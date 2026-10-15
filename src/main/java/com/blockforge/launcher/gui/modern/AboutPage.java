@@ -165,6 +165,12 @@ public class AboutPage extends Page {
             GetText.tr("Type a name to play offline, pick a saved player, or sign in with Microsoft.")));
         grid.add(feature(Icons.EXPLORE, GetText.tr("Modpacks from everywhere"),
             GetText.tr("ATLauncher, CurseForge, Modrinth, FTB and Technic packs in one place, or any version with Fabric, Forge, NeoForge or Quilt.")));
+        grid.add(feature(Icons.PUZZLE, GetText.tr("Mods, packs and shaders"),
+            GetText.tr("Search Modrinth and install with one click. Needed mods come along, and shaders get Iris.")));
+        grid.add(feature(Icons.DOWNLOAD, GetText.tr("Drop files to install"),
+            GetText.tr("Drag a mod, resource pack, shader or modpack onto the window. BlockForge works out what it is.")));
+        grid.add(feature(Icons.BOLT, GetText.tr("Light on slower PCs"),
+            GetText.tr("Fast to open and to play, sensible memory use, and a light mode for 4 GB computers.")));
         grid.add(feature(Icons.IMPORT, GetText.tr("Bring your instances"),
             GetText.tr("Finds Prism, MultiMC, CurseForge, GDLauncher and ATLauncher instances and copies them in.")));
         grid.add(feature(Icons.REFRESH, GetText.tr("Safe updates"),
