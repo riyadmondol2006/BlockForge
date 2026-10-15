@@ -22,7 +22,7 @@
 </p>
 
 <p align="center">
-  Windows &middot; macOS (Apple Silicon and Intel) &middot; Debian/Ubuntu &middot; Fedora<br>
+  Windows &middot; macOS (Apple Silicon) &middot; Debian/Ubuntu &middot; Fedora<br>
   Java is included in the installers, so there's nothing else to install.
 </p>
 
@@ -191,7 +191,6 @@ Get the newest version from the [**Releases** page](https://github.com/riyadmond
 |---|---|---|
 | Windows 10 and 11 (64-bit) | `BlockForge-<version>-windows-x64.exe` | Installs for your user, no administrator needed. Adds a Start menu entry and a shortcut. A newer installer replaces the older version. |
 | macOS on Apple Silicon (M1 and newer) | `BlockForge-<version>-macos-arm64.dmg` | Open it and drag BlockForge to Applications. |
-| macOS on Intel | `BlockForge-<version>-macos-x64.dmg` | Open it and drag BlockForge to Applications. |
 | Debian, Ubuntu and other deb systems | `BlockForge-<version>-linux-amd64.deb` | `sudo apt install ./BlockForge-*.deb` |
 | Fedora, RHEL and other RPM systems | `BlockForge-<version>-linux-x86_64.rpm` | `sudo dnf install ./BlockForge-*.rpm` |
 | Any system with Java 17 or newer | `BlockForge-<version>.jar` | `java -jar BlockForge-*.jar`, keeps its files next to the jar. |

@@ -1,6 +1,6 @@
 name: Build
 
-# Every push builds the jar and the installers for Windows, macOS (Apple Silicon and Intel), Debian/Ubuntu and
+# Every push builds the jar and the installers for Windows, macOS (Apple Silicon), Debian/Ubuntu and
 # Fedora. Download them from the run's "Artifacts" section.
 #
 # Pushes to master also publish them on the Releases page:
@@ -11,7 +11,7 @@ name: Build
 #
 # File names (the in-app updater picks its download by these endings):
 #   BlockForge-<version>.jar                    BlockForge-<version>-windows-x64.exe
-#   BlockForge-<version>-macos-arm64.dmg        BlockForge-<version>-macos-x64.dmg
+#   BlockForge-<version>-macos-arm64.dmg
 #   BlockForge-<version>-linux-amd64.deb        BlockForge-<version>-linux-x86_64.rpm
 #   SHA256SUMS.txt
 on:
@@ -195,11 +195,6 @@ jobs:
             arch: arm64
             java-arch: aarch64
             cpu: arm64
-          - runner: macos-15-intel
-            name: Intel
-            arch: x64
-            java-arch: x64
-            cpu: x86_64
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-java@v6
@@ -260,7 +255,7 @@ jobs:
         working-directory: artifacts
         run: |
           for f in "BlockForge-$VERSION.jar" "BlockForge-$VERSION-windows-x64.exe" \
-              "BlockForge-$VERSION-macos-arm64.dmg" "BlockForge-$VERSION-macos-x64.dmg" \
+              "BlockForge-$VERSION-macos-arm64.dmg" \
               "BlockForge-$VERSION-linux-amd64.deb" "BlockForge-$VERSION-linux-x86_64.rpm"; do
             [ -f "$f" ] || { echo "::error::$f is missing"; exit 1; }
           done
