@@ -90,7 +90,7 @@ public class Btn extends JButton {
 
     @Override
     public Dimension getPreferredSize() {
-        FontMetrics fm = getFontMetrics(Palette.bold(13f));
+        FontMetrics fm = getFontMetrics(Palette.fontFor(getText(), 13f, true));
         if (iconOnly) {
             return new Dimension(height, height);
         }
@@ -168,7 +168,7 @@ public class Btn extends JButton {
         }
 
         Color fg = foreground();
-        g.setFont(Palette.bold(13f));
+        g.setFont(Palette.fontFor(getText(), 13f, true));
         FontMetrics fm = g.getFontMetrics();
 
         if (iconOnly) {
