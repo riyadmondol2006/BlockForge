@@ -21,12 +21,16 @@ import java.awt.Dimension;
 import java.awt.Graphics;
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;
+import java.awt.event.HierarchyEvent;
 import java.awt.geom.Arc2D;
 
 import javax.swing.JComponent;
 import javax.swing.Timer;
 
-/** Indeterminate progress spinner. It only animates while it is on screen. */
+/**
+ * Indeterminate progress spinner. It only animates while it is on screen: a spinner on a hidden card or a page that
+ * isn't showing would otherwise wake the launcher up 60 times a second for as long as it runs.
+ */
 public class Spinner extends JComponent {
     private static final long serialVersionUID = 1L;
 
@@ -42,18 +46,36 @@ public class Spinner extends JComponent {
             angle = (angle + Math.max(8, ((Timer) e.getSource()).getDelay() / 2)) % 360;
             repaint();
         });
+        addHierarchyListener(e -> {
+            if ((e.getChangeFlags() & HierarchyEvent.SHOWING_CHANGED) != 0) {
+                updateTimer();
+            }
+        });
+    }
+
+    private void updateTimer() {
+        if (isShowing()) {
+            timer.start();
+        } else {
+            timer.stop();
+        }
     }
 
     @Override
     public void addNotify() {
         super.addNotify();
-        timer.start();
+        updateTimer();
     }
 
     @Override
     public void removeNotify() {
         timer.stop();
         super.removeNotify();
+    }
+
+    /** Whether the spinner is animating, for tests. */
+    boolean isAnimating() {
+        return timer.isRunning();
     }
 
     @Override

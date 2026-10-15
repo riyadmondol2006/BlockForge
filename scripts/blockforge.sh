@@ -10,8 +10,9 @@ mkdir -p "$CACHE"
 
 JAVA="${JAVA_HOME:+$JAVA_HOME/bin/}java"
 # one garbage collector thread and a heap that gives unused memory back, which suits a small desktop program on
-# slower computers (the same options the installers use)
-GC_OPTIONS="-XX:+UseSerialGC -XX:MinHeapFreeRatio=10 -XX:MaxHeapFreeRatio=30"
+# slower computers (the same options the installers use). The heap starts small because this collector never shrinks
+# it below its starting size.
+GC_OPTIONS="-XX:+UseSerialGC -XX:MinHeapFreeRatio=10 -XX:MaxHeapFreeRatio=30 -Xms64m"
 MAJOR=$("$JAVA" -version 2>&1 | sed -n 's/.*version "\([0-9]*\).*/\1/p' | head -n 1)
 
 if [ -n "$MAJOR" ] && [ "$MAJOR" -ge 19 ]; then

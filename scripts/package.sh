@@ -43,6 +43,7 @@ cp "$JAR" "$STAGE/input/"
 # -Dblockforge.installed makes the launcher keep its files in the user's own folder instead of next to the program.
 # The garbage collector options use one collector thread and give unused memory back to the system, which suits a
 # small desktop program on slower computers. There's deliberately no -Xmx: big modpack downloads need the room.
+# -Xms64m starts the heap small, because this collector never shrinks it below where it started (1/64 of the memory).
 # jpackage writes into an empty folder of its own, and the result is moved to the output folder under its final name.
 set -- --name BlockForge \
     --vendor BlockForge \
@@ -57,6 +58,7 @@ set -- --name BlockForge \
     --java-options -XX:+UseSerialGC \
     --java-options -XX:MinHeapFreeRatio=10 \
     --java-options -XX:MaxHeapFreeRatio=30 \
+    --java-options -Xms64m \
     --dest "$STAGE/out"
 
 # moves the one file jpackage made to the output folder under the given name
