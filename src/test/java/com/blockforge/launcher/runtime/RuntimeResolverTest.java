@@ -96,6 +96,30 @@ class RuntimeResolverTest {
     }
 
     @Test
+    void picksTheNewestJavaWhenMinecraftDoesNotSayWhatItNeeds() {
+        RuntimeResolver.Request req = new RuntimeResolver.Request();
+        req.installed.add(java("/jdk8", 8, "x64"));
+        req.installed.add(java("/jdk21", 21, "x64"));
+        req.installed.add(java("/jdk17", 17, "x64"));
+        req.hostArch = "x64";
+
+        RuntimeResolver.Choice c = RuntimeResolver.resolve(req);
+        assertEquals(21, c.java.major);
+        assertTrue(c.reasons.get(0).contains("newest"));
+    }
+
+    @Test
+    void aJavaOfUnknownVersionIsOnlyALastResort() {
+        RuntimeResolver.Request req = new RuntimeResolver.Request();
+        req.installed.add(java("/unknown", -1, "x64"));
+        req.installed.add(java("/jdk21", 21, "x64"));
+        req.requiredMajor = 17;
+        req.hostArch = "x64";
+
+        assertEquals(21, RuntimeResolver.resolve(req).java.major);
+    }
+
+    @Test
     void prefersTheNativeProcessorOnArmComputers() {
         RuntimeResolver.Request req = new RuntimeResolver.Request();
         req.installed.add(java("/x64-17", 17, "x64"));

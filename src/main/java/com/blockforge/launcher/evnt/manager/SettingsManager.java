@@ -37,7 +37,12 @@ public final class SettingsManager {
 
     public static synchronized void post() {
         SwingUtilities.invokeLater(() -> {
-            for (SettingsListener listener : listeners) {
+            // a copy, because a listener may be removed (a page being rebuilt) while the others are told
+            List<SettingsListener> current;
+            synchronized (SettingsManager.class) {
+                current = new ArrayList<>(listeners);
+            }
+            for (SettingsListener listener : current) {
                 listener.onSettingsSaved();
             }
         });

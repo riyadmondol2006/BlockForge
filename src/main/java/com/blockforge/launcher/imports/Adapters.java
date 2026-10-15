@@ -22,6 +22,7 @@ import java.io.Reader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Locale;
 import java.util.Properties;
 
 import com.google.gson.JsonArray;
@@ -165,7 +166,7 @@ public final class Adapters {
             String loaderType = null;
             String loaderVersion = null;
             if (loader != null) {
-                String loaderName = nonBlank(string(loader, "name"), "").toLowerCase();
+                String loaderName = nonBlank(string(loader, "name"), "").toLowerCase(Locale.ROOT);
                 if (loaderName.startsWith("forge")) {
                     loaderType = "forge";
                 } else if (loaderName.startsWith("fabric")) {
@@ -175,9 +176,8 @@ public final class Adapters {
                 } else if (loaderName.startsWith("neoforge")) {
                     loaderType = "neoforge";
                 }
-                int dash = loaderName.indexOf('-');
-                if (loaderType != null && dash >= 0 && dash + 1 < loaderName.length()) {
-                    loaderVersion = loaderName.substring(dash + 1);
+                if (loaderType != null) {
+                    loaderVersion = curseForgeLoaderVersion(loader, loaderName, minecraft);
                 }
             }
 
@@ -195,6 +195,28 @@ public final class Adapters {
                 }
             }
             return result;
+        }
+
+        /**
+         * The loader's own version. CurseForge stores it as "forgeVersion" (for every loader), and names the loader
+         * "forge-47.2.0" or, for Fabric and Quilt, "fabric-0.15.7-1.20.1" with the Minecraft version on the end.
+         */
+        static String curseForgeLoaderVersion(JsonObject loader, String loaderName, String minecraft) {
+            String stored = string(loader, "forgeVersion");
+            if (stored != null && !stored.trim().isEmpty()) {
+                return stored.trim();
+            }
+
+            int dash = loaderName.indexOf('-');
+            if (dash < 0 || dash + 1 >= loaderName.length()) {
+                return null;
+            }
+            String version = loaderName.substring(dash + 1);
+            String suffix = "-" + minecraft.toLowerCase(Locale.ROOT);
+            if (version.endsWith(suffix) && version.length() > suffix.length()) {
+                version = version.substring(0, version.length() - suffix.length());
+            }
+            return version;
         }
     }
 
@@ -223,7 +245,7 @@ public final class Adapters {
             String loaderType = null;
             String loaderVersion = null;
             if (loader != null) {
-                String type = nonBlank(string(loader, "type"), "").toLowerCase().replace(" ", "");
+                String type = nonBlank(string(loader, "type"), "").toLowerCase(Locale.ROOT).replace(" ", "");
                 if (type.equals("fabric") || type.equals("forge") || type.equals("neoforge") || type.equals("quilt")) {
                     loaderType = type;
                     loaderVersion = string(loader, "version");
@@ -273,7 +295,7 @@ public final class Adapters {
             if (loaders != null && loaders.isJsonArray() && loaders.getAsJsonArray().size() > 0
                 && loaders.getAsJsonArray().get(0).isJsonObject()) {
                 JsonObject first = loaders.getAsJsonArray().get(0).getAsJsonObject();
-                String type = nonBlank(string(first, "type"), "").toLowerCase();
+                String type = nonBlank(string(first, "type"), "").toLowerCase(Locale.ROOT);
                 if (type.equals("fabric") || type.equals("forge") || type.equals("neoforge") || type.equals("quilt")) {
                     loaderType = type;
                     loaderVersion = string(first, "version");

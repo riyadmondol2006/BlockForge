@@ -74,21 +74,15 @@ public class SettingsPage extends Page {
         column.add(Box.createVerticalStrut(16));
         column.add(section(GetText.tr("Game"), memoryRow(),
             textRow(GetText.tr("Java path"), GetText.tr("Leave empty to use the Java that comes with Minecraft"),
-                App.settings.javaPath, v -> App.settings.javaPath = v.isEmpty() ? null : v),
+                App.settings.usingCustomJavaPath ? App.settings.javaPath : "", SettingsPage::setJavaPath),
             textRow(GetText.tr("Java arguments"), GetText.tr("Extra options passed to the Java virtual machine"),
                 App.settings.javaParameters, v -> App.settings.javaParameters = v),
             toggleRow(GetText.tr("Ask who's playing on start"),
                 GetText.tr("Choose an offline name or sign in each time BlockForge opens"),
-                App.settings.askPlayerOnStartup, v -> {
-                    App.settings.askPlayerOnStartup = v;
-                    SettingsManager.post();
-                }),
+                App.settings.askPlayerOnStartup, v -> App.settings.askPlayerOnStartup = v),
             toggleRow(GetText.tr("Check for BlockForge updates"),
                 GetText.tr("Look on GitHub for a newer version and offer to install it"),
-                App.settings.checkForLauncherUpdates, v -> {
-                    App.settings.checkForLauncherUpdates = v;
-                    SettingsManager.post();
-                }),
+                App.settings.checkForLauncherUpdates, v -> App.settings.checkForLauncherUpdates = v),
             toggleRow(GetText.tr("Keep the launcher open"),
                 GetText.tr("Leave BlockForge open while Minecraft is running"), App.settings.keepLauncherOpen,
                 viewModel::setKeepLauncherOpen),
@@ -98,16 +92,10 @@ public class SettingsPage extends Page {
         column.add(section(GetText.tr("Privacy"),
             toggleRow(GetText.tr("Share anonymous usage statistics"),
                 GetText.tr("Which screens are used and how often. Off unless you turn it on"),
-                App.settings.enableAnalytics, v -> {
-                    App.settings.enableAnalytics = v;
-                    SettingsManager.post();
-                }),
+                App.settings.enableAnalytics, v -> App.settings.enableAnalytics = v),
             toggleRow(GetText.tr("Report pack installs and play time"),
                 GetText.tr("Counts for public modpacks, so authors can see how they are used. Off unless you turn it on"),
-                App.settings.enableLogs, v -> {
-                    App.settings.enableLogs = v;
-                    SettingsManager.post();
-                })));
+                App.settings.enableLogs, v -> App.settings.enableLogs = v)));
         column.add(Box.createVerticalStrut(16));
         column.add(section(GetText.tr("Launcher"),
             toggleRow(GetText.tr("Tray icon"), GetText.tr("Show a tray menu while the launcher runs"),
@@ -172,8 +160,32 @@ public class SettingsPage extends Page {
         return row;
     }
 
+    /**
+     * Writes the settings to disk and tells everything that listens. This page promises that changes are saved as
+     * they're made, and there is no Save button, so every change has to end up here or it is lost on restart.
+     */
+    private static void saved() {
+        App.settings.save();
+        SettingsManager.post();
+    }
+
+    /** An empty path means "use the Java that comes with Minecraft", which is the default path, not a custom one. */
+    private static void setJavaPath(String path) {
+        if (path.isEmpty()) {
+            App.settings.usingCustomJavaPath = false;
+            App.settings.javaPath = OS.getDefaultJavaPath();
+        } else {
+            // without the flag, the path is put back to the default the next time the settings are loaded
+            App.settings.usingCustomJavaPath = true;
+            App.settings.javaPath = path;
+        }
+    }
+
     private JPanel toggleRow(String label, String hint, boolean value, Consumer<Boolean> onChange) {
-        return row(label, hint, new Toggle(value, onChange));
+        return row(label, hint, new Toggle(value, on -> {
+            onChange.accept(on);
+            saved();
+        }));
     }
 
     private JPanel buttonRow(String label, String hint, String button, Icons icon, Runnable action) {
@@ -186,9 +198,16 @@ public class SettingsPage extends Page {
         SearchBox field = new SearchBox(null, false, 22);
         field.setText(value == null ? "" : value);
         field.setPreferredSize(new Dimension(300, 40));
+        String[] committed = { field.getText().trim() };
         Runnable commit = () -> {
-            save.accept(field.getText().trim());
-            SettingsManager.post();
+            String text = field.getText().trim();
+            // leaving the field without changing anything shouldn't rewrite the settings file
+            if (text.equals(committed[0])) {
+                return;
+            }
+            committed[0] = text;
+            save.accept(text);
+            saved();
         };
         field.addActionListener(e -> commit.run());
         field.addFocusListener(new java.awt.event.FocusAdapter() {
@@ -216,6 +235,7 @@ public class SettingsPage extends Page {
             int index = box.getSelectedIndex();
             if (index >= 0 && !themes.get(index).id.equals(App.settings.theme)) {
                 viewModel.setSelectedTheme(themes.get(index).id);
+                saved();
                 repaintAll();
             }
         });
@@ -235,6 +255,7 @@ public class SettingsPage extends Page {
             String chosen = (String) box.getSelectedItem();
             if (chosen != null && !chosen.equals(App.settings.language)) {
                 viewModel.setSelectedLanguage(chosen);
+                saved();
             }
         });
         return row(GetText.tr("Language"), null, box);
@@ -259,7 +280,7 @@ public class SettingsPage extends Page {
             value.setText(memoryText(v));
             if (!slider.getValueIsAdjusting()) {
                 App.settings.maximumMemory = Math.max(min, v);
-                SettingsManager.post();
+                saved();
             }
         });
 
@@ -272,6 +293,11 @@ public class SettingsPage extends Page {
 
     private static String memoryText(int mb) {
         return mb % 1024 == 0 ? (mb / 1024) + " GB" : String.format("%.1f GB", mb / 1024f);
+    }
+
+    @Override
+    public void dispose() {
+        SettingsManager.removeListener(viewModel);
     }
 
     private void repaintAll() {

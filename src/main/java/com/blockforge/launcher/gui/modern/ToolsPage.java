@@ -104,7 +104,7 @@ public class ToolsPage extends Page {
 
         JPanel top = new JPanel(new BorderLayout(12, 0));
         top.setOpaque(false);
-        top.add(new JLabel(icon.asIcon(26, Palette.accent())), BorderLayout.WEST);
+        top.add(new JLabel(icon.asIcon(26, Palette::accent)), BorderLayout.WEST);
         top.add(Lbl.text(name, 15f, true, Palette::text), BorderLayout.CENTER);
         card.add(top, BorderLayout.NORTH);
         card.add(new Lbl.Paragraph(description, 12.5f, 5, 244, Palette::textDim), BorderLayout.CENTER);

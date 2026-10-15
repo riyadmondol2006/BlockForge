@@ -273,7 +273,8 @@ public class InstanceTile extends RoundPanel {
             // round only the top corners to follow the card
             Area clip = new Area(new RoundRectangle2D.Float(0, 0, w, h + 40, 22, 22));
             clip.intersect(new Area(new java.awt.Rectangle(0, 0, w, h)));
-            g.setClip(clip);
+            // narrow the clip rather than replace it, or a card half scrolled out of view paints over its surroundings
+            g.clip(clip);
 
             if (image != null) {
                 g.drawImage(image, 0, 0, w, h, null);

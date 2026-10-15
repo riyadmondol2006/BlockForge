@@ -175,15 +175,15 @@ public final class Lbl {
                     int end = m.getPosition();
                     boolean more = end < it.getEndIndex() || p < paragraphs.length - 1;
                     if (last && more) {
-                        // fit the remainder on the last line with an ellipsis
-                        String rest = paragraph.substring(start);
+                        // fit the remainder on the last line with an ellipsis. No more than what the measurer put
+                        // on this line can fit, so start from that instead of measuring the whole rest over and over
                         FontMetrics fm = g.getFontMetrics(font);
-                        String cut = rest;
+                        String cut = paragraph.substring(start, Math.max(start + 1, end));
                         while (cut.length() > 1 && fm.stringWidth(cut + "…") > w) {
                             cut = cut.substring(0, cut.length() - 1);
                         }
                         g.setFont(font);
-                        g.drawString(cut.stripTrailing() + "…", 0, y + fm.getAscent());
+                        g.drawString(stripTrailing(cut) + "…", 0, y + fm.getAscent());
                         stop = true;
                         break;
                     }
@@ -197,6 +197,15 @@ public final class Lbl {
                 }
             }
             g.dispose();
+        }
+
+        /** String.stripTrailing() only exists from Java 11, and the launcher still runs on Java 8 */
+        static String stripTrailing(String text) {
+            int end = text.length();
+            while (end > 0 && Character.isWhitespace(text.charAt(end - 1))) {
+                end--;
+            }
+            return text.substring(0, end);
         }
     }
 }

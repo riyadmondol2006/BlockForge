@@ -216,13 +216,7 @@ public final class InstanceActions {
     /** Snapshots of the pack's files, taken before updates, that can be put back. */
     private static JMenu snapshotsMenu(Instance instance) {
         JMenu menu = new JMenu(GetText.tr("Snapshots"));
-        menu.add(item(GetText.tr("Save Snapshot Now"), () -> {
-            if (SnapshotService.saveBefore(instance, "manual")) {
-                App.TOASTER.pop(GetText.tr("Snapshot saved"));
-            } else {
-                App.TOASTER.popError(GetText.tr("Couldn't save the snapshot"));
-            }
-        }));
+        menu.add(item(GetText.tr("Save Snapshot Now"), () -> saveSnapshot(instance)));
 
         List<InstanceSnapshots.Snapshot> recent = InstanceSnapshots.latest(SnapshotService.folderFor(instance), 6);
         if (!recent.isEmpty()) {
@@ -237,6 +231,23 @@ public final class InstanceActions {
             menu.add(item(text, () -> restoreSnapshot(instance, snapshot)));
         }
         return menu;
+    }
+
+    /** Zipping the mods and configs can take a while for a big pack, so it happens behind a progress dialog. */
+    private static void saveSnapshot(Instance instance) {
+        final ProgressDialog<Boolean> dialog = new ProgressDialog<>(GetText.tr("Saving Snapshot"), 0,
+            GetText.tr("Saving Snapshot. Please wait..."), null, App.launcher.getParent());
+        dialog.addThread(new Thread(() -> {
+            dialog.setReturnValue(SnapshotService.saveBefore(instance, "manual"));
+            dialog.close();
+        }));
+        dialog.start();
+
+        if (Boolean.TRUE.equals(dialog.getReturnValue())) {
+            App.TOASTER.pop(GetText.tr("Snapshot saved"));
+        } else {
+            App.TOASTER.popError(GetText.tr("Couldn't save the snapshot"));
+        }
     }
 
     private static void restoreSnapshot(Instance instance, InstanceSnapshots.Snapshot snapshot) {

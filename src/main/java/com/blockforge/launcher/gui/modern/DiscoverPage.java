@@ -138,7 +138,7 @@ public class DiscoverPage extends Page {
         JPanel emptyBox = new JPanel();
         emptyBox.setOpaque(false);
         emptyBox.setLayout(new BoxLayout(emptyBox, BoxLayout.Y_AXIS));
-        JLabel emptyIcon = new JLabel(Icons.SEARCH.asIcon(44, Palette.textDim()));
+        JLabel emptyIcon = new JLabel(Icons.SEARCH.asIcon(44, Palette::textDim));
         emptyIcon.setAlignmentX(CENTER_ALIGNMENT);
         emptyText.setAlignmentX(CENTER_ALIGNMENT);
         Btn retry = new Btn(GetText.tr("Try again"), Btn.Kind.TONAL).icon(Icons.REFRESH);
@@ -306,7 +306,7 @@ public class DiscoverPage extends Page {
                     g.setColor(Palette.field());
                     g.fill(shape);
                     if (icon != null) {
-                        g.setClip(shape);
+                        g.clip(shape);
                         g.drawImage(icon, 0, 0, 60, 60, null);
                     } else {
                         Icons.CUBE.paint(g, 16, 16, 28, Palette.textDim());
@@ -354,6 +354,12 @@ public class DiscoverPage extends Page {
                     icon = image;
                     view.repaint();
                 });
+                return;
+            }
+
+            // only ATLauncher results are ATLauncher packs: a CurseForge or Modrinth id can be the same number as an
+            // unrelated ATLauncher pack, which would show that pack's picture
+            if (!"ATLauncher".equals(platformName(result.platform()))) {
                 return;
             }
 

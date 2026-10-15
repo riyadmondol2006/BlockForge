@@ -22,6 +22,7 @@ import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.nio.file.SimpleFileVisitor;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.BasicFileAttributes;
@@ -30,8 +31,10 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.Predicate;
 
 /**
  * Finds instances made by other launchers and brings their files across. Nothing is changed until the files have all
@@ -136,7 +139,7 @@ public final class InstanceImporter {
         int count = 0;
         try (DirectoryStream<Path> stream = Files.newDirectoryStream(dir)) {
             for (Path p : stream) {
-                String name = p.getFileName().toString().toLowerCase();
+                String name = p.getFileName().toString().toLowerCase(Locale.ROOT);
                 for (String suffix : suffixes) {
                     if (Files.isRegularFile(p) && name.endsWith(suffix)) {
                         count++;
@@ -284,6 +287,24 @@ public final class InstanceImporter {
         }
     }
 
+    /**
+     * A name for the new instance that isn't taken yet: the instance's own name, or that name with " (2)", " (3)" ...
+     * added. A name without any letters or digits can't be used for an instance, so it is replaced.
+     */
+    public static String uniqueName(String wanted, Predicate<String> taken) {
+        String base = wanted == null || wanted.replaceAll("[^A-Za-z0-9]", "").isEmpty() ? "Imported instance"
+            : wanted.trim();
+        if (!taken.test(base)) {
+            return base;
+        }
+        for (int i = 2;; i++) {
+            String candidate = base + " (" + i + ")";
+            if (!taken.test(candidate)) {
+                return candidate;
+            }
+        }
+    }
+
     /** Looks inside the folders where launchers keep their instances for ones that can be imported. */
     public static List<ImportedInstance> scan(List<Path> roots) {
         List<ImportedInstance> found = new ArrayList<>();
@@ -313,13 +334,13 @@ public final class InstanceImporter {
 
     /** where other launchers usually keep their instances on this computer */
     public static List<Path> defaultRoots() {
-        Path home = Path.of(System.getProperty("user.home"));
-        String os = System.getProperty("os.name", "").toLowerCase();
+        Path home = Paths.get(System.getProperty("user.home"));
+        String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
         List<Path> roots = new ArrayList<>();
 
         if (os.contains("win")) {
             String appData = System.getenv("APPDATA");
-            Path data = appData == null ? home.resolve("AppData/Roaming") : Path.of(appData);
+            Path data = appData == null ? home.resolve("AppData/Roaming") : Paths.get(appData);
             roots.add(data.resolve("PrismLauncher/instances"));
             roots.add(data.resolve(".atlauncher/instances"));
             roots.add(data.resolve("gdlauncher_carbon/data/instances"));

@@ -170,12 +170,11 @@ public class Sidebar extends JPanel {
         text.add(Box.createVerticalGlue());
         chip.add(text, BorderLayout.CENTER);
 
+        Runnable open = () -> showAccountMenu(chip);
         MouseAdapter click = new MouseAdapter() {
             @Override
             public void mouseClicked(MouseEvent e) {
-                // open upwards, just above the chip, whatever the number of players
-                JPopupMenu menu = accountMenu();
-                menu.show(chip, 0, -menu.getPreferredSize().height - 4);
+                open.run();
             }
         };
         chip.addMouseListener(click);
@@ -183,7 +182,29 @@ public class Sidebar extends JPanel {
         text.addMouseListener(click);
         chipName.addMouseListener(click);
         chipKind.addMouseListener(click);
+
+        // the chip can take keyboard focus, so it has to open with the keyboard too
+        chip.getInputMap(WHEN_FOCUSED).put(KeyStroke.getKeyStroke(KeyEvent.VK_ENTER, 0), "open");
+        chip.getInputMap(WHEN_FOCUSED).put(KeyStroke.getKeyStroke(KeyEvent.VK_SPACE, 0), "open");
+        chip.getActionMap().put("open", new javax.swing.AbstractAction() {
+            private static final long serialVersionUID = 1L;
+
+            @Override
+            public void actionPerformed(java.awt.event.ActionEvent e) {
+                open.run();
+            }
+        });
         return chip;
+    }
+
+    /**
+     * Opens the account menu just above the chip. Its height depends on how many accounts there are, so it is
+     * measured rather than guessed (a fixed guess covered the chip with few accounts and floated far above it with
+     * many).
+     */
+    private void showAccountMenu(JComponent chip) {
+        JPopupMenu menu = accountMenu();
+        menu.show(chip, 0, -menu.getPreferredSize().height - 4);
     }
 
     private JPopupMenu accountMenu() {

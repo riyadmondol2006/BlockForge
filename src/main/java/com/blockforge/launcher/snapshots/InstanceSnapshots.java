@@ -38,6 +38,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 import java.util.zip.ZipOutputStream;
@@ -109,8 +110,14 @@ public final class InstanceSnapshots {
     private static void addTree(ZipOutputStream z, Path root, Path start) throws IOException {
         Files.walkFileTree(start, new SimpleFileVisitor<Path>() {
             @Override
-            public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) {
-                return Files.isSymbolicLink(dir) ? FileVisitResult.SKIP_SUBTREE : FileVisitResult.CONTINUE;
+            public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) throws IOException {
+                if (Files.isSymbolicLink(dir)) {
+                    return FileVisitResult.SKIP_SUBTREE;
+                }
+                // folders get an entry of their own, so an empty mods or config folder comes back on a restore
+                z.putNextEntry(new ZipEntry(root.relativize(dir).toString().replace('\\', '/') + "/"));
+                z.closeEntry();
+                return FileVisitResult.CONTINUE;
             }
 
             @Override
@@ -164,21 +171,38 @@ public final class InstanceSnapshots {
      */
     public static void restore(Snapshot snapshot, Path instanceRoot, Path snapshotsDir) throws IOException {
         Path staging = Files.createTempDirectory(instanceRoot.toAbsolutePath().getParent(), ".restore-");
-        Snapshot before = create(instanceRoot, snapshotsDir, "before-restore");
+        Snapshot before = null;
 
         try {
+            // unpack first: saving the current state trims the oldest snapshots, which could be this one
             extract(snapshot.file, staging);
+            before = create(instanceRoot, snapshotsDir, "before-restore");
 
-            // the parts the snapshot holds are replaced, anything else in the instance is left alone
+            // every part a snapshot manages goes back to how it was, so something an update added since (a new
+            // kubejs folder, say) is taken away again. Worlds and anything else in the instance are left alone.
+            Set<String> names = new TreeSet<>(MANAGED);
+            try (DirectoryStream<Path> staged = Files.newDirectoryStream(staging)) {
+                for (Path entry : staged) {
+                    names.add(entry.getFileName().toString());
+                }
+            }
+
             List<Path> replaced = new ArrayList<>();
             Path parked = Files.createTempDirectory(instanceRoot.toAbsolutePath().getParent(), ".parked-");
             try {
-                try (DirectoryStream<Path> staged = Files.newDirectoryStream(staging)) {
-                    for (Path entry : staged) {
-                        Path current = instanceRoot.resolve(entry.getFileName().toString());
-                        if (Files.exists(current, LinkOption.NOFOLLOW_LINKS)) {
-                            Files.move(current, parked.resolve(entry.getFileName().toString()));
-                        }
+                for (String name : names) {
+                    Path entry = staging.resolve(name);
+                    Path current = instanceRoot.resolve(name);
+                    boolean inSnapshot = Files.exists(entry, LinkOption.NOFOLLOW_LINKS);
+
+                    // links are never saved in a snapshot, so one the snapshot knows nothing about is left as it is
+                    if (!inSnapshot && Files.isSymbolicLink(current)) {
+                        continue;
+                    }
+                    if (Files.exists(current, LinkOption.NOFOLLOW_LINKS)) {
+                        Files.move(current, parked.resolve(name));
+                    }
+                    if (inSnapshot) {
                         Files.move(entry, current);
                         replaced.add(current);
                     }
@@ -199,7 +223,9 @@ public final class InstanceSnapshots {
                 deleteTree(parked);
             }
         } catch (IOException | RuntimeException e) {
-            Files.deleteIfExists(before.file);
+            if (before != null) {
+                Files.deleteIfExists(before.file);
+            }
             throw e;
         } finally {
             deleteTree(staging);

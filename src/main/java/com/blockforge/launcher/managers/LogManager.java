@@ -20,8 +20,8 @@ package com.blockforge.launcher.managers;
 import java.io.CharArrayWriter;
 import java.io.PrintStream;
 import java.io.PrintWriter;
-import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -35,13 +35,25 @@ import com.blockforge.launcher.thread.LoggingThread;
 import com.blockforge.launcher.utils.SystemOutInterceptor;
 
 public final class LogManager {
-    private static final BlockingQueue<LogEvent> queue = new ArrayBlockingQueue<>(128);
+    /**
+     * Lines wait here until the logging thread runs. That thread only starts once the console window exists, which is
+     * built while everything else loads, so the queue has to hold a whole start up's worth of lines: anything offered
+     * to a full queue is lost from both the console and the log file.
+     */
+    static final int QUEUE_CAPACITY = 16384;
+
+    private static final BlockingQueue<LogEvent> queue = new LinkedBlockingQueue<>(QUEUE_CAPACITY);
     public static boolean showDebug = false;
 
     private static final Pattern LOG4J_THREAD_REGEX = Pattern.compile("<log4j:Event.*?thread=\"(.*?)\".*?>");
     private static final Pattern LOG4J_LEVEL_REGEX = Pattern.compile("<log4j:Event.*?level=\"(.*?)\".*?>");
     private static final Pattern LOG4J_MESSAGE_REGEX = Pattern
             .compile("<log4j:Message><!\\[CDATA\\[(.*?)\\]\\]></log4j:Message>");
+
+    /** how many lines are waiting for the logging thread */
+    static int pending() {
+        return queue.size();
+    }
 
     public static void start() {
         new LoggingThread(queue).start();

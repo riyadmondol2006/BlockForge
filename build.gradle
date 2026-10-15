@@ -167,6 +167,11 @@ tasks.withType(JavaCompile).configureEach {
     }
 }
 
+compileJava {
+    // the launcher still runs on Java 8, so make sure nothing newer than Java 8 is used by mistake
+    options.release = 8
+}
+
 tasks.register('uiTest', Test) {
     useJUnitPlatform {
         includeTags 'ui'

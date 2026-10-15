@@ -22,12 +22,21 @@ import java.awt.CardLayout;
 import java.awt.Component;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
+import java.awt.GraphicsConfiguration;
+import java.awt.GraphicsDevice;
+import java.awt.GraphicsEnvironment;
+import java.awt.Insets;
+import java.awt.Point;
+import java.awt.Rectangle;
 import java.awt.SystemTray;
+import java.awt.Toolkit;
 import java.awt.event.ComponentAdapter;
 import java.awt.event.ComponentEvent;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.function.Supplier;
 
@@ -87,6 +96,8 @@ public final class LauncherFrame extends JFrame implements RelocalizationListene
     private final JPanel runningBanner = new JPanel(new BorderLayout());
     private Sidebar sidebar;
     private int current = -1;
+    /** whether the "Minecraft is running" bar should show, kept so a rebuild of the window keeps it */
+    private boolean minecraftRunning;
 
     public LauncherFrame(boolean show) {
         LogManager.info("Launcher opening");
@@ -98,16 +109,21 @@ public final class LauncherFrame extends JFrame implements RelocalizationListene
         setLayout(new BorderLayout());
         setIconImage(Utils.getImage("/assets/image/icon.png"));
 
-        setMinimumSize(new Dimension(1080, 680));
-        setSize(1240, 780);
+        // a 1920x1080 laptop screen at 150% scaling only has 1280x720 to offer, less the task bar, so the window is
+        // never made bigger than the screen it opens on
+        Rectangle usable = usableScreen();
+        setMinimumSize(fit(new Dimension(1080, 680), usable));
+        setSize(fit(new Dimension(1240, 780), usable));
         setLocationRelativeTo(null);
 
         try {
             if (App.settings.rememberWindowSizePosition && App.settings.launcherSize != null) {
-                setSize(App.settings.launcherSize);
+                setSize(fit(App.settings.launcherSize, usable));
             }
 
-            if (App.settings.rememberWindowSizePosition && App.settings.launcherPosition != null) {
+            // a remembered position on a screen that has since been unplugged would put the window out of reach
+            if (App.settings.rememberWindowSizePosition && App.settings.launcherPosition != null
+                && isReachable(App.settings.launcherPosition, getSize(), allScreens())) {
                 setLocation(App.settings.launcherPosition);
             }
         } catch (Exception e) {
@@ -185,9 +201,55 @@ public final class LauncherFrame extends JFrame implements RelocalizationListene
         });
     }
 
+    /** The part of the main screen a window can use, without task bars and docks. */
+    private static Rectangle usableScreen() {
+        try {
+            GraphicsConfiguration gc = GraphicsEnvironment.getLocalGraphicsEnvironment().getDefaultScreenDevice()
+                .getDefaultConfiguration();
+            Rectangle bounds = gc.getBounds();
+            Insets insets = Toolkit.getDefaultToolkit().getScreenInsets(gc);
+            return new Rectangle(bounds.x + insets.left, bounds.y + insets.top,
+                bounds.width - insets.left - insets.right, bounds.height - insets.top - insets.bottom);
+        } catch (Exception e) {
+            return new Rectangle(0, 0, Integer.MAX_VALUE, Integer.MAX_VALUE);
+        }
+    }
+
+    private static List<Rectangle> allScreens() {
+        List<Rectangle> screens = new ArrayList<>();
+        try {
+            for (GraphicsDevice device : GraphicsEnvironment.getLocalGraphicsEnvironment().getScreenDevices()) {
+                screens.add(device.getDefaultConfiguration().getBounds());
+            }
+        } catch (Exception ignored) {
+            // no screens to check against
+        }
+        return screens;
+    }
+
+    /** The wanted size, made smaller where it doesn't fit the usable area. */
+    static Dimension fit(Dimension wanted, Rectangle usable) {
+        return new Dimension(Math.max(1, Math.min(wanted.width, usable.width)),
+            Math.max(1, Math.min(wanted.height, usable.height)));
+    }
+
+    /** Whether enough of the window's title bar is on some screen to grab it and move it. */
+    static boolean isReachable(Point location, Dimension size, List<Rectangle> screens) {
+        Rectangle titleBar = new Rectangle(location.x, location.y, size.width, 32);
+        for (Rectangle screen : screens) {
+            Rectangle overlap = screen.intersection(titleBar);
+            if (overlap.width >= 120 && overlap.height >= 16) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private void buildInterface() {
         getContentPane().removeAll();
         stack.removeAll();
+        // the old pages are thrown away, so they must let go of the view models and listeners they registered
+        pages.values().forEach(Page::dispose);
         pages.clear();
         factories.clear();
 
@@ -226,13 +288,14 @@ public final class LauncherFrame extends JFrame implements RelocalizationListene
         runningBanner.removeAll();
         runningBanner.setOpaque(false);
         runningBanner.setBorder(BorderFactory.createEmptyBorder(14, 36, 0, 36));
-        runningBanner.setVisible(false);
+        // rebuilt for a new language while the game runs: the bar has to stay up
+        runningBanner.setVisible(minecraftRunning);
 
         RoundPanel card = new RoundPanel(new BorderLayout(14, 0), 20, Palette::accentSoft);
         card.line(Palette::accent);
         card.pad(10, 18, 10, 12);
         JLabel text = Lbl.text(GetText.tr("Minecraft is running"), 14f, true, Palette::text);
-        text.setIcon(Icons.PLAY.asIcon(18, Palette.accent()));
+        text.setIcon(Icons.PLAY.asIcon(18, Palette::accent));
         text.setIconTextGap(10);
         card.add(text, BorderLayout.CENTER);
 
@@ -259,6 +322,7 @@ public final class LauncherFrame extends JFrame implements RelocalizationListene
     /** Shows or hides the "Minecraft is running" bar. */
     public void setMinecraftRunning(boolean running) {
         SwingUtilities.invokeLater(() -> {
+            minecraftRunning = running;
             runningBanner.setVisible(running);
             runningBanner.revalidate();
             runningBanner.repaint();

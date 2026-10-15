@@ -120,8 +120,11 @@ public final class FileFingerprints {
         }
     }
 
-    /** Writes any new facts to disk. Cheap when nothing changed. */
-    public static void save() {
+    /**
+     * Writes any new facts to disk. Cheap when nothing changed. Download pools, the virus scan and the shutdown hook
+     * can all call this at once, and they all write through the same temporary file, so only one may save at a time.
+     */
+    public static synchronized void save() {
         if (!loaded || !dirty.getAndSet(false)) {
             return;
         }

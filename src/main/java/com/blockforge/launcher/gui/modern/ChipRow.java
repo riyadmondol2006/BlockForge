@@ -22,12 +22,18 @@ import java.awt.FontMetrics;
 import java.awt.Graphics;
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;
+import java.awt.event.ActionEvent;
+import java.awt.event.FocusAdapter;
+import java.awt.event.FocusEvent;
+import java.awt.event.KeyEvent;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.awt.geom.RoundRectangle2D;
 import java.util.function.IntConsumer;
 
+import javax.swing.AbstractAction;
 import javax.swing.JComponent;
+import javax.swing.KeyStroke;
 
 /** A row of pill shaped choices where exactly one is selected. */
 public class ChipRow extends JComponent {
@@ -46,14 +52,46 @@ public class ChipRow extends JComponent {
         addMouseListener(new MouseAdapter() {
             @Override
             public void mouseClicked(MouseEvent e) {
-                int index = indexAt(e.getX());
-                if (index >= 0 && index != ChipRow.this.selected) {
-                    ChipRow.this.selected = index;
-                    repaint();
-                    onSelect.accept(index);
-                }
+                select(indexAt(e.getX()), onSelect);
             }
         });
+
+        // reachable with Tab and changed with the arrow keys, like a group of radio buttons
+        setFocusable(true);
+        getInputMap(WHEN_FOCUSED).put(KeyStroke.getKeyStroke(KeyEvent.VK_LEFT, 0), "previous");
+        getInputMap(WHEN_FOCUSED).put(KeyStroke.getKeyStroke(KeyEvent.VK_RIGHT, 0), "next");
+        getActionMap().put("previous", action(() -> select(this.selected - 1, onSelect)));
+        getActionMap().put("next", action(() -> select(this.selected + 1, onSelect)));
+        addFocusListener(new FocusAdapter() {
+            @Override
+            public void focusGained(FocusEvent e) {
+                repaint();
+            }
+
+            @Override
+            public void focusLost(FocusEvent e) {
+                repaint();
+            }
+        });
+    }
+
+    private static AbstractAction action(Runnable run) {
+        return new AbstractAction() {
+            private static final long serialVersionUID = 1L;
+
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                run.run();
+            }
+        };
+    }
+
+    private void select(int index, IntConsumer onSelect) {
+        if (index >= 0 && index < labels.length && index != selected) {
+            selected = index;
+            repaint();
+            onSelect.accept(index);
+        }
     }
 
     public int getSelected() {
@@ -107,9 +145,12 @@ public class ChipRow extends JComponent {
             g.setColor(on ? Palette.accentSoft() : Palette.field());
             g.fill(new RoundRectangle2D.Float(x, 0, w, h, h, h));
             if (on) {
+                // a thicker outline on the selected chip shows where the keyboard is
+                boolean focused = isFocusOwner() && FocusRing.visible();
+                float stroke = focused ? 2.5f : 1.5f;
                 g.setColor(Palette.accent());
-                g.setStroke(new java.awt.BasicStroke(1.5f));
-                g.draw(new RoundRectangle2D.Float(x + 0.75f, 0.75f, w - 1.5f, h - 1.5f, h, h));
+                g.setStroke(new java.awt.BasicStroke(stroke));
+                g.draw(new RoundRectangle2D.Float(x + stroke / 2, stroke / 2, w - stroke, h - stroke, h, h));
             }
             g.setColor(on ? Palette.accent() : Palette.textDim());
             g.drawString(labels[i], x + 16, (h - fm.getHeight()) / 2 + fm.getAscent());
