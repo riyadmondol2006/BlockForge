@@ -35,7 +35,6 @@ import javax.swing.SwingUtilities;
 import org.mini2Dx.gettext.GetText;
 
 import com.blockforge.launcher.data.MicrosoftAccount;
-import com.blockforge.launcher.gui.dialogs.ChangeSkinDialog;
 import com.blockforge.launcher.gui.dialogs.LoginWithMicrosoftDialog;
 import com.blockforge.launcher.managers.AccountManager;
 import com.blockforge.launcher.managers.DialogManager;
@@ -236,6 +235,9 @@ public class AccountsPage extends Page {
 
         JPanel actions = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
         actions.setOpaque(false);
+        Btn skin = new Btn(GetText.tr("Change skin"), Btn.Kind.TONAL).icon(Icons.EDIT).compact();
+        skin.addActionListener(e -> SkinDialog.open(account));
+        actions.add(skin);
         if (active) {
             JLabel badge = Lbl.text(GetText.tr("In use"), 13f, true, Palette::accent);
             badge.setIcon(Icons.CHECK.asIcon(18, Palette.accent()));
@@ -260,13 +262,14 @@ public class AccountsPage extends Page {
         JPopupMenu menu = new JPopupMenu();
         if (!account.offline) {
             JMenuItem skin = new JMenuItem(GetText.tr("Change skin"));
-            skin.addActionListener(e -> new ChangeSkinDialog(account).setVisible(true));
+            skin.addActionListener(e -> SkinDialog.open(account));
             menu.add(skin);
             JMenuItem reload = new JMenuItem(GetText.tr("Reload skin"));
-            reload.addActionListener(e -> {
+            reload.addActionListener(e -> new Thread(() -> {
+                // downloads the skin, so keep it off the UI thread
                 account.updateSkin();
-                rebuild();
-            });
+                SwingUtilities.invokeLater(this::rebuild);
+            }, "BlockForge skin reload").start());
             menu.add(reload);
             JMenuItem username = new JMenuItem(GetText.tr("Update username"));
             username.addActionListener(e -> {

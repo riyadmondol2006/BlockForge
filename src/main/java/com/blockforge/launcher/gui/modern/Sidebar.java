@@ -173,7 +173,9 @@ public class Sidebar extends JPanel {
         MouseAdapter click = new MouseAdapter() {
             @Override
             public void mouseClicked(MouseEvent e) {
-                accountMenu().show(chip, 0, -chip.getHeight() - 4 * 34);
+                // open upwards, just above the chip, whatever the number of players
+                JPopupMenu menu = accountMenu();
+                menu.show(chip, 0, -menu.getPreferredSize().height - 4);
             }
         };
         chip.addMouseListener(click);
@@ -199,6 +201,12 @@ public class Sidebar extends JPanel {
             menu.add(item);
         }
         menu.addSeparator();
+        if (active != null) {
+            JMenuItem skin = new JMenuItem(GetText.tr("Change skin"));
+            skin.setIcon(Icons.EDIT.asIcon(16, Palette.textDim()));
+            skin.addActionListener(e -> SkinDialog.open(active));
+            menu.add(skin);
+        }
         JMenuItem manage = new JMenuItem(GetText.tr("Manage accounts"));
         manage.setIcon(Icons.SETTINGS.asIcon(16, Palette.textDim()));
         manage.addActionListener(e -> navigate.accept(UIConstants.LAUNCHER_ACCOUNTS_TAB));

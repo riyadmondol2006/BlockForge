@@ -52,7 +52,6 @@ import javax.swing.event.HyperlinkEvent;
 import org.mini2Dx.gettext.GetText;
 
 import com.blockforge.launcher.App;
-import com.blockforge.launcher.FileSystem;
 import com.blockforge.launcher.constants.UIConstants;
 import com.blockforge.launcher.data.AbstractNews;
 import com.blockforge.launcher.data.Instance;
@@ -140,10 +139,10 @@ public class HomePage extends Page {
         row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 84));
         row.add(action(Icons.EXPLORE, GetText.tr("Browse modpacks"), GetText.tr("Find something new to play"),
             () -> App.navigate(UIConstants.LAUNCHER_PACKS_TAB)));
-        row.add(action(Icons.CUBE, GetText.tr("Create an instance"), GetText.tr("Pick a version and loader"),
+        row.add(action(Icons.PLUS, GetText.tr("New instance"), GetText.tr("Newest Minecraft, ready to play"),
             () -> App.navigate(UIConstants.LAUNCHER_CREATE_PACK_TAB)));
-        row.add(action(Icons.FOLDER, GetText.tr("Open data folder"), GetText.tr("Instances, mods and logs"),
-            () -> OS.openFileExplorer(FileSystem.BASE_DIR)));
+        row.add(action(Icons.PERSON, GetText.tr("Change skin"), GetText.tr("Pick how you look in game"),
+            () -> SkinDialog.open(null)));
         return row;
     }
 
@@ -229,7 +228,6 @@ public class HomePage extends Page {
         List<Instance> byRecent = new ArrayList<>(instances);
         byRecent.sort(Comparator.comparing(Instance::getLastPlayedOrEpoch).reversed());
 
-        quickActions.setVisible(!instances.isEmpty());
         heroHolder.removeAll();
         heroHolder.add(byRecent.isEmpty() ? new Hero(null) : new Hero(byRecent.get(0)), BorderLayout.CENTER);
 
@@ -364,7 +362,7 @@ public class HomePage extends Page {
             if (instance == null) {
                 Btn browse = new Btn(GetText.tr("Browse modpacks"), Btn.Kind.FILLED).icon(Icons.EXPLORE);
                 browse.addActionListener(e -> App.navigate(UIConstants.LAUNCHER_PACKS_TAB));
-                Btn create = new Btn(GetText.tr("Create instance"), Btn.Kind.TONAL).icon(Icons.CUBE);
+                Btn create = new Btn(GetText.tr("New instance"), Btn.Kind.TONAL).icon(Icons.PLUS);
                 create.addActionListener(e -> App.navigate(UIConstants.LAUNCHER_CREATE_PACK_TAB));
                 buttons.add(browse);
                 buttons.add(Box.createHorizontalStrut(10));
