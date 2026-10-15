@@ -43,6 +43,7 @@ import com.blockforge.launcher.utils.OS;
 import com.blockforge.launcher.utils.ProgressResponseBody;
 
 import okhttp3.Cache;
+import okhttp3.ConnectionPool;
 import okhttp3.OkHttpClient;
 import okhttp3.Protocol;
 import okhttp3.Response;
@@ -75,6 +76,9 @@ public final class Network {
 
         OkHttpClient baseClient = new OkHttpClient.Builder()
                 .protocols(Collections.singletonList(Protocol.HTTP_1_1))
+                // downloads run on many threads at once; the default pool only keeps 5 idle connections, so the
+                // rest were thrown away after each file and every next file paid for a new TLS handshake
+                .connectionPool(new ConnectionPool(32, 5, TimeUnit.MINUTES))
                 .addNetworkInterceptor(new UserAgentInterceptor())
                 .addInterceptor(new DebugLoggingInterceptor())
                 .addNetworkInterceptor(new ErrorReportingInterceptor())

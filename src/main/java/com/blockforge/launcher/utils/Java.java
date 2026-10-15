@@ -72,10 +72,19 @@ public class Java {
     }
 
     public static String getVersionForJavaPath(File folder) {
+        // every JDK and JRE (Mojang's runtimes included) has a "release" file that says its version, and reading
+        // it is a lot quicker than starting a whole Java just to ask
+        String fromRelease = versionFromReleaseFile(folder.toPath());
+        if (fromRelease != null) {
+            return fromRelease;
+        }
+
         String executablePath = Java.getPathToJavaExecutable(folder.toPath());
 
-        // starting Java just to ask its version is slow, and the answer only changes if Java does
-        String remembered = FileFingerprints.get(java.nio.file.Paths.get(executablePath), "javaversion");
+        // starting Java just to ask its version is slow, and the answer only changes if Java does. On Windows the
+        // file is javaw.exe, so remember it by that name or the fingerprint never matches
+        Path executableFile = Paths.get(executablePath + (OS.isWindows() ? ".exe" : ""));
+        String remembered = FileFingerprints.get(executableFile, "javaversion");
         if (remembered != null) {
             return remembered;
         }
@@ -111,10 +120,32 @@ public class Java {
         if (version.equals("Unknown")) {
             LogManager.warn("Cannot get Java version from the output of \"" + folder.getAbsolutePath() + " -version\"");
         } else {
-            FileFingerprints.put(java.nio.file.Paths.get(executablePath), "javaversion", version);
+            FileFingerprints.put(executableFile, "javaversion", version);
         }
 
         return version;
+    }
+
+    private static final Pattern RELEASE_JAVA_VERSION = Pattern
+        .compile("^JAVA_VERSION\\s*=\\s*\"?([^\"\\s]+)\"?\\s*$", Pattern.MULTILINE);
+
+    /**
+     * Reads the version from the "release" file in a Java home, such as "17.0.9" or "1.8.0_392", or null if there is
+     * no such file or it doesn't say.
+     */
+    public static String versionFromReleaseFile(Path javaHome) {
+        Path release = javaHome.resolve("release");
+        if (!Files.isRegularFile(release)) {
+            return null;
+        }
+
+        try {
+            Matcher m = RELEASE_JAVA_VERSION
+                .matcher(new String(Files.readAllBytes(release), StandardCharsets.ISO_8859_1));
+            return m.find() ? m.group(1) : null;
+        } catch (IOException e) {
+            return null;
+        }
     }
 
     /**

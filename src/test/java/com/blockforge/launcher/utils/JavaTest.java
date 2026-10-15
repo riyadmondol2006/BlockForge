@@ -18,8 +18,14 @@
 package com.blockforge.launcher.utils;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 public class JavaTest {
     @Test
@@ -42,6 +48,26 @@ public class JavaTest {
         assertEquals(3, Java.parseJavaBuildVersion("11.0.3"));
         assertEquals(1, Java.parseJavaBuildVersion("12.0.1"));
         assertEquals(0, Java.parseJavaBuildVersion("13-ea"));
+    }
+
+    @Test
+    public void testVersionFromReleaseFile(@TempDir Path home) throws Exception {
+        assertNull(Java.versionFromReleaseFile(home));
+
+        Files.write(home.resolve("release"),
+            "IMPLEMENTOR=\"Eclipse Adoptium\"\r\nJAVA_VERSION=\"17.0.15\"\r\nOS_ARCH=\"x86_64\"\r\n"
+                .getBytes(StandardCharsets.ISO_8859_1));
+        assertEquals("17.0.15", Java.versionFromReleaseFile(home));
+        assertEquals(17, Java.parseJavaVersionNumber(Java.versionFromReleaseFile(home)));
+
+        Files.write(home.resolve("release"), "JAVA_VERSION=\"1.8.0_202\"\nOS_NAME=\"Linux\"\n"
+            .getBytes(StandardCharsets.ISO_8859_1));
+        assertEquals("1.8.0_202", Java.versionFromReleaseFile(home));
+        assertEquals("1.8.0_202", Java.getVersionForJavaPath(home.toFile()), "no need to start Java");
+
+        Files.write(home.resolve("release"), "JAVA_VERSION_DATE=\"2024-01-16\"\n"
+            .getBytes(StandardCharsets.ISO_8859_1));
+        assertNull(Java.versionFromReleaseFile(home));
     }
 
 }

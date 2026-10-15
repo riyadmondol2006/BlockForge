@@ -19,6 +19,7 @@ package com.blockforge.launcher.mclauncher;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -93,6 +94,14 @@ public class MCLauncher {
                     instance.launcher.loaderVersion.version));
             }
 
+            // LWJGL 2 (Minecraft 1.12 and older) asks the xrandr program about the screens on Linux and crashes with
+            // an unhelpful error when it isn't installed, which many minimal and Wayland setups don't have
+            if (OS.isLinux() && usesLwjgl2(instance) && !Utils.executableInPath("xrandr")) {
+                LogManager.warn("This Minecraft version needs the \"xrandr\" program on Linux, but it wasn't found. "
+                    + "If the game crashes on start, install xrandr (x11-xserver-utils on Debian/Ubuntu, "
+                    + "xrandr on Fedora/Arch).");
+            }
+
             if (instance.hasDisabledJavaRuntime()) {
                 LogManager.warn(
                     "The Use Java Provided By Minecraft option has been disabled. If you're experiencing crashes, please enable this option.");
@@ -132,6 +141,23 @@ public class MCLauncher {
         } catch (IOException ignored) {
             // ignored
         }
+    }
+
+    private static void warnIfMemoryIsShort(int heapMb) {
+        try {
+            long availableMb = OS.getSystemInfo().getHardware().getMemory().getAvailable() / (1024 * 1024);
+            String warning = GameMemory.availabilityWarning(heapMb, availableMb);
+            if (warning != null) {
+                LogManager.warn(warning);
+            }
+        } catch (Throwable t) {
+            // only a hint, never worth failing over
+        }
+    }
+
+    private static boolean usesLwjgl2(Instance instance) {
+        return instance.libraries != null && instance.libraries.stream()
+            .anyMatch(l -> l.name != null && l.name.startsWith("org.lwjgl.lwjgl:lwjgl:2"));
     }
 
     private static List<String> wrapArguments(String wrapperCommand, List<String> args) {
@@ -288,27 +314,32 @@ public class MCLauncher {
         if (OS.isWindows() && (Files.exists(Paths.get(path + "w")) || Files.exists(Paths.get(path + "w.exe")))) {
             path += "w";
         }
+        int javaIndex = arguments.size();
         arguments.add(path);
 
-        if (OS.getMaximumRam() != 0 && maximumMemory < instance.getMemory()) {
-            if ((OS.getMaximumRam() / 2) < instance.getMemory()) {
-                arguments.add("-Xmx" + maximumMemory + "M");
-            } else {
-                arguments.add("-Xmx" + instance.getMemory() + "M");
-            }
-        } else {
-            arguments.add("-Xmx" + maximumMemory + "M");
-        }
+        // never more than the computer can spare, even when a modpack asks for more
+        GameMemory.Plan memory = GameMemory.plan(maximumMemory, instance.getMemory(), OS.getSystemRam(),
+            OS.is64Bit());
+        memory.warnings.forEach(LogManager::warn);
+        int heapMb = memory.heapMb;
+        // no -Xms: the game starts small and grows as needed, which matters on computers with little memory
+        arguments.add("-Xmx" + heapMb + "M");
+        App.TASKPOOL.execute(() -> warnIfMemoryIsShort(heapMb));
+
+        // read once from the Java's release file instead of starting Java (twice) to ask
+        int javaMajor = Java.parseJavaVersionNumber(Java.getVersionForJavaPath(new File(javaPath)));
+        // if the version is unknown, assume Java 8 or newer since it's far more likely these days
+        boolean useMetaspace = javaMajor <= 0 || javaMajor >= 8;
 
         if (OS.getMaximumRam() != 0 && permGen < instance.getPermGen()
             && (OS.getMaximumRam() / 8) < instance.getPermGen()) {
-            if (Java.useMetaspace(javaPath)) {
+            if (useMetaspace) {
                 arguments.add("-XX:MetaspaceSize=" + instance.getPermGen() + "M");
             } else {
                 arguments.add("-XX:PermSize=" + instance.getPermGen() + "M");
             }
         } else {
-            if (Java.useMetaspace(javaPath)) {
+            if (useMetaspace) {
                 arguments.add("-XX:MetaspaceSize=" + permGen + "M");
             } else {
                 arguments.add("-XX:PermSize=" + permGen + "M");
@@ -337,7 +368,8 @@ public class MCLauncher {
 
         if (OS.isMac()) {
             arguments.add("-Dapple.laf.useScreenMenuBar=true");
-            arguments.add("-Xdock:name=\"" + instance.getName() + "\"");
+            // no quotes: there's no shell in between, so they'd end up in the Dock as part of the name
+            arguments.add("-Xdock:name=" + instance.getName());
 
             if (new File(instance.getAssetsDir(), "icons/minecraft.icns").exists()) {
                 arguments.add(
@@ -345,12 +377,14 @@ public class MCLauncher {
             }
         }
 
-        if (!javaArguments.isEmpty()) {
-            for (String arg : javaArguments.split(" ")) {
-                if (!arg.isEmpty()) {
-                    arguments.add(arg);
-                }
-            }
+        if (JvmArguments.isCustom(javaArguments)) {
+            // the person's own arguments are used exactly as they are
+            arguments.addAll(JvmArguments.split(javaArguments));
+        } else {
+            // nothing set, or BlockForge's defaults: use the well known garbage collector settings, sized for the
+            // memory this game gets
+            JvmArguments.addMissing(arguments,
+                JvmArguments.performanceFlags(heapMb, Runtime.getRuntime().availableProcessors()));
         }
 
         String classpath = cpb.toString();
@@ -383,6 +417,8 @@ public class MCLauncher {
             arguments.add("-cp");
             arguments.add(cpb.toString());
         }
+
+        int mainClassIndex = arguments.size();
 
         if (instance.usesLegacyLaunch()) {
             arguments.add("com.blockforge.launcher.mclauncher.legacy.LegacyMCLauncher");
@@ -461,7 +497,36 @@ public class MCLauncher {
             }
         }
 
+        if (JvmArguments.needsArgumentFile(arguments, OS.isWindows(), javaMajor)) {
+            moveJavaOptionsToArgumentFile(arguments, javaIndex, mainClassIndex, Paths.get(nativesDir));
+        }
+
         return arguments;
+    }
+
+    /**
+     * Windows can't start a program with a command line over 32767 characters, which big modpacks with hundreds of
+     * libraries reach ("CreateProcess error=206"). Java 9 and newer can read their options from a file instead, so the
+     * options (mostly the class path) go there. Only the options before the main class go in the file, so the account
+     * details that follow it are never written to disk.
+     */
+    private static void moveJavaOptionsToArgumentFile(List<String> arguments, int javaIndex, int mainClassIndex,
+        Path directory) {
+        List<String> options = arguments.subList(javaIndex + 1, mainClassIndex);
+        Path argumentFile = directory.resolve("java-options.txt");
+
+        try {
+            Files.createDirectories(directory);
+            Files.write(argumentFile, JvmArguments.toArgumentFile(options).getBytes(StandardCharsets.UTF_8));
+        } catch (IOException e) {
+            LogManager.logStackTrace("Couldn't write the Java options file, trying the long command line", e);
+            return;
+        }
+
+        LogManager.info("The command line is too long for Windows, so the Java options are passed in "
+            + argumentFile.getFileName());
+        options.clear();
+        arguments.add(javaIndex + 1, "@" + argumentFile.toAbsolutePath());
     }
 
     private static String replaceArgument(String incomingArgument, Instance instance, MicrosoftAccount account,

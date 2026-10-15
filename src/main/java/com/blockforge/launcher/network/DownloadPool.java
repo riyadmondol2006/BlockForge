@@ -20,6 +20,7 @@ package com.blockforge.launcher.network;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -49,9 +50,15 @@ public final class DownloadPool extends ArrayList<Download> {
             }
         }
 
-        ExecutorService executor = Executors.newFixedThreadPool(App.settings.concurrentConnections);
+        if (this.isEmpty()) {
+            return;
+        }
+
+        int threads = downloadThreads(App.settings.concurrentConnections, Runtime.getRuntime().availableProcessors(),
+            this.size());
+        ExecutorService executor = Executors.newFixedThreadPool(threads);
         synchronized (this) {
-            for (Download dl : this) {
+            for (Download dl : startOrder(this, threads)) {
                 executor.execute(new Downloader(dl));
             }
         }
@@ -73,6 +80,53 @@ public final class DownloadPool extends ArrayList<Download> {
         }
     }
 
+    /**
+     * How many files to download at once: the number set in the settings, but no more than there are files, and on
+     * computers with few cores no more than 4 per core, since every file also has to be checked (and maybe unpacked)
+     * once it arrives, and a 2 core computer gains nothing from more than 8 at a time.
+     */
+    static int downloadThreads(int configured, int processors, int files) {
+        int threads = Math.min(Math.max(1, configured), Math.max(8, processors * 4));
+        return Math.max(1, Math.min(threads, files));
+    }
+
+    /**
+     * The order to start downloads in: the few biggest files first, one per thread, since a large file on a single
+     * connection is what everything else would otherwise end up waiting for at the end. The rest keep their order,
+     * so big and small files stay mixed and the connection is kept busy while small files wait for the server.
+     */
+    static List<Download> startOrder(List<Download> downloads, int threads) {
+        List<Download> biggest = new ArrayList<>(downloads);
+        biggest.sort(Comparator.comparingLong((Download dl) -> dl.size).reversed());
+        biggest = new ArrayList<>(biggest.subList(0, Math.min(Math.max(1, threads), biggest.size())));
+
+        List<Download> ordered = new ArrayList<>(biggest);
+        for (Download dl : downloads) {
+            if (!containsSame(biggest, dl)) {
+                ordered.add(dl);
+            }
+        }
+        return ordered;
+    }
+
+    private static boolean containsSame(List<Download> list, Download dl) {
+        for (Download other : list) {
+            if (other == dl) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * How many files to check at once. With the fingerprints most checks only look at a file's size and date, and
+     * the rest hash it, which is processor work: two per core keeps the disk and processors busy without swamping
+     * small computers.
+     */
+    static int checkThreads(int processors, int files) {
+        return Math.max(1, Math.min(files, Math.max(2, Math.min(processors * 2, 16))));
+    }
+
     public long totalSize() {
         long size = 0;
         synchronized (this) {
@@ -89,9 +143,12 @@ public final class DownloadPool extends ArrayList<Download> {
         final DownloadPool pool = new DownloadPool(this.wait);
         final List<Download> downloads = this.stream().distinct().collect(Collectors.toList());
 
-        // checking files is mostly disk and hashing work, so use as many threads as there are cores
-        ExecutorService executor = Executors.newFixedThreadPool(
-            Math.max(App.settings.concurrentConnections, Runtime.getRuntime().availableProcessors()));
+        if (downloads.isEmpty()) {
+            return pool;
+        }
+
+        ExecutorService executor = Executors
+            .newFixedThreadPool(checkThreads(Runtime.getRuntime().availableProcessors(), downloads.size()));
         for (final Download dl : downloads) {
             executor.submit(() -> {
                 if (dl.needToDownload()) {

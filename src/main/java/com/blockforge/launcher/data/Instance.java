@@ -55,6 +55,8 @@ import java.util.Optional;
 import java.util.Properties;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -72,6 +74,7 @@ import javax.swing.JPanel;
 import javax.swing.JProgressBar;
 import javax.swing.JScrollPane;
 import javax.swing.JTextArea;
+import javax.swing.SwingUtilities;
 import javax.swing.filechooser.FileNameExtensionFilter;
 
 import org.jetbrains.annotations.NotNull;
@@ -152,6 +155,8 @@ import com.blockforge.launcher.managers.ModrinthModpackUpdateManager;
 import com.blockforge.launcher.managers.PackManager;
 import com.blockforge.launcher.managers.PerformanceManager;
 import com.blockforge.launcher.managers.TechnicModpackUpdateManager;
+import com.blockforge.launcher.mclauncher.LaunchTimings;
+import com.blockforge.launcher.mclauncher.LauncherMemory;
 import com.blockforge.launcher.mclauncher.MCLauncher;
 import com.blockforge.launcher.network.Analytics;
 import com.blockforge.launcher.network.DownloadPool;
@@ -433,7 +438,14 @@ public class Instance extends MinecraftVersion implements ModManagement {
     public boolean prepareForLaunch(ProgressDialog<Boolean> progressDialog, Path nativesTempDir,
         Path lwjglNativesTempDir) {
         PerformanceManager.start();
+        LaunchTimings timings = new LaunchTimings();
         OkHttpClient httpClient = Network.createProgressClient(progressDialog);
+
+        // the Java runtime doesn't depend on anything else here, so it's checked (or fetched) alongside the rest
+        // instead of after it; when it has to be downloaded, its biggest file alone can take longer than all the
+        // libraries together
+        CompletableFuture<Void> javaRuntime = CompletableFuture.runAsync(this::ensureMinecraftJavaRuntime,
+            r -> new Thread(r, "launch-java-runtime").start());
 
         PerformanceManager.start("Downloading Minecraft");
         try {
@@ -455,6 +467,7 @@ public class Instance extends MinecraftVersion implements ModManagement {
             return false;
         }
         PerformanceManager.end("Downloading Minecraft");
+        timings.step("minecraft");
 
         // download libraries
         PerformanceManager.start("Downloading Libraries");
@@ -534,77 +547,7 @@ public class Instance extends MinecraftVersion implements ModManagement {
 
         progressDialog.doneTask();
         PerformanceManager.end("Downloading Libraries");
-
-        // download Java runtime
-        PerformanceManager.start("Java Runtime");
-        if (javaVersion != null && Data.JAVA_RUNTIMES != null && Optional
-            .ofNullable(launcher.useJavaProvidedByMinecraft).orElse(App.settings.useJavaProvidedByMinecraft)) {
-            Map<String, List<JavaRuntime>> runtimesForSystem = Data.JAVA_RUNTIMES.getForSystem();
-            String runtimeSystemString = JavaRuntimes.getSystem();
-
-            String runtimeToUse = Optional.ofNullable(launcher.javaRuntimeOverride).orElse(javaVersion.component);
-
-            if (runtimesForSystem.containsKey(runtimeToUse)
-                && !runtimesForSystem.get(runtimeToUse).isEmpty()) {
-                // #. {0} is the version of Java were downloading
-                progressDialog.setLabel(GetText.tr("Downloading Java Runtime {0}",
-                    runtimesForSystem.get(runtimeToUse).get(0).version.name));
-
-                JavaRuntime runtimeToDownload = runtimesForSystem.get(runtimeToUse).get(0);
-
-                try {
-                    JavaRuntimeManifest javaRuntimeManifest = com.blockforge.launcher.network.Download.build()
-                        .setUrl(runtimeToDownload.manifest.url).size(runtimeToDownload.manifest.size)
-                        .hash(runtimeToDownload.manifest.sha1).downloadTo(FileSystem.MINECRAFT_RUNTIMES
-                            .resolve(runtimeToUse).resolve("manifest.json"))
-                        .asClassWithThrow(JavaRuntimeManifest.class);
-
-                    DownloadPool pool = new DownloadPool();
-
-                    // create root directory
-                    Path runtimeSystemDirectory = FileSystem.MINECRAFT_RUNTIMES.resolve(runtimeToUse)
-                        .resolve(runtimeSystemString);
-                    Path runtimeDirectory = runtimeSystemDirectory.resolve(runtimeToUse);
-                    FileUtils.createDirectory(runtimeDirectory);
-
-                    // create all the directories
-                    javaRuntimeManifest.files.forEach((key, file) -> {
-                        if (file.type == JavaRuntimeManifestFileType.DIRECTORY) {
-                            FileUtils.createDirectory(runtimeDirectory.resolve(key));
-                        }
-                    });
-
-                    // collect the files we need to download
-                    javaRuntimeManifest.files.forEach((key, file) -> {
-                        if (file.type == JavaRuntimeManifestFileType.FILE) {
-                            com.blockforge.launcher.network.Download download = new com.blockforge.launcher.network.Download()
-                                .setUrl(file.downloads.raw.url).downloadTo(runtimeDirectory.resolve(key))
-                                .hash(file.downloads.raw.sha1).size(file.downloads.raw.size)
-                                .executable(file.executable).withHttpClient(httpClient);
-
-                            pool.add(download);
-                        }
-                    });
-
-                    DownloadPool smallPool = pool.downsize();
-
-                    progressDialog.setTotalBytes(smallPool.totalSize());
-
-                    smallPool.downloadAll();
-
-                    // write out the version file (theres also a .sha1 file created, but we're not
-                    // doing that)
-                    Files.write(runtimeSystemDirectory.resolve(".version"),
-                        runtimeToDownload.version.name.getBytes(StandardCharsets.UTF_8));
-                    // Files.write(runtimeSystemDirectory.resolve(runtimeToUse
-                    // + ".sha1"), runtimeToDownload.version.name.getBytes(StandardCharsets.UTF_8));
-                } catch (IOException e) {
-                    LogManager.logStackTrace("Failed to download Java runtime", e);
-                }
-            }
-        }
-        progressDialog.doneTask();
-        PerformanceManager.end("Java Runtime");
+        timings.step("libraries");
 
         // organise assets
         PerformanceManager.start("Organising Resources 1");
@@ -639,6 +582,23 @@ public class Instance extends MinecraftVersion implements ModManagement {
             smallPool.downloadAll();
         }
         PerformanceManager.end("Organising Resources 1");
+        timings.step("assets");
+
+        // the Java runtime was being checked or fetched in the meantime
+        PerformanceManager.start("Java Runtime");
+        if (!javaRuntime.isDone()) {
+            // #. {0} is the version of Java were downloading
+            progressDialog.setLabel(GetText.tr("Downloading Java Runtime {0}",
+                javaVersion == null ? "" : javaVersion.majorVersion));
+        }
+        try {
+            javaRuntime.join();
+        } catch (CompletionException e) {
+            LogManager.logStackTrace("Failed to download Java runtime", e);
+        }
+        progressDialog.doneTask();
+        PerformanceManager.end("Java Runtime");
+        timings.step("java");
 
         // copy resources to instance
         if (index != null && (index.mapToResources || assetIndex.id.equalsIgnoreCase("legacy"))) {
@@ -657,6 +617,7 @@ public class Instance extends MinecraftVersion implements ModManagement {
                 }
             });
             PerformanceManager.end("Organising Resources 2");
+            timings.step("copying assets");
         }
 
         progressDialog.doneTask();
@@ -712,6 +673,7 @@ public class Instance extends MinecraftVersion implements ModManagement {
 
         progressDialog.doneTask();
         PerformanceManager.end("Extracting Natives");
+        timings.step("natives");
 
         if (LWJGLManager.shouldUseLegacyLWJGL(this)) {
             PerformanceManager.start("Extracting Legacy LWJGL");
@@ -739,6 +701,7 @@ public class Instance extends MinecraftVersion implements ModManagement {
 
             progressDialog.doneTask();
             PerformanceManager.end("Extracting Legacy LWJGL");
+            timings.step("legacy lwjgl");
         }
 
         if (usesCustomMinecraftJar()) {
@@ -757,6 +720,7 @@ public class Instance extends MinecraftVersion implements ModManagement {
                 return false;
             }
             PerformanceManager.end("Creating custom minecraft.jar");
+            timings.step("minecraft.jar");
         }
         progressDialog.doneTask();
 
@@ -771,6 +735,7 @@ public class Instance extends MinecraftVersion implements ModManagement {
                 LogManager.logStackTrace("Failed to scan all mods for Fractureiser", e);
             }
             PerformanceManager.end("Scanning mods for Fractureiser");
+            timings.step("mod scan");
 
             if (!foundInfections.isEmpty()) {
                 LogManager.error("Infections have been found in your mods. See the below list of paths");
@@ -781,7 +746,72 @@ public class Instance extends MinecraftVersion implements ModManagement {
         progressDialog.doneTask();
 
         PerformanceManager.end();
+        LogManager.info("Ready to launch in " + timings.summary());
         return true;
+    }
+
+    /**
+     * Makes sure the Java that Mojang provides for this Minecraft version is there and complete, downloading what's
+     * missing, when that Java is the one being used.
+     */
+    private void ensureMinecraftJavaRuntime() {
+        if (javaVersion == null || Data.JAVA_RUNTIMES == null || !Optional
+            .ofNullable(launcher.useJavaProvidedByMinecraft).orElse(App.settings.useJavaProvidedByMinecraft)) {
+            return;
+        }
+
+        Map<String, List<JavaRuntime>> runtimesForSystem = Data.JAVA_RUNTIMES.getForSystem();
+        String runtimeSystemString = JavaRuntimes.getSystem();
+        String runtimeToUse = Optional.ofNullable(launcher.javaRuntimeOverride).orElse(javaVersion.component);
+
+        if (!runtimesForSystem.containsKey(runtimeToUse) || runtimesForSystem.get(runtimeToUse).isEmpty()) {
+            return;
+        }
+
+        JavaRuntime runtimeToDownload = runtimesForSystem.get(runtimeToUse).get(0);
+
+        try {
+            JavaRuntimeManifest javaRuntimeManifest = com.blockforge.launcher.network.Download.build()
+                .setUrl(runtimeToDownload.manifest.url).size(runtimeToDownload.manifest.size)
+                .hash(runtimeToDownload.manifest.sha1).downloadTo(FileSystem.MINECRAFT_RUNTIMES
+                    .resolve(runtimeToUse).resolve("manifest.json"))
+                .asClassWithThrow(JavaRuntimeManifest.class);
+
+            DownloadPool pool = new DownloadPool();
+
+            // create root directory
+            Path runtimeSystemDirectory = FileSystem.MINECRAFT_RUNTIMES.resolve(runtimeToUse)
+                .resolve(runtimeSystemString);
+            Path runtimeDirectory = runtimeSystemDirectory.resolve(runtimeToUse);
+            FileUtils.createDirectory(runtimeDirectory);
+
+            // create all the directories
+            javaRuntimeManifest.files.forEach((key, file) -> {
+                if (file.type == JavaRuntimeManifestFileType.DIRECTORY) {
+                    FileUtils.createDirectory(runtimeDirectory.resolve(key));
+                }
+            });
+
+            // collect the files we need to download
+            javaRuntimeManifest.files.forEach((key, file) -> {
+                if (file.type == JavaRuntimeManifestFileType.FILE) {
+                    pool.add(com.blockforge.launcher.network.Download
+                        .forJavaRuntimeFile(file.downloads, runtimeDirectory.resolve(key))
+                        .executable(file.executable));
+                }
+            });
+
+            pool.downsize().downloadAll();
+
+            // write out the version file (theres also a .sha1 file created, but we're not doing that)
+            Path versionFile = runtimeSystemDirectory.resolve(".version");
+            byte[] version = runtimeToDownload.version.name.getBytes(StandardCharsets.UTF_8);
+            if (!Files.exists(versionFile) || !Arrays.equals(Files.readAllBytes(versionFile), version)) {
+                Files.write(versionFile, version);
+            }
+        } catch (IOException e) {
+            LogManager.logStackTrace("Failed to download Java runtime", e);
+        }
     }
 
     public boolean launch() {
@@ -789,6 +819,7 @@ public class Instance extends MinecraftVersion implements ModManagement {
     }
 
     public boolean launch(boolean offline) {
+        final long playPressedAt = System.nanoTime();
         final MicrosoftAccount account = launcher.account == null ? AccountManager.getSelectedAccount()
             : AccountManager.getAccountByName(launcher.account);
 
@@ -875,6 +906,13 @@ public class Instance extends MinecraftVersion implements ModManagement {
             }
         }
 
+        // check the Microsoft login while the files are being checked, instead of after, so a token that needs
+        // refreshing doesn't add a round trip to Microsoft on top of everything else
+        final CompletableFuture<Boolean> loginCheck = offline || account.offline
+            ? CompletableFuture.completedFuture(true)
+            : CompletableFuture.supplyAsync(account::ensureAccessTokenValid,
+                r -> new Thread(r, "launch-login-check").start());
+
         ProgressDialog<Boolean> prepareDialog = new ProgressDialog<>(GetText.tr("Preparing For Launch"),
             7,
             GetText.tr("Preparing For Launch"));
@@ -895,9 +933,7 @@ public class Instance extends MinecraftVersion implements ModManagement {
         Thread launcherThread = new Thread(() -> {
             try {
                 long start = System.currentTimeMillis();
-                if (App.launcher.getParent() != null) {
-                    App.launcher.getParent().setVisible(false);
-                }
+                setLauncherWindowVisible(false);
 
                 LogManager.info(String.format("Launching pack %s %s (%s) for Minecraft %s", this.launcher.pack,
                     this.launcher.version, getPlatformName(), this.id));
@@ -916,23 +952,28 @@ public class Instance extends MinecraftVersion implements ModManagement {
 
                 // offline players have nothing to log in to, so don't make them wait for a login step
                 if (!offline && !account.offline) {
-                    LogManager.info("Logging into Minecraft!");
-                    ProgressDialog<Boolean> loginDialog = new ProgressDialog<>(GetText.tr("Logging Into Minecraft"),
-                        0, GetText.tr("Logging Into Minecraft"), "Aborted login to Minecraft!");
-                    loginDialog.addThread(new Thread(() -> {
-                        loginDialog.setReturnValue(account.ensureAccessTokenValid());
-                        loginDialog.close();
-                    }));
-                    loginDialog.start();
+                    // usually finished already, as it ran alongside the file checks
+                    Boolean loggedIn = loginCheck.getNow(null);
 
-                    if (!Boolean.TRUE.equals(loginDialog.getReturnValue())) {
+                    if (loggedIn == null) {
+                        LogManager.info("Logging into Minecraft!");
+                        ProgressDialog<Boolean> loginDialog = new ProgressDialog<>(
+                            GetText.tr("Logging Into Minecraft"), 0, GetText.tr("Logging Into Minecraft"),
+                            "Aborted login to Minecraft!");
+                        loginDialog.addThread(new Thread(() -> {
+                            loginDialog.setReturnValue(waitForLogin(loginCheck));
+                            loginDialog.close();
+                        }));
+                        loginDialog.start();
+                        loggedIn = loginDialog.getReturnValue();
+                    }
+
+                    if (!Boolean.TRUE.equals(loggedIn)) {
                         LogManager.error("Failed to login");
                         Analytics.trackEvent(
                             AnalyticsEvent.forInstanceLaunchFailed(this, offline, "microsoft_login_failure"));
                         App.launcher.setMinecraftLaunched(false);
-                        if (App.launcher.getParent() != null) {
-                            App.launcher.getParent().setVisible(true);
-                        }
+                        setLauncherWindowVisible(true);
                         DialogManager.okDialog().setTitle(GetText.tr("Error Logging In"))
                             .setContent(GetText.tr("Couldn't login with Microsoft account"))
                             .setType(DialogManager.ERROR).show();
@@ -947,16 +988,14 @@ public class Instance extends MinecraftVersion implements ModManagement {
                         Analytics.trackEvent(
                             AnalyticsEvent.forInstanceLaunchFailed(this, offline, "pre_launch_failure"));
                         App.launcher.setMinecraftLaunched(false);
-
-                        if (App.launcher.getParent() != null) {
-                            App.launcher.getParent().setVisible(true);
-                        }
+                        setLauncherWindowVisible(true);
 
                         return;
                     }
                 }
 
-                logJavaSelection();
+                // only writes to the log, so it doesn't need to hold up starting the game
+                App.TASKPOOL.execute(this::logJavaSelection);
 
                 Process process = MCLauncher.launch(account, this, nativesTempDir,
                     LWJGLManager.shouldUseLegacyLWJGL(this) ? lwjglNativesTempDir : null,
@@ -966,11 +1005,12 @@ public class Instance extends MinecraftVersion implements ModManagement {
                     Analytics.trackEvent(AnalyticsEvent.forInstanceLaunchFailed(this, offline, "no_process"));
                     LogManager.error("Failed to get process for Minecraft");
                     App.launcher.setMinecraftLaunched(false);
-                    if (App.launcher.getParent() != null) {
-                        App.launcher.getParent().setVisible(true);
-                    }
+                    setLauncherWindowVisible(true);
                     return;
                 }
+
+                LogManager.info(String.format(Locale.ENGLISH, "Minecraft started %d ms after Play was pressed",
+                    (System.nanoTime() - playPressedAt) / 1_000_000L));
 
                 Analytics.trackEvent(AnalyticsEvent.forInstanceLaunched(this, offline));
 
@@ -986,6 +1026,8 @@ public class Instance extends MinecraftVersion implements ModManagement {
                 }
 
                 App.launcher.showKillMinecraft(process);
+                // on a computer with little memory, give back what the launcher can spare while the game runs
+                LauncherMemory.gameStarted();
                 InputStream is = process.getInputStream();
                 InputStreamReader isr = new InputStreamReader(is, StandardCharsets.UTF_8);
                 StringBuilder sb = new StringBuilder();
@@ -1062,8 +1104,8 @@ public class Instance extends MinecraftVersion implements ModManagement {
                     LogManager.minecraft(line);
                 }
                 App.launcher.hideKillMinecraft();
-                if (App.launcher.getParent() != null && App.settings.keepLauncherOpen) {
-                    App.launcher.getParent().setVisible(true);
+                if (App.settings.keepLauncherOpen) {
+                    setLauncherWindowVisible(true);
                 }
                 long end = System.currentTimeMillis();
                 int exitValue = 0; // Assume we exited fine
@@ -1139,18 +1181,46 @@ public class Instance extends MinecraftVersion implements ModManagement {
                 LogManager.logStackTrace(e1);
                 Analytics.trackEvent(AnalyticsEvent.forInstanceLaunchFailed(this, offline, "exception"));
                 App.launcher.setMinecraftLaunched(false);
-                if (App.launcher.getParent() != null) {
-                    App.launcher.getParent().setVisible(true);
-                }
+                setLauncherWindowVisible(true);
             }
-        });
+        }, "minecraft-launch");
 
         this.setLastPlayed(Instant.now());
         this.incrementNumberOfPlays();
-        this.save();
 
+        // start the game first; writing the play count down can happen while it starts
         launcherThread.start();
+        this.save();
         return true;
+    }
+
+    /** Shows or hides the launcher's window from any thread; Swing windows may only be touched on its own thread. */
+    private static void setLauncherWindowVisible(boolean visible) {
+        if (App.launcher == null || App.launcher.getParent() == null) {
+            return;
+        }
+
+        if (SwingUtilities.isEventDispatchThread()) {
+            App.launcher.getParent().setVisible(visible);
+        } else {
+            SwingUtilities.invokeLater(() -> {
+                if (App.launcher.getParent() != null) {
+                    App.launcher.getParent().setVisible(visible);
+                }
+            });
+        }
+    }
+
+    private static Boolean waitForLogin(CompletableFuture<Boolean> loginCheck) {
+        try {
+            return loginCheck.get();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+        } catch (Exception e) {
+            LogManager.logStackTrace("Couldn't check the Microsoft login", e);
+            return false;
+        }
     }
 
     private boolean executeCommand(String command) {
