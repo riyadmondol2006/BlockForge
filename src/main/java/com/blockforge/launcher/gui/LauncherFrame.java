@@ -150,6 +150,12 @@ public final class LauncherFrame extends JFrame implements RelocalizationListene
             // look for a newer BlockForge on GitHub in the background; the popup waits for other dialogs to close
             LauncherUpdates.startBackgroundChecks(UpdateDialog::offer);
 
+            // once the launcher has settled, read the last played game's files so its start is quicker
+            javax.swing.Timer warmUp = new javax.swing.Timer(6000,
+                e -> com.blockforge.launcher.mclauncher.GameFileWarmer.launcherIdle());
+            warmUp.setRepeats(false);
+            warmUp.start();
+
             addWindowListener(new WindowAdapter() {
                 @Override
                 public void windowClosing(WindowEvent windowEvent) {

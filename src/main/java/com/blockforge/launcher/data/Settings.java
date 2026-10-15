@@ -43,6 +43,8 @@ import com.blockforge.launcher.annot.ExcludeFromGsonSerialization;
 import com.blockforge.launcher.constants.Constants;
 import com.blockforge.launcher.managers.LogManager;
 import com.blockforge.launcher.mclauncher.GameMemory;
+import com.blockforge.launcher.utils.Java;
+import com.blockforge.launcher.utils.LightMode;
 import com.blockforge.launcher.utils.OS;
 import com.blockforge.launcher.utils.Timestamper;
 import com.blockforge.launcher.utils.Utils;
@@ -107,9 +109,22 @@ public class Settings {
     public boolean scanModsOnLaunch = true;
 
     // Java/Minecraft
-    // half of the computer's memory, at most 4 GB: 2 GB gives 1 GB, 4 GB gives 2 GB, 8 GB or more gives 4 GB
+    /**
+     * Pick the game's memory for each game and this computer (see AutoMemory). null only in settings saved before
+     * this existed, and is then worked out once in validateMemory().
+     */
+    public Boolean automaticMemory = null;
+    // the memory used when automaticMemory is off: half of the computer's memory, at most 4 GB
     public int maximumMemory = defaultMaximumMemory();
-    public int metaspace = (OS.is64Bit() ? 256 : 128);
+    // the size only matters as a starting point for the game's class space, so the Java the launcher runs on is a
+    // good enough guess (and asking the system for its bitness here would slow down every start)
+    public int metaspace = (Java.is64Bit() ? 256 : 128);
+    /** keep a class-data archive per game so later starts load faster (Java 19 and newer) */
+    public boolean classDataCache = true;
+    /** read a game's files into the system's file cache while the launcher is idle, so Play starts faster */
+    public boolean warmUpGameFiles = true;
+    /** write graphics settings that suit this computer when a game starts for the first time */
+    public boolean autoGameOptions = true;
     public int windowWidth = 854;
     public int windowHeight = 480;
     public String javaPath;
@@ -441,7 +456,8 @@ public class Settings {
 
     private void validateMemory() {
         boolean needToSave = false;
-        int systemMemory = OS.getMaximumRam();
+        // from Java itself: asking the system (oshi) here would hold up the launcher's start
+        int systemMemory = (int) Math.max(0, LightMode.totalRamMb());
 
         if (systemMemory != 0 && maximumMemory > systemMemory) {
             LogManager.warn("Tried to allocate " + maximumMemory + "MB of maximum memory but only " + systemMemory
@@ -451,6 +467,11 @@ public class Settings {
             needToSave = true;
         }
 
+        if (automaticMemory == null) {
+            automaticMemory = GameMemory.wasNeverChosen(firstTimeRun, maximumMemory, systemMemory, Java.is64Bit());
+            needToSave = !firstTimeRun;
+        }
+
         if (needToSave) {
             save();
         }
@@ -458,7 +479,7 @@ public class Settings {
 
     private static int defaultMaximumMemory() {
         try {
-            return GameMemory.defaultMaximumMb(OS.getSystemRam(), OS.is64Bit());
+            return GameMemory.defaultMaximumMb((int) Math.max(0, LightMode.totalRamMb()), Java.is64Bit());
         } catch (Throwable t) {
             return GameMemory.UNKNOWN_DEFAULT_MB;
         }

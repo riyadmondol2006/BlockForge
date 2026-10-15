@@ -110,6 +110,30 @@ public class GameMemoryTest {
     }
 
     @Test
+    public void testOldSettingsKeepAMemoryThePlayerChose() {
+        // a brand new player: automatic
+        assertTrue(GameMemory.wasNeverChosen(true, 3072, 16384, true));
+        // the old defaults were never chosen by anyone: automatic
+        assertTrue(GameMemory.wasNeverChosen(false, 4096, 16384, true), "ATLauncher's 4 GB default");
+        assertTrue(GameMemory.wasNeverChosen(false, 2048, 4096, true), "early BlockForge: half of 4 GB");
+        // anything else was picked by the player and stays theirs
+        assertFalse(GameMemory.wasNeverChosen(false, 6144, 16384, true));
+        assertFalse(GameMemory.wasNeverChosen(false, 3072, 16384, true));
+    }
+
+    @Test
+    public void testWhichGamesUseAutomaticMemory() {
+        // an instance that follows the launcher does what the launcher does
+        assertTrue(GameMemory.usesAutomatic(null, null, true));
+        assertFalse(GameMemory.usesAutomatic(null, null, false));
+        // an instance with its own amount uses it
+        assertFalse(GameMemory.usesAutomatic(4096, null, true));
+        // an instance set to automatic is automatic even when the launcher isn't
+        assertTrue(GameMemory.usesAutomatic(null, true, false));
+        assertTrue(GameMemory.usesAutomatic(4096, true, false));
+    }
+
+    @Test
     public void testIsLowMemoryComputer() {
         assertTrue(GameMemory.isLowMemoryComputer(2048));
         assertTrue(GameMemory.isLowMemoryComputer(3790));

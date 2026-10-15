@@ -62,6 +62,8 @@ public class InstanceLauncher {
     public Integer requiredPermGen;
 
     public Integer maximumMemory;
+    /** true: pick the memory automatically for this instance; null: follow the launcher setting */
+    public Boolean automaticMemory;
     public Integer permGen;
     public String javaPath;
     public String javaArguments;

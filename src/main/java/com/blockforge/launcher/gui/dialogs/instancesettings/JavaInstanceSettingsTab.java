@@ -70,6 +70,7 @@ public class JavaInstanceSettingsTab extends JPanel {
     private final Instance instance;
 
     private JSpinner maximumMemory;
+    private MemoryChoice memoryChoice;
     private JSpinner permGen;
     private JTextField javaPath;
     private JTextArea javaParameters;
@@ -124,7 +125,9 @@ public class JavaInstanceSettingsTab extends JPanel {
         maximumMemoryModel.setMaximum((systemRam == 0 ? null : systemRam));
         maximumMemory = new JSpinner(maximumMemoryModel);
         ((JSpinner.DefaultEditor) maximumMemory.getEditor()).getTextField().setColumns(5);
-        add(maximumMemory, gbc);
+        // automatic, the launcher setting or a custom amount (the spinner)
+        memoryChoice = new MemoryChoice(instance, maximumMemory);
+        add(memoryChoice, gbc);
 
         // Perm Gen Settings
         gbc.gridx = 0;
@@ -589,7 +592,6 @@ public class JavaInstanceSettingsTab extends JPanel {
     }
 
     public void saveSettings() {
-        Integer maximumMemory = (Integer) this.maximumMemory.getValue();
         Integer permGen = (Integer) this.permGen.getValue();
         String javaPath = this.javaPath.getText();
         String javaParameters = this.javaParameters.getText();
@@ -602,7 +604,7 @@ public class JavaInstanceSettingsTab extends JPanel {
         Boolean useSystemGlfwVal = ((ComboItem<Boolean>) useSystemGlfw.getSelectedItem()).getValue();
         Boolean useSystemOpenAlVal = ((ComboItem<Boolean>) useSystemOpenAl.getSelectedItem()).getValue();
 
-        this.instance.launcher.maximumMemory = (maximumMemory == App.settings.maximumMemory ? null : maximumMemory);
+        memoryChoice.save(this.instance.launcher);
         this.instance.launcher.permGen = (permGen == App.settings.metaspace ? null : permGen);
 
         boolean instanceWillUseMinecraftProvidedJava = Optional.ofNullable(useJavaProvidedByMinecraftVal)

@@ -27,13 +27,25 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
+import java.util.concurrent.atomic.AtomicInteger;
+
 import com.blockforge.launcher.App;
+import com.blockforge.launcher.data.Settings;
 import com.blockforge.launcher.managers.LogManager;
 import com.blockforge.launcher.utils.FileFingerprints;
 import com.blockforge.launcher.utils.FileUtils;
+import com.blockforge.launcher.utils.LightMode;
 
 public final class DownloadPool extends ArrayList<Download> {
+    /** how many pools are downloading right now, so background disk work can keep out of the way */
+    private static final AtomicInteger ACTIVE = new AtomicInteger();
+
     private final boolean wait;
+
+    /** if any files are being downloaded right now */
+    public static boolean anyActive() {
+        return ACTIVE.get() > 0;
+    }
 
     public DownloadPool(boolean wait) {
         this.wait = wait;
@@ -54,8 +66,10 @@ public final class DownloadPool extends ArrayList<Download> {
             return;
         }
 
-        int threads = downloadThreads(App.settings.concurrentConnections, Runtime.getRuntime().availableProcessors(),
-            this.size());
+        int processors = Runtime.getRuntime().availableProcessors();
+        int configured = forComputer(App.settings.concurrentConnections,
+            Settings.DEFAULT_CONCURRENT_CONNECTIONS, LightMode.totalRamMb(), processors);
+        int threads = downloadThreads(configured, processors, this.size());
         ExecutorService executor = Executors.newFixedThreadPool(threads);
         synchronized (this) {
             for (Download dl : startOrder(this, threads)) {
@@ -64,8 +78,28 @@ public final class DownloadPool extends ArrayList<Download> {
         }
         executor.shutdown();
         if (this.wait) {
-            awaitTermination(executor);
+            ACTIVE.incrementAndGet();
+            try {
+                awaitTermination(executor);
+            } finally {
+                ACTIVE.decrementAndGet();
+            }
         }
+    }
+
+    /**
+     * How many downloads to run at once: what the player set, or when the setting was never changed from the
+     * default, what suits this computer: 8 with two cores or 4 GB of memory or less (each finished file is also
+     * hashed and written, and more at once only makes the launcher stutter there), otherwise the default.
+     * {@link com.blockforge.launcher.utils.PcProfile} uses the same rule; it lives here so downloads while the
+     * launcher starts don't load the PC profile.
+     */
+    public static int forComputer(int configured, int defaultConfigured, long totalMb, int cores) {
+        if (configured != defaultConfigured) {
+            return configured;
+        }
+        boolean small = (totalMb > 0 && totalMb <= 4608) || (cores > 0 && cores <= 2);
+        return small ? Math.min(configured, 8) : configured;
     }
 
     /** Waits for the pool to finish without spinning a CPU core while it does. */

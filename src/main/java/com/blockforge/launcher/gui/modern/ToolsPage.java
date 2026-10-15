@@ -76,6 +76,9 @@ public class ToolsPage extends Page {
         grid.add(tool(Icons.PERSON, GetText.tr("Update skins"),
             GetText.tr("Downloads the latest skin for each of your Microsoft accounts."), GetText.tr("Update"),
             () -> new SkinUpdaterToolPanel(viewModel)));
+        grid.add(tool(Icons.TRASH, GetText.tr("Clear game start cache"),
+            GetText.tr("Deletes the saved class data that makes games start faster. Each game makes it again the next time it is played."),
+            GetText.tr("Clear"), ToolsPage::clearClassCache));
         grid.add(tool(Icons.LIBRARY, GetText.tr("Delete libraries"),
             GetText.tr("Removes the libraries Minecraft uses. An instance may need a reinstall if they don't download again."),
             GetText.tr("Delete"), () -> new LibrariesDeleterToolPanel(viewModel)));
@@ -88,6 +91,18 @@ public class ToolsPage extends Page {
         fit.setLayout(new BorderLayout());
         fit.add(wrap, BorderLayout.CENTER);
         add(FitWidthPanel.scroll(fit), BorderLayout.CENTER);
+    }
+
+    private static void clearClassCache() {
+        if (com.blockforge.launcher.App.launcher != null && com.blockforge.launcher.App.launcher.minecraftLaunched) {
+            com.blockforge.launcher.App.TOASTER.pop(GetText.tr("Close Minecraft first, it is using the cache"));
+            return;
+        }
+        com.blockforge.launcher.App.TASKPOOL.execute(() -> {
+            long freed = com.blockforge.launcher.mclauncher.ClassDataCache.clear();
+            javax.swing.SwingUtilities.invokeLater(() -> com.blockforge.launcher.App.TOASTER
+                .pop(GetText.tr("Game start cache cleared ({0} MB freed)", freed / (1024 * 1024))));
+        });
     }
 
     private RoundPanel tool(Icons icon, String name, String description, String action,

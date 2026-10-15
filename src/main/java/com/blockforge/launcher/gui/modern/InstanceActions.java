@@ -56,6 +56,16 @@ public final class InstanceActions {
      * Launches the instance, after the checks that make sure it can actually be launched.
      */
     public static void play(Instance instance, boolean offline, boolean hasUpdate) {
+        play(instance, hasUpdate, () -> instance.launch(offline));
+    }
+
+    /** Launches the instance straight into one of its singleplayer worlds, just this once. */
+    public static void continueWorld(Instance instance, String worldFolder) {
+        play(instance, false, () -> instance.launchIntoWorld(worldFolder));
+    }
+
+    private static void play(Instance instance, boolean hasUpdate,
+        java.util.function.BooleanSupplier launch) {
         if (App.launcher.minecraftLaunched) {
             App.TOASTER.pop(GetText.tr("Minecraft is already running"));
             return;
@@ -97,7 +107,7 @@ public final class InstanceActions {
             }
         }
 
-        if (instance.launch(offline)) {
+        if (launch.getAsBoolean()) {
             App.launcher.setMinecraftLaunched(true);
         }
     }

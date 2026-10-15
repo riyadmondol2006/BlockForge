@@ -210,6 +210,8 @@ public class InstanceManager {
 
         if (instances.remove(instance)) {
             FileUtils.delete(instance.getRoot(), true);
+            // its class cache is of no use to anything else
+            com.blockforge.launcher.mclauncher.ClassDataCache.deleteFor(instance.getSafeName());
             INSTANCES.onNext(instances);
         }
     }

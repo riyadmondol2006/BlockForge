@@ -133,6 +133,12 @@ public class InstanceTile extends RoundPanel {
             }
 
             @Override
+            public void mouseEntered(MouseEvent e) {
+                // likely to be played next: get its files read ahead
+                com.blockforge.launcher.mclauncher.GameFileWarmer.warmSoon(instance);
+            }
+
+            @Override
             public void mousePressed(MouseEvent e) {
                 popup(e);
             }

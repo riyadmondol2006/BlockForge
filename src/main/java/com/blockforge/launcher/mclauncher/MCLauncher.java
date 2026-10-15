@@ -27,6 +27,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.stream.Stream;
@@ -197,7 +198,6 @@ public class MCLauncher {
         ErrorReporting.recordInstancePlay(instance.getPackName(), instance.getVersion(), instance.getLoaderVersion(),
             2);
 
-        int maximumMemory = Optional.ofNullable(instance.launcher.maximumMemory).orElse(App.settings.maximumMemory);
         int permGen = Optional.ofNullable(instance.launcher.permGen).orElse(App.settings.metaspace);
         String javaArguments = Optional.ofNullable(instance.launcher.javaArguments).orElse(App.settings.javaParameters);
         String javaPath = instance.getJavaPath();
@@ -317,14 +317,21 @@ public class MCLauncher {
         int javaIndex = arguments.size();
         arguments.add(path);
 
-        // never more than the computer can spare, even when a modpack asks for more
-        GameMemory.Plan memory = GameMemory.plan(maximumMemory, instance.getMemory(), OS.getSystemRam(),
-            OS.is64Bit());
+        // automatic: what this game needs, as far as this computer can spare it; otherwise what the player set
+        InstanceMemory.Decision memory = instance.takeMemoryDecision(javaPath);
         memory.warnings.forEach(LogManager::warn);
         int heapMb = memory.heapMb;
+        LogManager.info(memory.automatic
+            ? String.format(Locale.ENGLISH, "Memory: %d MB, picked automatically for %s (it would like %d MB; "
+                + "this computer can spare up to %d MB)", heapMb, AutoMemory.describeGame(memory.game),
+                memory.auto.idealMb, memory.auto.ceilingMb)
+            : String.format(Locale.ENGLISH, "Memory: %d MB, as set in the settings", heapMb));
         // no -Xms: the game starts small and grows as needed, which matters on computers with little memory
         arguments.add("-Xmx" + heapMb + "M");
-        App.TASKPOOL.execute(() -> warnIfMemoryIsShort(heapMb));
+        if (!memory.automatic) {
+            // the automatic choice has already looked at the free memory
+            App.TASKPOOL.execute(() -> warnIfMemoryIsShort(heapMb));
+        }
 
         // read once from the Java's release file instead of starting Java (twice) to ask
         int javaMajor = Java.parseJavaVersionNumber(Java.getVersionForJavaPath(new File(javaPath)));
@@ -458,7 +465,8 @@ public class MCLauncher {
 
         // Quick Play feature (with backward compatibility for older versions of
         // Minecraft)
-        QuickPlay quickPlay = instance.launcher.quickPlay;
+        // "Continue" on Home asks for one world just this once, without changing the instance's setting
+        QuickPlay quickPlay = instance.takeQuickPlayForLaunch();
 
         // Quick Play Multiplayer
         if (quickPlay.serverAddress != null && !quickPlay.serverAddress.isEmpty()) {
@@ -496,6 +504,10 @@ public class MCLauncher {
                 arguments.addAll(Arrays.asList(quickPlay.getSelectedQuickPlayOption().argumentRuleValue, realmId));
             }
         }
+
+        // a class-data archive per game and Java makes later starts quicker; the person's own sharing options win
+        mainClassIndex += ClassDataCache.apply(arguments, javaIndex, mainClassIndex, App.settings.classDataCache,
+            javaMajor, javaPath, JvmArguments.split(javaArguments), instance.getSafeName());
 
         if (JvmArguments.needsArgumentFile(arguments, OS.isWindows(), javaMajor)) {
             moveJavaOptionsToArgumentFile(arguments, javaIndex, mainClassIndex, Paths.get(nativesDir));

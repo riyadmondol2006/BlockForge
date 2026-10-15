@@ -155,7 +155,13 @@ import com.blockforge.launcher.managers.ModrinthModpackUpdateManager;
 import com.blockforge.launcher.managers.PackManager;
 import com.blockforge.launcher.managers.PerformanceManager;
 import com.blockforge.launcher.managers.TechnicModpackUpdateManager;
+import com.blockforge.launcher.data.json.QuickPlay;
+import com.blockforge.launcher.mclauncher.ClassDataCache;
+import com.blockforge.launcher.mclauncher.GameFileWarmer;
+import com.blockforge.launcher.mclauncher.GameOptionsDefaults;
+import com.blockforge.launcher.mclauncher.InstanceMemory;
 import com.blockforge.launcher.mclauncher.LaunchTimings;
+import com.blockforge.launcher.utils.PcProfile;
 import com.blockforge.launcher.mclauncher.LauncherMemory;
 import com.blockforge.launcher.mclauncher.MCLauncher;
 import com.blockforge.launcher.network.Analytics;
@@ -200,6 +206,12 @@ public class Instance extends MinecraftVersion implements ModManagement {
      * @deprecated moved within launcher property
      */
     public transient long numPlays;
+
+    /** a world to start straight into on the next launch only ("Continue" on Home); not saved */
+    private transient volatile QuickPlay quickPlayOnce;
+
+    /** the memory worked out while preparing the launch, used when the game starts; not saved */
+    private transient volatile InstanceMemory.Decision memoryDecision;
 
     public Instance(MinecraftVersion version) {
         setValues(version);
@@ -440,6 +452,13 @@ public class Instance extends MinecraftVersion implements ModManagement {
         PerformanceManager.start();
         LaunchTimings timings = new LaunchTimings();
         OkHttpClient httpClient = Network.createProgressClient(progressDialog);
+
+        // a brand new game gets graphics settings for this computer; finding the graphics card can take a moment
+        // the first time, so it happens alongside the file checks
+        if (App.settings.autoGameOptions && !GameOptionsDefaults.hasOwnOptions(ROOT)) {
+            PcProfile.whenReady(pc -> {
+            });
+        }
 
         // the Java runtime doesn't depend on anything else here, so it's checked (or fetched) alongside the rest
         // instead of after it; when it has to be downloaded, its biggest file alone can take longer than all the
@@ -745,9 +764,44 @@ public class Instance extends MinecraftVersion implements ModManagement {
         }
         progressDialog.doneTask();
 
+        prepareMemoryAndOptions();
+        timings.step("memory and options");
+
         PerformanceManager.end();
         LogManager.info("Ready to launch in " + timings.summary());
         return true;
+    }
+
+    /**
+     * Works out the game's memory now, while the "Preparing" window is still up, so the player sees a warning when
+     * the computer can't spare what the game needs; and gives a brand new game graphics settings for this computer.
+     */
+    private void prepareMemoryAndOptions() {
+        try {
+            InstanceMemory.Decision decision = InstanceMemory.decide(this, resolveJavaPath(false));
+            memoryDecision = decision;
+            if (decision.isShort() && !decision.warnings.isEmpty() && App.TOASTER != null) {
+                String warning = decision.warnings.get(0);
+                SwingUtilities.invokeLater(() -> App.TOASTER.popWarning(warning));
+            }
+        } catch (Throwable t) {
+            LogManager.logStackTrace("Couldn't work out the game's memory ahead of time", t);
+        }
+
+        if (App.settings.autoGameOptions && !GameOptionsDefaults.hasOwnOptions(ROOT)) {
+            try {
+                PcProfile pc = PcProfile.get();
+                Map<String, String> written = GameOptionsDefaults.writeIfMissing(ROOT, pc.tier, id,
+                    getMinecraftJar().toPath());
+                if (written != null) {
+                    LogManager.info(String.format(Locale.ENGLISH,
+                        "First start: graphics settings picked for this computer (%s tier): %s",
+                        pc.tier.name().toLowerCase(Locale.ENGLISH), written));
+                }
+            } catch (Throwable t) {
+                LogManager.logStackTrace("Couldn't write the first start graphics settings", t);
+            }
+        }
     }
 
     /**
@@ -818,8 +872,45 @@ public class Instance extends MinecraftVersion implements ModManagement {
         return launch(false);
     }
 
+    /**
+     * Starts the game straight into a singleplayer world, just this once (Minecraft 1.20 and newer). The instance's
+     * own Quick Play setting is left as it is.
+     *
+     * @param worldFolder the world's folder name in saves
+     */
+    public boolean launchIntoWorld(String worldFolder) {
+        if (worldFolder == null || !isQuickPlaySupported(QuickPlayOption.singlePlayer)) {
+            return launch();
+        }
+        quickPlayOnce = new QuickPlay(null, worldFolder, null);
+        boolean started = launch();
+        if (!started) {
+            quickPlayOnce = null;
+        }
+        return started;
+    }
+
+    /** The Quick Play to use for the launch that is starting now; a one-off world is used only once. */
+    public QuickPlay takeQuickPlayForLaunch() {
+        QuickPlay once = quickPlayOnce;
+        quickPlayOnce = null;
+        if (once != null) {
+            return once;
+        }
+        return launcher.quickPlay == null ? QuickPlay.getDefault() : launcher.quickPlay;
+    }
+
+    /** The memory for the launch that is starting now: what was worked out while preparing, or worked out now. */
+    public InstanceMemory.Decision takeMemoryDecision(String javaPath) {
+        InstanceMemory.Decision decision = memoryDecision;
+        memoryDecision = null;
+        return decision != null ? decision : InstanceMemory.decide(this, javaPath);
+    }
+
     public boolean launch(boolean offline) {
         final long playPressedAt = System.nanoTime();
+        // reading game files in the background would only get in the way of starting the game now
+        GameFileWarmer.stopForLaunch();
         final MicrosoftAccount account = launcher.account == null ? AccountManager.getSelectedAccount()
             : AccountManager.getAccountByName(launcher.account);
 
@@ -859,9 +950,12 @@ public class Instance extends MinecraftVersion implements ModManagement {
 
         final String username = offline ? playerName : account.minecraftUsername;
 
+        // automatic memory gives the pack what it needs whenever the computer can; only a value set by hand can be
+        // too low for the pack
         int maximumMemory = Optional.ofNullable(this.launcher.maximumMemory).orElse(App.settings.maximumMemory);
-        if ((maximumMemory < this.launcher.requiredMemory)
-            && (this.launcher.requiredMemory <= OS.getSafeMaximumRam())) {
+        int requiredMemory = Optional.ofNullable(this.launcher.requiredMemory).orElse(0);
+        if (!InstanceMemory.isAutomatic(this) && (maximumMemory < requiredMemory)
+            && (requiredMemory <= OS.getSafeMaximumRam())) {
             int ret = DialogManager.yesNoDialog().setTitle(GetText.tr("Insufficient Ram"))
                 .setContent(new HTMLBuilder().center().text(GetText.tr(
                     "This pack has set a minimum amount of ram needed to <b>{0}</b> MB.<br/><br/>Do you want to continue loading the instance anyway?",
@@ -1104,6 +1198,8 @@ public class Instance extends MinecraftVersion implements ModManagement {
                     LogManager.minecraft(line);
                 }
                 App.launcher.hideKillMinecraft();
+                // if this start wrote down its classes, make the class cache now that the game has closed
+                ClassDataCache.gameExited(getSafeName());
                 if (App.settings.keepLauncherOpen) {
                     setLauncherWindowVisible(true);
                 }
@@ -2782,6 +2878,15 @@ public class Instance extends MinecraftVersion implements ModManagement {
     }
 
     public String getJavaPath() {
+        return resolveJavaPath(true);
+    }
+
+    /** {@link #getJavaPath()} without writing which Java is used to the log, for background work. */
+    public String getJavaPathQuietly() {
+        return resolveJavaPath(false);
+    }
+
+    private String resolveJavaPath(boolean log) {
         String javaPath = Optional.ofNullable(launcher.javaPath).orElse(App.settings.javaPath);
 
         // are we using Mojangs provided runtime?
@@ -2803,6 +2908,9 @@ public class Instance extends MinecraftVersion implements ModManagement {
 
                 if (Files.isDirectory(runtimeDirectory)) {
                     javaPath = runtimeDirectory.toAbsolutePath().toString();
+                    if (!log) {
+                        return javaPath;
+                    }
                     if (launcher.javaRuntimeOverride != null) {
                         LogManager.info(String.format("Using overriden Java runtime %s (Java %s) at path %s",
                             runtimeToUse, runtimesForSystem.get(runtimeToUse).get(0).version.name, javaPath));

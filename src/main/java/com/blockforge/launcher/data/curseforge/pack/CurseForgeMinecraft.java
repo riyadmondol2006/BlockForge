@@ -22,4 +22,6 @@ import java.util.List;
 public class CurseForgeMinecraft {
     public String version;
     public List<CurseForgeModLoader> modLoaders;
+    /** the memory the pack's author recommends, in MB (newer CurseForge exports only) */
+    public Integer recommendedRam;
 }
