@@ -27,7 +27,6 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.function.Consumer;
 
 import javax.imageio.ImageIO;
@@ -52,13 +51,62 @@ public final class ImageCache {
      * Images are loaded on their own threads: a page of modpack icons from a slow server would otherwise queue up in
      * front of the launcher's other background work (searches, log uploads, play time reports).
      */
-    private static final ExecutorService LOADER = Executors.newFixedThreadPool(com.blockforge.launcher.utils.LightMode.imageLoaderThreads(), r -> {
-        Thread thread = new Thread(r, "image-loader");
-        thread.setDaemon(true);
-        return thread;
-    });
+    private static final ExecutorService LOADER = loaderPool();
+
+    /** The loader threads end after 30 seconds without pictures to load, so an idle launcher doesn't keep them. */
+    private static ExecutorService loaderPool() {
+        int threads = com.blockforge.launcher.utils.LightMode.imageLoaderThreads();
+        java.util.concurrent.ThreadPoolExecutor pool = new java.util.concurrent.ThreadPoolExecutor(threads, threads,
+            30, java.util.concurrent.TimeUnit.SECONDS, new java.util.concurrent.LinkedBlockingQueue<>(), r -> {
+                Thread thread = new Thread(r, "image-loader");
+                thread.setDaemon(true);
+                return thread;
+            });
+        pool.allowCoreThreadTimeOut(true);
+        return pool;
+    }
+
+    private static volatile int pixelScale;
 
     private ImageCache() {
+    }
+
+    /**
+     * How many image pixels each screen point needs on the sharpest screen attached: 1 on ordinary screens, 2 on high
+     * density ones. Pictures are kept at that size, so an ordinary screen doesn't hold four times the pixels it shows.
+     */
+    public static int pixelScale() {
+        if (pixelScale == 0) {
+            pixelScale = clampScale(maxScreenScale());
+        }
+        return pixelScale;
+    }
+
+    /** Pixels per point rounded up and kept between 1 and 2; unknown (0 or less) counts as 2, as before. */
+    static int clampScale(double scale) {
+        if (!(scale > 0)) {
+            return 2;
+        }
+        return (int) Math.max(1, Math.min(2, Math.ceil(scale - 0.01)));
+    }
+
+    private static double maxScreenScale() {
+        try {
+            double max = 0;
+            for (java.awt.GraphicsDevice device : java.awt.GraphicsEnvironment.getLocalGraphicsEnvironment()
+                .getScreenDevices()) {
+                max = Math.max(max, device.getDefaultConfiguration().getDefaultTransform().getScaleX());
+            }
+            return max;
+        } catch (Throwable e) {
+            // headless or no screens
+            return 0;
+        }
+    }
+
+    /** The image size in pixels for a picture shown at the given size in points. */
+    public static int px(int points) {
+        return points * pixelScale();
     }
 
     /** Least recently used images go first once the total size is over the limit. */

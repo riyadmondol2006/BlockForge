@@ -25,6 +25,7 @@ import javax.swing.text.AbstractDocument;
 import javax.swing.text.BadLocationException;
 import javax.swing.text.BoxView;
 import javax.swing.text.ComponentView;
+import javax.swing.text.Document;
 import javax.swing.text.Element;
 import javax.swing.text.IconView;
 import javax.swing.text.LabelView;
@@ -38,6 +39,14 @@ import javax.swing.text.ViewFactory;
 import com.blockforge.launcher.App;
 
 public final class Console extends JTextPane {
+    /**
+     * How many lines the console keeps. A game that logs a lot would otherwise grow the console without end, and
+     * every line costs the launcher memory. Older lines are still in the log file.
+     */
+    public static final int MAX_LINES = 5000;
+    /** lines are dropped in batches, so a busy log doesn't trim (and lay the text out again) on every line */
+    static final int TRIM_SLACK = 500;
+
     private final SimpleAttributeSet attrs = new SimpleAttributeSet();
 
     public Console() {
@@ -64,10 +73,28 @@ public final class Console extends JTextPane {
     public void write(String str) {
         try {
             this.getDocument().insertString(this.getDocument().getLength(), str, this.attrs);
+            trimToLines(this.getDocument(), MAX_LINES, TRIM_SLACK);
             this.setCaretPosition(this.getDocument().getLength());
         } catch (BadLocationException ex) {
             ex.printStackTrace(System.err);
         }
+    }
+
+    /**
+     * Removes the oldest lines once the document holds more than maxLines + slack finished lines, leaving maxLines.
+     *
+     * @return how many lines were removed
+     */
+    static int trimToLines(Document doc, int maxLines, int slack) throws BadLocationException {
+        Element root = doc.getDefaultRootElement();
+        // the last line is the one still being written to, so it doesn't count
+        int finished = root.getElementCount() - 1;
+        if (finished <= maxLines + slack) {
+            return 0;
+        }
+        int remove = finished - maxLines;
+        doc.remove(0, root.getElement(remove).getStartOffset());
+        return remove;
     }
 }
 

@@ -208,7 +208,7 @@ public class InstanceTile extends RoundPanel {
         String key = "instance:" + instance.getRoot() + "#" + custom.lastModified();
         ImageCache.async(() -> {
             BufferedImage source = ImageCache.toBuffered(instance.getImage());
-            return source == null ? null : ImageCache.cover(source, WIDTH * 2, 128 * 2);
+            return source == null ? null : ImageCache.cover(source, ImageCache.px(WIDTH), ImageCache.px(128));
         }, key, image -> {
             banner.image = image;
             banner.repaint();

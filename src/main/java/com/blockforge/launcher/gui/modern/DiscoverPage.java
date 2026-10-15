@@ -350,7 +350,7 @@ public class DiscoverPage extends Page {
 
         private void loadIcon(UnifiedModPackResultsFragment result, JComponent view) {
             if (result.iconUrl() != null && !result.iconUrl().isEmpty()) {
-                ImageCache.load(result.iconUrl(), 120, 120, image -> {
+                ImageCache.load(result.iconUrl(), ImageCache.px(60), ImageCache.px(60), image -> {
                     icon = image;
                     view.repaint();
                 });
@@ -367,7 +367,7 @@ public class DiscoverPage extends Page {
                 Pack pack = PackManager.getPackByID(Integer.parseInt(result.id()));
                 ImageCache.async(() -> {
                     BufferedImage source = ImageCache.toBuffered(pack.getImage());
-                    return source == null ? null : ImageCache.cover(source, 120, 120);
+                    return source == null ? null : ImageCache.cover(source, ImageCache.px(60), ImageCache.px(60));
                 }, "pack:" + result.id(), image -> {
                     icon = image;
                     view.repaint();

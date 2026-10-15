@@ -385,7 +385,7 @@ public class HomePage extends Page {
                 File custom = instance.getRoot().resolve("instance.png").toFile();
                 ImageCache.async(() -> {
                     BufferedImage source = ImageCache.toBuffered(instance.getImage());
-                    return source == null ? null : ImageCache.cover(source, 900, 400);
+                    return source == null ? null : ImageCache.cover(source, ImageCache.px(450), ImageCache.px(200));
                 }, "hero:" + instance.getRoot() + "#" + custom.lastModified(), img -> {
                     image = img;
                     faded = null;

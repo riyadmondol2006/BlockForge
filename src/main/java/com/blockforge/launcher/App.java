@@ -48,7 +48,9 @@ import java.util.Optional;
 import java.util.Properties;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 
 import javax.swing.BorderFactory;
 import javax.swing.InputMap;
@@ -84,6 +86,7 @@ import com.blockforge.launcher.managers.ServerManager;
 import com.blockforge.launcher.network.Download;
 import com.blockforge.launcher.network.ErrorReporting;
 import com.blockforge.launcher.themes.ATLauncherLaf;
+import com.blockforge.launcher.utils.IdleTrim;
 import com.blockforge.launcher.utils.Java;
 import com.blockforge.launcher.utils.LightMode;
 import com.blockforge.launcher.utils.OS;
@@ -110,7 +113,18 @@ public class App {
     /**
      * The taskpool used to quickly add in tasks to do in the background.
      */
-    public static final ExecutorService TASKPOOL = Executors.newFixedThreadPool(2);
+    public static final ExecutorService TASKPOOL = shrinkingPool(2);
+
+    /**
+     * Up to the given number of threads, which end after 30 seconds without work so that an idle launcher doesn't
+     * keep them (and the memory each holds). Work beyond that number waits its turn, as with a fixed thread pool.
+     */
+    public static ThreadPoolExecutor shrinkingPool(int threads) {
+        ThreadPoolExecutor pool = new ThreadPoolExecutor(threads, threads, 30, TimeUnit.SECONDS,
+            new LinkedBlockingQueue<>());
+        pool.allowCoreThreadTimeOut(true);
+        return pool;
+    }
 
     /**
      * The instance of toaster to show popups in the bottom right.
@@ -269,6 +283,12 @@ public class App {
     public static TrayIcon trayIcon;
 
     static {
+        // RxJava's computation pool starts a thread per processor core and keeps them forever; the launcher only
+        // uses it for small view model work. Set before RxJava starts, unless chosen on the command line.
+        if (System.getProperty("rx3.computation-threads") == null) {
+            System.setProperty("rx3.computation-threads", "2");
+        }
+
         // Sets up where all uncaught exceptions go to.
         Thread.setDefaultUncaughtExceptionHandler(new ExceptionStrainer());
     }
@@ -484,6 +504,13 @@ public class App {
             launcherFrame = new LauncherFrame(openLauncher);
             PerformanceManager.end("startup: window");
             ss.close();
+
+            // giving memory back once the launcher is left alone starts a while after the window is up, so it adds
+            // nothing to opening the launcher
+            javax.swing.Timer idleTrim = new javax.swing.Timer(30_000,
+                e -> TASKPOOL.execute(() -> IdleTrim.start()));
+            idleTrim.setRepeats(false);
+            idleTrim.start();
         });
     }
 

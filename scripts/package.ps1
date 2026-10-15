@@ -65,6 +65,8 @@ $arguments = @(
     '--java-options', '-XX:+UseSerialGC',
     '--java-options', '-XX:MinHeapFreeRatio=10',
     '--java-options', '-XX:MaxHeapFreeRatio=30',
+    # a small starting heap: the serial collector never shrinks below where it started (1/64 of the memory)
+    '--java-options', '-Xms64m',
     '--icon', (Join-Path $root 'src\main\resources\assets\image\icon.ico'),
     '--dest', $Out
 )
