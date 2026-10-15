@@ -80,6 +80,8 @@ public class Settings {
     public boolean keepLauncherOpen = true;
     public boolean askPlayerOnStartup = true;
     public boolean checkForLauncherUpdates = true;
+    /** null means decide automatically from this computer's memory and processor cores */
+    public Boolean lightMode = null;
     public String skippedLauncherUpdate = null;
     public boolean enableConsole = false;
     public boolean enableTrayMenu = true;

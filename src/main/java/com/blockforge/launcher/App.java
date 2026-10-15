@@ -85,6 +85,7 @@ import com.blockforge.launcher.network.Download;
 import com.blockforge.launcher.network.ErrorReporting;
 import com.blockforge.launcher.themes.ATLauncherLaf;
 import com.blockforge.launcher.utils.Java;
+import com.blockforge.launcher.utils.LightMode;
 import com.blockforge.launcher.utils.OS;
 import com.blockforge.launcher.utils.Utils;
 import com.formdev.flatlaf.extras.FlatInspector;
@@ -910,6 +911,7 @@ public class App {
         try {
             setLAF(theme);
             modifyLAF();
+            LightMode.applyToSwing();
 
             // now the theme is loaded, we can intialize the toaster/tray menu
             TOASTER = Toaster.instance();

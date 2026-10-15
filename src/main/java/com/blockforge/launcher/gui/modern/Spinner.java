@@ -37,8 +37,9 @@ public class Spinner extends JComponent {
     public Spinner(int size) {
         this.size = size;
         setOpaque(false);
-        timer = new Timer(16, e -> {
-            angle = (angle + 8) % 360;
+        // a slower frame rate in light mode keeps the spinner from using a slow processor
+        timer = new Timer(com.blockforge.launcher.utils.LightMode.frameDelayMs(), e -> {
+            angle = (angle + Math.max(8, ((Timer) e.getSource()).getDelay() / 2)) % 360;
             repaint();
         });
     }

@@ -45,6 +45,7 @@ import com.blockforge.launcher.App;
 import com.blockforge.launcher.FileSystem;
 import com.blockforge.launcher.data.LauncherTheme;
 import com.blockforge.launcher.evnt.manager.SettingsManager;
+import com.blockforge.launcher.utils.LightMode;
 import com.blockforge.launcher.utils.OS;
 import com.blockforge.launcher.viewmodel.impl.settings.GeneralSettingsViewModel;
 
@@ -99,6 +100,14 @@ public class SettingsPage extends Page {
                 App.settings.enableLogs, v -> App.settings.enableLogs = v)));
         column.add(Box.createVerticalStrut(16));
         column.add(section(GetText.tr("Launcher"),
+            toggleRow(GetText.tr("Light mode for slower PCs"),
+                LightMode.detectedLowEnd()
+                    ? GetText.tr("Fewer animations and a smaller picture cache. On by default for this computer")
+                    : GetText.tr("Fewer animations and a smaller picture cache, for computers with 4 GB of memory or less"),
+                LightMode.isOn(), v -> {
+                    App.settings.lightMode = v;
+                    LightMode.applyToSwing();
+                }),
             toggleRow(GetText.tr("Tray icon"), GetText.tr("Show a tray menu while the launcher runs"),
                 App.settings.enableTrayMenu, viewModel::setEnableTrayMenuOpen),
             buttonRow(GetText.tr("Data folder"), GetText.tr("Where instances, mods and logs are stored"),

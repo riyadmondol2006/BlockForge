@@ -44,7 +44,7 @@ public final class ImageCache {
      * How much decoded image data is kept. A banner for a big instance card is over half a megabyte once decoded, so
      * the limit is on bytes rather than on the number of pictures.
      */
-    static final long MAX_BYTES = 48L * 1024 * 1024;
+    static final long MAX_BYTES = com.blockforge.launcher.utils.LightMode.imageCacheBytes();
 
     private static final Lru CACHE = new Lru(MAX_BYTES);
 
@@ -52,7 +52,7 @@ public final class ImageCache {
      * Images are loaded on their own threads: a page of modpack icons from a slow server would otherwise queue up in
      * front of the launcher's other background work (searches, log uploads, play time reports).
      */
-    private static final ExecutorService LOADER = Executors.newFixedThreadPool(3, r -> {
+    private static final ExecutorService LOADER = Executors.newFixedThreadPool(com.blockforge.launcher.utils.LightMode.imageLoaderThreads(), r -> {
         Thread thread = new Thread(r, "image-loader");
         thread.setDaemon(true);
         return thread;
