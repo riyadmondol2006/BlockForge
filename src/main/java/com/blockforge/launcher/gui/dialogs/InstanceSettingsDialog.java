@@ -18,6 +18,9 @@
 package com.blockforge.launcher.gui.dialogs;
 
 import java.awt.BorderLayout;
+import java.awt.CardLayout;
+import java.awt.FlowLayout;
+import java.awt.Rectangle;
 import java.awt.Dimension;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
@@ -27,7 +30,7 @@ import javax.swing.JButton;
 import javax.swing.JComponent;
 import javax.swing.JDialog;
 import javax.swing.JPanel;
-import javax.swing.JTabbedPane;
+import javax.swing.Scrollable;
 
 import org.mini2Dx.gettext.GetText;
 
@@ -38,12 +41,13 @@ import com.blockforge.launcher.gui.dialogs.instancesettings.GeneralInstanceSetti
 import com.blockforge.launcher.gui.dialogs.instancesettings.JavaInstanceSettingsTab;
 import com.blockforge.launcher.gui.modern.Icons;
 import com.blockforge.launcher.gui.modern.ModernDialogs;
-import com.blockforge.launcher.gui.modern.Palette;
+import com.blockforge.launcher.gui.modern.TabStrip;
 
 public class InstanceSettingsDialog extends JDialog {
     private final Instance instance;
 
-    private final JTabbedPane tabbedPane = new JTabbedPane(JTabbedPane.TOP);
+    private final JPanel cards = new JPanel(new CardLayout());
+    private TabStrip tabs;
 
     private final GeneralInstanceSettingsTab generalInstanceSettingsTab;
     private final JavaInstanceSettingsTab javaInstanceSettingsTab;
@@ -69,19 +73,33 @@ public class InstanceSettingsDialog extends JDialog {
     }
 
     private void setupComponents() {
-        setSize(820, 640);
-        setMinimumSize(new Dimension(820, 640));
+        setSize(700, 660);
+        setMinimumSize(new Dimension(640, 520));
         setLocationRelativeTo(App.launcher.getParent());
-        setResizable(false);
+        setResizable(true);
         setDefaultCloseOperation(JDialog.DISPOSE_ON_CLOSE);
 
-        // Tabbed Pane
+        // Tabs
 
-        tabbedPane.setFont(Palette.bold(14f));
-        tabbedPane.addTab(GetText.tr("General"), page(generalInstanceSettingsTab));
-        tabbedPane.addTab(GetText.tr("Java/Minecraft"), page(javaInstanceSettingsTab));
-        tabbedPane.addTab(GetText.tr("Commands"), page(commandsInstanceSettingsTab));
-        tabbedPane.setOpaque(false);
+        cards.setOpaque(false);
+        cards.add(page(generalInstanceSettingsTab), "0");
+        cards.add(page(javaInstanceSettingsTab), "1");
+        cards.add(page(commandsInstanceSettingsTab), "2");
+
+        tabs = new TabStrip(
+                new String[] { GetText.tr("General"), GetText.tr("Java and Minecraft"), GetText.tr("Commands") },
+                new Icons[] { Icons.PERSON, Icons.CUBE, Icons.TERMINAL },
+                index -> ((CardLayout) cards.getLayout()).show(cards, String.valueOf(index)));
+
+        JPanel tabRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
+        tabRow.setOpaque(false);
+        tabRow.setBorder(BorderFactory.createEmptyBorder(0, 0, 12, 0));
+        tabRow.add(tabs);
+
+        JPanel body = new JPanel(new BorderLayout());
+        body.setOpaque(false);
+        body.add(tabRow, BorderLayout.NORTH);
+        body.add(cards, BorderLayout.CENTER);
 
         // Bottom Panel
 
@@ -100,20 +118,58 @@ public class InstanceSettingsDialog extends JDialog {
 
         ModernDialogs.install(this,
                 ModernDialogs.header(GetText.tr("Settings"), instance.launcher.name, Icons.SETTINGS),
-                tabbedPane, ModernDialogs.footer(cancelButton, saveButton));
+                body, ModernDialogs.footer(cancelButton, saveButton));
     }
 
-    /** Puts a settings tab at the top of a scrollable page with some room around it. */
-    private static JComponent page(JPanel tab) {
-        ModernDialogs.blend(tab);
-        tab.setOpaque(false);
-        tab.setBorder(BorderFactory.createEmptyBorder(18, 8, 18, 8));
+    /** Shows one of the tabs: 0 general, 1 Java and Minecraft, 2 commands. */
+    public void selectTab(int index) {
+        tabs.select(index);
+    }
 
-        JPanel holder = new JPanel(new BorderLayout());
-        holder.setOpaque(false);
+    /** Puts a settings tab at the top of a page that scrolls up and down and always fits the window's width. */
+    private static JComponent page(JPanel tab) {
+        tab.setOpaque(false);
+        tab.setBorder(BorderFactory.createEmptyBorder(4, 0, 12, 2));
+
+        FitWidth holder = new FitWidth();
         holder.add(tab, BorderLayout.NORTH);
 
         return ModernDialogs.scroll(holder);
+    }
+
+    /** A see-through panel that is always as wide as the scroll pane it's in, so nothing is cut off on the right. */
+    private static final class FitWidth extends JPanel implements Scrollable {
+        private static final long serialVersionUID = 1L;
+
+        FitWidth() {
+            super(new BorderLayout());
+            setOpaque(false);
+        }
+
+        @Override
+        public Dimension getPreferredScrollableViewportSize() {
+            return getPreferredSize();
+        }
+
+        @Override
+        public int getScrollableUnitIncrement(Rectangle visibleRect, int orientation, int direction) {
+            return 24;
+        }
+
+        @Override
+        public int getScrollableBlockIncrement(Rectangle visibleRect, int orientation, int direction) {
+            return Math.max(24, visibleRect.height - 48);
+        }
+
+        @Override
+        public boolean getScrollableTracksViewportWidth() {
+            return true;
+        }
+
+        @Override
+        public boolean getScrollableTracksViewportHeight() {
+            return false;
+        }
     }
 
     private void close() {

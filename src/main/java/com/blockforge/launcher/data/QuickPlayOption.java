@@ -26,10 +26,10 @@ import org.mini2Dx.gettext.GetText;
  * The values are from <a href="https://www.minecraft.net/en-us/article/minecraft-snapshot-23w14a">Minecraft QuickPlay</a>
  */
 public enum QuickPlayOption {
-    disabled(GetText.tr("Disabled"), null, true),
-    singlePlayer(GetText.tr("Single Player"), "--quickPlaySingleplayer", false),
-    multiPlayer(GetText.tr("Multiplayer"), "--quickPlayMultiplayer", true),
-    realm(GetText.tr("Minecraft Realm"), "--quickPlayRealms", false);
+    disabled(GetText.tr("The title screen"), null, true),
+    singlePlayer(GetText.tr("A single player world"), "--quickPlaySingleplayer", false),
+    multiPlayer(GetText.tr("A multiplayer server"), "--quickPlayMultiplayer", true),
+    realm(GetText.tr("A realm"), "--quickPlayRealms", false);
 
     public final String label;
     public final String argumentRuleValue;

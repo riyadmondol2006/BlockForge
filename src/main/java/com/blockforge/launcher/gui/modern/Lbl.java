@@ -91,6 +91,26 @@ public final class Lbl {
             setOpaque(false);
         }
 
+        /**
+         * Wraps to whatever width the layout gives this paragraph instead of the width it was made with, so its
+         * height grows or shrinks with the window.
+         */
+        public Paragraph fillWidth() {
+            addComponentListener(new java.awt.event.ComponentAdapter() {
+                @Override
+                public void componentResized(java.awt.event.ComponentEvent e) {
+                    if (getWidth() > 0 && getWidth() != width) {
+                        int before = getPreferredSize().height;
+                        width = getWidth();
+                        if (getPreferredSize().height != before) {
+                            revalidate();
+                        }
+                    }
+                }
+            });
+            return this;
+        }
+
         public void setText(String text) {
             this.text = text == null ? "" : text;
             revalidate();

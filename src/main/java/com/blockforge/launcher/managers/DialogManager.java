@@ -69,6 +69,8 @@ public final class DialogManager {
     public int lookAndFeel = DialogManager.DEFAULT_OPTION;
     public String defaultOption = null;
     public int type = DialogManager.QUESTION;
+    /** null: decided from the title and message, see {@link #isDestructive()} */
+    public Boolean destructive = null;
 
     private DialogManager(int dialogType) {
         this.dialogType = dialogType;
@@ -85,7 +87,7 @@ public final class DialogManager {
     public static DialogManager okDialog() {
         DialogManager dialog = new DialogManager(DialogManager.CONFIRM_TYPE);
 
-        dialog.addOption(GetText.tr("Ok"), true);
+        dialog.addOption(GetText.tr("OK"), true);
 
         return dialog;
     }
@@ -93,7 +95,7 @@ public final class DialogManager {
     public static DialogManager okCancelDialog() {
         DialogManager dialog = new DialogManager(DialogManager.CONFIRM_TYPE);
 
-        dialog.addOption(GetText.tr("Ok"), true);
+        dialog.addOption(GetText.tr("OK"), true);
         dialog.addOption(GetText.tr("Cancel"));
 
         return dialog;
@@ -145,6 +147,36 @@ public final class DialogManager {
     public DialogManager setType(int type) {
         this.type = type;
         return this;
+    }
+
+    /**
+     * Marks the first option as one that deletes or undoes something, so it's shown in red instead of as the main
+     * action. Without this it's guessed from the title and message.
+     */
+    public DialogManager setDestructive(boolean destructive) {
+        this.destructive = destructive;
+        return this;
+    }
+
+    private static final java.util.regex.Pattern DESTRUCTIVE_WORDS = java.util.regex.Pattern.compile(
+            "\\b(delete|deleting|remove|removing|kill|reset|uninstall|uninstalling|wipe|erase)\\b",
+            java.util.regex.Pattern.CASE_INSENSITIVE);
+
+    /**
+     * Whether the first option of this dialog destroys something: set with {@link #setDestructive(boolean)}, or a
+     * question with a choice whose title or message talks about deleting, removing, killing, resetting or
+     * uninstalling.
+     */
+    boolean isDestructive() {
+        if (this.destructive != null) {
+            return this.destructive;
+        }
+        if (this.options.size() < 2) {
+            return false;
+        }
+        String text = (this.title == null ? "" : this.title) + " "
+                + (this.content instanceof String ? (String) this.content : "");
+        return DESTRUCTIVE_WORDS.matcher(text).find();
     }
 
     public DialogManager setDefaultOption(String defaultOption) {
@@ -253,10 +285,13 @@ public final class DialogManager {
 
         Object[] buttons = new Object[options.length];
         Object initial = null;
+        boolean destructive = this.isDestructive();
         for (int i = 0; i < options.length; i++) {
             final Object option = options[i];
             boolean isDefault = option.equals(this.defaultOption);
-            JButton button = isDefault ? ModernDialogs.primary(String.valueOf(option))
+            // a destructive choice is shown in red, and never as the inviting filled button
+            JButton button = destructive && i == 0 ? ModernDialogs.danger(String.valueOf(option))
+                    : isDefault && !destructive ? ModernDialogs.primary(String.valueOf(option))
                     : ModernDialogs.secondary(String.valueOf(option));
             button.addActionListener(e -> jop.setValue(option));
             buttons[i] = button;
