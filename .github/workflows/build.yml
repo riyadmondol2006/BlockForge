@@ -209,7 +209,6 @@ jobs:
     if: >-
       (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')))
       || (github.event_name == 'workflow_dispatch' && inputs.draft_release)
-      || github.ref == 'refs/heads/ci-test'
     permissions:
       contents: write
     # never publish two builds at the same time
@@ -220,7 +219,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
       VERSION: ${{ needs.checks.outputs.version }}
-      DRAFT: ${{ github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/ci-test' }}
+      DRAFT: ${{ github.event_name == 'workflow_dispatch' }}
       UNSIGNED: >-
         The installers aren't signed yet: on Windows choose "More info" and then "Run anyway", on macOS right-click
         BlockForge and choose Open the first time.
@@ -264,15 +263,13 @@ jobs:
           if [ "$GITHUB_REF_TYPE" = tag ]; then tag="$GITHUB_REF_NAME"; else tag="v$VERSION"; fi
           if [ "$DRAFT" = true ]; then
             # a draft is only for checking the steps: it makes no tag and nobody but the owner sees it
-            gh release delete "$tag" --yes 2>/dev/null || true
+            # only an earlier draft is replaced; a published release is never touched
+            if [ "$(gh release view "$tag" --json isDraft --jq .isDraft 2>/dev/null)" = true ]; then
+              gh release delete "$tag" --yes
+            fi
             gh release create "$tag" artifacts/* --draft --target "$GITHUB_SHA" --title "BlockForge $VERSION (test)" \
               --notes-file notes.md
             gh release view "$tag" --json assets --jq '.assets[] | "\(.name) \(.size)"'
-            if [ "$GITHUB_REF" = refs/heads/ci-test ]; then
-              # the test branch only checks that publishing works, so it cleans up after itself
-              gh release delete "$tag" --yes
-              echo "::notice title=Draft release::made with all files and deleted again"
-            fi
             exit 0
           fi
           # the commit the tag points at, if the tag exists already

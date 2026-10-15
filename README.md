@@ -110,7 +110,7 @@ Your numbers will differ; the proportions are what matter. The original is ATLau
 | Memory with the window open (median) | 244 MB | 101 MB | **59% less** |
 | CPU while idle | 0.0% | 0.0% | same |
 | Needs Java installed to run the launcher | yes | no | |
-| Linux package size | 27 MB (jar), needs Java | 8 MB (.deb), 8 MB (.rpm), 12 MB (AppImage) | **about 70% smaller**, and nothing else to install |
+| Download size | 27.5 MB (Windows exe) or 27.1 MB (jar), and Java has to be installed | 8.2 MB (Windows setup), 9.1 MB (macOS), 8.0 MB (deb), 7.8 MB (rpm), 11.3 MB (AppImage) | **about 70% smaller**, and nothing else to install |
 
 What does not change: Minecraft itself. It runs on the same Java in both launchers, so the time from pressing Play to the
 title screen is dominated by the game and your mods (about 7 to 8 seconds for Fabric 1.21.1 and 26.3 on the test
