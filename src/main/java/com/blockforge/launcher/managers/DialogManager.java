@@ -25,13 +25,19 @@ import java.util.List;
 import java.util.Timer;
 import java.util.TimerTask;
 
+import javax.swing.BorderFactory;
 import javax.swing.Icon;
+import javax.swing.JButton;
 import javax.swing.JDialog;
+import javax.swing.JLabel;
 import javax.swing.JOptionPane;
 
 import org.mini2Dx.gettext.GetText;
 
 import com.blockforge.launcher.App;
+import com.blockforge.launcher.gui.modern.Lbl;
+import com.blockforge.launcher.gui.modern.ModernDialogs;
+import com.blockforge.launcher.gui.modern.Palette;
 
 public final class DialogManager {
     public static final int OPTION_TYPE = 0;
@@ -189,13 +195,11 @@ public final class DialogManager {
         try {
             Object[] options = this.getOptions();
 
-            JOptionPane jop = new JOptionPane(this.content, this.type, this.lookAndFeel, this.icon, options,
-                    this.defaultOption);
-
-            jop.setInitialValue(this.defaultOption);
+            JOptionPane jop = this.createOptionPane(options);
             jop.setComponentOrientation(this.getParent().getComponentOrientation());
 
             JDialog dialog = jop.createDialog(this.getParent(), this.title);
+            ModernDialogs.polish(jop, dialog);
             dialog.setAlwaysOnTop(true);
             dialog.setVisible(true);
 
@@ -226,6 +230,68 @@ public final class DialogManager {
         return CLOSED_OPTION;
     }
 
+    /**
+     * Builds the option pane in the BlockForge style: the title repeated as a heading above the message, a drawn
+     * icon for the message type and pill buttons with the default one filled. Picking a button still sets the
+     * option pane's value to the option text, so callers get the same index back as before.
+     */
+    private JOptionPane createOptionPane(Object[] options) {
+        if (App.THEME == null) {
+            // too early in startup for the themed look, fall back to the plain option pane
+            JOptionPane plain = new JOptionPane(this.content, this.type, this.lookAndFeel, this.icon, options,
+                    this.defaultOption);
+            plain.setInitialValue(this.defaultOption);
+            return plain;
+        }
+
+        Icon shownIcon = this.icon != null ? this.icon : ModernDialogs.messageIcon(this.type);
+        JOptionPane jop = new JOptionPane(this.buildMessage(), this.type, this.lookAndFeel, shownIcon);
+
+        if (options == null) {
+            return jop;
+        }
+
+        Object[] buttons = new Object[options.length];
+        Object initial = null;
+        for (int i = 0; i < options.length; i++) {
+            final Object option = options[i];
+            boolean isDefault = option.equals(this.defaultOption);
+            JButton button = isDefault ? ModernDialogs.primary(String.valueOf(option))
+                    : ModernDialogs.secondary(String.valueOf(option));
+            button.addActionListener(e -> jop.setValue(option));
+            buttons[i] = button;
+            if (isDefault) {
+                initial = button;
+            }
+        }
+        jop.setOptions(buttons);
+        jop.setInitialValue(initial);
+
+        return jop;
+    }
+
+    private Object buildMessage() {
+        Object message = this.content;
+
+        if (message instanceof String && ((String) message).startsWith("<html>")) {
+            // the heading is left aligned, so the text under it reads better left aligned too
+            message = ((String) message).replace(" align=\"center\"", "");
+        }
+
+        if (this.title == null || this.title.isEmpty()) {
+            return message;
+        }
+
+        JLabel heading = Lbl.text(this.title, 17f, true, Palette::text);
+        heading.setBorder(BorderFactory.createEmptyBorder(0, 0, 6, 0));
+
+        if (message == null) {
+            return heading;
+        }
+
+        return new Object[] { heading, message };
+    }
+
     public int showWithFileMonitoring(File firstFile, File secondFile, int size, int returnValue) {
         if (secondFile != null) {
             return showWithFileMonitoring(size, returnValue, firstFile, secondFile);
@@ -238,13 +304,11 @@ public final class DialogManager {
         try {
             Object[] options = this.getOptions();
 
-            JOptionPane jop = new JOptionPane(this.content, this.type, this.lookAndFeel, this.icon, options,
-                    this.defaultOption);
-
-            jop.setInitialValue(this.defaultOption);
+            JOptionPane jop = this.createOptionPane(options);
             jop.setComponentOrientation(this.getParent().getComponentOrientation());
 
             JDialog dialog = jop.createDialog(this.getParent(), this.title);
+            ModernDialogs.polish(jop, dialog);
             List<File> filesForMonitoring = Arrays.asList(files);
 
             Timer timer = new Timer();

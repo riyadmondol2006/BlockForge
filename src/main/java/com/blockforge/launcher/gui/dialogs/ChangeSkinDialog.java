@@ -18,7 +18,6 @@
 package com.blockforge.launcher.gui.dialogs;
 
 import java.awt.BorderLayout;
-import java.awt.FlowLayout;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.Window;
@@ -45,8 +44,9 @@ import org.mini2Dx.gettext.GetText;
 import com.blockforge.launcher.App;
 import com.blockforge.launcher.FileSystem;
 import com.blockforge.launcher.builders.HTMLBuilder;
-import com.blockforge.launcher.constants.UIConstants;
 import com.blockforge.launcher.data.MicrosoftAccount;
+import com.blockforge.launcher.gui.modern.Icons;
+import com.blockforge.launcher.gui.modern.ModernDialogs;
 import com.blockforge.launcher.managers.DialogManager;
 import com.blockforge.launcher.managers.LogManager;
 import com.blockforge.launcher.network.Analytics;
@@ -73,9 +73,8 @@ public class ChangeSkinDialog extends JDialog {
 
         Analytics.sendScreenView("Change Skin Dialog");
 
-        setSize(445, 180);
+        setSize(520, 280);
         setLocationRelativeTo(parent);
-        setLayout(new BorderLayout());
         setIconImage(Utils.getImage("/assets/image/icon.png"));
         setDefaultCloseOperation(JDialog.DISPOSE_ON_CLOSE);
         setResizable(false);
@@ -92,30 +91,31 @@ public class ChangeSkinDialog extends JDialog {
 
     private void setupComponents() {
         // Top Panel Stuff
-        JPanel top = new JPanel();
-        top.add(new JLabel(GetText.tr("Changing Skin")));
+        JPanel top = ModernDialogs.header(GetText.tr("Changing Skin"), account.minecraftUsername, Icons.PERSON);
 
         // Middle Panel Stuff
         JPanel middle = new JPanel();
+        middle.setOpaque(false);
         middle.setLayout(new GridBagLayout());
         GridBagConstraints gbc = new GridBagConstraints();
 
         // Skin Browse
         gbc.gridx = 0;
         gbc.gridy = 0;
-        gbc.insets = UIConstants.LABEL_INSETS;
+        gbc.insets = ModernDialogs.LABEL_INSETS;
         gbc.anchor = GridBagConstraints.BASELINE_TRAILING;
-        JLabel skinFilePath = new JLabel(GetText.tr("Skin File") + ": ");
+        JLabel skinFilePath = ModernDialogs.label(GetText.tr("Skin File") + ": ");
         middle.add(skinFilePath, gbc);
 
         gbc.gridx++;
-        gbc.insets = UIConstants.LABEL_INSETS;
+        gbc.insets = ModernDialogs.LABEL_INSETS;
         gbc.anchor = GridBagConstraints.BASELINE_LEADING;
         JPanel skinPathPanel = new JPanel();
+        skinPathPanel.setOpaque(false);
         skinPathPanel.setLayout(new BoxLayout(skinPathPanel, BoxLayout.X_AXIS));
 
         skinPath = new JTextField(16);
-        JButton skinBrowseButton = new JButton(GetText.tr("Browse"));
+        JButton skinBrowseButton = ModernDialogs.secondary(GetText.tr("Browse")).icon(Icons.FOLDER).compact();
         skinBrowseButton.addActionListener(e -> {
             JFileChooser chooser = new JFileChooser();
             chooser.setCurrentDirectory(FileSystem.SKINS.toFile());
@@ -160,7 +160,7 @@ public class ChangeSkinDialog extends JDialog {
         });
 
         skinPathPanel.add(skinPath);
-        skinPathPanel.add(Box.createHorizontalStrut(5));
+        skinPathPanel.add(Box.createHorizontalStrut(8));
         skinPathPanel.add(skinBrowseButton);
 
         middle.add(skinPathPanel, gbc);
@@ -169,13 +169,13 @@ public class ChangeSkinDialog extends JDialog {
 
         gbc.gridx = 0;
         gbc.gridy++;
-        gbc.insets = UIConstants.LABEL_INSETS;
+        gbc.insets = ModernDialogs.LABEL_INSETS;
         gbc.anchor = GridBagConstraints.BASELINE_TRAILING;
-        JLabel skinTypeLabel = new JLabel(GetText.tr("Skin Type") + ": ");
+        JLabel skinTypeLabel = ModernDialogs.label(GetText.tr("Skin Type") + ": ");
         middle.add(skinTypeLabel, gbc);
 
         gbc.gridx++;
-        gbc.insets = UIConstants.FIELD_INSETS;
+        gbc.insets = ModernDialogs.FIELD_INSETS;
         gbc.anchor = GridBagConstraints.BASELINE_LEADING;
         skinType = new JComboBox<>();
         skinType.addItem(new ComboItem<>("classic", "Classic"));
@@ -183,10 +183,7 @@ public class ChangeSkinDialog extends JDialog {
         middle.add(skinType, gbc);
 
         // Bottom Panel Stuff
-        JPanel bottom = new JPanel();
-        bottom.setLayout(new FlowLayout());
-
-        uploadButton = new JButton(GetText.tr("Upload"));
+        uploadButton = ModernDialogs.primary(GetText.tr("Upload"));
         uploadButton.addActionListener(e -> {
             ProgressDialog<Boolean> progressDialog = new ProgressDialog<>(GetText.tr("Updating Skin"), 0,
                 GetText.tr("Updating Skin"));
@@ -214,15 +211,16 @@ public class ChangeSkinDialog extends JDialog {
             close();
         });
         uploadButton.setEnabled(false);
-        bottom.add(uploadButton);
 
-        JButton cancelButton = new JButton(GetText.tr("Cancel"));
+        JButton cancelButton = ModernDialogs.secondary(GetText.tr("Cancel"));
         cancelButton.addActionListener(e -> close());
-        bottom.add(cancelButton);
 
-        add(top, BorderLayout.NORTH);
-        add(middle, BorderLayout.CENTER);
-        add(bottom, BorderLayout.SOUTH);
+        JPanel body = new JPanel(new BorderLayout());
+        body.setOpaque(false);
+        body.add(middle, BorderLayout.NORTH);
+
+        ModernDialogs.install(this, top, body, ModernDialogs.footer(cancelButton, uploadButton));
+        ModernDialogs.growToFitOnShow(this);
     }
 
     private void close() {

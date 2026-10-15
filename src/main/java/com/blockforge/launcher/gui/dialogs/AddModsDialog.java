@@ -39,7 +39,6 @@ import javax.swing.JPanel;
 import javax.swing.JScrollPane;
 import javax.swing.JTextField;
 import javax.swing.SwingUtilities;
-import javax.swing.UIManager;
 import javax.swing.event.HyperlinkEvent;
 
 import org.mini2Dx.gettext.GetText;
@@ -63,6 +62,9 @@ import com.blockforge.launcher.exceptions.InvalidMinecraftVersion;
 import com.blockforge.launcher.gui.card.CurseForgeProjectCard;
 import com.blockforge.launcher.gui.card.ModrinthSearchHitCard;
 import com.blockforge.launcher.gui.layouts.WrapLayout;
+import com.blockforge.launcher.gui.modern.Icons;
+import com.blockforge.launcher.gui.modern.ModernDialogs;
+import com.blockforge.launcher.gui.modern.Palette;
 import com.blockforge.launcher.gui.panels.LoadingPanel;
 import com.blockforge.launcher.gui.panels.NoCurseModsPanel;
 import com.blockforge.launcher.managers.ConfigManager;
@@ -98,7 +100,7 @@ public final class AddModsDialog extends JDialog {
 
     private final JLabel fabricApiWarningLabel = new JLabel(
             "<html><p align=\"center\" style=\"color: "
-                    + String.format("#%06x", 0xFFFFFF & UIManager.getColor("yellow").getRGB())
+                    + String.format("#%06x", 0xFFFFFF & Palette.warn().getRGB())
                     // #. {0} is the loader (Fabric/Quilt), {1} is the loader api (Fabric API/QSL)
                     + "\">" + GetText.tr("Before installing {0} mods, you should install {1} first!",
                             "Fabric", "Fabric API")
@@ -109,7 +111,7 @@ public final class AddModsDialog extends JDialog {
 
     private final JLabel legacyFabricApiWarningLabel = new JLabel(
             "<html><p align=\"center\" style=\"color: "
-                    + String.format("#%06x", 0xFFFFFF & UIManager.getColor("yellow").getRGB())
+                    + String.format("#%06x", 0xFFFFFF & Palette.warn().getRGB())
                     // #. {0} is the loader (Fabric/Quilt), {1} is the loader api (Fabric API/QSL)
                     + "\">" + GetText.tr("Before installing {0} mods, you should install {1} first!",
                             "Legacy Fabric", "Legacy Fabric API")
@@ -121,7 +123,7 @@ public final class AddModsDialog extends JDialog {
 
     private final JLabel quiltStandardLibrariesWarningLabel = new JLabel(
             "<html><p align=\"center\" style=\"color: "
-                    + String.format("#%06x", 0xFFFFFF & UIManager.getColor("yellow").getRGB())
+                    + String.format("#%06x", 0xFFFFFF & Palette.warn().getRGB())
                     + "\">"
                     // #. {0} is the loader (Fabric/Quilt), {1} is the loader api (Fabric API/QSL)
                     + GetText.tr("Before installing {0} mods, you should install {1} first!",
@@ -134,7 +136,7 @@ public final class AddModsDialog extends JDialog {
 
     private final JLabel forgifiedFabricApiWarningLabel = new JLabel(
             "<html><p align=\"center\" style=\"color: "
-                    + String.format("#%06x", 0xFFFFFF & UIManager.getColor("yellow").getRGB())
+                    + String.format("#%06x", 0xFFFFFF & Palette.warn().getRGB())
                     // #. {0} is the loader (Fabric/Quilt), {1} is the loader api (Fabric API/QSL)
                     + "\">" + GetText.tr("Before installing {0} mods, you should install {1} first!",
                             "Fabric", "Forgified Fabric API")
@@ -155,7 +157,7 @@ public final class AddModsDialog extends JDialog {
         super(parent, GetText.tr("Adding Mods For {0}", instanceOrServer.getName()), ModalityType.DOCUMENT_MODAL);
         this.instanceOrServer = instanceOrServer;
 
-        this.setPreferredSize(new Dimension(800, 500));
+        this.setPreferredSize(new Dimension(920, 640));
         this.setMinimumSize(new Dimension(800, 500));
         this.setResizable(true);
         this.setDefaultCloseOperation(JDialog.DISPOSE_ON_CLOSE);
@@ -211,21 +213,25 @@ public final class AddModsDialog extends JDialog {
     private void setupComponents() {
         Analytics.sendScreenView("Add Mods Dialog");
 
-        this.topPanel.setBorder(BorderFactory.createEmptyBorder(0, 10, 0, 10));
+        this.topPanel.setBorder(BorderFactory.createEmptyBorder(0, 0, 14, 0));
+        this.topPanel.setOpaque(false);
 
         this.warningPanel.setLayout(new BoxLayout(this.warningPanel, BoxLayout.X_AXIS));
+        this.warningPanel.setOpaque(false);
+        this.warningPanel.setBorder(BorderFactory.createEmptyBorder(10, 0, 0, 0));
 
         JPanel searchButtonsPanel = new JPanel();
+        searchButtonsPanel.setOpaque(false);
 
         searchButtonsPanel.setLayout(new BoxLayout(searchButtonsPanel, BoxLayout.X_AXIS));
         searchButtonsPanel.add(this.hostComboBox);
-        searchButtonsPanel.add(Box.createHorizontalStrut(5));
+        searchButtonsPanel.add(Box.createHorizontalStrut(8));
         searchButtonsPanel.add(this.sectionComboBox);
-        searchButtonsPanel.add(Box.createHorizontalStrut(5));
+        searchButtonsPanel.add(Box.createHorizontalStrut(8));
         searchButtonsPanel.add(this.sortComboBox);
-        searchButtonsPanel.add(Box.createHorizontalStrut(5));
+        searchButtonsPanel.add(Box.createHorizontalStrut(8));
         searchButtonsPanel.add(this.categoriesComboBox);
-        searchButtonsPanel.add(Box.createHorizontalStrut(20));
+        searchButtonsPanel.add(Box.createHorizontalStrut(16));
         searchButtonsPanel.add(this.searchField);
 
         this.installFabricApiButton.addActionListener(e -> {
@@ -635,30 +641,37 @@ public final class AddModsDialog extends JDialog {
         };
 
         this.jscrollPane.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
+        this.jscrollPane.setBorder(BorderFactory.createEmptyBorder());
+        this.jscrollPane.setOpaque(false);
+        this.jscrollPane.getViewport().setOpaque(false);
+        this.contentPanel.setOpaque(false);
+        this.mainPanel.setOpaque(false);
 
         mainPanel.add(this.topPanel, BorderLayout.NORTH);
         mainPanel.add(this.jscrollPane, BorderLayout.CENTER);
 
-        JPanel bottomPanel = new JPanel(new BorderLayout());
-        JPanel bottomButtonsPanel = new JPanel(new FlowLayout());
+        JPanel bottomPanel = new JPanel(new BorderLayout(0, 8));
+        bottomPanel.setOpaque(false);
+        bottomPanel.setBorder(BorderFactory.createEmptyBorder(12, 0, 0, 0));
+        JPanel bottomButtonsPanel = new JPanel(new FlowLayout(FlowLayout.CENTER, 10, 0));
+        bottomButtonsPanel.setOpaque(false);
 
-        prevButton = new JButton("<<");
+        prevButton = ModernDialogs.secondary("<<").compact();
         prevButton.setEnabled(false);
         prevButton.addActionListener(e -> goToPreviousPage());
 
-        nextButton = new JButton(">>");
+        nextButton = ModernDialogs.secondary(">>").compact();
         nextButton.setEnabled(false);
         nextButton.addActionListener(e -> goToNextPage());
 
         bottomButtonsPanel.add(prevButton);
         bottomButtonsPanel.add(nextButton);
 
-        platformMessageLabel.setForeground(UIManager.getColor("yellow"));
+        platformMessageLabel.setForeground(Palette.warn());
         bottomPanel.add(platformMessageLabel, BorderLayout.NORTH);
         bottomPanel.add(bottomButtonsPanel, BorderLayout.CENTER);
 
-        this.add(mainPanel, BorderLayout.CENTER);
-        this.add(bottomPanel, BorderLayout.SOUTH);
+        ModernDialogs.install(this, ModernDialogs.header(getTitle(), null, Icons.DOWNLOAD), mainPanel, bottomPanel);
 
         this.hostComboBox.addActionListener(e -> {
             updating = true;
@@ -741,7 +754,9 @@ public final class AddModsDialog extends JDialog {
         if (loading) {
             contentPanel.removeAll();
             contentPanel.setLayout(new BorderLayout());
-            contentPanel.add(new LoadingPanel(), BorderLayout.CENTER);
+            LoadingPanel loadingPanel = new LoadingPanel();
+            loadingPanel.setOpaque(false);
+            contentPanel.add(loadingPanel, BorderLayout.CENTER);
         }
 
         revalidate();
@@ -982,7 +997,8 @@ public final class AddModsDialog extends JDialog {
 
         if (mods == null || mods.isEmpty()) {
             contentPanel.setLayout(new BorderLayout());
-            contentPanel.add(new NoCurseModsPanel(!this.searchField.getText().isEmpty()), BorderLayout.CENTER);
+            contentPanel.add(ModernDialogs.transparent(new NoCurseModsPanel(!this.searchField.getText().isEmpty())),
+                BorderLayout.CENTER);
         } else {
             prevButton.setEnabled(page > 0);
             nextButton.setEnabled(mods.size() == Constants.CURSEFORGE_PAGINATION_SIZE);
@@ -1070,7 +1086,8 @@ public final class AddModsDialog extends JDialog {
 
         if (searchResult == null || searchResult.hits.isEmpty()) {
             contentPanel.setLayout(new BorderLayout());
-            contentPanel.add(new NoCurseModsPanel(!this.searchField.getText().isEmpty()), BorderLayout.CENTER);
+            contentPanel.add(ModernDialogs.transparent(new NoCurseModsPanel(!this.searchField.getText().isEmpty())),
+                BorderLayout.CENTER);
         } else {
             prevButton.setEnabled(page > 0);
             nextButton.setEnabled((searchResult.offset + searchResult.limit) < searchResult.totalHits);

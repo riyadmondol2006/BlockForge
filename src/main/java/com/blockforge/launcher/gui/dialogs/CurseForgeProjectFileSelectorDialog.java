@@ -50,6 +50,10 @@ import com.blockforge.launcher.data.curseforge.CurseForgeProject;
 import com.blockforge.launcher.data.minecraft.loaders.LoaderVersion;
 import com.blockforge.launcher.exceptions.InvalidMinecraftVersion;
 import com.blockforge.launcher.gui.card.CurseForgeFileDependencyCard;
+import com.blockforge.launcher.gui.modern.Icons;
+import com.blockforge.launcher.gui.modern.Lbl;
+import com.blockforge.launcher.gui.modern.ModernDialogs;
+import com.blockforge.launcher.gui.modern.Palette;
 import com.blockforge.launcher.managers.ConfigManager;
 import com.blockforge.launcher.managers.DialogManager;
 import com.blockforge.launcher.managers.LogManager;
@@ -115,20 +119,19 @@ public class CurseForgeProjectFileSelectorDialog extends JDialog {
         // #. {0} is the name of the mod we're installing
         setTitle(GetText.tr("Installing {0}", mod.name));
 
-        setSize(550, 200);
-        setMinimumSize(new Dimension(550, 200));
+        setSize(620, 280);
+        setMinimumSize(new Dimension(620, 280));
         setLocationRelativeTo(App.launcher.getParent());
-        setLayout(new BorderLayout());
         setResizable(true);
         this.setDefaultCloseOperation(JDialog.DISPOSE_ON_CLOSE);
 
-        addButton = new JButton(GetText.tr("Add"));
+        addButton = ModernDialogs.primary(GetText.tr("Add"));
         addButton.setEnabled(false);
 
-        viewModButton = new JButton(GetText.tr("View Mod"));
+        viewModButton = ModernDialogs.secondary(GetText.tr("View Mod")).icon(Icons.EXTERNAL);
         viewModButton.setEnabled(false);
 
-        viewFileButton = new JButton(GetText.tr("View File"));
+        viewFileButton = ModernDialogs.secondary(GetText.tr("View File")).icon(Icons.EXTERNAL);
         viewFileButton.setEnabled(false);
 
         dependenciesPanel.setVisible(false);
@@ -137,20 +140,24 @@ public class CurseForgeProjectFileSelectorDialog extends JDialog {
 
         // Top Panel Stuff
         JPanel top = new JPanel(new BorderLayout());
+        top.setOpaque(false);
         // #. {0} is the name of the mod we're installing
-        top.add(new JLabel(GetText.tr("Installing {0}", mod.name), JLabel.CENTER), BorderLayout.NORTH);
+        top.add(ModernDialogs.header(GetText.tr("Installing {0}", mod.name), null, Icons.DOWNLOAD),
+            BorderLayout.NORTH);
 
-        installedJLabel = new JLabel("", JLabel.CENTER);
+        installedJLabel = Lbl.text("", 13f, false, Palette::accent);
         top.add(installedJLabel, BorderLayout.SOUTH);
 
         // Middle Panel Stuff
         JPanel middle = new JPanel(new BorderLayout());
+        middle.setOpaque(false);
 
         // Middle Panel Stuff
-        JPanel filesPanel = new JPanel(new FlowLayout());
-        filesPanel.setBorder(BorderFactory.createEmptyBorder(20, 0, 20, 0));
+        JPanel filesPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
+        filesPanel.setOpaque(false);
+        filesPanel.setBorder(BorderFactory.createEmptyBorder(6, 0, 6, 0));
 
-        versionsLabel = new JLabel(GetText.tr("Version To Install") + ": ");
+        versionsLabel = ModernDialogs.label(GetText.tr("Version To Install") + ": ");
         filesPanel.add(versionsLabel);
 
         filesDropdown = new JComboBox<>();
@@ -164,6 +171,10 @@ public class CurseForgeProjectFileSelectorDialog extends JDialog {
         scrollPane.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED);
         scrollPane.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
         scrollPane.setPreferredSize(new Dimension(550, 250));
+        scrollPane.setBorder(BorderFactory.createEmptyBorder(10, 0, 0, 0));
+        scrollPane.setOpaque(false);
+        scrollPane.getViewport().setOpaque(false);
+        dependenciesPanel.setOpaque(false);
 
         middle.add(filesPanel, BorderLayout.NORTH);
         middle.add(scrollPane, BorderLayout.SOUTH);
@@ -171,9 +182,6 @@ public class CurseForgeProjectFileSelectorDialog extends JDialog {
         this.getFiles();
 
         // Bottom Panel Stuff
-        JPanel bottom = new JPanel();
-        bottom.setLayout(new FlowLayout());
-
         addButton.addActionListener(e -> {
             CurseForgeFile file = (CurseForgeFile) filesDropdown.getSelectedItem();
 
@@ -200,16 +208,11 @@ public class CurseForgeProjectFileSelectorDialog extends JDialog {
 
         filesDropdown.addActionListener(e -> reloadDependenciesPanel());
 
-        JButton cancel = new JButton(GetText.tr("Cancel"));
+        JButton cancel = ModernDialogs.secondary(GetText.tr("Cancel"));
         cancel.addActionListener(e -> dispose());
-        bottom.add(addButton);
-        bottom.add(viewModButton);
-        bottom.add(viewFileButton);
-        bottom.add(cancel);
 
-        add(top, BorderLayout.NORTH);
-        add(middle, BorderLayout.CENTER);
-        add(bottom, BorderLayout.SOUTH);
+        ModernDialogs.install(this, top, middle,
+            ModernDialogs.footer(viewModButton, viewFileButton, cancel, addButton));
     }
 
     public void reloadDependenciesPanel() {
@@ -281,7 +284,7 @@ public class CurseForgeProjectFileSelectorDialog extends JDialog {
                 dependenciesPanel.setLayout(new GridLayout(dependencies.size() < 2 ? 1 : dependencies.size() / 2,
                     (dependencies.size() / 2) + 1));
 
-                setSize(550, 450);
+                setSize(620, 580);
                 setLocationRelativeTo(App.launcher.getParent());
 
                 dependenciesPanel.setVisible(true);
@@ -289,10 +292,10 @@ public class CurseForgeProjectFileSelectorDialog extends JDialog {
                 scrollPane.repaint();
                 scrollPane.validate();
             } else {
-                setSize(550, 200);
+                setSize(620, 280);
             }
         } else {
-            setSize(550, 200);
+            setSize(620, 280);
         }
     }
 
@@ -447,7 +450,7 @@ public class CurseForgeProjectFileSelectorDialog extends JDialog {
 
             // ensures that the dropdown is at least 200 px wide and has a maximum width of
             // 350 px to prevent overflow
-            filesDropdown.setPreferredSize(new Dimension(Math.min(350, Math.max(200, filesLength)), 25));
+            ModernDialogs.preferWidth(filesDropdown, Math.min(350, Math.max(200, filesLength)));
 
             filesDropdown.setEnabled(true);
             versionsLabel.setVisible(true);

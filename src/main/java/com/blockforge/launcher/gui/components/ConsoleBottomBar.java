@@ -18,12 +18,14 @@
 package com.blockforge.launcher.gui.components;
 
 import java.awt.BorderLayout;
+import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.Toolkit;
 import java.awt.datatransfer.Clipboard;
 import java.awt.datatransfer.StringSelection;
 import java.util.concurrent.ExecutionException;
 
+import javax.swing.BorderFactory;
 import javax.swing.JButton;
 import javax.swing.JPanel;
 import javax.swing.SwingUtilities;
@@ -36,6 +38,8 @@ import com.blockforge.launcher.constants.Constants;
 import com.blockforge.launcher.evnt.listener.RelocalizationListener;
 import com.blockforge.launcher.evnt.manager.RelocalizationManager;
 import com.blockforge.launcher.gui.dialogs.ProgressDialog;
+import com.blockforge.launcher.gui.modern.Btn;
+import com.blockforge.launcher.gui.modern.Icons;
 import com.blockforge.launcher.managers.DialogManager;
 import com.blockforge.launcher.managers.LogManager;
 import com.blockforge.launcher.network.Analytics;
@@ -44,14 +48,23 @@ import com.blockforge.launcher.thread.PasteUpload;
 
 public class ConsoleBottomBar extends BottomBar implements RelocalizationListener {
 
-    public final JPanel leftSide = new JPanel(new FlowLayout(FlowLayout.LEFT, 5, 13));
-    private final JButton clearButton = new JButton(GetText.tr("Clear"));
-    private final JButton copyLogButton = new JButton(GetText.tr("Copy Log"));
-    private final JButton uploadLogButton = new JButton(GetText.tr("Upload Log"));
-    private final JButton killMinecraftButton = new JButton(GetText.tr("Kill Minecraft"));
+    public final JPanel leftSide = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+    private final JButton clearButton = new Btn(GetText.tr("Clear"), Btn.Kind.TONAL).icon(Icons.TRASH).compact();
+    private final JButton copyLogButton = new Btn(GetText.tr("Copy Log"), Btn.Kind.TONAL)
+            .compact();
+    private final JButton uploadLogButton = new Btn(GetText.tr("Upload Log"), Btn.Kind.TONAL).icon(Icons.EXTERNAL)
+            .compact();
+    private final JButton killMinecraftButton = new Btn(GetText.tr("Kill Minecraft"), Btn.Kind.DANGER)
+            .icon(Icons.CLOSE).compact();
 
     public ConsoleBottomBar() {
         this.addActionListeners(); // Setup Action Listeners
+
+        this.setOpaque(false);
+        this.leftSide.setOpaque(false);
+        this.rightSide.setOpaque(false);
+        this.setPreferredSize(new Dimension(0, 56));
+        this.applyBorder();
 
         leftSide.add(this.clearButton);
         leftSide.add(this.copyLogButton);
@@ -63,6 +76,15 @@ public class ConsoleBottomBar extends BottomBar implements RelocalizationListene
         this.add(leftSide, BorderLayout.WEST);
 
         RelocalizationManager.addListener(this);
+    }
+
+    private void applyBorder() {
+        this.setBorder(BorderFactory.createEmptyBorder(12, 0, 12, 0));
+    }
+
+    @Override
+    public void onThemeChange() {
+        this.applyBorder();
     }
 
     public void hideBottomBarIconsIfNeeded() {

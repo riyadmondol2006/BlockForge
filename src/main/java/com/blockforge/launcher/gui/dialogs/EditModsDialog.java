@@ -18,8 +18,9 @@
 package com.blockforge.launcher.gui.dialogs;
 
 import java.awt.BorderLayout;
+import java.awt.Color;
 import java.awt.Dimension;
-import java.awt.FlowLayout;
+import java.awt.GridLayout;
 import java.awt.event.ItemEvent;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
@@ -35,6 +36,7 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 import javax.swing.AbstractButton;
+import javax.swing.BorderFactory;
 import javax.swing.BoxLayout;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
@@ -44,9 +46,6 @@ import javax.swing.JLayer;
 import javax.swing.JList;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
-import javax.swing.JSplitPane;
-import javax.swing.SwingConstants;
-import javax.swing.UIManager;
 
 import org.mini2Dx.gettext.GetText;
 
@@ -66,6 +65,11 @@ import com.blockforge.launcher.gui.WheelScrollLayerUI;
 import com.blockforge.launcher.gui.components.ModsJCheckBox;
 import com.blockforge.launcher.gui.handlers.ModsJCheckBoxTransferHandler;
 import com.blockforge.launcher.gui.layouts.WrapLayout;
+import com.blockforge.launcher.gui.modern.Btn;
+import com.blockforge.launcher.gui.modern.Icons;
+import com.blockforge.launcher.gui.modern.Lbl;
+import com.blockforge.launcher.gui.modern.ModernDialogs;
+import com.blockforge.launcher.gui.modern.Palette;
 import com.blockforge.launcher.managers.ConfigManager;
 import com.blockforge.launcher.managers.DialogManager;
 import com.blockforge.launcher.managers.LogManager;
@@ -110,10 +114,9 @@ public class EditModsDialog extends JDialog {
     }
 
     private void setup() {
-        setSize(550, 450);
-        setMinimumSize(new Dimension(550, 450));
+        setSize(780, 580);
+        setMinimumSize(new Dimension(640, 480));
         setLocationRelativeTo(App.launcher.getParent());
-        setLayout(new BorderLayout());
         setResizable(true);
         setDefaultCloseOperation(JDialog.DISPOSE_ON_CLOSE);
         addWindowListener(new WindowAdapter() {
@@ -133,90 +136,77 @@ public class EditModsDialog extends JDialog {
     private void setupComponents() {
         Analytics.sendScreenView("Edit Mods Dialog");
 
-        JSplitPane split = new JSplitPane(JSplitPane.VERTICAL_SPLIT);
-        split.setDividerSize(0);
-        split.setBorder(null);
-        split.setEnabled(false);
-        add(split, BorderLayout.NORTH);
+        JPanel topLeftPanel = new JPanel(new BorderLayout());
+        topLeftPanel.setOpaque(false);
 
-        JSplitPane labelsTop = new JSplitPane(JSplitPane.VERTICAL_SPLIT);
-        labelsTop.setDividerSize(0);
-        labelsTop.setBorder(null);
-        labelsTop.setEnabled(false);
-        split.setLeftComponent(labelsTop);
-
-        JSplitPane labels = new JSplitPane();
-        labels.setDividerLocation(275);
-        labels.setDividerSize(0);
-        labels.setBorder(null);
-        labels.setEnabled(false);
-        split.setRightComponent(labels);
-
-        JPanel topLeftPanel = new JPanel(new FlowLayout());
-
-        JLabel topLabelLeft = new JLabel(GetText.tr("Enabled Mods"));
-        topLabelLeft.setHorizontalAlignment(SwingConstants.CENTER);
-        topLeftPanel.add(topLabelLeft);
+        JLabel topLabelLeft = Lbl.text(GetText.tr("Enabled Mods"), 14f, true, Palette::text);
+        topLeftPanel.add(topLabelLeft, BorderLayout.CENTER);
 
         selectAllEnabledModsCheckbox = new JCheckBox();
+        selectAllEnabledModsCheckbox.setOpaque(false);
         selectAllEnabledModsCheckbox.addActionListener(e -> {
             boolean selected = selectAllEnabledModsCheckbox.isSelected();
 
             enabledMods.forEach(em -> em.setSelected(selected));
         });
-        topLeftPanel.add(selectAllEnabledModsCheckbox);
+        topLeftPanel.add(selectAllEnabledModsCheckbox, BorderLayout.EAST);
 
-        labels.setLeftComponent(topLeftPanel);
+        JPanel topRightPanel = new JPanel(new BorderLayout());
+        topRightPanel.setOpaque(false);
 
-        JPanel topRightPanel = new JPanel(new FlowLayout());
-
-        JLabel topLabelRight = new JLabel(GetText.tr("Disabled Mods"));
-        topLabelRight.setHorizontalAlignment(SwingConstants.CENTER);
-        topRightPanel.add(topLabelRight);
+        JLabel topLabelRight = Lbl.text(GetText.tr("Disabled Mods"), 14f, true, Palette::text);
+        topRightPanel.add(topLabelRight, BorderLayout.CENTER);
 
         selectAllDisabledModsCheckbox = new JCheckBox();
+        selectAllDisabledModsCheckbox.setOpaque(false);
         selectAllDisabledModsCheckbox.addActionListener(e -> {
             boolean selected = selectAllDisabledModsCheckbox.isSelected();
 
             disabledMods.forEach(dm -> dm.setSelected(selected));
         });
-        topRightPanel.add(selectAllDisabledModsCheckbox);
+        topRightPanel.add(selectAllDisabledModsCheckbox, BorderLayout.EAST);
 
-        labels.setRightComponent(topRightPanel);
+        JPanel modsInPack = new JPanel(new GridLayout(1, 2, 14, 0));
+        modsInPack.setOpaque(false);
 
-        JSplitPane modsInPack = new JSplitPane();
-        modsInPack.setDividerLocation(275);
-        modsInPack.setDividerSize(0);
-        modsInPack.setBorder(null);
-        modsInPack.setEnabled(false);
-        add(modsInPack, BorderLayout.CENTER);
-
-        disabledModsPanel = new JPanel();
+        disabledModsPanel = new JPanel() {
+            @Override
+            public Color getBackground() {
+                return Palette.card();
+            }
+        };
         disabledModsPanel.setLayout(new BoxLayout(disabledModsPanel, BoxLayout.Y_AXIS));
-        disabledModsPanel.setBackground(UIManager.getColor("Mods.modSelectionColor"));
         disabledModsPanel.setTransferHandler(new ModsJCheckBoxTransferHandler(this, true));
 
         JScrollPane scroller1 = new JScrollPane(disabledModsPanel,
             JScrollPane.VERTICAL_SCROLLBAR_ALWAYS,
             JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
         scroller1.getVerticalScrollBar().setUnitIncrement(16);
-        modsInPack.setRightComponent(new JLayer<>(scroller1, new WheelScrollLayerUI()));
 
-        enabledModsPanel = new JPanel();
+        enabledModsPanel = new JPanel() {
+            @Override
+            public Color getBackground() {
+                return Palette.card();
+            }
+        };
         enabledModsPanel.setLayout(new BoxLayout(enabledModsPanel, BoxLayout.Y_AXIS));
-        enabledModsPanel.setBackground(UIManager.getColor("Mods.modSelectionColor"));
         enabledModsPanel.setTransferHandler(new ModsJCheckBoxTransferHandler(this, true));;
 
         JScrollPane scroller2 = new JScrollPane(enabledModsPanel,
             JScrollPane.VERTICAL_SCROLLBAR_ALWAYS,
             JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
         scroller2.getVerticalScrollBar().setUnitIncrement(16);
-        modsInPack.setLeftComponent(new JLayer<>(scroller2, new WheelScrollLayerUI()));
 
-        JPanel bottomPanel = new JPanel(new WrapLayout());
-        add(bottomPanel, BorderLayout.SOUTH);
+        modsInPack.add(ModernDialogs.listCard(topLeftPanel, scroller2, new JLayer<>(scroller2, new WheelScrollLayerUI())));
+        modsInPack.add(ModernDialogs.listCard(topRightPanel, scroller1, new JLayer<>(scroller1, new WheelScrollLayerUI())));
 
-        JButton addButton = new JButton(GetText.tr("Add Mod"));
+        JPanel bottomPanel = new JPanel(new WrapLayout(WrapLayout.RIGHT, 8, 8));
+        bottomPanel.setOpaque(false);
+        bottomPanel.setBorder(BorderFactory.createEmptyBorder(10, 0, 0, 0));
+
+        ModernDialogs.install(this, ModernDialogs.header(getTitle(), null, Icons.CUBE), modsInPack, bottomPanel);
+
+        JButton addButton = new Btn(GetText.tr("Add Mod"), Btn.Kind.TONAL).icon(Icons.PLUS).compact();
         addButton.addActionListener(e -> {
             String[] modTypes;
 
@@ -313,7 +303,7 @@ public class EditModsDialog extends JDialog {
                 || (ConfigManager.getConfigItem("platforms.modrinth.modsEnabled", true)
                 && (instanceOrServer.getLoaderVersion() != null
                 || instanceOrServer instanceof Instance))) {
-                JButton browseMods = new JButton(GetText.tr("Browse Mods"));
+                JButton browseMods = new Btn(GetText.tr("Browse Mods"), Btn.Kind.FILLED).icon(Icons.SEARCH).compact();
                 browseMods.addActionListener(e -> {
                     AddModsDialog addModsDialog = new AddModsDialog(this, instanceOrServer);
                     addModsDialog.setVisible(true);
@@ -325,33 +315,33 @@ public class EditModsDialog extends JDialog {
                 bottomPanel.add(browseMods);
             }
 
-            checkForUpdatesButton = new JButton(GetText.tr("Check For Updates"));
+            checkForUpdatesButton = new Btn(GetText.tr("Check For Updates"), Btn.Kind.TONAL).compact();
             checkForUpdatesButton.addActionListener(e -> checkForUpdates());
             checkForUpdatesButton.setEnabled(false);
             bottomPanel.add(checkForUpdatesButton);
 
-            reinstallButton = new JButton(GetText.tr("Reinstall"));
+            reinstallButton = new Btn(GetText.tr("Reinstall"), Btn.Kind.TONAL).compact();
             reinstallButton.addActionListener(e -> reinstall());
             reinstallButton.setEnabled(false);
             bottomPanel.add(reinstallButton);
         }
 
-        enableButton = new JButton(GetText.tr("Enable Selected"));
+        enableButton = new Btn(GetText.tr("Enable Selected"), Btn.Kind.TONAL).compact();
         enableButton.addActionListener(e -> enableMods());
         enableButton.setEnabled(false);
         bottomPanel.add(enableButton);
 
-        disableButton = new JButton(GetText.tr("Disable Selected"));
+        disableButton = new Btn(GetText.tr("Disable Selected"), Btn.Kind.TONAL).compact();
         disableButton.addActionListener(e -> disableMods());
         disableButton.setEnabled(false);
         bottomPanel.add(disableButton);
 
-        removeButton = new JButton(GetText.tr("Remove Selected"));
+        removeButton = new Btn(GetText.tr("Remove Selected"), Btn.Kind.DANGER).compact();
         removeButton.addActionListener(e -> removeMods());
         removeButton.setEnabled(false);
         bottomPanel.add(removeButton);
 
-        refreshMetadataButton = new JButton(GetText.tr("Refresh Metadata"));
+        refreshMetadataButton = new Btn(GetText.tr("Refresh Metadata"), Btn.Kind.TONAL).compact();
         refreshMetadataButton.addActionListener(e -> refreshMetadata());
         refreshMetadataButton.setEnabled(false);
         bottomPanel.add(refreshMetadataButton);

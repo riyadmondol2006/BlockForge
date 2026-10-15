@@ -18,6 +18,7 @@
 package com.blockforge.launcher.gui.dialogs;
 
 import java.awt.BorderLayout;
+import java.awt.Dimension;
 import java.awt.Window;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
@@ -35,6 +36,9 @@ import javax.swing.SwingUtilities;
 import org.mini2Dx.gettext.GetText;
 
 import com.blockforge.launcher.App;
+import com.blockforge.launcher.gui.modern.Lbl;
+import com.blockforge.launcher.gui.modern.ModernDialogs;
+import com.blockforge.launcher.gui.modern.Palette;
 import com.blockforge.launcher.interfaces.NetworkProgressable;
 import com.blockforge.launcher.managers.LogManager;
 import com.blockforge.launcher.utils.Utils;
@@ -47,7 +51,7 @@ public class ProgressDialog<T> extends JDialog implements NetworkProgressable {
     private final String closedLogMessage; // The message to log to the console when dialog closed
     private T returnValue = null; // The value returned
     public boolean wasClosed = false; // If the dialog was closed by the user
-    private final JLabel label = new JLabel();
+    private final JLabel label = Lbl.text(" ", 13f, false, Palette::textDim);
     private int tasksToDo;
     private int tasksDone;
     private double totalBytes = 0; // Total number of bytes to download
@@ -60,20 +64,21 @@ public class ProgressDialog<T> extends JDialog implements NetworkProgressable {
         this.closedLogMessage = initClosedLogMessage;
         setDefaultCloseOperation(JDialog.DO_NOTHING_ON_CLOSE);
         setIconImage(Utils.getImage("/assets/image/icon.png"));
-        setSize(300, 100);
+        setSize(460, 215);
         setTitle(title);
         setLocationRelativeTo(parent);
-        setLayout(new BorderLayout());
         setResizable(false);
 
-        label.setText(initLabelText);
-        label.setHorizontalAlignment(SwingConstants.CENTER);
+        showLabel(initLabelText);
+        label.setHorizontalAlignment(SwingConstants.LEFT);
 
-        JPanel bottomPanel = new JPanel(new BorderLayout());
+        JPanel bottomPanel = new JPanel(new BorderLayout(0, 10));
+        bottomPanel.setOpaque(false);
         progressBar = new JProgressBar(0, initMax);
         if (initMax <= 0) {
             progressBar.setIndeterminate(true);
         }
+        progressBar.setPreferredSize(new Dimension(0, 8));
         progressBar.setVisible(showProgressBar);
         bottomPanel.add(progressBar, BorderLayout.NORTH);
 
@@ -81,8 +86,13 @@ public class ProgressDialog<T> extends JDialog implements NetworkProgressable {
         subProgressBar.setVisible(false);
         bottomPanel.add(subProgressBar, BorderLayout.SOUTH);
 
-        add(label, BorderLayout.CENTER);
-        add(bottomPanel, BorderLayout.SOUTH);
+        JPanel body = new JPanel(new BorderLayout(0, 14));
+        body.setOpaque(false);
+        body.add(label, BorderLayout.NORTH);
+        body.add(bottomPanel, BorderLayout.CENTER);
+
+        ModernDialogs.install(this, ModernDialogs.header(title, null), body, null);
+        ModernDialogs.growToFitOnShow(this);
 
         addWindowListener(new WindowAdapter() {
             @Override
@@ -161,7 +171,7 @@ public class ProgressDialog<T> extends JDialog implements NetworkProgressable {
         this.progressBar.setString(++this.tasksDone + "/" + tasksToDo + " " + GetText.tr("Tasks Done"));
         this.progressBar.setValue(this.tasksDone);
         this.clearDownloadedBytes();
-        this.label.setText(this.labelText);
+        showLabel(this.labelText);
     }
 
     public void setReturnValue(T returnValue) {
@@ -184,7 +194,12 @@ public class ProgressDialog<T> extends JDialog implements NetworkProgressable {
     }
 
     public void setLabel(String text) {
-        this.label.setText(text);
+        showLabel(text);
+    }
+
+    /** The title is already shown as the heading, so a label that only repeats it is left empty. */
+    private void showLabel(String text) {
+        this.label.setText(text == null || text.isEmpty() || text.equals(getTitle()) ? " " : text);
     }
 
     private void updateProgressBar() {

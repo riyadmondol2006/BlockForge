@@ -17,8 +17,9 @@
  */
 package com.blockforge.launcher.gui.dialogs;
 
-import java.awt.BorderLayout;
+import java.awt.Color;
 import java.awt.Dimension;
+import java.awt.GridLayout;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
 import java.util.ArrayList;
@@ -31,15 +32,16 @@ import javax.swing.JDialog;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
-import javax.swing.JSplitPane;
-import javax.swing.SwingConstants;
-import javax.swing.UIManager;
 
 import org.mini2Dx.gettext.GetText;
 
 import com.blockforge.launcher.App;
 import com.blockforge.launcher.data.json.Mod;
 import com.blockforge.launcher.gui.components.ModsJCheckBox;
+import com.blockforge.launcher.gui.modern.Icons;
+import com.blockforge.launcher.gui.modern.Lbl;
+import com.blockforge.launcher.gui.modern.ModernDialogs;
+import com.blockforge.launcher.gui.modern.Palette;
 import com.blockforge.launcher.managers.DialogManager;
 import com.blockforge.launcher.managers.LogManager;
 import com.blockforge.launcher.network.Analytics;
@@ -65,7 +67,6 @@ public class ModsChooser extends JDialog {
 
         setIconImage(Utils.getImage("/assets/image/icon.png"));
         setLocationRelativeTo(App.launcher.getParent());
-        setLayout(new BorderLayout());
         setResizable(false);
         setDefaultCloseOperation(JDialog.DISPOSE_ON_CLOSE);
         addWindowListener(new WindowAdapter() {
@@ -76,62 +77,40 @@ public class ModsChooser extends JDialog {
             }
         });
 
-        JSplitPane split = new JSplitPane(JSplitPane.VERTICAL_SPLIT);
-        split.setDividerSize(0);
-        split.setBorder(null);
-        split.setEnabled(false);
-        add(split, BorderLayout.NORTH);
+        JLabel topLabelLeft = Lbl.text(GetText.tr("Required Mods"), 14f, true, Palette::text);
 
-        JSplitPane labelsTop = new JSplitPane(JSplitPane.VERTICAL_SPLIT);
-        labelsTop.setDividerSize(0);
-        labelsTop.setBorder(null);
-        labelsTop.setEnabled(false);
-        split.setLeftComponent(labelsTop);
+        JLabel topLabelRight = Lbl.text(GetText.tr("Optional Mods"), 14f, true, Palette::text);
 
-        JSplitPane labels = new JSplitPane();
-        labels.setDividerLocation(275);
-        labels.setDividerSize(0);
-        labels.setBorder(null);
-        labels.setEnabled(false);
-        split.setRightComponent(labels);
+        JPanel modsInPack = new JPanel(new GridLayout(1, 2, 14, 0));
+        modsInPack.setOpaque(false);
 
-        JLabel topLabelLeft = new JLabel(GetText.tr("Required Mods"));
-        topLabelLeft.setHorizontalAlignment(SwingConstants.CENTER);
-        labels.setLeftComponent(topLabelLeft);
-
-        JLabel topLabelRight = new JLabel(GetText.tr("Optional Mods"));
-        topLabelRight.setHorizontalAlignment(SwingConstants.CENTER);
-        labels.setRightComponent(topLabelRight);
-
-        JSplitPane modsInPack = new JSplitPane();
-        modsInPack.setDividerLocation(275);
-        modsInPack.setDividerSize(0);
-        modsInPack.setBorder(null);
-        modsInPack.setEnabled(false);
-        add(modsInPack, BorderLayout.CENTER);
-
-        JPanel checkBoxPanel1 = new JPanel();
+        JPanel checkBoxPanel1 = new JPanel() {
+            @Override
+            public Color getBackground() {
+                return Palette.card();
+            }
+        };
         checkBoxPanel1.setLayout(null);
-        checkBoxPanel1.setBackground(UIManager.getColor("Mods.modSelectionColor"));
 
         JScrollPane scroller1 = new JScrollPane(checkBoxPanel1, JScrollPane.VERTICAL_SCROLLBAR_ALWAYS,
                 JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
         scroller1.getVerticalScrollBar().setUnitIncrement(16);
-        modsInPack.setRightComponent(scroller1);
 
-        JPanel checkBoxPanel2 = new JPanel();
+        JPanel checkBoxPanel2 = new JPanel() {
+            @Override
+            public Color getBackground() {
+                return Palette.card();
+            }
+        };
         checkBoxPanel2.setLayout(null);
-        checkBoxPanel2.setBackground(UIManager.getColor("Mods.modSelectionColor"));
 
         JScrollPane scroller2 = new JScrollPane(checkBoxPanel2, JScrollPane.VERTICAL_SCROLLBAR_ALWAYS,
                 JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
         scroller2.getVerticalScrollBar().setUnitIncrement(16);
-        modsInPack.setLeftComponent(scroller2);
+        modsInPack.add(ModernDialogs.listCard(topLabelLeft, scroller2, scroller2));
+        modsInPack.add(ModernDialogs.listCard(topLabelRight, scroller1, scroller1));
 
-        JPanel bottomPanel = new JPanel();
-        add(bottomPanel, BorderLayout.SOUTH);
-
-        selectAllButton = new JButton();
+        selectAllButton = ModernDialogs.secondary("");
 
         if (installer.hasRecommendedMods()) {
             selectAllButton.setText(GetText.tr("Select Recommended"));
@@ -162,9 +141,8 @@ public class ModsChooser extends JDialog {
                 }
             }
         });
-        bottomPanel.add(selectAllButton);
 
-        clearAllButton = new JButton(GetText.tr("Clear All"));
+        clearAllButton = ModernDialogs.secondary(GetText.tr("Clear All"));
         clearAllButton.addActionListener(e -> {
             for (ModsJCheckBox check : modCheckboxes) {
                 if ((installer.isServer ? check.getMod().isServerOptional() : check.getMod().isOptional())) {
@@ -180,11 +158,12 @@ public class ModsChooser extends JDialog {
                 }
             }
         });
-        bottomPanel.add(clearAllButton);
 
-        installButton = new JButton(GetText.tr("Install"));
+        installButton = ModernDialogs.primary(GetText.tr("Install"));
         installButton.addActionListener(e -> dispose());
-        bottomPanel.add(installButton);
+
+        ModernDialogs.install(this, ModernDialogs.header(getTitle(), null, Icons.CUBE), modsInPack,
+                ModernDialogs.footer(selectAllButton, clearAllButton, installButton));
 
         modCheckboxes = new ArrayList<>();
         int count1 = 0;
@@ -332,7 +311,7 @@ public class ModsChooser extends JDialog {
         checkBoxPanel1.setPreferredSize(new Dimension(0, count1 * 20));
         checkBoxPanel2.setPreferredSize(new Dimension(0, count2 * 20));
 
-        setSize(calculateWidth(), 450);
+        setSize(Math.max(calculateWidth() + 60, 680), 580);
         scroller1.setPreferredSize(new Dimension(calculateWidth() / 2, 350));
         scroller2.setPreferredSize(new Dimension(calculateWidth() / 2, 350));
     }

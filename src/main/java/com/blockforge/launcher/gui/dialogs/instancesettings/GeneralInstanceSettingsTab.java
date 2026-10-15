@@ -31,7 +31,7 @@ import org.mini2Dx.gettext.GetText;
 
 import com.blockforge.launcher.App;
 import com.blockforge.launcher.builders.HTMLBuilder;
-import com.blockforge.launcher.constants.UIConstants;
+import com.blockforge.launcher.gui.modern.ModernDialogs;
 import com.blockforge.launcher.data.Instance;
 import com.blockforge.launcher.data.QuickPlayOption;
 import com.blockforge.launcher.data.json.QuickPlay;
@@ -78,7 +78,7 @@ public class GeneralInstanceSettingsTab extends JPanel {
     void prepareLabelConstraints() {
         gbc.gridx = 0;
         gbc.gridy++;
-        gbc.insets = UIConstants.LABEL_INSETS;
+        gbc.insets = ModernDialogs.LABEL_INSETS;
         gbc.anchor = GridBagConstraints.BASELINE_TRAILING;
     }
 
@@ -88,7 +88,7 @@ public class GeneralInstanceSettingsTab extends JPanel {
      */
     void prepareAfterLabelComponentConstraints() {
         gbc.gridx++;
-        gbc.insets = UIConstants.FIELD_INSETS;
+        gbc.insets = ModernDialogs.FIELD_INSETS;
         gbc.anchor = GridBagConstraints.BASELINE_LEADING;
     }
 

@@ -28,9 +28,9 @@ import java.awt.event.WindowEvent;
 import java.io.File;
 
 import javax.swing.BorderFactory;
+import javax.swing.Box;
 import javax.swing.JButton;
 import javax.swing.JDialog;
-import javax.swing.JEditorPane;
 import javax.swing.JFileChooser;
 import javax.swing.JFrame;
 import javax.swing.JLabel;
@@ -47,6 +47,10 @@ import com.blockforge.launcher.FileSystem;
 import com.blockforge.launcher.builders.HTMLBuilder;
 import com.blockforge.launcher.constants.UIConstants;
 import com.blockforge.launcher.dbus.DBusUtils;
+import com.blockforge.launcher.gui.modern.Icons;
+import com.blockforge.launcher.gui.modern.Lbl;
+import com.blockforge.launcher.gui.modern.ModernDialogs;
+import com.blockforge.launcher.gui.modern.Palette;
 import com.blockforge.launcher.managers.AccountManager;
 import com.blockforge.launcher.managers.DialogManager;
 import com.blockforge.launcher.network.Analytics;
@@ -64,10 +68,9 @@ public class ImportInstanceDialog extends JDialog {
 
     public ImportInstanceDialog() {
         super(App.launcher.getParent(), GetText.tr("Import Instance"), ModalityType.DOCUMENT_MODAL);
-        setSize(500, 250);
-        setMinimumSize(new Dimension(500, 250));
+        setSize(600, 380);
+        setMinimumSize(new Dimension(600, 380));
         setLocationRelativeTo(null);
-        setLayout(new BorderLayout());
         setIconImage(Utils.getImage("/assets/image/icon.png"));
         setDefaultCloseOperation(JFrame.DO_NOTHING_ON_CLOSE);
         setResizable(false);
@@ -76,25 +79,27 @@ public class ImportInstanceDialog extends JDialog {
 
         // Middle Panel Stuff
         JPanel middle = new JPanel();
+        middle.setOpaque(false);
         middle.setLayout(new BorderLayout());
 
-        JEditorPane infoMessage = new JEditorPane("text/html", new HTMLBuilder().center().text(GetText.tr(
-                "Select a zip/mrpack file to import it.<br/>We currently support CurseForge, Modrinth and MultiMC exported files/urls, as well as CurseForge.com links."))
-            .build());
-        infoMessage.setEditable(false);
+        Lbl.Paragraph infoMessage = new Lbl.Paragraph(GetText.tr(
+                "Select a zip/mrpack file to import it.<br/>We currently support CurseForge, Modrinth and MultiMC exported files/urls, as well as CurseForge.com links.")
+            .replace("<br/>", "\n"), 13f, 4, 520, Palette::textDim);
+        infoMessage.setBorder(BorderFactory.createEmptyBorder(0, 0, 12, 0));
         middle.add(infoMessage, BorderLayout.NORTH);
 
         JPanel mainPanel = new JPanel(new GridBagLayout());
+        mainPanel.setOpaque(false);
         GridBagConstraints gbc = new GridBagConstraints();
         gbc.gridx = 0;
         gbc.gridy = 0;
-        gbc.insets = UIConstants.LABEL_INSETS;
+        gbc.insets = ModernDialogs.LABEL_INSETS;
         gbc.anchor = GridBagConstraints.BASELINE_TRAILING;
-        JLabel urlLabel = new JLabel(GetText.tr("URL") + ": ");
+        JLabel urlLabel = ModernDialogs.label(GetText.tr("URL") + ": ");
         mainPanel.add(urlLabel, gbc);
 
         gbc.gridx++;
-        gbc.insets = UIConstants.FIELD_INSETS;
+        gbc.insets = ModernDialogs.FIELD_INSETS;
         gbc.anchor = GridBagConstraints.BASELINE_LEADING;
         url = new JTextField(25);
         url.getDocument().addDocumentListener(new DocumentListener() {
@@ -120,21 +125,22 @@ public class ImportInstanceDialog extends JDialog {
 
         gbc.gridx = 0;
         gbc.gridy++;
-        gbc.insets = UIConstants.LABEL_INSETS;
+        gbc.insets = ModernDialogs.LABEL_INSETS;
         gbc.anchor = GridBagConstraints.BASELINE_TRAILING;
-        JLabel fileLabel = new JLabel(GetText.tr("File") + ": ");
-        fileLabel.setBorder(BorderFactory.createEmptyBorder(10, 0, 0, 0));
+        JLabel fileLabel = ModernDialogs.label(GetText.tr("File") + ": ");
         mainPanel.add(fileLabel, gbc);
 
         gbc.gridx++;
-        gbc.insets = UIConstants.FIELD_INSETS;
+        gbc.insets = ModernDialogs.FIELD_INSETS;
         gbc.anchor = GridBagConstraints.BASELINE_LEADING;
-        JPanel filePathPanel = new JPanel(new FlowLayout());
+        JPanel filePathPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
+        filePathPanel.setOpaque(false);
         filePath = new JTextField(17);
         filePath.setEnabled(false);
         filePathPanel.add(filePath);
+        filePathPanel.add(Box.createHorizontalStrut(8));
 
-        JButton browseButton = new JButton(GetText.tr("Browse"));
+        JButton browseButton = ModernDialogs.secondary(GetText.tr("Browse")).icon(Icons.FOLDER).compact();
         browseButton.addActionListener(e -> {
             if (OS.isUsingFlatpak()) {
                 File[] filesChosen = DBusUtils.selectFiles();
@@ -192,9 +198,7 @@ public class ImportInstanceDialog extends JDialog {
         middle.add(mainPanel, BorderLayout.CENTER);
 
         // Bottom Panel Stuff
-        JPanel bottom = new JPanel();
-        bottom.setLayout(new FlowLayout());
-        addButton = new JButton(GetText.tr("Import"));
+        addButton = ModernDialogs.primary(GetText.tr("Import"));
         addButton.addActionListener(e -> {
             if (AccountManager.getSelectedAccount() == null) {
                 DialogManager.okDialog().setTitle(GetText.tr("No Account Selected"))
@@ -239,10 +243,10 @@ public class ImportInstanceDialog extends JDialog {
                 dispose();
             }
         });
-        bottom.add(addButton);
 
-        add(middle, BorderLayout.CENTER);
-        add(bottom, BorderLayout.SOUTH);
+        ModernDialogs.install(this, ModernDialogs.header(GetText.tr("Import Instance"), null, Icons.IMPORT), middle,
+            ModernDialogs.footer(addButton));
+        ModernDialogs.growToFitOnShow(this);
 
         addWindowListener(new WindowAdapter() {
             @Override

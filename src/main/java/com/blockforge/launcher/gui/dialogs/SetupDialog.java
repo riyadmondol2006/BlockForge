@@ -26,6 +26,7 @@ import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
 import java.util.Locale;
 
+import javax.swing.BorderFactory;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
 import javax.swing.JComboBox;
@@ -42,6 +43,11 @@ import com.blockforge.launcher.constants.UIConstants;
 import com.blockforge.launcher.data.Language;
 import com.blockforge.launcher.evnt.listener.RelocalizationListener;
 import com.blockforge.launcher.evnt.manager.RelocalizationManager;
+import com.blockforge.launcher.gui.modern.Btn;
+import com.blockforge.launcher.gui.modern.Icons;
+import com.blockforge.launcher.gui.modern.Lbl;
+import com.blockforge.launcher.gui.modern.ModernDialogs;
+import com.blockforge.launcher.gui.modern.Palette;
 import com.blockforge.launcher.gui.components.JLabelWithHover;
 import com.blockforge.launcher.network.Analytics;
 import com.blockforge.launcher.network.analytics.AnalyticsEvent;
@@ -65,34 +71,36 @@ public class SetupDialog extends JDialog implements RelocalizationListener {
         // #. {0} is the name of the launcher (ATLauncher)
         super(null, GetText.tr("{0} Setup", Constants.LAUNCHER_NAME), ModalityType.DOCUMENT_MODAL);
         this.requestFocus();
-        this.setSize(500, 250);
+        this.setSize(620, 300);
         setLocationRelativeTo(null);
-        setLayout(new BorderLayout());
         setIconImage(Utils.getImage("/assets/image/icon.png"));
         setDefaultCloseOperation(JFrame.DO_NOTHING_ON_CLOSE);
         setResizable(false);
 
         // Top Panel Stuff
-        JPanel top = new JPanel();
+        JPanel top = new JPanel(new BorderLayout());
+        top.setOpaque(false);
+        top.setBorder(BorderFactory.createEmptyBorder(0, 0, 18, 0));
 
         // #. {0} is the name of the launcher (ATLauncher)
-        setupLabel = new JLabel(GetText.tr("Setting up {0}", Constants.LAUNCHER_NAME));
-        top.add(setupLabel);
+        setupLabel = Lbl.text(GetText.tr("Setting up {0}", Constants.LAUNCHER_NAME), 20f, true, Palette::text);
+        top.add(setupLabel, BorderLayout.CENTER);
 
         // Middle Panel Stuff
         JPanel middle = new JPanel();
+        middle.setOpaque(false);
         middle.setLayout(new GridBagLayout());
         GridBagConstraints gbc = new GridBagConstraints();
 
         gbc.gridx = 0;
         gbc.gridy = 0;
-        gbc.insets = UIConstants.LABEL_INSETS;
+        gbc.insets = ModernDialogs.LABEL_INSETS;
         gbc.anchor = GridBagConstraints.BASELINE_TRAILING;
-        languageLabel = new JLabel(GetText.tr("Language") + ": ");
+        languageLabel = ModernDialogs.label(GetText.tr("Language") + ": ");
         middle.add(languageLabel, gbc);
 
         gbc.gridx++;
-        gbc.insets = UIConstants.FIELD_INSETS;
+        gbc.insets = ModernDialogs.FIELD_INSETS;
         gbc.anchor = GridBagConstraints.BASELINE_LEADING;
         language = new JComboBox<>(
                 Language.locales.stream().filter(l -> l.equals(Locale.ENGLISH) || Language.languages.containsValue(l))
@@ -108,7 +116,7 @@ public class SetupDialog extends JDialog implements RelocalizationListener {
 
         gbc.gridx = 0;
         gbc.gridy++;
-        gbc.insets = UIConstants.LABEL_INSETS;
+        gbc.insets = ModernDialogs.LABEL_INSETS;
         gbc.anchor = GridBagConstraints.BASELINE_TRAILING;
         enableAnalyticsLabel = new JLabelWithHover(GetText.tr("Enable Anonymous Analytics") + "? ",
                 Utils.getIconImage(App.THEME.getIconPath("question")),
@@ -122,20 +130,20 @@ public class SetupDialog extends JDialog implements RelocalizationListener {
         gbc.anchor = GridBagConstraints.BASELINE_LEADING;
 
         JPanel enableAnalyticsPanel = new JPanel(new FlowLayout(FlowLayout.CENTER, UIConstants.SPACING_LARGE, 0));
+        enableAnalyticsPanel.setOpaque(false);
         enableAnalytics = new JCheckBox();
         enableAnalytics.setSelected(false);
         enableAnalyticsPanel.add(enableAnalytics);
 
-        JButton privacyPolicyButton = new JButton(GetText.tr("Open Privacy Policy"));
+        JButton privacyPolicyButton = new Btn(GetText.tr("Open Privacy Policy"), Btn.Kind.TEXT).icon(Icons.EXTERNAL)
+                .compact();
         privacyPolicyButton.addActionListener(e -> OS.openWebBrowser("https://atlauncher.com/privacy-policy"));
         enableAnalyticsPanel.add(privacyPolicyButton);
 
         middle.add(enableAnalyticsPanel, gbc);
 
         // Bottom Panel Stuff
-        JPanel bottom = new JPanel();
-        bottom.setLayout(new FlowLayout());
-        saveButton = new JButton(GetText.tr("Save"));
+        saveButton = ModernDialogs.primary(GetText.tr("Save"));
         saveButton.addActionListener(e -> {
             Language.setLanguage((String) language.getSelectedItem());
             App.settings.language = (String) language.getSelectedItem();
@@ -150,11 +158,13 @@ public class SetupDialog extends JDialog implements RelocalizationListener {
             setVisible(false);
             dispose();
         });
-        bottom.add(saveButton);
 
-        add(top, BorderLayout.NORTH);
-        add(middle, BorderLayout.CENTER);
-        add(bottom, BorderLayout.SOUTH);
+        JPanel body = new JPanel(new BorderLayout());
+        body.setOpaque(false);
+        body.add(middle, BorderLayout.NORTH);
+
+        ModernDialogs.install(this, top, body, ModernDialogs.footer(saveButton));
+        ModernDialogs.growToFitOnShow(this);
 
         addWindowListener(new WindowAdapter() {
             @Override

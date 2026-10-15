@@ -19,7 +19,6 @@ package com.blockforge.launcher.gui.dialogs;
 
 import java.awt.BorderLayout;
 import java.awt.Dimension;
-import java.awt.FlowLayout;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.event.WindowAdapter;
@@ -46,10 +45,11 @@ import javax.swing.JTextField;
 import org.mini2Dx.gettext.GetText;
 
 import com.blockforge.launcher.App;
-import com.blockforge.launcher.constants.UIConstants;
 import com.blockforge.launcher.data.Instance;
 import com.blockforge.launcher.data.InstanceExportFormat;
 import com.blockforge.launcher.data.MicrosoftAccount;
+import com.blockforge.launcher.gui.modern.Icons;
+import com.blockforge.launcher.gui.modern.ModernDialogs;
 import com.blockforge.launcher.gui.components.JLabelWithHover;
 import com.blockforge.launcher.managers.AccountManager;
 import com.blockforge.launcher.utils.ComboItem;
@@ -84,20 +84,22 @@ public class InstanceExportDialog extends JDialog {
         });
 
         WindowUtils.resizeForContent(this);
+        setLocationRelativeTo(App.launcher.getParent());
+        ModernDialogs.growToFitOnShow(this);
     }
 
     private void setupComponents() {
         setLocationRelativeTo(App.launcher.getParent());
-        setLayout(new BorderLayout());
         setResizable(true);
         setDefaultCloseOperation(JDialog.DISPOSE_ON_CLOSE);
 
         topPanel.setLayout(new GridBagLayout());
+        topPanel.setOpaque(false);
 
         // Name
         gbc.gridx = 0;
         gbc.gridy++;
-        gbc.insets = UIConstants.LABEL_INSETS;
+        gbc.insets = ModernDialogs.LABEL_INSETS;
         gbc.anchor = GridBagConstraints.BASELINE_TRAILING;
 
         JLabelWithHover nameLabel = new JLabelWithHover(GetText.tr("Name") + ":", HELP_ICON,
@@ -105,7 +107,7 @@ public class InstanceExportDialog extends JDialog {
         topPanel.add(nameLabel, gbc);
 
         gbc.gridx++;
-        gbc.insets = UIConstants.LABEL_INSETS;
+        gbc.insets = ModernDialogs.LABEL_INSETS;
         gbc.anchor = GridBagConstraints.BASELINE_LEADING;
         final JTextField name = new JTextField(30);
         name.setText(Optional.ofNullable(instance.launcher.lastExportName).orElse(instance.launcher.name));
@@ -114,7 +116,7 @@ public class InstanceExportDialog extends JDialog {
         // Version
         gbc.gridx = 0;
         gbc.gridy++;
-        gbc.insets = UIConstants.LABEL_INSETS;
+        gbc.insets = ModernDialogs.LABEL_INSETS;
         gbc.anchor = GridBagConstraints.BASELINE_TRAILING;
 
         JLabelWithHover versionLabel = new JLabelWithHover(GetText.tr("Version") + ":", HELP_ICON,
@@ -122,7 +124,7 @@ public class InstanceExportDialog extends JDialog {
         topPanel.add(versionLabel, gbc);
 
         gbc.gridx++;
-        gbc.insets = UIConstants.LABEL_INSETS;
+        gbc.insets = ModernDialogs.LABEL_INSETS;
         gbc.anchor = GridBagConstraints.BASELINE_LEADING;
         final JTextField version = new JTextField(30);
         version.setText(Optional.ofNullable(instance.launcher.lastExportVersion).orElse(instance.launcher.version));
@@ -131,7 +133,7 @@ public class InstanceExportDialog extends JDialog {
         // Author
         gbc.gridx = 0;
         gbc.gridy++;
-        gbc.insets = UIConstants.LABEL_INSETS;
+        gbc.insets = ModernDialogs.LABEL_INSETS;
         gbc.anchor = GridBagConstraints.BASELINE_TRAILING;
 
         JLabelWithHover authorLabel = new JLabelWithHover(GetText.tr("Author") + ":", HELP_ICON,
@@ -139,7 +141,7 @@ public class InstanceExportDialog extends JDialog {
         topPanel.add(authorLabel, gbc);
 
         gbc.gridx++;
-        gbc.insets = UIConstants.LABEL_INSETS;
+        gbc.insets = ModernDialogs.LABEL_INSETS;
         gbc.anchor = GridBagConstraints.BASELINE_LEADING;
         final JTextField author = new JTextField(30);
         final MicrosoftAccount selectedAccount = AccountManager.getSelectedAccount();
@@ -150,7 +152,7 @@ public class InstanceExportDialog extends JDialog {
         // Format
         gbc.gridx = 0;
         gbc.gridy++;
-        gbc.insets = UIConstants.LABEL_INSETS;
+        gbc.insets = ModernDialogs.LABEL_INSETS;
         gbc.anchor = GridBagConstraints.BASELINE_TRAILING;
 
         JLabelWithHover formatLabel = new JLabelWithHover(GetText.tr("Format") + ":", HELP_ICON,
@@ -158,7 +160,7 @@ public class InstanceExportDialog extends JDialog {
         topPanel.add(formatLabel, gbc);
 
         gbc.gridx++;
-        gbc.insets = UIConstants.LABEL_INSETS;
+        gbc.insets = ModernDialogs.LABEL_INSETS;
         gbc.anchor = GridBagConstraints.BASELINE_LEADING;
         final JComboBox<ComboItem<InstanceExportFormat>> format = new JComboBox<>();
         format.addItem(new ComboItem<>(InstanceExportFormat.CURSEFORGE, "CurseForge"));
@@ -180,17 +182,18 @@ public class InstanceExportDialog extends JDialog {
         gbc.gridx = 0;
         gbc.gridy++;
         gbc.gridwidth = 1;
-        gbc.insets = UIConstants.LABEL_INSETS;
+        gbc.insets = ModernDialogs.LABEL_INSETS;
         gbc.anchor = GridBagConstraints.BELOW_BASELINE_TRAILING;
         JLabelWithHover saveToLabel = new JLabelWithHover(GetText.tr("Save To") + ":", HELP_ICON,
             GetText.tr("Select the folder you wish to export the instance to"));
         topPanel.add(saveToLabel, gbc);
 
         gbc.gridx++;
-        gbc.insets = UIConstants.LABEL_INSETS;
+        gbc.insets = ModernDialogs.LABEL_INSETS;
         gbc.anchor = GridBagConstraints.BASELINE_LEADING;
 
         JPanel saveToPanel = new JPanel();
+        saveToPanel.setOpaque(false);
         saveToPanel.setLayout(new BoxLayout(saveToPanel, BoxLayout.X_AXIS));
 
         final JTextField saveTo = new JTextField(25);
@@ -200,7 +203,7 @@ public class InstanceExportDialog extends JDialog {
         // Disable manual input on flatpak (require proper xdg selection)
         saveTo.setEnabled(!OS.isUsingFlatpak());
 
-        JButton browseButton = new JButton(GetText.tr("Browse"));
+        JButton browseButton = ModernDialogs.secondary(GetText.tr("Browse")).icon(Icons.FOLDER).compact();
         browseButton.addActionListener(e -> {
             FileChooserDialog fcd = new FileChooserDialog(this,
                 GetText.tr("Select export directory"),
@@ -220,12 +223,13 @@ public class InstanceExportDialog extends JDialog {
             }
         });
 
-        JButton resetButton = new JButton(GetText.tr("Reset"));
+        JButton resetButton = ModernDialogs.secondary(GetText.tr("Reset")).compact();
         resetButton.addActionListener(e -> saveTo.setText(instance.getRoot().toAbsolutePath().toString()));
 
         saveToPanel.add(saveTo);
         saveToPanel.add(Box.createHorizontalStrut(5));
         saveToPanel.add(browseButton);
+        saveToPanel.add(Box.createHorizontalStrut(8));
         saveToPanel.add(resetButton);
 
         topPanel.add(saveToPanel, gbc);
@@ -234,19 +238,20 @@ public class InstanceExportDialog extends JDialog {
         gbc.gridx = 0;
         gbc.gridy++;
         gbc.gridwidth = 1;
-        gbc.insets = UIConstants.LABEL_INSETS;
+        gbc.insets = ModernDialogs.LABEL_INSETS;
         gbc.anchor = GridBagConstraints.BASELINE_TRAILING;
         JLabelWithHover overridesLabel = new JLabelWithHover(GetText.tr("Folders To Export") + ":", HELP_ICON,
             GetText.tr("Select the folders you wish to include for this export"));
         topPanel.add(overridesLabel, gbc);
 
         gbc.gridx++;
-        gbc.insets = UIConstants.LABEL_INSETS;
+        gbc.insets = ModernDialogs.LABEL_INSETS;
         gbc.anchor = GridBagConstraints.BASELINE_LEADING;
 
         JPanel overridesPanel = new JPanel();
         overridesPanel.setLayout(new BoxLayout(overridesPanel, BoxLayout.Y_AXIS));
-        overridesPanel.setBorder(BorderFactory.createEmptyBorder(0, -3, 0, 0));
+        overridesPanel.setBorder(BorderFactory.createEmptyBorder(4, 6, 4, 6));
+        overridesPanel.setOpaque(false);
 
         // get all files ignoring ATLauncher specific things as well as naughtys
         File[] files = Optional.ofNullable(instance.getRoot().toFile()
@@ -291,13 +296,14 @@ public class InstanceExportDialog extends JDialog {
             }
         };
         overridesScrollPanel.setPreferredSize(new Dimension(350, 200));
+        overridesScrollPanel.setBorder(ModernDialogs.outline());
+        overridesScrollPanel.setOpaque(false);
+        overridesScrollPanel.getViewport().setOpaque(false);
 
         topPanel.add(overridesScrollPanel, gbc);
 
         // bottom panel
-        bottomPanel.setLayout(new FlowLayout());
-
-        JButton exportButton = new JButton(GetText.tr("Export"));
+        JButton exportButton = ModernDialogs.primary(GetText.tr("Export")).icon(Icons.IMPORT);
         exportButton.addActionListener(arg0 -> {
             instance.scanMissingMods(this);
 
@@ -342,14 +348,15 @@ public class InstanceExportDialog extends JDialog {
 
             dialog.start();
         });
-        bottomPanel.add(exportButton);
 
-        JButton cancelButton = new JButton(GetText.tr("Cancel"));
+        JButton cancelButton = ModernDialogs.secondary(GetText.tr("Cancel"));
         cancelButton.addActionListener(arg0 -> close());
-        bottomPanel.add(cancelButton);
 
-        add(topPanel, BorderLayout.CENTER);
-        add(bottomPanel, BorderLayout.SOUTH);
+        bottomPanel.setLayout(new BorderLayout());
+        bottomPanel.setOpaque(false);
+        bottomPanel.add(ModernDialogs.footer(cancelButton, exportButton), BorderLayout.CENTER);
+
+        ModernDialogs.install(this, ModernDialogs.header(getTitle(), null, Icons.IMPORT), topPanel, bottomPanel);
     }
 
     private void close() {

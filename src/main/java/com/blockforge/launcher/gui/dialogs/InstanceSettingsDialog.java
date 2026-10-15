@@ -19,11 +19,12 @@ package com.blockforge.launcher.gui.dialogs;
 
 import java.awt.BorderLayout;
 import java.awt.Dimension;
-import java.awt.FlowLayout;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
 
+import javax.swing.BorderFactory;
 import javax.swing.JButton;
+import javax.swing.JComponent;
 import javax.swing.JDialog;
 import javax.swing.JPanel;
 import javax.swing.JTabbedPane;
@@ -35,12 +36,14 @@ import com.blockforge.launcher.data.Instance;
 import com.blockforge.launcher.gui.dialogs.instancesettings.CommandsInstanceSettingsTab;
 import com.blockforge.launcher.gui.dialogs.instancesettings.GeneralInstanceSettingsTab;
 import com.blockforge.launcher.gui.dialogs.instancesettings.JavaInstanceSettingsTab;
+import com.blockforge.launcher.gui.modern.Icons;
+import com.blockforge.launcher.gui.modern.ModernDialogs;
+import com.blockforge.launcher.gui.modern.Palette;
 
 public class InstanceSettingsDialog extends JDialog {
     private final Instance instance;
 
     private final JTabbedPane tabbedPane = new JTabbedPane(JTabbedPane.TOP);
-    private final JPanel bottomPanel = new JPanel();
 
     private final GeneralInstanceSettingsTab generalInstanceSettingsTab;
     private final JavaInstanceSettingsTab javaInstanceSettingsTab;
@@ -66,28 +69,23 @@ public class InstanceSettingsDialog extends JDialog {
     }
 
     private void setupComponents() {
-        setSize(800, 450);
-        setMinimumSize(new Dimension(800, 600));
+        setSize(820, 640);
+        setMinimumSize(new Dimension(820, 640));
         setLocationRelativeTo(App.launcher.getParent());
-        setLayout(new BorderLayout());
         setResizable(false);
         setDefaultCloseOperation(JDialog.DISPOSE_ON_CLOSE);
 
         // Tabbed Pane
 
-        tabbedPane.setFont(App.THEME.getNormalFont().deriveFont(17.0F));
-        tabbedPane.addTab(GetText.tr("General"), generalInstanceSettingsTab);
-        tabbedPane.addTab(GetText.tr("Java/Minecraft"), javaInstanceSettingsTab);
-        tabbedPane.addTab(GetText.tr("Commands"), commandsInstanceSettingsTab);
-        tabbedPane.setOpaque(true);
-
-        add(tabbedPane, BorderLayout.CENTER);
+        tabbedPane.setFont(Palette.bold(14f));
+        tabbedPane.addTab(GetText.tr("General"), page(generalInstanceSettingsTab));
+        tabbedPane.addTab(GetText.tr("Java/Minecraft"), page(javaInstanceSettingsTab));
+        tabbedPane.addTab(GetText.tr("Commands"), page(commandsInstanceSettingsTab));
+        tabbedPane.setOpaque(false);
 
         // Bottom Panel
 
-        bottomPanel.setLayout(new FlowLayout());
-
-        JButton saveButton = new JButton(GetText.tr("Save"));
+        JButton saveButton = ModernDialogs.primary(GetText.tr("Save"));
         saveButton.addActionListener(arg0 -> {
             if (javaInstanceSettingsTab.isValidJavaPath() && javaInstanceSettingsTab.isValidJavaParamaters()
                     && generalInstanceSettingsTab.isValidQuickPlayOptionValue()) {
@@ -96,13 +94,26 @@ public class InstanceSettingsDialog extends JDialog {
                 close();
             }
         });
-        bottomPanel.add(saveButton);
 
-        JButton cancelButton = new JButton(GetText.tr("Cancel"));
+        JButton cancelButton = ModernDialogs.secondary(GetText.tr("Cancel"));
         cancelButton.addActionListener(arg0 -> close());
-        bottomPanel.add(cancelButton);
 
-        add(bottomPanel, BorderLayout.SOUTH);
+        ModernDialogs.install(this,
+                ModernDialogs.header(GetText.tr("Settings"), instance.launcher.name, Icons.SETTINGS),
+                tabbedPane, ModernDialogs.footer(cancelButton, saveButton));
+    }
+
+    /** Puts a settings tab at the top of a scrollable page with some room around it. */
+    private static JComponent page(JPanel tab) {
+        ModernDialogs.blend(tab);
+        tab.setOpaque(false);
+        tab.setBorder(BorderFactory.createEmptyBorder(18, 8, 18, 8));
+
+        JPanel holder = new JPanel(new BorderLayout());
+        holder.setOpaque(false);
+        holder.add(tab, BorderLayout.NORTH);
+
+        return ModernDialogs.scroll(holder);
     }
 
     private void close() {

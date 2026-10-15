@@ -18,7 +18,6 @@
 package com.blockforge.launcher.gui.dialogs;
 
 import java.awt.BorderLayout;
-import java.awt.FlowLayout;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.Window;
@@ -35,8 +34,9 @@ import org.mini2Dx.gettext.GetText;
 
 import com.blockforge.launcher.App;
 import com.blockforge.launcher.builders.HTMLBuilder;
-import com.blockforge.launcher.constants.UIConstants;
 import com.blockforge.launcher.data.Instance;
+import com.blockforge.launcher.gui.modern.Icons;
+import com.blockforge.launcher.gui.modern.ModernDialogs;
 import com.blockforge.launcher.managers.DialogManager;
 import com.blockforge.launcher.managers.InstanceManager;
 import com.blockforge.launcher.managers.LogManager;
@@ -60,9 +60,8 @@ public class RenameInstanceDialog extends JDialog {
 
         Analytics.sendScreenView("Rename Instance Dialog");
 
-        setSize(320, 150);
+        setSize(420, 230);
         setLocationRelativeTo(parent);
-        setLayout(new BorderLayout());
         setIconImage(Utils.getImage("/assets/image/icon.png"));
         setDefaultCloseOperation(JDialog.DISPOSE_ON_CLOSE);
         setResizable(false);
@@ -79,32 +78,32 @@ public class RenameInstanceDialog extends JDialog {
 
     private void setupComponents() {
         // Top Panel Stuff
-        JPanel top = new JPanel();
-        top.add(new JLabel(GetText.tr("Renaming Instance")));
+        JPanel top = ModernDialogs.header(GetText.tr("Renaming Instance"), this.instance.launcher.name, Icons.EDIT);
 
         // Middle Panel Stuff
         JPanel middle = new JPanel();
+        middle.setOpaque(false);
         middle.setLayout(new GridBagLayout());
         GridBagConstraints gbc = new GridBagConstraints();
 
         gbc.gridx = 0;
         gbc.gridy = 0;
-        gbc.insets = UIConstants.LABEL_INSETS;
+        gbc.insets = ModernDialogs.LABEL_INSETS;
         gbc.anchor = GridBagConstraints.BASELINE_TRAILING;
-        JLabel instanceNameLabel = new JLabel(GetText.tr("Instance Name") + ": ");
+        JLabel instanceNameLabel = ModernDialogs.label(GetText.tr("Instance Name") + ": ");
         middle.add(instanceNameLabel, gbc);
 
         gbc.gridx++;
-        gbc.insets = UIConstants.FIELD_INSETS;
+        gbc.insets = ModernDialogs.FIELD_INSETS;
         gbc.anchor = GridBagConstraints.BASELINE_LEADING;
+        gbc.weightx = 1;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
         instanceName = new JTextField(16);
         instanceName.setText(this.instance.launcher.name);
         middle.add(instanceName, gbc);
 
         // Bottom Panel Stuff
-        JPanel bottom = new JPanel();
-        bottom.setLayout(new FlowLayout());
-        JButton saveButton = new JButton(GetText.tr("Save"));
+        JButton saveButton = ModernDialogs.primary(GetText.tr("Save"));
         saveButton.addActionListener(e -> {
             if (InstanceManager.isInstance(instanceName.getText())) {
                 DialogManager.okDialog().setParent(RenameInstanceDialog.this).setTitle(GetText.tr("Error"))
@@ -133,11 +132,13 @@ public class RenameInstanceDialog extends JDialog {
                 close();
             }
         });
-        bottom.add(saveButton);
 
-        add(top, BorderLayout.NORTH);
-        add(middle, BorderLayout.CENTER);
-        add(bottom, BorderLayout.SOUTH);
+        JPanel body = new JPanel(new BorderLayout());
+        body.setOpaque(false);
+        body.add(middle, BorderLayout.NORTH);
+
+        ModernDialogs.install(this, top, body, ModernDialogs.footer(saveButton));
+        ModernDialogs.growToFitOnShow(this);
     }
 
     private void close() {
