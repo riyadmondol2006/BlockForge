@@ -42,6 +42,7 @@ import com.blockforge.launcher.Gsons;
 import com.blockforge.launcher.annot.ExcludeFromGsonSerialization;
 import com.blockforge.launcher.constants.Constants;
 import com.blockforge.launcher.managers.LogManager;
+import com.blockforge.launcher.mclauncher.GameMemory;
 import com.blockforge.launcher.utils.OS;
 import com.blockforge.launcher.utils.Timestamper;
 import com.blockforge.launcher.utils.Utils;
@@ -106,7 +107,8 @@ public class Settings {
     public boolean scanModsOnLaunch = true;
 
     // Java/Minecraft
-    public int maximumMemory = 4096;
+    // half of the computer's memory, at most 4 GB: 2 GB gives 1 GB, 4 GB gives 2 GB, 8 GB or more gives 4 GB
+    public int maximumMemory = defaultMaximumMemory();
     public int metaspace = (OS.is64Bit() ? 256 : 128);
     public int windowWidth = 854;
     public int windowHeight = 480;
@@ -125,7 +127,10 @@ public class Settings {
     public Map<String, String> environmentVariables = new HashMap<>();
 
     // Network
-    public int concurrentConnections = 8;
+    // Minecraft is thousands of small files from a CDN, so the number of files in flight matters more than
+    // bandwidth; 16 roughly halves a first download compared to 8 without being unkind to the servers
+    public static final int DEFAULT_CONCURRENT_CONNECTIONS = 16;
+    public int concurrentConnections = DEFAULT_CONCURRENT_CONNECTIONS;
     public int connectionTimeout = 60;
     public String modrinthApiKey = null;
     public boolean enableProxy = false;
@@ -442,17 +447,20 @@ public class Settings {
             LogManager.warn("Tried to allocate " + maximumMemory + "MB of maximum memory but only " + systemMemory
                 + "MB is available to use!");
 
-            if (OS.is64Bit()) {
-                maximumMemory = Math.min((systemMemory / 1000) * 512, 8192);
-                needToSave = true;
-            } else {
-                maximumMemory = 1024;
-                needToSave = true;
-            }
+            maximumMemory = defaultMaximumMemory();
+            needToSave = true;
         }
 
         if (needToSave) {
             save();
+        }
+    }
+
+    private static int defaultMaximumMemory() {
+        try {
+            return GameMemory.defaultMaximumMb(OS.getSystemRam(), OS.is64Bit());
+        } catch (Throwable t) {
+            return GameMemory.UNKNOWN_DEFAULT_MB;
         }
     }
 
@@ -515,8 +523,9 @@ public class Settings {
     private void validateConcurrentConnections() {
         if (concurrentConnections < 1 || concurrentConnections > 100) {
             LogManager.warn("Tried to set the number of concurrent connections to " + concurrentConnections
-                + " which is not valid! Must be between 1 and 100. Setting back to default of 8!");
-            concurrentConnections = 8;
+                + " which is not valid! Must be between 1 and 100. Setting back to default of "
+                + DEFAULT_CONCURRENT_CONNECTIONS + "!");
+            concurrentConnections = DEFAULT_CONCURRENT_CONNECTIONS;
         }
     }
 

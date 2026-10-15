@@ -3124,10 +3124,9 @@ public class InstanceInstaller extends SwingWorker<Boolean, Void> implements Net
                 // collect the files we need to download
                 javaRuntimeManifest.files.forEach((key, file) -> {
                     if (file.type == JavaRuntimeManifestFileType.FILE) {
-                        com.blockforge.launcher.network.Download download = new com.blockforge.launcher.network.Download()
-                                .setUrl(file.downloads.raw.url).downloadTo(runtimeDirectory.resolve(key))
-                                .hash(file.downloads.raw.sha1).size(file.downloads.raw.size).executable(file.executable)
-                                .withInstanceInstaller(this).withHttpClient(httpClient);
+                        com.blockforge.launcher.network.Download download = com.blockforge.launcher.network.Download
+                                .forJavaRuntimeFile(file.downloads, runtimeDirectory.resolve(key))
+                                .executable(file.executable).withInstanceInstaller(this).withHttpClient(httpClient);
 
                         pool.add(download);
                     }

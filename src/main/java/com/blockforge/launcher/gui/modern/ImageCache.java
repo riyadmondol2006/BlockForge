@@ -48,6 +48,11 @@ public final class ImageCache {
 
     private static final Lru CACHE = new Lru(MAX_BYTES);
 
+    static {
+        // on a computer with little memory, pictures are dropped while Minecraft runs; they reload when shown again
+        com.blockforge.launcher.mclauncher.LauncherMemory.register(CACHE::clear);
+    }
+
     /**
      * Images are loaded on their own threads: a page of modpack icons from a slow server would otherwise queue up in
      * front of the launcher's other background work (searches, log uploads, play time reports).
@@ -96,6 +101,11 @@ public final class ImageCache {
 
         synchronized long bytes() {
             return bytes;
+        }
+
+        synchronized void clear() {
+            images.clear();
+            bytes = 0;
         }
 
         synchronized int size() {

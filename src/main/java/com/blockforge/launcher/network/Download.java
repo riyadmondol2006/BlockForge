@@ -17,7 +17,9 @@
  */
 package com.blockforge.launcher.network;
 
+import java.io.BufferedInputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.net.SocketTimeoutException;
 import java.nio.channels.Channels;
@@ -55,6 +57,8 @@ import okhttp3.Request;
 import okhttp3.RequestBody;
 import okhttp3.Response;
 
+import org.tukaani.xz.LZMAInputStream;
+
 // TODO: fuck this file, it's shit, I hate it
 public final class Download {
     public static final int MAX_ATTEMPTS = 3;
@@ -70,9 +74,12 @@ public final class Download {
     private boolean ignoreFailures = false;
     private boolean deleteAfterExtract = false;
     private String hash;
+    /** if the hash wasn't given but taken from what the server said (an ETag), so it's no use offline */
+    private boolean hashFromServer = false;
     private Long fingerprint = null;
     public long size = -1L;
     private boolean executable = false;
+    private boolean lzmaCompressed = false;
     public InstanceInstaller instanceInstaller;
     private OkHttpClient httpClient = Network.CLIENT;
     private RequestBody post = null;
@@ -215,6 +222,34 @@ public final class Download {
         this.executable = executable;
 
         return this;
+    }
+
+    /**
+     * The server sends the file LZMA compressed and it is unpacked while it is written. The hash is still the one of
+     * the unpacked file, and the size the one of what is sent.
+     */
+    public Download lzmaCompressed(boolean lzmaCompressed) {
+        this.lzmaCompressed = lzmaCompressed;
+
+        return this;
+    }
+
+    boolean isLzmaCompressed() {
+        return this.lzmaCompressed;
+    }
+
+    /**
+     * A file of one of Mojang's Java runtimes. Most are offered LZMA compressed as well, which for Java 8 is under a
+     * third of the size, so that is fetched when there is one.
+     */
+    public static Download forJavaRuntimeFile(
+        com.blockforge.launcher.data.minecraft.JavaRuntimeManifestFileDownloads downloads, Path to) {
+        com.blockforge.launcher.data.minecraft.Download raw = downloads.raw;
+        com.blockforge.launcher.data.minecraft.Download lzma = downloads.lzma;
+        boolean useLzma = lzma != null && lzma.url != null && !lzma.url.isEmpty();
+
+        return new Download().setUrl(useLzma ? lzma.url : raw.url).lzmaCompressed(useLzma).downloadTo(to)
+            .hash(raw.sha1).size(useLzma ? lzma.size : raw.size);
     }
 
     public Download copyTo(Path copyTo) {
@@ -440,6 +475,7 @@ public final class Download {
 
     public String getHash() {
         if (this.hash == null || this.hash.isEmpty()) {
+            this.hashFromServer = true;
             try {
                 this.hash = this.getHashFromURL();
             } catch (Exception e) {
@@ -490,6 +526,15 @@ public final class Download {
                 return false;
             }
 
+            // without a hash to check against, the only way to check a file is to ask the server about it, so once
+            // it has been fetched or checked, trust it for as long as the file stays exactly as it was. Otherwise
+            // every Play would make a request per library (Fabric and Quilt libraries have no hashes), which is
+            // slow and fails when offline.
+            if (this.fingerprint == null && !hasKnownHash() && this.url != null
+                && this.url.equals(FileFingerprints.get(this.to, "url"))) {
+                return false;
+            }
+
             if (this.fingerprint != null) {
                 try {
                     if (Hashing.murmur(this.to) == this.fingerprint) {
@@ -514,7 +559,12 @@ public final class Download {
             }
 
             // if no hash, but filesizes match, then no need to download
-            return (this.hash != null && !this.hash.equals("-")) || this.to.toFile().length() != this.getFilesize();
+            boolean need = (this.hash != null && !this.hash.equals("-"))
+                || this.to.toFile().length() != this.getFilesize();
+            if (!need) {
+                rememberUrl();
+            }
+            return need;
         }
 
         return true;
@@ -535,8 +585,13 @@ public final class Download {
         try {
             Files.deleteIfExists(part);
 
+            InputStream body = this.response.body().byteStream();
+            if (this.lzmaCompressed) {
+                body = new LZMAInputStream(new BufferedInputStream(body, 65536));
+            }
+
             try (FileChannel fc = FileChannel.open(part, Utils.WRITE);
-                ReadableByteChannel rbc = Channels.newChannel(this.response.body().byteStream())) {
+                ReadableByteChannel rbc = Channels.newChannel(body)) {
                 fc.transferFrom(rbc, 0, Long.MAX_VALUE);
             }
 
@@ -555,10 +610,26 @@ public final class Download {
         }
     }
 
+    private boolean hasKnownHash() {
+        return this.hash != null && !this.hash.isEmpty() && !this.hash.equals("-");
+    }
+
+    /** Notes that the file on disk is what this URL serves, for files that come without a hash. */
+    private void rememberUrl() {
+        if (this.url != null && this.fingerprint == null && (!hasKnownHash() || this.hashFromServer)
+            && Files.exists(this.to)) {
+            FileFingerprints.put(this.to, "url", this.url);
+        }
+    }
+
     /** Notes that the file on disk matches the hash it's meant to have. */
     private void rememberHash() {
         if (this.hash != null && !this.hash.equals("-")) {
             FileFingerprints.put(this.to, "hash", this.hash);
+        }
+
+        if (this.hashFromServer) {
+            rememberUrl();
         }
     }
 
@@ -754,6 +825,10 @@ public final class Download {
             || (expected != null && expected.equals(Hashing.EMPTY_HASH_CODE))) {
             if (this.response.isSuccessful()) {
                 this.downloadDirect();
+
+                if (!this.ignoreFailures) {
+                    rememberUrl();
+                }
             }
         } else {
             boolean downloaded = this.downloadRec(1);

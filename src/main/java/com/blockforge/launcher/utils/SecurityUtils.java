@@ -53,11 +53,17 @@ public class SecurityUtils {
             return outputString;
         };
 
+        // nothing to scan (no mods), so nothing to load, start or write
+        if (paths == null || paths.isEmpty()) {
+            return new ArrayList<>();
+        }
+
         loadFractureiserScannedHashes();
+        int knownHashes = FRACTURISER_SCANNED_HASHES.size();
 
         List<Path> infectionsFound = Collections.synchronizedList(new ArrayList<>());
 
-        ExecutorService executor = Executors.newFixedThreadPool(4);
+        ExecutorService executor = Executors.newFixedThreadPool(Math.min(4, paths.size()));
         for (final Path path : paths) {
             executor.submit(() -> {
                 // a jar that hasn't changed since it was last found clean doesn't need to be read again
@@ -92,7 +98,10 @@ public class SecurityUtils {
         executor.shutdown();
         executor.awaitTermination(5, TimeUnit.MINUTES);
 
-        saveFractureiserScannedHashes();
+        // only write the list when something new was scanned
+        if (FRACTURISER_SCANNED_HASHES.size() != knownHashes) {
+            saveFractureiserScannedHashes();
+        }
         FileFingerprints.save();
 
         return infectionsFound;
