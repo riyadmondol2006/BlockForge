@@ -69,7 +69,10 @@ public final class SkinDialog extends JDialog {
     private final MicrosoftAccount account;
     private final SkinPreview preview = new SkinPreview();
     private final JLabel fileLabel = Lbl.text(" ", 12.5f, false, Palette::textDim);
-    private final JLabel message = Lbl.text(" ", 12.5f, false, Palette::textDim);
+    /** whether the message below the choices is an error, which shows it in red */
+    private boolean messageIsError;
+    private final JLabel message = Lbl.text(" ", 12.5f, false,
+        () -> messageIsError ? Palette.danger() : Palette.textDim());
     private final Chip classic = new Chip(GetText.tr("Classic arms"));
     private final Chip slim = new Chip(GetText.tr("Slim arms"));
     private Btn upload;
@@ -328,8 +331,9 @@ public final class SkinDialog extends JDialog {
     }
 
     private void showMessage(String text, boolean error) {
+        messageIsError = error;
         message.setText(text);
-        message.setForeground(error ? Palette.danger() : Palette.textDim());
+        message.repaint();
     }
 
     private void installDropTarget(Component target) {

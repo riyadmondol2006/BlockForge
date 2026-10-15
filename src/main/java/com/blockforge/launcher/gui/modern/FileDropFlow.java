@@ -185,6 +185,13 @@ public final class FileDropFlow {
         notAdded.addAll(result.rejected);
         showUnknown(owner, notAdded);
 
+        if (result.added.containsKey(ContentKind.MODS) && instance.launcher.loaderVersion == null) {
+            // the files are kept (the player may add a loader later), but say why they won't load yet
+            ChoiceDialog.ask(owner, Icons.WARNING, GetText.tr("Mods need a mod loader"),
+                GetText.tr("{0} runs plain Minecraft, so these mods won't load. Use an instance with Fabric, Forge, NeoForge or Quilt, or make one from New instance.",
+                    instance.launcher.name),
+                GetText.tr("OK"));
+        }
         if (result.added.containsKey(ContentKind.SHADERS)) {
             offerShaderLoader(owner, instance, service, changed);
         }
