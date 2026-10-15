@@ -4,16 +4,14 @@ buildscript {
     repositories {
         mavenCentral()
         maven {
-            url 'https://jitpack.io'
+            url = 'https://jitpack.io'
             content {
                 includeGroup "com.github.RyanTheAllmighty.gettext"
-                includeGroup "com.github.ATLauncher.gradle-macappbundle"
             }
         }
     }
     dependencies {
         classpath 'com.github.RyanTheAllmighty.gettext:gettext-gradle-plugin:aab5c30bf8'
-        classpath 'com.github.ATLauncher.gradle-macappbundle:edu.sc.seis.macAppBundle.gradle.plugin:d22f8cdb94'
     }
 }
 
@@ -21,22 +19,19 @@ plugins {
     id 'java'
     id 'application'
 
-    id 'org.cadixdev.licenser' version '0.6.1'
     id 'com.adarshr.test-logger' version '4.0.0'
-    id 'edu.sc.seis.macAppBundle' version '2.3.0'
-    id 'edu.sc.seis.launch4j' version '3.0.6'
-    id 'de.undercouch.download' version '5.6.0'
-    id 'com.github.johnrengelman.shadow' version '8.1.1'
-    id 'com.github.ben-manes.versions' version '0.52.0'
-    id 'com.apollographql.apollo' version '2.5.14' // Cannot update past 2.x.x as Kotlin is required
-    id 'net.ltgt.errorprone' version '4.1.0'
+    id 'edu.sc.seis.launch4j' version '4.0.0'
+    id 'com.gradleup.shadow' version '9.6.1'
+    id 'io.github.ben-manes.versions' version '0.66.0'
+    id 'net.ltgt.errorprone' version '5.1.1'
 }
 
 apply plugin: 'org.mini2Dx.gettext'
-apply plugin: 'net.ltgt.errorprone'
 
-sourceCompatibility = '1.8'
-targetCompatibility = '1.8'
+java {
+    sourceCompatibility = JavaVersion.VERSION_1_8
+    targetCompatibility = JavaVersion.VERSION_1_8
+}
 
 group = 'com.blockforge.launcher'
 version = rootProject.file('src/main/resources/version').text.trim().replace('.Beta', '')
@@ -45,10 +40,10 @@ repositories {
     mavenCentral()
     gradlePluginPortal()
     maven {
-        url 'https://libraries.minecraft.net'
+        url = 'https://libraries.minecraft.net'
     }
     maven {
-        url 'https://jitpack.io'
+        url = 'https://jitpack.io'
         content {
             includeGroup "com.github.RyanTheAllmighty.gettext"
             includeGroup "com.github.Vatuu"
@@ -59,39 +54,40 @@ repositories {
 }
 
 dependencies {
-    implementation 'net.java.dev.jna:jna:5.16.0'
-    implementation 'net.java.dev.jna:jna-platform:5.16.0'
-    implementation 'com.google.code.gson:gson:2.11.0'
-    implementation 'com.google.guava:guava:33.4.0-jre'
-    implementation 'org.tukaani:xz:1.10'
+    implementation 'net.java.dev.jna:jna:5.19.1'
+    implementation 'net.java.dev.jna:jna-platform:5.19.1'
+    implementation 'com.google.code.gson:gson:2.14.0'
+    implementation 'com.google.guava:guava:33.7.2-jre'
+    implementation 'com.google.code.findbugs:jsr305:3.0.2' // javax.annotation.Nullable, no longer brought in by Guava
+    implementation 'org.tukaani:xz:1.12'
     implementation 'net.iharder:base64:2.3.9'
     implementation 'net.sf.jopt-simple:jopt-simple:5.0.4'
-    implementation 'org.zeroturnaround:zt-zip:1.17'
-    implementation 'io.sentry:sentry:8.0.0'
+    implementation 'org.zeroturnaround:zt-zip:1.18.2'
+    implementation 'io.sentry:sentry:8.61.0'
     implementation 'com.github.RyanTheAllmighty.gettext:gettext-lib:88ae68d897'
     implementation 'com.sangupta:murmur:1.0.0'
-    implementation 'com.github.oshi:oshi-core:6.6.6'
+    implementation 'com.github.oshi:oshi-core:6.12.0'
     implementation 'net.freeutils:jlhttp:3.2'
-    implementation 'joda-time:joda-time:2.13.0'
+    implementation 'joda-time:joda-time:2.15.0'
     implementation 'org.commonmark:commonmark:0.21.0' // Cannot update past 0.21.0 as needs >=Java 11
     implementation 'com.github.hypfvieh:dbus-java:3.3.2'
     implementation 'com.github.MCRcortex:nekodetector:Version-1.1-pre'
-    implementation 'com.twelvemonkeys.imageio:imageio-webp:3.12.0'
+    implementation 'com.twelvemonkeys.imageio:imageio-webp:3.15.3'
 
     // Commons
-    implementation 'org.apache.commons:commons-compress:1.27.1'
+    implementation 'org.apache.commons:commons-compress:1.28.0'
 
     // OkHttp
     implementation 'com.squareup.okhttp3:okhttp:4.12.0'
     implementation 'com.squareup.okhttp3:okhttp-tls:4.12.0'
 
     // FlatLaf UI (https://www.formdev.com/flatlaf/)
-    implementation 'com.formdev:flatlaf:3.5.4'
-    implementation 'com.formdev:flatlaf-extras:3.5.4'
+    implementation 'com.formdev:flatlaf:3.7.2'
+    implementation 'com.formdev:flatlaf-extras:3.7.2'
 
     // Log4J
-    implementation 'org.apache.logging.log4j:log4j-api:2.24.3'
-    implementation 'org.apache.logging.log4j:log4j-core:2.24.3'
+    implementation 'org.apache.logging.log4j:log4j-api:2.26.1'
+    implementation 'org.apache.logging.log4j:log4j-core:2.26.1'
 
     // Apollo GraphQL (Cannot update past 2.x.x as Kotlin is required)
     implementation 'com.apollographql.apollo:apollo-runtime:2.5.14'
@@ -99,16 +95,20 @@ dependencies {
     implementation 'com.apollographql.apollo:apollo-rx3-support:2.5.14'
 
     // RxJava
-    implementation("io.reactivex.rxjava3:rxjava:3.1.10")
+    implementation("io.reactivex.rxjava3:rxjava:3.1.12")
     implementation("com.gitlab.doomsdayrs:rxswing:a5749ad421") // TODO tag
 
     testImplementation 'org.mockito:mockito-core:4.11.0' // Cannot update to 5.x.x as Java 11 min
     testImplementation 'org.mockito:mockito-inline:4.11.0' // Cannot update to 5.x.x as Java 11 min
     testImplementation 'org.assertj:assertj-swing-junit:3.17.1'
     testImplementation 'org.mock-server:mockserver-netty:5.15.0'
-    testImplementation 'org.junit.jupiter:junit-jupiter-api:5.11.4'
-    testRuntimeOnly 'org.junit.jupiter:junit-jupiter-engine:5.11.4'
-    testRuntimeOnly 'org.junit.vintage:junit-vintage-engine:5.11.4'
+    testImplementation 'org.junit.jupiter:junit-jupiter-api:5.14.4'
+    testRuntimeOnly 'org.junit.jupiter:junit-jupiter-engine:5.14.4'
+    testRuntimeOnly 'org.junit.vintage:junit-vintage-engine:5.14.4'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher:1.14.4'
+
+    // Error Prone 2.43 and newer need JDK 21 to run, and the code is compiled with JDK 17
+    errorprone 'com.google.errorprone:error_prone_core:2.42.0'
 }
 
 application {
@@ -131,7 +131,7 @@ test {
     }
 
     testlogger {
-        theme 'mocha'
+        theme = 'mocha'
     }
 }
 
@@ -139,10 +139,6 @@ tasks.withType(JavaCompile).configureEach {
     // compile with JDK 17
     javaCompiler = javaToolchains.compilerFor {
         languageVersion = JavaLanguageVersion.of(17)
-    }
-
-    dependencies {
-        errorprone "com.google.errorprone:error_prone_core:2.36.0"
     }
 
     options.errorprone {
@@ -186,12 +182,107 @@ jar {
     }
 }
 
-apollo {
-    customTypeMapping = [
-        "ID"      : "java.lang.String",
-        "DateTime": "java.util.Date"
-    ]
-    packageName = "com.blockforge.launcher.graphql"
+// Apollo GraphQL code generation.
+// The Apollo 2.x Gradle plugin can't run on Gradle 9 and Apollo 3+ needs Kotlin, so this runs the Apollo 2.x compiler
+// directly with the same settings the plugin used. The generated Java goes to the same folder as before.
+configurations {
+    apolloCompiler {
+        canBeConsumed = false
+        canBeResolved = true
+    }
+}
+
+dependencies {
+    apolloCompiler 'com.apollographql.apollo:apollo-compiler:2.5.14'
+}
+
+def apolloSourceDir = layout.projectDirectory.dir('src/main/graphql')
+def apolloSchemaFile = layout.projectDirectory.file('src/main/graphql/com/blockforge/launcher/schema.json')
+def apolloGraphqlFiles = fileTree(apolloSourceDir) {
+    include '**/*.graphql', '**/*.gql'
+}
+def apolloCustomTypeMapping = [
+    "ID"      : "java.lang.String",
+    "DateTime": "java.util.Date"
+]
+def apolloPackageName = "com.blockforge.launcher.graphql"
+def apolloOutputDir = layout.buildDirectory.dir('generated/source/apollo/main/service')
+
+def generateApolloSources = tasks.register('generateApolloSources') {
+    group = 'apollo'
+    description = 'Generates the Java models for the GraphQL queries in src/main/graphql.'
+
+    def compilerClasspath = configurations.apolloCompiler
+    def outputDir = apolloOutputDir
+    def metadataFile = layout.buildDirectory.file('generated/metadata/apollo/main/service/metadata.json')
+    def moduleName = project.name
+    def rootDir = rootProject.rootDir
+
+    inputs.files(compilerClasspath).withPropertyName('compilerClasspath').withNormalizer(ClasspathNormalizer)
+    inputs.files(apolloGraphqlFiles).withPropertyName('graphqlFiles').withPathSensitivity(PathSensitivity.RELATIVE).skipWhenEmpty()
+    inputs.file(apolloSchemaFile).withPropertyName('schemaFile').withPathSensitivity(PathSensitivity.RELATIVE)
+    inputs.property('customTypeMapping', apolloCustomTypeMapping)
+    inputs.property('packageName', apolloPackageName)
+    outputs.dir(outputDir).withPropertyName('outputDir')
+    outputs.file(metadataFile).withPropertyName('metadataFile')
+    outputs.cacheIf { true }
+
+    doLast {
+        def out = outputDir.get().asFile
+        out.deleteDir()
+        out.mkdirs()
+
+        def urls = compilerClasspath.files.collect { it.toURI().toURL() } as URL[]
+        def loader = new URLClassLoader(urls, ClassLoader.getPlatformClassLoader())
+        try {
+            def nullableValueType = loader.loadClass('com.apollographql.apollo.compiler.NullableValueType').enumConstants.find { it.value == 'annotated' }
+            def idGenerator = loader.loadClass('com.apollographql.apollo.compiler.OperationIdGenerator$Sha256').getConstructor().newInstance()
+            def outputGenerator = loader.loadClass('com.apollographql.apollo.compiler.OperationOutputGenerator$DefaultOperationOuputGenerator')
+                .constructors.find { it.parameterCount == 1 }.newInstance(idGenerator)
+            def argumentsClass = loader.loadClass('com.apollographql.apollo.compiler.GraphQLCompiler$Arguments')
+            // the parameters in the order of GraphQLCompiler.Arguments, with the values the Apollo 2.5 Gradle plugin used
+            def arguments = argumentsClass.constructors.find { it.parameterCount == 27 }.newInstance(
+                [apolloSourceDir.asFile],             // rootFolders
+                apolloGraphqlFiles.files,             // graphqlFiles
+                apolloSchemaFile.asFile,              // schemaFile
+                out,                                  // outputDir
+                [],                                   // metadata
+                moduleName,                           // moduleName
+                rootDir,                              // rootProjectDir
+                metadataFile.get().asFile,            // metadataOutputFile
+                false,                                // generateMetadata
+                null,                                 // alwaysGenerateTypesMatching
+                null,                                 // operationOutputFile
+                outputGenerator,                      // operationOutputGenerator
+                '',                                   // rootPackageName
+                false,                                // generateKotlinModels
+                apolloCustomTypeMapping,              // customTypeMap
+                true,                                 // useSemanticNaming
+                false,                                // generateAsInternal
+                true,                                 // warnOnDeprecatedUsages
+                false,                                // failOnWarnings
+                apolloPackageName,                    // packageName
+                false,                                // kotlinMultiPlatformProject
+                [] as Set,                            // enumAsSealedClassPatternFilters
+                nullableValueType,                    // nullableValueType
+                false,                                // generateModelBuilder
+                false,                                // useJavaBeansSemanticNaming
+                false,                                // suppressRawTypesWarning
+                false                                 // generateVisitorForPolymorphicDatatypes
+            )
+            def compiler = loader.loadClass('com.apollographql.apollo.compiler.GraphQLCompiler').getConstructor().newInstance()
+            compiler.write(arguments)
+        } finally {
+            loader.close()
+        }
+    }
+}
+
+sourceSets.main.java.srcDir(files(apolloOutputDir).builtBy(generateApolloSources))
+
+// the gettext plugin's tasks use Task.project while running, so Gradle runs them without the configuration cache
+tasks.matching { it.name.startsWith('generatePot') }.configureEach {
+    notCompatibleWithConfigurationCache('the gettext plugin uses Task.project at execution time')
 }
 
 gettext {
@@ -213,22 +304,52 @@ gettext {
     }
 }
 
-license {
-    header = project.file('LICENSEHEADER')
+// License headers. These two tasks replace the unmaintained org.cadixdev.licenser plugin, which can't run on Gradle 9.
+// updateLicenses adds the LICENSEHEADER to Java files that have no header yet (files that have one are left alone),
+// and checkLicenses fails if a file is missing one.
+def licensedSources = files(sourceSets.main.java.srcDirs, sourceSets.test.java.srcDirs).asFileTree.matching {
     include '**/*.java'
     exclude 'io/github/**/*.java'
     exclude 'net/minecraft/**/*.java'
     exclude 'com/blockforge/launcher/graphql/**/*.java'
     exclude 'com/blockforge/launcher/gui/layouts/WrapLayout.java'
     exclude 'com/blockforge/launcher/gui/WheelScrollLayerUI.java'
-    newLine = false
-    skipExistingHeaders = true
-    properties {
-        year = currentYear()
+}
+def licenseHeaderTemplate = layout.projectDirectory.file('LICENSEHEADER')
+
+tasks.register('updateLicenses') {
+    group = 'license'
+    description = 'Adds the license header to Java source files that do not have one.'
+    doLast { task ->
+        def df = new SimpleDateFormat('yyyy')
+        df.setTimeZone(TimeZone.getTimeZone('UTC'))
+        def lines = licenseHeaderTemplate.asFile.getText('UTF-8').replace('$year', df.format(new Date())).trim().readLines()
+        def header = '/*\n' + lines.collect { it.trim() ? (' * ' + it) : ' *' }.join('\n') + '\n */\n'
+        licensedSources.each { File file ->
+            def text = file.getText('UTF-8')
+            if (!text.trim().startsWith('/*')) {
+                file.setText(header + text, 'UTF-8')
+                task.logger.lifecycle("Added a license header to ${file}")
+            }
+        }
     }
 }
 
-shadowJar {
+tasks.register('checkLicenses') {
+    group = 'license'
+    description = 'Checks that Java source files have a license header.'
+    doLast {
+        def missing = licensedSources.files.findAll { !it.getText('UTF-8').trim().startsWith('/*') }
+        if (!missing.isEmpty()) {
+            throw new GradleException('These files have no license header (run updateLicenses):\n  ' + missing.join('\n  '))
+        }
+    }
+}
+
+tasks.named('shadowJar') {
+    // nothing is relocated, so the .kotlin_module files can be copied as they are
+    enableKotlinModuleRemapping = false
+
     archiveClassifier.set(null)
     minimize {
         exclude(dependency('org.apache.logging.log4j:.*:.*'))
@@ -256,26 +377,6 @@ shadowJar {
     archiveClassifier.set('')
 }
 
-macAppBundle {
-    mainClassName = 'com.blockforge.launcher.App'
-    appName = 'BlockForge'
-    appStyle = 'universalJavaApplicationStub'
-    runtimeConfigurationName = 'shadow'
-    jarTask = 'shadowJar'
-    icon = 'src/main/resources/assets/image/icon.icns'
-    javaProperties.put('user.dir', '$APP_ROOT/Contents/Java')
-    javaProperties.put('apple.laf.useScreenMenuBar', 'true')
-    javaExtras.put("-Djna.nosys", "true")
-    javaExtras.put("-Djava.net.preferIPv4Stack", "true")
-    javaExtras.put("-Dawt.useSystemAAFontSettings", "on")
-    javaExtras.put("-Dswing.aatext", "true")
-    bundleExtras.put("JVMVersion", project.targetCompatibility.toString() + "+")
-}
-
-copyToResourcesJava {
-    rename("BlockForge-${project.version}.jar", "BlockForge.jar")
-}
-
 def currentYear() {
     def df = new SimpleDateFormat("yyyy")
     df.setTimeZone(TimeZone.getTimeZone("UTC"))
@@ -284,7 +385,7 @@ def currentYear() {
 
 launch4j {
     outfile = "BlockForge-${project.version}.exe"
-    jreMinVersion = "${project.targetCompatibility.toString()}"
+    jreMinVersion = "${java.targetCompatibility.toString()}"
     mainClassName = 'com.blockforge.launcher.App'
     icon = "${projectDir}/src/main/resources/assets/image/icon.ico"
     version = "${project.version}"
@@ -300,45 +401,25 @@ launch4j {
     ]
 }
 
-artifacts {
-    archives shadowJar
-    archives file(project.tasks.jar.getArchivePath().getPath().replace('.jar', '.exe').replace('libs', 'launch4j'))
-    archives file(project.tasks.jar.getArchivePath().getPath().replace('.jar', '.zip').replace('libs', 'distributions'))
-}
-
-task copyArtifacts(type: Copy) {
-    dependsOn build
-    from shadowJar
-    from file(project.tasks.jar.getArchivePath().getPath().replace('.jar', '.exe').replace('libs', 'launch4j'))
-    from file(project.tasks.jar.getArchivePath().getPath().replace('.jar', '.zip').replace('libs', 'distributions'))
-    into "${projectDir}/dist"
-}
-
-task downloadNewerUniversalJavaApplicationStub(type: Download) {
-    description 'Downloads newer universalJavaApplicationStub'
-    src 'https://raw.githubusercontent.com/tofi86/universalJavaApplicationStub/404f5c1b008d6296065de7a93406b387c9f3dce1/src/universalJavaApplicationStub'
-    dest file("$buildDir/macApp/${project.name}.app/Contents/MacOS/universalJavaApplicationStub")
-    overwrite true
-}
-
-task createTestLauncherDir {
-    project.file('testLauncher/dev').mkdirs()
-}
-
-task createMacApp(type: Zip) {
-    dependsOn createApp, shadowJar, downloadNewerUniversalJavaApplicationStub
-    from("$buildDir/macApp") {
-        include "${project.name}.app/**"
-        exclude "${project.name}.app/Contents/MacOS"
+tasks.register('copyArtifacts', Copy) {
+    dependsOn 'build'
+    from tasks.named('shadowJar')
+    from layout.buildDirectory.file("launch4j/${project.name}-${project.version}.exe")
+    into layout.projectDirectory.dir('dist')
+    doLast {
+        println 'BlockForge has been built. Distribution files are located in the dist directory.'
     }
-    from("$buildDir/macApp") {
-        include "${project.name}.app/Contents/MacOS/**"
-        fileMode 0777
-    }
-    archiveFileName = "${project.name}-${project.version}.zip"
 }
 
-task generateThirdPartyLibraries {
+tasks.register('createTestLauncherDir') {
+    def dir = layout.projectDirectory.dir('testLauncher/dev').asFile
+    doLast {
+        dir.mkdirs()
+    }
+}
+
+tasks.register('generateThirdPartyLibraries') {
+    notCompatibleWithConfigurationCache('reads the project dependencies while running')
     doLast {
         def output = new StringBuilder()
         output.append("<h2>Build Dependencies</h2>\n")
@@ -360,20 +441,8 @@ task generateThirdPartyLibraries {
     }
 }
 
-copyArtifacts.finalizedBy {
-    println 'BlockForge has been built. Distribution files are located in the dist directory.'
-}
-
-clean.doFirst {
-    delete "${projectDir}/dist"
-}
-
-project.afterEvaluate {
-    tasks.check {
-        dependsOn -= tasks.find {
-            it.name.equals("checkLicenses")
-        }
-    }
+tasks.named('clean', Delete) {
+    delete layout.projectDirectory.dir('dist')
 }
 
 def shouldIgnoreUpdate = { String version -> return ['ALPHA', 'BETA', 'RC', '-M'].any { it -> version.toUpperCase(Locale.ENGLISH).contains(it) } }
@@ -383,10 +452,10 @@ tasks.named("dependencyUpdates").configure {
     }
 }
 
-build.finalizedBy copyArtifacts
-shadowJar.dependsOn jar
-build.dependsOn createExe, createMacApp
-startScripts.dependsOn shadowJar
-createExe.dependsOn shadowJar
-createAppZip.dependsOn downloadNewerUniversalJavaApplicationStub
-createDmg.dependsOn downloadNewerUniversalJavaApplicationStub
+tasks.named('build') {
+    dependsOn 'createExe'
+    finalizedBy 'copyArtifacts'
+}
+tasks.named('shadowJar') { dependsOn 'jar' }
+tasks.named('startScripts') { dependsOn 'shadowJar' }
+tasks.named('createExe') { dependsOn 'shadowJar' }
