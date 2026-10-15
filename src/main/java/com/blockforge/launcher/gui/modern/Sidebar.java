@@ -82,13 +82,13 @@ public class Sidebar extends JPanel {
         top.add(Box.createVerticalStrut(26));
         top.add(add(UIConstants.LAUNCHER_NEWS_TAB, Icons.HOME, GetText.tr("Home")));
         top.add(Box.createVerticalStrut(4));
+        top.add(add(UIConstants.LAUNCHER_CREATE_PACK_TAB, Icons.PLUS, GetText.tr("New instance")));
+        top.add(Box.createVerticalStrut(4));
         top.add(add(UIConstants.LAUNCHER_INSTANCES_TAB, Icons.LIBRARY, GetText.tr("Library")));
         top.add(Box.createVerticalStrut(4));
         top.add(add(UIConstants.LAUNCHER_PACKS_TAB, Icons.EXPLORE, GetText.tr("Discover")));
         top.add(Box.createVerticalStrut(22));
-        top.add(sectionLabel(GetText.tr("Build")));
-        top.add(add(UIConstants.LAUNCHER_CREATE_PACK_TAB, Icons.CUBE, GetText.tr("Create")));
-        top.add(Box.createVerticalStrut(4));
+        top.add(sectionLabel(GetText.tr("More")));
         top.add(add(UIConstants.LAUNCHER_TOOLS_TAB, Icons.TERMINAL, GetText.tr("Tools")));
         add(top, BorderLayout.NORTH);
 
@@ -98,6 +98,8 @@ public class Sidebar extends JPanel {
         bottom.add(accountChip());
         bottom.add(Box.createVerticalStrut(12));
         bottom.add(add(UIConstants.LAUNCHER_SETTINGS_TAB, Icons.SETTINGS, GetText.tr("Settings")));
+        bottom.add(Box.createVerticalStrut(4));
+        bottom.add(add(UIConstants.LAUNCHER_ABOUT_TAB, Icons.INFO, GetText.tr("About")));
         add(bottom, BorderLayout.SOUTH);
     }
 

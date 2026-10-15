@@ -83,6 +83,12 @@ public class SettingsPage extends Page {
                     App.settings.askPlayerOnStartup = v;
                     SettingsManager.post();
                 }),
+            toggleRow(GetText.tr("Check for BlockForge updates"),
+                GetText.tr("Look on GitHub for a newer version and offer to install it"),
+                App.settings.checkForLauncherUpdates, v -> {
+                    App.settings.checkForLauncherUpdates = v;
+                    SettingsManager.post();
+                }),
             toggleRow(GetText.tr("Keep the launcher open"),
                 GetText.tr("Leave BlockForge open while Minecraft is running"), App.settings.keepLauncherOpen,
                 viewModel::setKeepLauncherOpen),

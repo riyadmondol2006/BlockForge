@@ -58,6 +58,10 @@ public class Constants {
     // name this fork uses when talking to ATLauncher's own servers/APIs (user agent, CDN file names, Technic API)
     public static final String LAUNCHER_API_NAME = "ATLauncher";
     public static final String LAUNCHER_WEBSITE = "https://atlauncher.com";
+    // where BlockForge's own source code and releases live
+    public static final String GITHUB_REPO = "riyadmondol2006/BlockForge";
+    public static final String GITHUB_URL = "https://github.com/" + GITHUB_REPO;
+    public static final String LATEST_RELEASE_API = "https://api.github.com/repos/" + GITHUB_REPO + "/releases/latest";
     public static final String DEFAULT_THEME_CLASS = "com.blockforge.launcher.themes.Material3Dark";
     public static final String GA_TRACKING_ID = "UA-88820616-7";
     public static final String CROWDIN_URL = "https://crowdin.com/project/atlauncher";

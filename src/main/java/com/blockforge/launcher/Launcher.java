@@ -23,7 +23,6 @@ import java.awt.Window;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStreamReader;
-import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -44,7 +43,6 @@ import com.blockforge.launcher.builders.HTMLBuilder;
 import com.blockforge.launcher.constants.Constants;
 import com.blockforge.launcher.data.DownloadableFile;
 import com.blockforge.launcher.data.Instance;
-import com.blockforge.launcher.data.LauncherVersion;
 import com.blockforge.launcher.graphql.AddLauncherLaunchMutation;
 import com.blockforge.launcher.graphql.type.AddLauncherLaunchInput;
 import com.blockforge.launcher.graphql.type.LauncherJavaVersionInput;
@@ -68,18 +66,14 @@ import com.blockforge.launcher.network.Analytics;
 import com.blockforge.launcher.network.DownloadPool;
 import com.blockforge.launcher.network.GraphqlClient;
 import com.blockforge.launcher.network.NetworkClient;
-import com.blockforge.launcher.network.analytics.AnalyticsEvent;
 import com.blockforge.launcher.utils.Java;
 import com.blockforge.launcher.utils.OS;
-import com.google.gson.JsonIOException;
-import com.google.gson.JsonSyntaxException;
 import com.google.gson.reflect.TypeToken;
 
 import okhttp3.OkHttpClient;
 
 public class Launcher {
     // Holding update data
-    private LauncherVersion latestLauncherVersion; // Latest Launcher version
     private List<DownloadableFile> launcherFiles; // Files the Launcher needs to download
 
     // UI things
@@ -99,8 +93,6 @@ public class Launcher {
         if (hasUpdatedFiles()) {
             downloadUpdatedFiles(); // Downloads updated files on the server
         }
-
-        checkForLauncherUpdate();
 
         ConfigManager.loadConfig(); // Load the config
 
@@ -161,65 +153,6 @@ public class Launcher {
             Analytics.startSession(App.settings.selectedTabOnStartup);
         }
         PerformanceManager.end();
-    }
-
-    public boolean launcherHasUpdate() {
-        try (InputStreamReader fileReader = new InputStreamReader(
-            Files.newInputStream(FileSystem.JSON.resolve("version.json")), StandardCharsets.UTF_8)) {
-            this.latestLauncherVersion = Gsons.DEFAULT.fromJson(fileReader, LauncherVersion.class);
-        } catch (JsonSyntaxException | JsonIOException | IOException e) {
-            LogManager.logStackTrace("Exception when loading latest launcher version!", e);
-        }
-
-        return this.latestLauncherVersion != null && Constants.VERSION.needsUpdate(this.latestLauncherVersion);
-    }
-
-    public void downloadUpdate() {
-        try {
-            File thisFile = new File(Update.class.getProtectionDomain().getCodeSource().getLocation().getPath());
-            String path = thisFile.getCanonicalPath();
-            path = URLDecoder.decode(path, "UTF-8");
-            String toget;
-            String saveAs = thisFile.getName();
-            if (path.contains(".exe")) {
-                toget = "exe";
-            } else {
-                toget = "jar";
-            }
-            File newFile = FileSystem.TEMP.resolve(saveAs).toFile();
-            LogManager.info("Downloading Launcher Update");
-            Analytics.trackEvent(AnalyticsEvent.simpleEvent("launcher_update"));
-
-            ProgressDialog<Boolean> progressDialog = new ProgressDialog<>(GetText.tr("Downloading Launcher Update"), 1,
-                GetText.tr("Downloading Launcher Update"));
-            progressDialog.addThread(new Thread(() -> {
-                com.blockforge.launcher.network.Download download = com.blockforge.launcher.network.Download.build()
-                    .setUrl(String.format("%s/%s.%s", Constants.DOWNLOAD_SERVER, Constants.LAUNCHER_API_NAME, toget))
-                    .withHttpClient(Network.createProgressClient(progressDialog)).downloadTo(newFile.toPath());
-
-                progressDialog.setTotalBytes(download.getFilesize());
-
-                try {
-                    download.downloadFile();
-                } catch (IOException e) {
-                    LogManager.logStackTrace("Failed to download update", e);
-                    progressDialog.setReturnValue(false);
-                    progressDialog.close();
-                    return;
-                }
-
-                progressDialog.setReturnValue(true);
-                progressDialog.doneTask();
-                progressDialog.close();
-            }));
-            progressDialog.start();
-
-            if (Boolean.TRUE.equals(progressDialog.getReturnValue())) {
-                runUpdate(path, newFile.getAbsolutePath());
-            }
-        } catch (IOException e) {
-            LogManager.logStackTrace(e);
-        }
     }
 
     public void runUpdate(String currentPath, String temporaryUpdatePath) {
@@ -435,7 +368,6 @@ public class Launcher {
             if (hasUpdatedFiles()) {
                 downloadUpdatedFiles(); // Downloads updated files on the server
             }
-            checkForLauncherUpdate();
             checkForExternalPackUpdates();
 
             ConfigManager.loadConfig(); // Load the config
@@ -448,49 +380,6 @@ public class Launcher {
             dialog.dispose(); // Dispose the dialog
         });
         dialog.setVisible(true);
-    }
-
-    private void checkForLauncherUpdate() {
-        // self updating is disabled; updates would replace this app with the upstream ATLauncher build
-        if (true) {
-            return;
-        }
-
-        PerformanceManager.start();
-
-        LogManager.debug("Checking for launcher update");
-        if (launcherHasUpdate()) {
-            if (App.noLauncherUpdate) {
-                int ret = DialogManager.okDialog().setTitle("Launcher Update Available")
-                    .setContent(new HTMLBuilder().center().split(80).text(GetText.tr(
-                            "An update to the launcher is available. Please update via your package manager or manually by visiting https://atlauncher.com/downloads to get the latest features and bug fixes."))
-                        .build())
-                    .addOption(GetText.tr("Visit Downloads Page")).setType(DialogManager.INFO).show();
-
-                if (ret == 1) {
-                    OS.openWebBrowser("https://atlauncher.com/downloads");
-                }
-
-                return;
-            }
-
-            if (!App.wasUpdated) {
-                downloadUpdate(); // Update the Launcher
-            } else {
-                DialogManager.okDialog().setTitle("Update Failed!")
-                    .setContent(new HTMLBuilder().center()
-                        .text(GetText.tr("Update failed. Please click Ok to close "
-                            + "the launcher and open up the downloads page.<br/><br/>Download "
-                            + "the update and replace the old exe/jar file."))
-                        .build())
-                    .setType(DialogManager.ERROR).show();
-                OS.openWebBrowser("https://atlauncher.com/downloads");
-                Analytics.endSession();
-                System.exit(0);
-            }
-        }
-        LogManager.debug("Finished checking for launcher update");
-        PerformanceManager.end();
     }
 
     /**

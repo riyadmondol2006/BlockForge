@@ -416,6 +416,16 @@ public class CreatePackViewModel implements SettingsListener, ICreatePackViewMod
 
         selectedMinecraftVersionFlow.onNext(Optional.empty());
 
+        // start on the newest version (the list is newest first and shows releases by default), and pick the newest
+        // again when a filter change hides the chosen one, so the highlighted row is always the real selection
+        minecraftVersions.subscribe(rows -> {
+            String selected = selectedMinecraftVersionFlow.getValue().orElse(null);
+            boolean stillListed = selected != null && rows.stream().anyMatch(row -> row.id.equals(selected));
+            if (!stillListed && !rows.isEmpty()) {
+                setSelectedMinecraftVersion(rows.get(0).id);
+            }
+        });
+
         selectedMinecraftVersionFlow
                 .observeOn(Schedulers.computation())
                 .subscribe(selectedVersion -> {

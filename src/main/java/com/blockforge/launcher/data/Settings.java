@@ -79,6 +79,8 @@ public class Settings {
     public Boolean showPackNameAndVersion = null;
     public boolean keepLauncherOpen = true;
     public boolean askPlayerOnStartup = true;
+    public boolean checkForLauncherUpdates = true;
+    public String skippedLauncherUpdate = null;
     public boolean enableConsole = false;
     public boolean enableTrayMenu = true;
     public boolean enableFeralGamemode = OS.isLinux() && Utils.executableInPath("gamemoderun");

@@ -50,6 +50,7 @@ import com.blockforge.launcher.evnt.manager.RelocalizationManager;
 import com.blockforge.launcher.evnt.manager.TabChangeManager;
 import com.blockforge.launcher.evnt.manager.ThemeManager;
 import com.blockforge.launcher.gui.dialogs.InstanceInstallerDialog;
+import com.blockforge.launcher.gui.modern.AboutPage;
 import com.blockforge.launcher.gui.modern.AccountsPage;
 import com.blockforge.launcher.gui.modern.Btn;
 import com.blockforge.launcher.gui.modern.DiscoverPage;
@@ -62,12 +63,14 @@ import com.blockforge.launcher.gui.modern.Page;
 import com.blockforge.launcher.gui.modern.Palette;
 import com.blockforge.launcher.gui.modern.RoundPanel;
 import com.blockforge.launcher.gui.modern.SettingsPage;
+import com.blockforge.launcher.gui.modern.UpdateDialog;
 import com.blockforge.launcher.gui.modern.WhoIsPlayingDialog;
 import com.blockforge.launcher.gui.modern.ToolsPage;
 import com.blockforge.launcher.gui.modern.Sidebar;
 import com.blockforge.launcher.managers.DialogManager;
 import com.blockforge.launcher.managers.LogManager;
 import com.blockforge.launcher.managers.PackManager;
+import com.blockforge.launcher.update.LauncherUpdates;
 import com.blockforge.launcher.utils.Utils;
 
 /**
@@ -124,6 +127,9 @@ public final class LauncherFrame extends JFrame implements RelocalizationListene
 
             // ask who is playing once the window is up
             SwingUtilities.invokeLater(() -> WhoIsPlayingDialog.askIfNeeded(this));
+
+            // look for a newer BlockForge on GitHub in the background; the popup waits for other dialogs to close
+            LauncherUpdates.startBackgroundChecks(UpdateDialog::offer);
 
             addWindowListener(new WindowAdapter() {
                 @Override
@@ -192,6 +198,7 @@ public final class LauncherFrame extends JFrame implements RelocalizationListene
         factories.put(UIConstants.LAUNCHER_SETTINGS_TAB, SettingsPage::new);
         factories.put(UIConstants.LAUNCHER_CREATE_PACK_TAB, CreatePage::new);
         factories.put(UIConstants.LAUNCHER_TOOLS_TAB, ToolsPage::new);
+        factories.put(UIConstants.LAUNCHER_ABOUT_TAB, AboutPage::new);
 
         sidebar = new Sidebar(this::navigate);
 

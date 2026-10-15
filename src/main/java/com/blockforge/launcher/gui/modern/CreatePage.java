@@ -85,8 +85,8 @@ public class CreatePage extends Page {
         column.setLayout(new BoxLayout(column, BoxLayout.Y_AXIS));
         column.setBorder(BorderFactory.createEmptyBorder(28, 36, 36, 36));
 
-        JLabel title = Lbl.title(GetText.tr("Create"));
-        JLabel sub = Lbl.dim(GetText.tr("Build an instance from any Minecraft version and mod loader"));
+        JLabel title = Lbl.title(GetText.tr("New instance"));
+        JLabel sub = Lbl.dim(GetText.tr("Pick a Minecraft version and, if you like, a mod loader. The newest version is selected for you."));
         title.setAlignmentX(LEFT_ALIGNMENT);
         sub.setAlignmentX(LEFT_ALIGNMENT);
         column.add(title);
