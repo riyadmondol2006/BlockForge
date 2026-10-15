@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/logo/banner-dark.svg">
+    <img src="docs/logo/banner.svg" alt="BlockForge, a Minecraft launcher" width="640">
+  </picture>
+</p>
+
 # BlockForge
 
 A Minecraft launcher with a modern interface that opens fast, plays offline without an account, and keeps working when
