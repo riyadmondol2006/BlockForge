@@ -32,10 +32,12 @@ import java.util.stream.Collectors;
 
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
+import javax.swing.SwingUtilities;
 
 import org.joda.time.format.DateTimeFormat;
 import org.joda.time.format.DateTimeFormatter;
 import org.joda.time.format.ISODateTimeFormat;
+
 import org.mini2Dx.gettext.GetText;
 
 import com.apollographql.apollo.ApolloQueryCall;
@@ -44,6 +46,10 @@ import com.apollographql.apollo.api.cache.http.HttpCachePolicy;
 import com.apollographql.apollo.rx3.Rx3Apollo;
 import com.blockforge.launcher.App;
 import com.blockforge.launcher.constants.UIConstants;
+import com.blockforge.launcher.content.ContentService;
+import com.blockforge.launcher.content.LoaderSupport;
+import com.blockforge.launcher.content.PerformancePack;
+import com.blockforge.launcher.data.Instance;
 import com.blockforge.launcher.data.MCVersionRow;
 import com.blockforge.launcher.data.installables.Installable;
 import com.blockforge.launcher.data.installables.VanillaInstallable;
@@ -55,6 +61,7 @@ import com.blockforge.launcher.evnt.listener.SettingsListener;
 import com.blockforge.launcher.evnt.manager.SettingsManager;
 import com.blockforge.launcher.exceptions.InvalidMinecraftVersion;
 import com.blockforge.launcher.graphql.GetLoaderVersionsForMinecraftVersionQuery;
+import com.blockforge.launcher.gui.dialogs.ProgressDialog;
 import com.blockforge.launcher.managers.AccountManager;
 import com.blockforge.launcher.managers.ConfigManager;
 import com.blockforge.launcher.managers.DialogManager;
@@ -62,6 +69,7 @@ import com.blockforge.launcher.managers.InstanceManager;
 import com.blockforge.launcher.managers.LogManager;
 import com.blockforge.launcher.managers.MinecraftManager;
 import com.blockforge.launcher.network.GraphqlClient;
+import com.blockforge.launcher.utils.LightMode;
 import com.blockforge.launcher.utils.Pair;
 import com.blockforge.launcher.utils.Utils;
 import com.blockforge.launcher.viewmodel.base.ICreatePackViewModel;
@@ -290,6 +298,20 @@ public class CreatePackViewModel implements SettingsListener, ICreatePackViewMod
 
     public final Observable<Boolean> loaderTypeQuiltSelected = selectedLoaderType
             .map(it -> it.orElse(null) == LoaderType.QUILT)
+            .subscribeOn(Schedulers.computation());
+
+    /**
+     * Adding performance mods starts switched on for slower computers, where they help the most.
+     */
+    private final BehaviorSubject<Boolean> addPerformanceMods = BehaviorSubject
+            .createDefault(LightMode.detectedLowEnd());
+
+    public final Observable<Optional<String>> performanceModsOffered = selectedLoaderType
+            .map(it -> {
+                String key = LoaderSupport.key(it.orElse(null));
+                return PerformancePack.offeredFor(key) ? Optional.of(PerformancePack.describe(key))
+                        : Optional.<String>empty();
+            })
             .subscribeOn(Schedulers.computation());
 
     // was lazy
@@ -850,6 +872,13 @@ public class CreatePackViewModel implements SettingsListener, ICreatePackViewMod
             installable.isServer = isServer;
             final boolean success = installable.startInstall();
 
+            if (success && !isServer && wantsPerformanceMods(selectedLoaderVersion)) {
+                Instance created = InstanceManager.getInstanceByName(name);
+                if (created != null) {
+                    addPerformancePack(created);
+                }
+            }
+
             if (success) {
                 final String defaultNameField;
                 if (selectedLoaderVersion == null) {
@@ -989,6 +1018,64 @@ public class CreatePackViewModel implements SettingsListener, ICreatePackViewMod
     @Override
     public void createServer() {
         install(true);
+    }
+
+    @Override
+    public Observable<Optional<String>> performanceModsOffered() {
+        return performanceModsOffered.observeOn(SwingSchedulers.edt());
+    }
+
+    @Override
+    public Observable<Boolean> addPerformanceMods() {
+        return addPerformanceMods.observeOn(SwingSchedulers.edt());
+    }
+
+    @Override
+    public void setAddPerformanceMods(boolean add) {
+        addPerformanceMods.onNext(add);
+    }
+
+    /**
+     * Whether the performance mods get added to an instance made with this loader.
+     */
+    boolean wantsPerformanceMods(@Nullable LoaderVersion loaderVersion) {
+        return Boolean.TRUE.equals(addPerformanceMods.getValue())
+                && PerformancePack.offeredFor(LoaderSupport.key(loaderVersion));
+    }
+
+    /**
+     * Adds the performance mods to a newly made instance, showing progress while it downloads them.
+     */
+    private void addPerformancePack(Instance instance) {
+        final ProgressDialog<ContentService.InstallResult> dialog = new ProgressDialog<>(
+                GetText.tr("Adding performance mods"), 0, GetText.tr("Adding performance mods"), (String) null);
+        dialog.addThread(new Thread(() -> {
+            ContentService.InstallResult result = new ContentService(instance)
+                    .installPerformancePack(new ContentService.Progress() {
+                        @Override
+                        public void status(String text) {
+                            SwingUtilities.invokeLater(() -> dialog.setLabel(
+                                    GetText.tr("Adding performance mods") + ": " + text));
+                        }
+
+                        @Override
+                        public void fraction(double fraction) {
+                        }
+                    });
+            dialog.setReturnValue(result);
+            dialog.close();
+        }, "performance-pack"));
+        dialog.start();
+
+        ContentService.InstallResult result = dialog.getReturnValue();
+        if (result == null || App.TOASTER == null) {
+            return;
+        }
+        if (!result.installed.isEmpty()) {
+            App.TOASTER.pop(GetText.tr("Added {0}", String.join(", ", result.installed)));
+        } else if (!result.skipped.isEmpty()) {
+            App.TOASTER.pop(GetText.tr("No performance mods are available for this Minecraft version yet"));
+        }
     }
 
     @Override

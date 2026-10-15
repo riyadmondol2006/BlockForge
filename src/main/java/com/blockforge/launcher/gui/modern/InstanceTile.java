@@ -74,6 +74,8 @@ public class InstanceTile extends RoundPanel {
         hover(Palette::cardHover);
         setPreferredSize(new Dimension(WIDTH, HEIGHT));
         setCursor(Cursor.getPredefinedCursor(Cursor.DEFAULT_CURSOR));
+        // files dropped on the card go into this instance
+        putClientProperty(FileDropFlow.INSTANCE_KEY, instance);
 
         add(banner, BorderLayout.NORTH);
 
@@ -99,9 +101,20 @@ public class InstanceTile extends RoundPanel {
         Btn more = Btn.iconButton(Icons.MORE, GetText.tr("More options"));
         more.addActionListener(e -> InstanceActions.showMenu(more, 0, more.getHeight(), instance, hasUpdate, changed));
 
+        Btn mods = new Btn(GetText.tr("Mods"), Btn.Kind.TONAL).icon(Icons.PUZZLE).compact();
+        mods.setToolTipText(GetText.tr("Add mods, resource packs and shaders"));
+        mods.addActionListener(e -> InstanceActions.openContent(instance, com.blockforge.launcher.content.ContentKind.MODS,
+            changed));
+
+        JPanel left = new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 0, 0));
+        left.setOpaque(false);
+        left.add(play);
+        left.add(javax.swing.Box.createHorizontalStrut(8));
+        left.add(mods);
+
         JPanel actions = new JPanel(new BorderLayout());
         actions.setOpaque(false);
-        actions.add(play, BorderLayout.WEST);
+        actions.add(left, BorderLayout.WEST);
         actions.add(more, BorderLayout.EAST);
 
         JPanel body = new JPanel(new BorderLayout(0, 10));
