@@ -20,6 +20,7 @@ package com.blockforge.launcher.gui.dialogs;
 import java.awt.BorderLayout;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
+import java.awt.Window;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
 import java.awt.event.WindowAdapter;
@@ -85,11 +86,23 @@ public final class LoginWithMicrosoftDialog extends JDialog {
     private String loginMethod = "Unknown";
 
     public LoginWithMicrosoftDialog() {
-        this(null);
+        this((MicrosoftAccount) null);
     }
 
     public LoginWithMicrosoftDialog(MicrosoftAccount account) {
-        super(App.launcher.getParent(), GetText.tr("Login with Microsoft"), ModalityType.DOCUMENT_MODAL);
+        this(App.launcher.getParent(), account);
+    }
+
+    /**
+     * Opens over {@code owner}. A dialog that is already showing (like "Who's playing?") must be the owner, otherwise
+     * it stays on top of this one and blocks it.
+     */
+    public LoginWithMicrosoftDialog(Window owner) {
+        this(owner, null);
+    }
+
+    private LoginWithMicrosoftDialog(Window owner, MicrosoftAccount account) {
+        super(owner, GetText.tr("Login with Microsoft"), ModalityType.DOCUMENT_MODAL);
 
         this.account = account;
         this.setMinimumSize(new Dimension(520, 600));
@@ -209,7 +222,7 @@ public final class LoginWithMicrosoftDialog extends JDialog {
                 mainPanel.repaint();
                 setMinimumSize(new Dimension(520, 280));
                 setSize(new Dimension(520, 280));
-                setLocationRelativeTo(App.launcher.getParent());
+                setLocationRelativeTo(getOwner());
                 return;
             }
             SwingUtilities.invokeLater(() -> {
@@ -231,7 +244,7 @@ public final class LoginWithMicrosoftDialog extends JDialog {
         setVisible(false);
         dispose();
 
-        setLocationRelativeTo(App.launcher.getParent());
+        setLocationRelativeTo(owner);
     }
 
     private void close() {

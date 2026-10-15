@@ -258,7 +258,7 @@ public final class WhoIsPlayingDialog extends JDialog {
 
     private void signIn() {
         int before = AccountManager.getAccounts().size();
-        LoginWithMicrosoftDialog dialog = new LoginWithMicrosoftDialog();
+        LoginWithMicrosoftDialog dialog = new LoginWithMicrosoftDialog(this);
         dialog.setVisible(true);
         if (before != AccountManager.getAccounts().size()) {
             if (dialog.account != null) {
