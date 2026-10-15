@@ -122,10 +122,61 @@ public final class Palette {
     }
 
     public static Font font(float size) {
-        return App.THEME.getNormalFont().deriveFont(Font.PLAIN, size);
+        return withFallback(App.THEME.getNormalFont(), Font.PLAIN).deriveFont(Font.PLAIN, size);
+    }
+
+    private static Font plainBase;
+    private static Font plainSource;
+    private static Font boldBase;
+    private static Font boldSource;
+
+    /**
+     * Wraps a bundled font so characters it doesn't have (Chinese, Japanese, Korean, Arabic...) are drawn with the
+     * system's fonts instead of boxes. Swing's StyleContext builds such a composite font; FlatLaf does the same.
+     */
+    private static synchronized Font withFallback(Font source, int style) {
+        boolean plain = style == Font.PLAIN;
+        if (plain ? source == plainSource : source == boldSource) {
+            return plain ? plainBase : boldBase;
+        }
+        Font composite = source;
+        try {
+            Font c = javax.swing.text.StyleContext.getDefaultStyleContext().getFont(source.getFamily(), style,
+                Math.max(1, source.getSize()));
+            if (c != null && c.getFamily().equals(source.getFamily())) {
+                composite = c;
+            }
+        } catch (Exception ignored) {
+            // keep the bundled font; fontFor still switches to Dialog for text it can't draw
+        }
+        if (plain) {
+            plainSource = source;
+            plainBase = composite;
+        } else {
+            boldSource = source;
+            boldBase = composite;
+        }
+        return composite;
+    }
+
+    /**
+     * The interface font for showing {@code text}. The theme font already falls back to system fonts (see
+     * withFallback); if some characters are still missing and the system's "Dialog" font can draw all of them, that
+     * is used instead.
+     */
+    public static Font fontFor(String text, float size, boolean bold) {
+        Font font = bold ? bold(size) : font(size);
+        if (text != null && !text.isEmpty() && font.canDisplayUpTo(text) != -1) {
+            Font dialog = new Font(Font.DIALOG, bold ? Font.BOLD : Font.PLAIN, 12).deriveFont(size);
+            // only worth giving up Roboto when the system font can really draw all of it
+            if (dialog.canDisplayUpTo(text) == -1) {
+                return dialog;
+            }
+        }
+        return font;
     }
 
     public static Font bold(float size) {
-        return App.THEME.getBoldFont().deriveFont(Font.BOLD, size);
+        return withFallback(App.THEME.getBoldFont(), Font.BOLD).deriveFont(Font.BOLD, size);
     }
 }

@@ -49,7 +49,7 @@ public final class Lbl {
 
             @Override
             public Font getFont() {
-                return bold ? Palette.bold(size) : Palette.font(size);
+                return Palette.fontFor(getText(), size, bold);
             }
         };
         l.setOpaque(false);
@@ -98,7 +98,7 @@ public final class Lbl {
         }
 
         private int lineHeight() {
-            FontMetrics fm = getFontMetrics(Palette.font(size));
+            FontMetrics fm = getFontMetrics(Palette.fontFor(text, size, false));
             return fm.getHeight() + 2;
         }
 
@@ -126,7 +126,7 @@ public final class Lbl {
                     continue;
                 }
                 AttributedString as = new AttributedString(paragraph);
-                as.addAttribute(TextAttribute.FONT, Palette.font(size));
+                as.addAttribute(TextAttribute.FONT, Palette.fontFor(paragraph, size, false));
                 AttributedCharacterIterator it = as.getIterator();
                 LineBreakMeasurer m = new LineBreakMeasurer(it, g.getFontRenderContext());
                 while (m.getPosition() < it.getEndIndex() && lines < maxLines) {
@@ -152,7 +152,7 @@ public final class Lbl {
             float w = Math.max(20, getWidth());
             float y = 0;
             int lines = 0;
-            Font font = Palette.font(size);
+            Font font = Palette.fontFor(text, size, false);
             boolean stop = false;
             String[] paragraphs = text.split("\n");
 
