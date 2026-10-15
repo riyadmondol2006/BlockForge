@@ -17,27 +17,23 @@
  */
 package com.blockforge.launcher.gui.dialogs.instancesettings;
 
-import java.awt.Dimension;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
+import java.awt.Insets;
 import java.awt.event.ItemEvent;
 
-import javax.swing.BorderFactory;
-import javax.swing.ImageIcon;
 import javax.swing.JComboBox;
+import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JTextField;
-import javax.swing.JTextPane;
-import javax.swing.border.Border;
 
 import org.mini2Dx.gettext.GetText;
 
 import com.blockforge.launcher.App;
-import com.blockforge.launcher.gui.modern.ModernDialogs;
 import com.blockforge.launcher.data.Instance;
-import com.blockforge.launcher.gui.components.JLabelWithHover;
+import com.blockforge.launcher.gui.modern.Lbl;
+import com.blockforge.launcher.gui.modern.Palette;
 import com.blockforge.launcher.utils.ComboItem;
-import com.blockforge.launcher.utils.Utils;
 
 public class CommandsInstanceSettingsTab extends JPanel {
     private final Instance instance;
@@ -47,135 +43,78 @@ public class CommandsInstanceSettingsTab extends JPanel {
     private final JTextField postExitCommand;
     private final JTextField wrapperCommand;
 
-    final ImageIcon HELP_ICON = Utils.getIconImage(App.THEME.getIconPath("question"));
-    final ImageIcon ERROR_ICON = Utils.getIconImage(App.THEME.getIconPath("error"));
-    final ImageIcon WARNING_ICON = Utils.getIconImage(App.THEME.getIconPath("warning"));
-
-    final Border RESTART_BORDER = BorderFactory.createEmptyBorder(0, 0, 0, 5);
-
-    final GridBagConstraints gbc = new GridBagConstraints();
-
     public CommandsInstanceSettingsTab(Instance instance) {
         this.instance = instance;
 
-        setLayout(new GridBagLayout());
+        SettingRows.column(this);
 
         // Enable commands
 
-        gbc.gridx = 0;
-        gbc.gridy++;
-        gbc.insets = ModernDialogs.LABEL_INSETS;
-        gbc.anchor = GridBagConstraints.BASELINE_TRAILING;
-        JLabelWithHover enableCommandsLabel = new JLabelWithHover(GetText.tr("Enable commands") + "?", HELP_ICON,
-                GetText.tr("This allows you to turn launch/exit commands on or off."));
-        add(enableCommandsLabel, gbc);
-
-        gbc.gridx++;
-        gbc.insets = ModernDialogs.FIELD_INSETS;
-        gbc.anchor = GridBagConstraints.BASELINE_LEADING;
-        enableCommands = new JComboBox<>();
-        enableCommands.addItem(new ComboItem<>(null, GetText.tr("Use Launcher Default")));
-        enableCommands.addItem(new ComboItem<>(true, GetText.tr("Yes")));
-        enableCommands.addItem(new ComboItem<>(false, GetText.tr("No")));
-
-        if (instance.launcher.enableCommands == null) {
-            enableCommands.setSelectedIndex(0);
-        } else if (instance.launcher.enableCommands) {
-            enableCommands.setSelectedIndex(1);
-        } else {
-            enableCommands.setSelectedIndex(2);
-        }
-
-        add(enableCommands, gbc);
+        enableCommands = SettingRows.triState(instance.launcher.enableCommands, App.settings.enableCommands);
 
         // Pre-launch command
-        gbc.gridx = 0;
-        gbc.gridy++;
-        gbc.insets = ModernDialogs.LABEL_INSETS;
-        gbc.anchor = GridBagConstraints.BASELINE_TRAILING;
-        JLabelWithHover preLaunchCommandLabel = new JLabelWithHover(GetText.tr("Pre-launch command") + ":", HELP_ICON,
-                GetText.tr(
-                        "This command will be run before the instance launches. The game will not run until the command has finished."));
-        add(preLaunchCommandLabel, gbc);
-
-        gbc.gridx++;
-        gbc.insets = ModernDialogs.FIELD_INSETS;
-        gbc.anchor = GridBagConstraints.BASELINE_LEADING;
         preLaunchCommand = new JTextField(App.settings.preLaunchCommand, 32);
-        ModernDialogs.preferWidth(preLaunchCommand, 516);
 
         if (this.instance.launcher.preLaunchCommand != null) {
             preLaunchCommand.setText(this.instance.launcher.preLaunchCommand);
         }
 
-        add(preLaunchCommand, gbc);
-
         // Post-exit command
-        gbc.gridx = 0;
-        gbc.gridy++;
-        gbc.insets = ModernDialogs.LABEL_INSETS;
-        gbc.anchor = GridBagConstraints.BASELINE_TRAILING;
-        JLabelWithHover postExitCommandLabel = new JLabelWithHover(GetText.tr("Post-exit command") + ":", HELP_ICON,
-                GetText.tr(
-                        "This command will be run after the instance exits. It will run even if the instance is killed or if it crashes and exits."));
-        add(postExitCommandLabel, gbc);
-
-        gbc.gridx++;
-        gbc.insets = ModernDialogs.FIELD_INSETS;
-        gbc.anchor = GridBagConstraints.BASELINE_LEADING;
         postExitCommand = new JTextField(App.settings.postExitCommand, 32);
-        ModernDialogs.preferWidth(postExitCommand, 516);
 
         if (this.instance.launcher.postExitCommand != null) {
             postExitCommand.setText(this.instance.launcher.postExitCommand);
         }
 
-        add(postExitCommand, gbc);
-
         // wrapper command
-        gbc.gridx = 0;
-        gbc.gridy++;
-        gbc.insets = ModernDialogs.LABEL_INSETS;
-        gbc.anchor = GridBagConstraints.BASELINE_TRAILING;
-        JLabelWithHover wrapperCommandLabel = new JLabelWithHover(GetText.tr("Wrapper command") + ":", HELP_ICON,
-                GetText.tr(
-                        "Wrapper command allow launcher using an extra wrapper program (like 'prime-run' on Linux)\nUse %command% to substitute launch command\n%\"command\"% to substitute launch as a whole string (like 'bash -c' on Linux)"));
-        add(wrapperCommandLabel, gbc);
-
-        gbc.gridx++;
-        gbc.insets = ModernDialogs.FIELD_INSETS;
-        gbc.anchor = GridBagConstraints.BASELINE_LEADING;
         wrapperCommand = new JTextField(App.settings.wrapperCommand, 32);
-        ModernDialogs.preferWidth(wrapperCommand, 516);
 
         if (this.instance.launcher.wrapperCommand != null) {
             wrapperCommand.setText(this.instance.launcher.wrapperCommand);
         }
 
-        add(wrapperCommand, gbc);
+        SettingRows.addSection(this, SettingRows.section(GetText.tr("Commands"),
+                SettingRows.row(GetText.tr("Run commands"),
+                        GetText.tr("Turn the commands below on or off for this instance"), enableCommands),
+                SettingRows.stacked(GetText.tr("Before launch"),
+                        GetText.tr("Runs before the game starts. The game waits until it has finished"),
+                        preLaunchCommand),
+                SettingRows.stacked(GetText.tr("After exit"),
+                        GetText.tr("Runs after the game closes, even if it crashed or was stopped"),
+                        postExitCommand),
+                SettingRows.stacked(GetText.tr("Wrapper command"),
+                        GetText.tr("Starts the game through another program, such as prime-run on Linux. Use %command% for the launch command, or %\"command\"% for it as one quoted string"),
+                        wrapperCommand)));
 
         // Parameter Information
-        gbc.gridx = 0;
-        gbc.gridy++;
-        gbc.gridwidth = GridBagConstraints.REMAINDER;
-        gbc.anchor = GridBagConstraints.CENTER;
+        JPanel variables = new JPanel(new GridBagLayout());
+        variables.setOpaque(false);
+        String[][] rows = {
+                { "$INST_NAME", GetText.tr("The name of the instance") },
+                { "$INST_ID", GetText.tr("The name of the instance's root directory") },
+                { "$INST_DIR", GetText.tr("The absolute path to the instance directory") },
+                { "$INST_MC_DIR", GetText.tr("Alias for") + " $INST_DIR" },
+                { "$INST_JAVA", GetText.tr("The absolute path to the java executable used for launch") },
+                { "$INST_JAVA_ARGS", GetText.tr("The JVM parameters used for launch") } };
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.anchor = GridBagConstraints.BASELINE_LEADING;
+        gbc.insets = new Insets(3, 0, 3, 16);
+        gbc.gridy = 0;
+        for (String[] row : rows) {
+            gbc.gridx = 0;
+            gbc.weightx = 0;
+            JLabel name = Lbl.text(row[0], 12f, true, Palette::text);
+            variables.add(name, gbc);
+            gbc.gridx = 1;
+            gbc.weightx = 1;
+            variables.add(Lbl.text(row[1], 12f, false, Palette::textDim), gbc);
+            gbc.gridy++;
+        }
 
-        JTextPane parameterInformation = new JTextPane();
-        parameterInformation
-                .setText(GetText.tr("Commands will be run in the directory of the instance that is launched/exited.")
-                        + System.lineSeparator() + GetText.tr("The following variables are available for each command")
-                        + ":" + System.lineSeparator() + "$INST_NAME: " + GetText.tr("The name of the instance")
-                        + System.lineSeparator() + "$INST_ID: "
-                        + GetText.tr("The name of the instance's root directory") + System.lineSeparator()
-                        + "$INST_DIR: " + GetText.tr("The absolute path to the instance directory")
-                        + System.lineSeparator() + "$INST_MC_DIR: " + GetText.tr("Alias for") + " $INST_DIR"
-                        + System.lineSeparator() + "$INST_JAVA: "
-                        + GetText.tr("The absolute path to the java executable used for launch")
-                        + System.lineSeparator() + "$INST_JAVA_ARGS: "
-                        + GetText.tr("The JVM parameters used for launch") + System.lineSeparator());
-        parameterInformation.setEditable(false);
-
-        add(parameterInformation, gbc);
+        SettingRows.addSection(this, SettingRows.section(GetText.tr("Variables"),
+                SettingRows.stacked(GetText.tr("Available in every command"),
+                        GetText.tr("Commands run in the folder of the instance that is launched or exited"),
+                        variables)));
 
         enableCommands.addItemListener(e -> {
             if (e.getStateChange() == ItemEvent.SELECTED) {

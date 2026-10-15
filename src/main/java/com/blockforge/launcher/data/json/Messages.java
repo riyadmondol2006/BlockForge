@@ -49,7 +49,7 @@ public class Messages {
             }
         });
         return DialogManager.optionDialog().setTitle(GetText.tr("Installing")).setContent(ep)
-                .setType(DialogManager.WARNING).addOption(GetText.tr("Ok"), true).addOption(GetText.tr("Cancel"))
+                .setType(DialogManager.WARNING).addOption(GetText.tr("OK"), true).addOption(GetText.tr("Cancel"))
                 .show();
     }
 
@@ -70,7 +70,7 @@ public class Messages {
             }
         });
         return DialogManager.optionDialog().setTitle(GetText.tr("Reinstalling") + " " + pack.getName()).setContent(ep)
-                .setType(DialogManager.WARNING).addOption(GetText.tr("Ok"), true).addOption(GetText.tr("Cancel"))
+                .setType(DialogManager.WARNING).addOption(GetText.tr("OK"), true).addOption(GetText.tr("Cancel"))
                 .show();
     }
 }

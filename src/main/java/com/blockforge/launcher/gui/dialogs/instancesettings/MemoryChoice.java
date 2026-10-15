@@ -16,7 +16,6 @@
  */
 package com.blockforge.launcher.gui.dialogs.instancesettings;
 
-import java.awt.FlowLayout;
 
 import javax.swing.JComboBox;
 import javax.swing.JLabel;
@@ -46,15 +45,21 @@ final class MemoryChoice extends JPanel {
 
     private final JComboBox<ComboItem<String>> choice = new JComboBox<>();
     private final JSpinner custom;
+    private final javax.swing.JComponent customControl;
     private final JLabel hint = new JLabel(" ");
     private final Instance instance;
     private final boolean launcherAutomatic;
 
-    /** @param custom the spinner for a custom amount, shown only when "Custom" is chosen */
-    MemoryChoice(Instance instance, JSpinner custom) {
-        super(new FlowLayout(FlowLayout.LEFT, 8, 0));
+    /**
+     * @param custom        the spinner that holds a custom amount
+     * @param customControl what is shown to set a custom amount (the spinner, or a slider row that contains it)
+     */
+    MemoryChoice(Instance instance, JSpinner custom, javax.swing.JComponent customControl) {
         this.instance = instance;
         this.custom = custom;
+        this.customControl = customControl;
+        setOpaque(false);
+        setLayout(new javax.swing.BoxLayout(this, javax.swing.BoxLayout.Y_AXIS));
         this.launcherAutomatic = !Boolean.FALSE.equals(App.settings.automaticMemory);
 
         if (launcherAutomatic) {
@@ -74,8 +79,12 @@ final class MemoryChoice extends JPanel {
         ModernDialogs.preferWidth(choice, 220);
         hint.setEnabled(false);
 
+        choice.setAlignmentX(LEFT_ALIGNMENT);
+        customControl.setAlignmentX(LEFT_ALIGNMENT);
+        hint.setAlignmentX(LEFT_ALIGNMENT);
         add(choice);
-        add(custom);
+        add(javax.swing.Box.createVerticalStrut(6));
+        add(customControl);
         add(hint);
         choice.addActionListener(e -> update());
         update();
@@ -90,7 +99,7 @@ final class MemoryChoice extends JPanel {
     private void update() {
         String chosen = selected();
         boolean automatic = AUTOMATIC.equals(chosen) || (FOLLOW.equals(chosen) && launcherAutomatic);
-        custom.setVisible(CUSTOM.equals(chosen));
+        customControl.setVisible(CUSTOM.equals(chosen));
         if (automatic) {
             hint.setText(GetText.tr("Working it out..."));
             // reads the instance's folders, so not on the Swing thread
@@ -103,7 +112,7 @@ final class MemoryChoice extends JPanel {
                 });
             });
         } else {
-            hint.setText(CUSTOM.equals(chosen) ? GetText.tr("MB") : " ");
+            hint.setText(" ");
         }
         revalidate();
     }

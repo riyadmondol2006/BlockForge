@@ -22,6 +22,7 @@ import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
+import java.awt.Insets;
 import java.awt.Window;
 import java.awt.event.ComponentAdapter;
 import java.awt.event.ComponentEvent;
@@ -56,7 +57,9 @@ import com.blockforge.launcher.Gsons;
 import com.blockforge.launcher.builders.HTMLBuilder;
 import com.blockforge.launcher.constants.Constants;
 import com.blockforge.launcher.gui.modern.Icons;
+import com.blockforge.launcher.gui.modern.Lbl;
 import com.blockforge.launcher.gui.modern.ModernDialogs;
+import com.blockforge.launcher.gui.modern.Palette;
 import com.blockforge.launcher.data.Instance;
 import com.blockforge.launcher.data.Pack;
 import com.blockforge.launcher.data.PackVersion;
@@ -122,8 +125,6 @@ import okhttp3.CacheControl;
 
 public class InstanceInstallerDialog extends JDialog {
     private static final long serialVersionUID = -6984886874482721558L;
-    private int versionLength = 0;
-    private int loaderVersionLength = 0;
     private boolean isReinstall = false;
     private boolean isServer = false;
     private Pack pack;
@@ -142,14 +143,16 @@ public class InstanceInstallerDialog extends JDialog {
     private final JButton install;
     private final JTextField nameField;
     private JComboBox<PackVersion> versionsDropDown;
-    private final JLabel loaderVersionLabel = new JLabel();
+    /** width of the name field and the dropdowns, so they line up and long version names fit */
+    private static final int FIELD_WIDTH = 400;
+
+    private final JLabel loaderVersionLabel = fieldLabel("");
     private final JComboBox<ComboItem<LoaderVersion>> loaderVersionsDropDown = new JComboBox<>();
     private final List<LoaderVersion> loaderVersions = new ArrayList<>();
 
-    private final JLabel showAllMinecraftVersionsLabel = new JLabel(GetText.tr("Show All"));
-    private final JCheckBox showAllMinecraftVersionsCheckbox = new JCheckBox();
+    private final JCheckBox showAllMinecraftVersionsCheckbox = new JCheckBox(GetText.tr("Show all versions"));
 
-    private JLabel saveModsLabel;
+    private javax.swing.JComponent saveModsLabel;
     private JCheckBox saveModsCheckbox;
     private final boolean isUpdate;
     private final PackVersion autoInstallVersion;
@@ -262,15 +265,17 @@ public class InstanceInstallerDialog extends JDialog {
 
         gbc.gridx = 0;
         gbc.gridy = 0;
-        gbc.insets = ModernDialogs.LABEL_INSETS;
-        gbc.anchor = GridBagConstraints.BASELINE_TRAILING;
-        JLabel instanceNameLabel = new JLabel(GetText.tr("Name") + ": ");
+        gbc.weightx = 1;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.insets = LABEL_ABOVE;
+        gbc.anchor = GridBagConstraints.LINE_START;
+        JLabel instanceNameLabel = fieldLabel(GetText.tr("Name"));
         middle.add(instanceNameLabel, gbc);
 
-        gbc.gridx++;
-        gbc.insets = ModernDialogs.FIELD_INSETS;
-        gbc.anchor = GridBagConstraints.BASELINE_LEADING;
+        gbc.gridy++;
+        gbc.insets = FIELD_BELOW;
         nameField = new JTextField(17);
+        ModernDialogs.preferWidth(nameField, FIELD_WIDTH);
         nameField.setText(((isReinstall) ? instance.launcher.name : packName));
         if (isReinstall) {
             nameField.setEnabled(false);
@@ -293,14 +298,14 @@ public class InstanceInstallerDialog extends JDialog {
         });
         middle.add(nameField, gbc);
 
-        gbc.gridx = 0;
         gbc.gridy++;
-        gbc.insets = ModernDialogs.LABEL_INSETS;
 
         gbc = this.setupVersionsDropdown(gbc);
 
         if (isReinstall && instance.launcher.vanillaInstance) {
-            gbc.gridx++;
+            gbc.gridy++;
+            gbc.insets = FIELD_BELOW;
+            showAllMinecraftVersionsCheckbox.setOpaque(false);
             middle.add(showAllMinecraftVersionsCheckbox, gbc);
 
             showAllMinecraftVersionsCheckbox.addItemListener(e -> {
@@ -309,9 +314,6 @@ public class InstanceInstallerDialog extends JDialog {
                     setVersionsDropdown();
                 }
             });
-
-            gbc.gridx++;
-            middle.add(showAllMinecraftVersionsLabel, gbc);
         }
 
         gbc = this.setupLoaderVersionsDropdown(gbc);
@@ -319,19 +321,17 @@ public class InstanceInstallerDialog extends JDialog {
         if (!this.isServer && isReinstall) {
             gbc.gridx = 0;
             gbc.gridy++;
-            gbc.insets = ModernDialogs.LABEL_INSETS;
-            gbc.anchor = GridBagConstraints.BASELINE_TRAILING;
-            saveModsLabel = new JLabelWithHover(GetText.tr("Save Mods") + "? ",
-                Utils.getIconImage(App.THEME.getIconPath("question")),
-                new HTMLBuilder().center().text(GetText.tr(
-                        "Since this update changes the Minecraft version, your custom mods may no longer work.<br/><br/>Checking this box will keep your custom mods, otherwise they'll be removed."))
-                    .build());
-            middle.add(saveModsLabel, gbc);
+            gbc.insets = new Insets(4, 0, 0, 0);
+            saveModsCheckbox = new JCheckBox(GetText.tr("Keep my mods"));
+            saveModsCheckbox.setOpaque(false);
+            middle.add(saveModsCheckbox, gbc);
 
-            gbc.gridx++;
-            gbc.insets = ModernDialogs.FIELD_INSETS;
-            gbc.anchor = GridBagConstraints.BASELINE_LEADING;
-            saveModsCheckbox = new JCheckBox();
+            gbc.gridy++;
+            gbc.insets = new Insets(2, 26, 0, 0);
+            saveModsLabel = new Lbl.Paragraph(GetText.tr(
+                "This changes the Minecraft version, so mods you added may stop working. Keep them, or leave this off to remove them."),
+                12f, 3, FIELD_WIDTH - 26, Palette::textDim);
+            middle.add(saveModsLabel, gbc);
 
             PackVersion packVersion = ((PackVersion) versionsDropDown.getSelectedItem());
             Optional<VersionManifestVersion> minecraftVersion = Optional.ofNullable(packVersion)
@@ -342,7 +342,6 @@ public class InstanceInstallerDialog extends JDialog {
             saveModsCheckbox.setVisible(
                 minecraftVersion.isPresent() && !minecraftVersion.get().id.equalsIgnoreCase(this.instance.id));
 
-            middle.add(saveModsCheckbox, gbc);
         }
 
         // Bottom Panel Stuff
@@ -1054,14 +1053,21 @@ public class InstanceInstallerDialog extends JDialog {
         }
     }
 
+    private static final Insets LABEL_ABOVE = new Insets(0, 2, 6, 0);
+    private static final Insets FIELD_BELOW = new Insets(0, 0, 14, 0);
+
+    /** A small bold label that sits above its field. */
+    private static JLabel fieldLabel(String text) {
+        return Lbl.text(text, 13f, true, Palette::text);
+    }
+
     private GridBagConstraints setupVersionsDropdown(GridBagConstraints gbc) {
-        gbc.anchor = GridBagConstraints.BASELINE_TRAILING;
-        JLabel versionLabel = new JLabel(GetText.tr("Version To Install") + ": ");
+        gbc.insets = LABEL_ABOVE;
+        JLabel versionLabel = fieldLabel(GetText.tr("Version"));
         middle.add(versionLabel, gbc);
 
-        gbc.gridx++;
-        gbc.insets = ModernDialogs.FIELD_INSETS;
-        gbc.anchor = GridBagConstraints.BASELINE_LEADING;
+        gbc.gridy++;
+        gbc.insets = FIELD_BELOW;
 
         versionsDropDown = new JComboBox<>();
         setVersionsDropdown();
@@ -1102,7 +1108,6 @@ public class InstanceInstallerDialog extends JDialog {
         }
 
         if (multiMCManifest != null) {
-            gbc.gridx--;
             versionLabel.setVisible(false);
             versionsDropDown.setVisible(false);
         }
@@ -1163,19 +1168,8 @@ public class InstanceInstallerDialog extends JDialog {
             }
         }
 
-        // ensures that font width is taken into account
-        for (PackVersion version : versions) {
-            versionLength = Math.max(versionLength,
-                getFontMetrics(App.THEME.getNormalFont()).stringWidth(version.toString()) + 25);
-        }
-
-        // ensures that the dropdown is at least 200 px wide
-        versionLength = Math.max(200, versionLength);
-
-        // ensures that there is a maximum width of 250 px to prevent overflow
-        versionLength = Math.min(250, versionLength);
-
-        ModernDialogs.preferWidth(versionsDropDown, versionLength);
+        // as wide as the name field, so long version names like "Pixelmon-1.21.1-9.4.1 (1.21.1)" fit
+        ModernDialogs.preferWidth(versionsDropDown, FIELD_WIDTH);
     }
 
     protected void updateLoaderVersions(@Nonnull PackVersion item) {
@@ -1191,51 +1185,51 @@ public class InstanceInstallerDialog extends JDialog {
             }
 
             // #. {0} is the loader (Fabric/Forge/Quilt)
-            loaderVersionLabel.setText(GetText.tr("{0} Version", "Fabric") + ": ");
+            loaderVersionLabel.setText(GetText.tr("{0} version", "Fabric"));
         } else if (item.loaderType != null && item.loaderType.equalsIgnoreCase("forge")) {
             if (!ConfigManager.getConfigItem("loaders.forge.enabled", true)) {
                 return;
             }
 
             // #. {0} is the loader (Fabric/Forge/Quilt)
-            loaderVersionLabel.setText(GetText.tr("{0} Version", "Forge") + ": ");
+            loaderVersionLabel.setText(GetText.tr("{0} version", "Forge"));
         } else if (item.loaderType != null && item.loaderType.equalsIgnoreCase("neoforge")) {
             if (!ConfigManager.getConfigItem("loaders.neoforge.enabled", true)) {
                 return;
             }
 
             // #. {0} is the loader (Fabric/Forge/Quilt)
-            loaderVersionLabel.setText(GetText.tr("{0} Version", "NeoForge") + ": ");
+            loaderVersionLabel.setText(GetText.tr("{0} version", "NeoForge"));
         } else if (item.loaderType != null && item.loaderType.equalsIgnoreCase("paper")) {
             if (!ConfigManager.getConfigItem("loaders.paper.enabled", true)) {
                 return;
             }
 
             // #. {0} is the loader (Fabric/Forge/Quilt)
-            loaderVersionLabel.setText(GetText.tr("{0} Version", "Paper") + ": ");
+            loaderVersionLabel.setText(GetText.tr("{0} version", "Paper"));
         } else if (item.loaderType != null && item.loaderType.equalsIgnoreCase("purpur")) {
             if (!ConfigManager.getConfigItem("loaders.purpur.enabled", true)) {
                 return;
             }
 
             // #. {0} is the loader (Fabric/Forge/Quilt)
-            loaderVersionLabel.setText(GetText.tr("{0} Version", "Purpur") + ": ");
+            loaderVersionLabel.setText(GetText.tr("{0} version", "Purpur"));
         } else if (item.loaderType != null && item.loaderType.equalsIgnoreCase("legacyfabric")) {
             if (!ConfigManager.getConfigItem("loaders.legacyfabric.enabled", true)) {
                 return;
             }
 
             // #. {0} is the loader (Fabric/Forge/Quilt)
-            loaderVersionLabel.setText(GetText.tr("{0} Version", "Legacy Fabric") + ": ");
+            loaderVersionLabel.setText(GetText.tr("{0} version", "Legacy Fabric"));
         } else if (item.loaderType != null && item.loaderType.equalsIgnoreCase("quilt")) {
             if (!ConfigManager.getConfigItem("loaders.quilt.enabled", false)) {
                 return;
             }
 
             // #. {0} is the loader (Fabric/Forge/Quilt)
-            loaderVersionLabel.setText(GetText.tr("{0} Version", "Quilt") + ": ");
+            loaderVersionLabel.setText(GetText.tr("{0} version", "Quilt"));
         } else {
-            loaderVersionLabel.setText(GetText.tr("Loader Version") + ": ");
+            loaderVersionLabel.setText(GetText.tr("Loader version"));
         }
 
         loaderVersionsDropDown.setEnabled(false);
@@ -1290,12 +1284,6 @@ public class InstanceInstallerDialog extends JDialog {
                 return;
             }
 
-            // ensures that font width is taken into account
-            for (LoaderVersion version : loaderVersions) {
-                loaderVersionLength = Math.max(loaderVersionLength,
-                    getFontMetrics(App.THEME.getNormalFont()).stringWidth(version.toString()) + 25);
-            }
-
             loaderVersionsDropDown.removeAllItems();
 
             loaderVersions.forEach(version -> loaderVersionsDropDown
@@ -1315,13 +1303,7 @@ public class InstanceInstallerDialog extends JDialog {
                 }
             }
 
-            // ensures that the dropdown is at least 200 px wide
-            loaderVersionLength = Math.max(200, loaderVersionLength);
-
-            // ensures that there is a maximum width of 250 px to prevent overflow
-            loaderVersionLength = Math.min(250, loaderVersionLength);
-
-            ModernDialogs.preferWidth(loaderVersionsDropDown, loaderVersionLength);
+            ModernDialogs.preferWidth(loaderVersionsDropDown, FIELD_WIDTH);
 
             loaderVersionsDropDown.setEnabled(true);
             loaderVersionLabel.setVisible(true);
@@ -1336,14 +1318,13 @@ public class InstanceInstallerDialog extends JDialog {
     private GridBagConstraints setupLoaderVersionsDropdown(GridBagConstraints gbc) {
         gbc.gridx = 0;
         gbc.gridy++;
-        gbc.insets = ModernDialogs.LABEL_INSETS;
-        gbc.anchor = GridBagConstraints.BASELINE_TRAILING;
+        gbc.insets = LABEL_ABOVE;
 
         middle.add(loaderVersionLabel, gbc);
 
-        gbc.gridx++;
-        gbc.insets = ModernDialogs.FIELD_INSETS;
-        gbc.anchor = GridBagConstraints.BASELINE_LEADING;
+        gbc.gridy++;
+        gbc.insets = FIELD_BELOW;
+        ModernDialogs.preferWidth(loaderVersionsDropDown, FIELD_WIDTH);
         if (this.versionsDropDown.getSelectedItem() != null) {
             this.updateLoaderVersions((PackVersion) this.versionsDropDown.getSelectedItem());
         }
