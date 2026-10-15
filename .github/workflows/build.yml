@@ -83,9 +83,11 @@ jobs:
       - name: Install the packaging tools
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y dpkg-dev rpm squashfs-tools desktop-file-utils appstream curl
+          sudo apt-get install -y dpkg-dev rpm squashfs-tools desktop-file-utils appstream curl file
       - name: Build the packages
-        run: ./packaging/linux/build.sh "$VERSION"
+        run: |
+          set -o pipefail
+          ./packaging/linux/build.sh "$VERSION" 2>&1 | tee build.log || { .github/scripts/why.sh build.log "Building the Linux packages"; exit 1; }
       - name: Check the deb on this system
         run: |
           sudo apt-get update -qq
@@ -125,10 +127,24 @@ jobs:
       - run: cargo build --locked --release
       - name: Build the installer and the portable zip
         shell: pwsh
-        run: ./packaging/windows/build.ps1 -Version $env:VERSION
+        run: |
+          $ErrorActionPreference = 'Continue'
+          ./packaging/windows/build.ps1 -Version $env:VERSION *>&1 | Tee-Object -FilePath build.log
+          if (-not $? -or ($LASTEXITCODE -ne $null -and $LASTEXITCODE -ne 0)) {
+            $tail = ((Get-Content build.log -Tail 40) -join "`n") -replace '%', '%25' -replace "`r", '' -replace "`n", '%0A'
+            Write-Host "::error title=Building the Windows installer failed::$tail"
+            exit 1
+          }
       - name: Check the installer
         shell: pwsh
-        run: ./packaging/windows/smoke.ps1 -Version $env:VERSION
+        run: |
+          $ErrorActionPreference = 'Continue'
+          ./packaging/windows/smoke.ps1 -Version $env:VERSION *>&1 | Tee-Object -FilePath smoke.log
+          if (-not $? -or ($LASTEXITCODE -ne $null -and $LASTEXITCODE -ne 0)) {
+            $tail = ((Get-Content smoke.log -Tail 40) -join "`n") -replace '%', '%25' -replace "`r", '' -replace "`n", '%0A'
+            Write-Host "::error title=Checking the Windows installer failed::$tail"
+            exit 1
+          }
       - uses: actions/upload-artifact@v7
         with:
           name: BlockForge-windows
@@ -152,9 +168,13 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --locked --release
       - name: Build the disk image
-        run: ./packaging/macos/build.sh "$VERSION"
+        run: |
+          set -o pipefail
+          ./packaging/macos/build.sh "$VERSION" 2>&1 | tee build.log || { .github/scripts/why.sh build.log "Building the macOS disk image"; exit 1; }
       - name: Check the disk image
-        run: ./packaging/macos/smoke.sh "$VERSION"
+        run: |
+          set -o pipefail
+          ./packaging/macos/smoke.sh "$VERSION" 2>&1 | tee smoke.log || { .github/scripts/why.sh smoke.log "Checking the macOS disk image"; exit 1; }
       - uses: actions/upload-artifact@v7
         with:
           name: BlockForge-macos

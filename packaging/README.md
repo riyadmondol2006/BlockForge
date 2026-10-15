@@ -8,7 +8,7 @@ and writes into `dist/`.
 
 | Folder | Makes | Run it with | Needs |
 |---|---|---|---|
-| `linux/` | `BlockForge-<v>-linux-x86_64.deb`, `.rpm` and `.AppImage` | `packaging/linux/build.sh <v>` | `dpkg-dev`, `rpm`, `squashfs-tools`, `curl` (and `desktop-file-utils`, `appstream` for the checks) |
+| `linux/` | `BlockForge-<v>-linux-x86_64.deb`, `.rpm` and `.AppImage` | `packaging/linux/build.sh <v>` | `dpkg-dev`, `rpm`, `squashfs-tools`, `curl`, `file` (and `desktop-file-utils`, `appstream` for the checks) |
 | `windows/` | `BlockForge-<v>-windows-x64-setup.exe` and `-portable.zip` | `packaging\windows\build.ps1 -Version <v>` | Inno Setup 6 |
 | `macos/` | `BlockForge-<v>-macos-arm64.dmg` | `packaging/macos/build.sh <v>` | macOS on Apple Silicon (`hdiutil`, `codesign`) |
 | `bridge/` | `BlockForge-<v>.jar`, the bridge that moves old 3.x jar installs to the native program | `packaging/bridge/build.sh <v>` | a JDK |

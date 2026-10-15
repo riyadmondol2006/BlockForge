@@ -32,7 +32,7 @@ esac
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 CRATE="$(cd "$HERE/../.." && pwd)"
-ROOT="$(cd "$CRATE/.." && pwd)"
+ROOT="$CRATE"
 BIN="${BLOCKFORGE_BIN:-$CRATE/target/release/blockforge}"
 OUT="${2:-$CRATE/dist}"
 ONLY="${ONLY:-deb rpm appimage}"
@@ -108,7 +108,14 @@ if command -v desktop-file-validate > /dev/null 2>&1; then
     desktop-file-validate "$STAGE/usr/share/applications/blockforge.desktop"
 fi
 if command -v appstreamcli > /dev/null 2>&1; then
-    appstreamcli validate --no-net "$STAGE/usr/share/metainfo/$METAINFO_ID.metainfo.xml"
+    # The file follows the current AppStream standard. An older appstreamcli (Ubuntu 22.04 has 0.15) doesn't know its
+    # newer tags and complains, so a problem is only reported here, not fatal; a current one is checked strictly.
+    if appstreamcli --version | grep -Eq '[[:space:]]([1-9][0-9]*)\.'; then
+        appstreamcli validate --no-net "$STAGE/usr/share/metainfo/$METAINFO_ID.metainfo.xml"
+    else
+        appstreamcli validate --no-net "$STAGE/usr/share/metainfo/$METAINFO_ID.metainfo.xml" \
+            || echo "note: this appstreamcli is older than 1.0 and doesn't know the whole standard; not treated as an error" >&2
+    fi
 fi
 
 # ---- deb ------------------------------------------------------------------------------------------------------------
