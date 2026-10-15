@@ -161,28 +161,8 @@ public final class InstanceActions {
         content.setFont(content.getFont().deriveFont(java.awt.Font.BOLD));
         menu.add(content);
         menu.add(item(GetText.tr("Settings"), () -> openSettings(instance)));
-
-        // the classic windows still cover CurseForge, data packs, worlds and jar mods
-        JMenu classic = new JMenu(GetText.tr("Classic mod tools"));
-        boolean modsViaPlatforms = instance.launcher.enableCurseForgeIntegration
-            && (ConfigManager.getConfigItem("platforms.curseforge.modsEnabled", true)
-                || (ConfigManager.getConfigItem("platforms.modrinth.modsEnabled", true)
-                    && instance.launcher.loaderVersion != null));
-        if (modsViaPlatforms) {
-            classic.add(item(GetText.tr("Add Mods (CurseForge, data packs, worlds)"), () -> {
-                new AddModsDialog(instance).setVisible(true);
-                changed.run();
-            }));
-        }
-        if (instance.launcher.enableEditingMods) {
-            classic.add(item(GetText.tr("Edit Mods"), () -> {
-                new EditModsDialog(instance).setVisible(true);
-                changed.run();
-            }));
-        }
-        if (classic.getItemCount() > 0) {
-            menu.add(classic);
-        }
+        menu.add(item(GetText.tr("Open folder"), () -> openFolder(instance)));
+        menu.add(item(GetText.tr("Play offline with another name"), () -> play(instance, true, false)));
 
         menu.addSeparator();
         if (instance.isUpdatable()) {
@@ -191,45 +171,32 @@ public final class InstanceActions {
             menu.add(update);
             menu.add(item(GetText.tr("Reinstall"), instance::startReinstall));
         }
+        menu.add(item(GetText.tr("Clone"), instance::startClone));
+        if (instance.canBeExported()) {
+            menu.add(item(GetText.tr("Export"), () -> new InstanceExportDialog(instance).setVisible(true)));
+        }
+        JMenu loader = loaderMenu(instance, changed);
+        if (loader.getItemCount() > 0) {
+            menu.add(loader);
+        }
+        menu.add(backupMenu(instance));
+
+        menu.addSeparator();
         menu.add(item(GetText.tr("Rename"), () -> {
             instance.startRename();
             changed.run();
         }));
         if (instance.canChangeDescription()) {
-            menu.add(item(GetText.tr("Change Description"), () -> {
+            menu.add(item(GetText.tr("Change description"), () -> {
                 instance.startChangeDescription();
                 changed.run();
             }));
         }
-        menu.add(item(GetText.tr("Change Image"), () -> {
+        menu.add(item(GetText.tr("Change image"), () -> {
             instance.startChangeImage();
             changed.run();
         }));
-        menu.add(item(GetText.tr("Clone"), instance::startClone));
-
-        JMenu loader = loaderMenu(instance, changed);
-        if (loader.getItemCount() > 0) {
-            menu.add(loader);
-        }
-
-        menu.add(snapshotsMenu(instance));
-
-        JMenu backup = new JMenu(GetText.tr("Backup"));
-        backup.add(item(GetText.tr("Normal Backup"), () -> instance.backup(BackupMode.NORMAL)));
-        backup.add(item(GetText.tr("Normal + Mods Backup"), () -> instance.backup(BackupMode.NORMAL_PLUS_MODS)));
-        backup.add(item(GetText.tr("Full Backup"), () -> instance.backup(BackupMode.FULL)));
-        menu.add(backup);
-
-        menu.addSeparator();
-        menu.add(item(GetText.tr("Play Offline With Custom Name"), () -> play(instance, true, false)));
-        menu.add(item(GetText.tr("Open Folder"), () -> openFolder(instance)));
-        menu.add(item(GetText.tr("Create Support Bundle"), () -> SupportActions.createBundle(instance)));
-        if (instance.canBeExported()) {
-            menu.add(item(GetText.tr("Export"), () -> new InstanceExportDialog(instance).setVisible(true)));
-        }
-        if (instance.hasWebsite()) {
-            menu.add(item(GetText.tr("Open Website"), () -> OS.openWebBrowser(instance.getWebsiteUrl())));
-        }
+        menu.add(moreMenu(instance, changed));
 
         menu.addSeparator();
         JMenuItem delete = item(GetText.tr("Delete"), () -> delete(instance));
@@ -238,15 +205,52 @@ public final class InstanceActions {
         return menu;
     }
 
-    /** Snapshots of the pack's files, taken before updates, that can be put back. */
-    private static JMenu snapshotsMenu(Instance instance) {
-        JMenu menu = new JMenu(GetText.tr("Snapshots"));
-        menu.add(item(GetText.tr("Save Snapshot Now"), () -> saveSnapshot(instance)));
+    /** The less common things: the classic mod windows, a support bundle and the pack's website. */
+    private static JMenu moreMenu(Instance instance, Runnable changed) {
+        JMenu more = new JMenu(GetText.tr("More"));
+
+        // the classic windows still cover CurseForge, data packs, worlds and jar mods
+        boolean modsViaPlatforms = instance.launcher.enableCurseForgeIntegration
+            && (ConfigManager.getConfigItem("platforms.curseforge.modsEnabled", true)
+                || (ConfigManager.getConfigItem("platforms.modrinth.modsEnabled", true)
+                    && instance.launcher.loaderVersion != null));
+        if (modsViaPlatforms) {
+            more.add(item(GetText.tr("Add mods (CurseForge, data packs, worlds)"), () -> {
+                new AddModsDialog(instance).setVisible(true);
+                changed.run();
+            }));
+        }
+        if (instance.launcher.enableEditingMods) {
+            more.add(item(GetText.tr("Edit mods (classic)"), () -> {
+                new EditModsDialog(instance).setVisible(true);
+                changed.run();
+            }));
+        }
+        if (more.getItemCount() > 0) {
+            more.addSeparator();
+        }
+
+        more.add(item(GetText.tr("Create support bundle"), () -> SupportActions.createBundle(instance)));
+        if (instance.hasWebsite()) {
+            more.add(item(GetText.tr("Open website"), () -> OS.openWebBrowser(instance.getWebsiteUrl())));
+        }
+        return more;
+    }
+
+    /**
+     * Backups of the whole instance, and snapshots of the pack's files (also taken before updates) that can be put
+     * back.
+     */
+    private static JMenu backupMenu(Instance instance) {
+        JMenu menu = new JMenu(GetText.tr("Backups and snapshots"));
+        menu.add(item(GetText.tr("Back up worlds and settings"), () -> instance.backup(BackupMode.NORMAL)));
+        menu.add(item(GetText.tr("Back up worlds, settings and mods"),
+            () -> instance.backup(BackupMode.NORMAL_PLUS_MODS)));
+        menu.add(item(GetText.tr("Back up everything"), () -> instance.backup(BackupMode.FULL)));
+        menu.addSeparator();
+        menu.add(item(GetText.tr("Save a snapshot now"), () -> saveSnapshot(instance)));
 
         List<InstanceSnapshots.Snapshot> recent = InstanceSnapshots.latest(SnapshotService.folderFor(instance), 6);
-        if (!recent.isEmpty()) {
-            menu.addSeparator();
-        }
 
         java.text.DateFormat format = java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.MEDIUM,
             java.text.DateFormat.SHORT);
@@ -306,7 +310,7 @@ public final class InstanceActions {
     }
 
     private static JMenu loaderMenu(Instance instance, Runnable changed) {
-        JMenu loader = new JMenu(GetText.tr("Mod Loader"));
+        JMenu loader = new JMenu(GetText.tr("Mod loader"));
 
         if (instance.launcher.loaderVersion == null) {
             List<LoaderType> addable = new ArrayList<>();
@@ -333,7 +337,7 @@ public final class InstanceActions {
                 }));
             }
         } else {
-            loader.add(item(GetText.tr("Change {0} Version", instance.launcher.loaderVersion.type), () -> {
+            loader.add(item(GetText.tr("Change {0} version", instance.launcher.loaderVersion.type), () -> {
                 instance.changeLoaderVersion();
                 changed.run();
             }));
