@@ -42,11 +42,15 @@
   along automatically, and adding a shader offers to set up Iris and Sodium (or Oculus on Forge) for you.
 - **Drag and drop anything.** Drop a mod, resource pack, shader, data pack or whole modpack anywhere on the window.
   BlockForge looks inside the file, works out what it is and puts it in the right place.
-- **Quick to open, quick to play.** The window opens sooner, and pressing Play starts the game almost straight away
-  because files that haven't changed aren't checked again.
-- **Good on low-end PCs.** Light mode switches on by itself on computers with about 4 GB of RAM or 2 cores. The game
-  gets a safe amount of memory picked for your PC, the launcher gives memory back while it sits idle, and a one-click
-  performance pack adds Sodium, Lithium, FerriteCore and ModernFix.
+- **Quick to open, quick to play.** The window opens sooner, pressing Play starts the game almost straight away, and
+  Minecraft itself starts faster: BlockForge keeps a class cache for each game and preloads its files while the
+  launcher sits idle. **Continue** drops you straight into the world you played last.
+- **Set up for your PC automatically.** Game memory is picked from your PC (RAM, free memory, cores) and from the
+  game (version, loader, number of mods, shaders, the pack's own advice), and a new game starts with graphics settings
+  that suit your hardware. Your own settings always win.
+- **Good on low-end PCs.** Light mode switches on by itself on computers with about 4 GB of RAM or 2 cores, the
+  launcher gives memory back while it sits idle, and a one-click performance pack adds Sodium, Lithium, FerriteCore and
+  ModernFix.
 - **Every modpack source in one place.** ATLauncher, CurseForge, Modrinth, FTB and Technic packs, or any Minecraft
   version with Fabric, Forge, NeoForge or Quilt. It can also copy in instances from Prism, MultiMC, CurseForge,
   GDLauncher and ATLauncher.
@@ -110,12 +114,15 @@
 | Mods, resource packs and shaders | Separate Add Mods and Edit Mods dialogs | One window with Installed and Browse tabs, one-click Modrinth installs, dependencies added automatically |
 | Drag and drop | Into the Edit Mods dialog | Anywhere on the window; detects mods, resource packs, shaders, data packs and modpacks |
 | Performance pack | No | One click: Sodium, Lithium, FerriteCore, ModernFix (or the equivalents for your loader) |
-| Game memory | 4 GB by default | Half of your RAM, at most 4 GB, with a warning before a pack asks for more than the PC can spare |
+| Game memory | 4 GB by default | Automatic: from your PC (RAM, free memory, cores) and the game (version, loader, mods, shaders, pack advice); e.g. 2.5 GB for vanilla 26.3, 3 GB for Fabric with the performance pack, 7–8 GB for a 200-mod Forge pack on a 16 GB PC |
+| First-launch graphics settings | Minecraft's defaults | Picked for your PC (low, medium or high tier from RAM, cores and graphics card) |
+| Continue into your last world | No | One click, Minecraft 1.20 and newer |
 | Light mode for slower PCs | No | Turns on by itself on PCs with about 4 GB of RAM or 2 cores |
 | Launcher RAM use after browsing\* | ~500 MB | ~250 MB |
 | Play button to game process (Fabric)\* | ~1.2 s | ~0.1 s |
 | Window open time\* | ~4.9 s | ~3.8 s |
-| Minecraft startup with the class cache | — | TBD |
+| Minecraft 26.3 (vanilla) to the title screen\* | ~7.8 s | ~7.2 s with the class cache |
+| Minecraft 26.3 + Fabric, cold start\* | ~10.4 s | ~9.9 s with file warm-up |
 | Self-update source | ATLauncher's server | BlockForge's GitHub releases |
 | Usage statistics and play-time reporting | On by default | Off unless you turn them on |
 | Installers | Downloads from atlauncher.com | Windows exe, macOS dmg (arm64 and x64), deb and rpm, all with Java bundled; plus the jar |
@@ -150,8 +157,10 @@ Compared to ATLauncher 3.4.41.4, this fork changes:
 **Speed and memory**
 - Pressing Play skips re-hashing files that haven't changed, remembers the Java version, skips the login step for
   offline players and logs how long each step took. The game's Java gets tuned G1 garbage collector flags.
-- Game memory defaults to half of the computer's RAM (at most 4 GB) and warns when a setting would leave too little for
-  the rest of the system.
+- Game memory is automatic unless you set it: it is sized from the PC and the game, never takes more than the
+  system can spare, and warns when a pack needs more than is free. New games get graphics settings for the PC's tier.
+- Minecraft starts faster: the first start records the classes it loads, a low-priority background job then builds a
+  class cache for that game (Java 17 and newer), and the launcher preloads the game's files while it sits idle.
 - The launcher hands memory back after a minute of no use, uses fewer threads, keeps smaller pictures and caps the
   console, and drops picture caches while the game runs on low-memory computers.
 - Light mode (fewer redraws, no smooth-scroll animation, a smaller picture cache) switches on by itself on slower PCs.
