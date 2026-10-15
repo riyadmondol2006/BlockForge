@@ -260,8 +260,25 @@ public class InstanceInstaller extends SwingWorker<Boolean, Void> implements Net
         return success;
     }
 
+    /** installs running right now, so background disk work can keep out of their way */
+    private static final java.util.concurrent.atomic.AtomicInteger RUNNING = new java.util.concurrent.atomic.AtomicInteger();
+
+    /** if an instance is being installed or updated right now */
+    public static boolean anyRunning() {
+        return RUNNING.get() > 0;
+    }
+
     @Override
     protected Boolean doInBackground() throws Exception {
+        RUNNING.incrementAndGet();
+        try {
+            return runInstall();
+        } finally {
+            RUNNING.decrementAndGet();
+        }
+    }
+
+    private Boolean runInstall() throws Exception {
         ErrorReporting.recordPackInstall(this.pack.name, this.version.version, this.loaderVersion);
         LogManager.info("Started install of " + this.pack.name + " version " + this.version.version);
 

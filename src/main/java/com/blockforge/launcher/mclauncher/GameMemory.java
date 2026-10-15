@@ -109,6 +109,35 @@ public final class GameMemory {
         return plan;
     }
 
+    /**
+     * For settings saved before automatic memory existed: if the memory there was ever chosen by the player. The
+     * launcher used to write its own default into the settings, so a value equal to one of its old defaults (4 GB
+     * in ATLauncher, half the memory up to 4 GB in early BlockForge) was never picked by anyone and becomes
+     * automatic; anything else is the player's choice and stays exactly as it is.
+     *
+     * @return true when automatic memory should be used
+     */
+    public static boolean wasNeverChosen(boolean firstTimeRun, int maximumMemory, int physicalMb, boolean is64Bit) {
+        if (firstTimeRun) {
+            return true;
+        }
+        return maximumMemory == 4096 || maximumMemory == defaultMaximumMb(physicalMb, is64Bit);
+    }
+
+    /**
+     * If a game uses automatic memory: an instance set to automatic does, an instance with its own amount doesn't,
+     * and an instance that follows the launcher does what the launcher setting says.
+     */
+    public static boolean usesAutomatic(Integer instanceMb, Boolean instanceAutomatic, boolean launcherAutomatic) {
+        if (Boolean.TRUE.equals(instanceAutomatic)) {
+            return true;
+        }
+        if (instanceMb != null) {
+            return false;
+        }
+        return launcherAutomatic;
+    }
+
     /** a warning when the game is given more memory than is free right now, or null */
     public static String availabilityWarning(int heapMb, long availableMb) {
         if (availableMb <= 0 || heapMb <= availableMb) {

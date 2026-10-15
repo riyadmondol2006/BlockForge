@@ -45,6 +45,7 @@ import com.blockforge.launcher.App;
 import com.blockforge.launcher.FileSystem;
 import com.blockforge.launcher.data.LauncherTheme;
 import com.blockforge.launcher.evnt.manager.SettingsManager;
+import com.blockforge.launcher.mclauncher.InstanceMemory;
 import com.blockforge.launcher.utils.LightMode;
 import com.blockforge.launcher.utils.OS;
 import com.blockforge.launcher.viewmodel.impl.settings.GeneralSettingsViewModel;
@@ -74,6 +75,12 @@ public class SettingsPage extends Page {
         column.add(section(GetText.tr("Appearance"), themeRow(), languageRow()));
         column.add(Box.createVerticalStrut(16));
         column.add(section(GetText.tr("Game"), memoryRow(),
+            toggleRow(GetText.tr("Speed up game start (class cache)"),
+                GetText.tr("Keeps the classes a game loads ready for its next start, which is then quicker (Minecraft 1.18 and newer)"),
+                App.settings.classDataCache, v -> App.settings.classDataCache = v),
+            toggleRow(GetText.tr("Pick game settings for this PC on first launch"),
+                GetText.tr("A new game starts with a view distance and graphics that suit this computer"),
+                App.settings.autoGameOptions, v -> App.settings.autoGameOptions = v),
             textRow(GetText.tr("Java path"), GetText.tr("Leave empty to use the Java that comes with Minecraft"),
                 GetText.tr("Automatic (recommended)"),
                 App.settings.usingCustomJavaPath ? App.settings.javaPath : "", SettingsPage::setJavaPath),
@@ -145,6 +152,10 @@ public class SettingsPage extends Page {
     }
 
     private JPanel row(String label, String hint, JComponent control) {
+        return row(label, hint == null ? null : Lbl.text(hint, 12f, false, Palette::textDim), control);
+    }
+
+    private JPanel row(String label, JLabel hintLabel, JComponent control) {
         JPanel row = new JPanel(new BorderLayout(16, 0));
         row.setOpaque(false);
         row.setBorder(BorderFactory.createEmptyBorder(8, 0, 8, 0));
@@ -156,10 +167,9 @@ public class SettingsPage extends Page {
         JLabel l = Lbl.text(label, 14f, true, Palette::text);
         l.setAlignmentX(LEFT_ALIGNMENT);
         text.add(l);
-        if (hint != null) {
-            JLabel h = Lbl.text(hint, 12f, false, Palette::textDim);
-            h.setAlignmentX(LEFT_ALIGNMENT);
-            text.add(h);
+        if (hintLabel != null) {
+            hintLabel.setAlignmentX(LEFT_ALIGNMENT);
+            text.add(hintLabel);
         }
         row.add(text, BorderLayout.CENTER);
 
@@ -272,17 +282,19 @@ public class SettingsPage extends Page {
                 saved();
             }
         });
-        return row(GetText.tr("Language"), null, box);
+        return row(GetText.tr("Language"), (String) null, box);
     }
 
     private JPanel memoryRow() {
-        int max = Math.max(2048, OS.getSafeMaximumRam());
+        // from Java itself: asking the system (oshi) would make opening this page slow the first time
+        long totalMb = LightMode.totalRamMb();
+        int max = (int) Math.max(2048, totalMb > 0 ? totalMb / 2 / 256 * 256 : 8192);
         int min = 1024;
         int current = Math.max(min, Math.min(max, App.settings.maximumMemory));
 
         JSlider slider = new JSlider(min, max, current);
         slider.setOpaque(false);
-        slider.setPreferredSize(new Dimension(220, 32));
+        slider.setPreferredSize(new Dimension(200, 32));
         slider.setMajorTickSpacing(1024);
         slider.setSnapToTicks(false);
         JLabel value = Lbl.text(memoryText(current), 13f, true, Palette::accent);
@@ -298,11 +310,54 @@ public class SettingsPage extends Page {
             }
         });
 
+        boolean automatic = !Boolean.FALSE.equals(App.settings.automaticMemory);
+        JLabel hint = Lbl.text(GetText.tr("How much RAM Minecraft may use"), 12f, false, Palette::textDim);
+        JLabel autoLabel = Lbl.text(GetText.tr("Automatic"), 13f, false, Palette::text);
+        Runnable refresh = () -> {
+            boolean on = !Boolean.FALSE.equals(App.settings.automaticMemory);
+            slider.setVisible(!on);
+            value.setVisible(!on);
+            if (on) {
+                MemoryExample.describe(hint::setText);
+            } else {
+                hint.setText(GetText.tr("Set by hand, for every game without its own setting"));
+            }
+        };
+        Toggle auto = new Toggle(automatic, on -> {
+            App.settings.automaticMemory = on;
+            saved();
+            refresh.run();
+        });
+        refresh.run();
+
         JPanel control = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 0));
         control.setOpaque(false);
         control.add(slider);
         control.add(value);
-        return row(GetText.tr("Memory"), GetText.tr("How much RAM Minecraft may use"), control);
+        control.add(autoLabel);
+        control.add(auto);
+        return row(GetText.tr("Memory"), hint, control);
+    }
+
+    /** The automatic memory for the game played last (or a plain modern game), worked out off the Swing thread. */
+    private static final class MemoryExample {
+        static void describe(Consumer<String> show) {
+            show.accept(GetText.tr("Automatic: picked for each game and this PC"));
+            App.TASKPOOL.execute(() -> {
+                String text;
+                try {
+                    text = InstanceMemory.describeAutomatic(SupportActions.lastPlayedInstance());
+                } catch (Throwable t) {
+                    return;
+                }
+                javax.swing.SwingUtilities.invokeLater(() -> {
+                    // the switch may have been turned off in the meantime
+                    if (!Boolean.FALSE.equals(App.settings.automaticMemory)) {
+                        show.accept(GetText.tr("Automatic: {0}", text));
+                    }
+                });
+            });
+        }
     }
 
     private static String memoryText(int mb) {

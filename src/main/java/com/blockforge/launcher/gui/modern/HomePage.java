@@ -386,6 +386,19 @@ public class HomePage extends Page {
                 buttons.add(mods);
                 buttons.add(Box.createHorizontalStrut(10));
                 buttons.add(settings);
+                // "Continue: <world>" next to Play, for versions with Quick Play; looked for once the card is on
+                // screen, so it never holds up the launcher's start
+                javax.swing.Timer later = new javax.swing.Timer(300, null);
+                int[] tries = { 0 };
+                later.addActionListener(e -> {
+                    if (isShowing() || ++tries[0] > 200) {
+                        later.stop();
+                        if (isShowing()) {
+                            ContinueWorld.attach(this, buttons, instance);
+                        }
+                    }
+                });
+                later.start();
             }
             text.add(buttons);
             add(text, BorderLayout.WEST);
