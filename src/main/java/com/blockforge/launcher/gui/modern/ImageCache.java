@@ -170,12 +170,20 @@ public final class ImageCache {
      * callback receives null if the image couldn't be loaded.
      */
     public static void load(String url, int width, int height, Consumer<BufferedImage> callback) {
+        load(url, width, height, false, callback);
+    }
+
+    /**
+     * Like {@link #load(String, int, int, Consumer)}, but with {@code whole} set the image is scaled to fit inside the
+     * area instead of covering it, so nothing is cut off; the space left over is transparent.
+     */
+    public static void load(String url, int width, int height, boolean whole, Consumer<BufferedImage> callback) {
         if (url == null || url.isEmpty()) {
             callback.accept(null);
             return;
         }
 
-        String key = url + "@" + width + "x" + height;
+        String key = url + "@" + width + "x" + height + (whole ? "fit" : "");
         BufferedImage cached = CACHE.get(key);
         if (cached != null) {
             callback.accept(cached);
@@ -189,9 +197,23 @@ public final class ImageCache {
             connection.setReadTimeout(15000);
             try (java.io.InputStream in = connection.getInputStream()) {
                 BufferedImage source = ImageIO.read(in);
-                return source == null ? null : cover(source, width, height);
+                return source == null ? null : whole ? fit(source, width, height) : cover(source, width, height);
             }
         }, key, callback);
+    }
+
+    /** Scales the image to fit inside width x height, centred, keeping all of it; the rest stays transparent. */
+    public static BufferedImage fit(BufferedImage src, int width, int height) {
+        BufferedImage out = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g = out.createGraphics();
+        g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC);
+        g.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
+        double scale = Math.min(width / (double) src.getWidth(), height / (double) src.getHeight());
+        int w = Math.max(1, (int) Math.round(src.getWidth() * scale));
+        int h = Math.max(1, (int) Math.round(src.getHeight() * scale));
+        g.drawImage(src, (width - w) / 2, (height - h) / 2, w, h, null);
+        g.dispose();
+        return out;
     }
 
     /** Runs a loader on a background thread and caches its result under the key. */

@@ -33,7 +33,7 @@ import javax.swing.Icon;
  */
 public enum Icons {
     HOME, LIBRARY, EXPLORE, PERSON, SETTINGS, PLAY, PLUS, MORE, FOLDER, TRASH, SEARCH, CLOSE, DOWNLOAD, TERMINAL,
-    SERVER, CUBE, INFO, REFRESH, CHECK, EXTERNAL, EDIT, IMPORT, WARNING, PUZZLE, IMAGE, SPARKLE, BOLT;
+    SERVER, CUBE, INFO, REFRESH, CHECK, EXTERNAL, EDIT, IMPORT, WARNING, PUZZLE, IMAGE, SPARKLE, BOLT, GLOBE;
 
     /**
      * Paints this icon into the square at (x, y) with the given size.
@@ -364,7 +364,16 @@ public enum Icons {
                 g.draw(bolt);
                 break;
             }
+            case GLOBE: {
+                g.draw(new Ellipse2D.Float(3, 3, 18, 18));
+                g.draw(new Ellipse2D.Float(8, 3, 8, 18));
+                g.draw(new java.awt.geom.Line2D.Float(3.5f, 12, 20.5f, 12));
+                g.draw(new java.awt.geom.Line2D.Float(5, 7.5f, 19, 7.5f));
+                g.draw(new java.awt.geom.Line2D.Float(5, 16.5f, 19, 16.5f));
+                break;
+            }
             default:
+
                 break;
         }
 

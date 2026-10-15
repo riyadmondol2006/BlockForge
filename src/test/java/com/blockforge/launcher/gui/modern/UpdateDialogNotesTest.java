@@ -28,9 +28,15 @@ class UpdateDialogNotesTest {
             + "- Fix `crash` on launch\r\n\r\n\r\n\r\n<!-- hidden -->\r\n**Full Changelog**: https://x/compare";
         String text = UpdateDialog.plainNotes(markdown);
 
-        assertEquals("What's Changed\n\n• Faster start by @someone in #12\n• Fix crash on launch\n\n"
+        assertEquals("• Faster start by @someone in #12\n• Fix crash on launch\n\n"
             + "Full Changelog: https://x/compare", text);
         assertFalse(text.contains("\r"));
+    }
+
+    @Test
+    void keepsOtherFirstHeadings() {
+        assertEquals("Highlights\n• Faster", UpdateDialog.plainNotes("## Highlights\n* Faster"));
+        assertEquals("• Faster", UpdateDialog.plainNotes("\n# What's new\n* Faster"));
     }
 
     @Test

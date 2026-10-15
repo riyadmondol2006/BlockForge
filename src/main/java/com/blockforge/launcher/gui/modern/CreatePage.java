@@ -164,6 +164,8 @@ public class CreatePage extends Page {
     private JComponent versionCard() {
         JPanel filters = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
         filters.setOpaque(false);
+        // FlowLayout puts its gap before the first item too; pull the row back so it starts at the section's edge
+        filters.setBorder(BorderFactory.createEmptyBorder(0, -8, 0, 0));
         if (viewModel.showReleaseOption()) {
             filters.add(filter(GetText.tr("Releases"), viewModel.releaseSelected(), viewModel.releaseEnabled(),
                 viewModel::setReleaseSelected));
@@ -222,6 +224,7 @@ public class CreatePage extends Page {
     private JComponent loaderCard() {
         JPanel chips = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 6));
         chips.setOpaque(false);
+        chips.setBorder(BorderFactory.createEmptyBorder(0, -8, 0, 0));
 
         chips.add(loader(GetText.tr("None"), null, viewModel.loaderTypeNoneSelected(),
             viewModel.loaderTypeNoneEnabled(), null, true));
@@ -254,6 +257,7 @@ public class CreatePage extends Page {
         });
         JPanel versionRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 6));
         versionRow.setOpaque(false);
+        versionRow.setBorder(BorderFactory.createEmptyBorder(0, -8, 0, 0));
         versionRow.add(Lbl.dim(GetText.tr("Loader version")));
         versionRow.add(loaderVersions);
 
@@ -333,6 +337,7 @@ public class CreatePage extends Page {
     private JComponent actions() {
         JPanel row = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 0));
         row.setOpaque(false);
+        row.setBorder(BorderFactory.createEmptyBorder(0, -10, 0, 0));
         row.setAlignmentX(LEFT_ALIGNMENT);
         row.setMaximumSize(new Dimension(760, 44));
         createInstance.addActionListener(e -> viewModel.createInstance());
@@ -371,17 +376,12 @@ public class CreatePage extends Page {
             versionModel.clear();
             rows.forEach(versionModel::addElement);
             updating = false;
+            // the newest version may have been picked before the list was filled
+            showSelectedVersion(selectedVersionIndex);
         })));
         subscriptions.add(viewModel.selectedMinecraftVersionIndex().subscribe(index -> ui(() -> {
-            if (index >= 0 && index < versionModel.size()) {
-                updating = true;
-                versionList.setSelectedIndex(index);
-                if (!scrolledToSelection) {
-                    versionList.ensureIndexIsVisible(index);
-                    scrolledToSelection = true;
-                }
-                updating = false;
-            }
+            selectedVersionIndex = index;
+            showSelectedVersion(index);
         })));
 
         subscriptions.add(viewModel.loaderVersionsDropDownEnabled()
@@ -424,7 +424,25 @@ public class CreatePage extends Page {
             .subscribe(reason -> ui(() -> createInstance.setToolTipText(reason.orElse(null)))));
     }
 
+    private int selectedVersionIndex = -1;
+
+    /** Highlights the chosen version and, the first time, scrolls the list so it can be seen. */
+    private void showSelectedVersion(int index) {
+        if (index < 0 || index >= versionModel.size()) {
+            return;
+        }
+        updating = true;
+        versionList.setSelectedIndex(index);
+        updating = false;
+        if (!scrolledToSelection) {
+            scrolledToSelection = true;
+            // after layout, or the list has no size yet and there is nothing to scroll
+            SwingUtilities.invokeLater(() -> versionList.ensureIndexIsVisible(index));
+        }
+    }
+
     private static void ui(Runnable run) {
+
         if (SwingUtilities.isEventDispatchThread()) {
             run.run();
         } else {

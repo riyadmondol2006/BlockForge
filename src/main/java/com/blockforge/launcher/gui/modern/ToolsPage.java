@@ -58,7 +58,7 @@ public class ToolsPage extends Page {
         add(header, BorderLayout.NORTH);
 
         FitWidthPanel grid = new FitWidthPanel(18);
-        grid.add(tool(Icons.INFO, GetText.tr("Network checker"),
+        grid.add(tool(Icons.GLOBE, GetText.tr("Network checker"),
             GetText.tr("Tests your connection to the servers the launcher needs and shares the result so problems can be diagnosed."),
             GetText.tr("Run"), () -> new NetworkCheckerToolPanel(viewModel)));
         grid.add(tool(Icons.FOLDER, GetText.tr("Support bundle"),

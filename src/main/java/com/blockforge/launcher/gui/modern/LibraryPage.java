@@ -79,8 +79,7 @@ public class LibraryPage extends Page {
         titles.add(countLabel);
         titleRow.add(titles, BorderLayout.WEST);
 
-        JPanel actions = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 0));
-        actions.setOpaque(false);
+        JPanel actions = FitWidthPanel.rightButtons();
         Btn importButton = new Btn(GetText.tr("Import"), Btn.Kind.TONAL).icon(Icons.IMPORT);
         importButton.addActionListener(e -> ImportWizardDialog.open(App.launcherFrame));
         Btn newButton = new Btn(GetText.tr("New instance"), Btn.Kind.FILLED).icon(Icons.PLUS);
@@ -114,7 +113,10 @@ public class LibraryPage extends Page {
         gridWrap.setBorder(BorderFactory.createEmptyBorder(8, 36, 36, 36));
         gridWrap.add(grid, BorderLayout.NORTH);
         center.setOpaque(false);
-        center.add(FitWidthPanel.scroll(wrapScrollable(gridWrap)), "grid");
+        javax.swing.JScrollPane gridScroll = FitWidthPanel.scroll(wrapScrollable(gridWrap));
+        FitWidthPanel.alignHeader(header, gridScroll, 28, 36, 12);
+        center.add(gridScroll, "grid");
+
 
         JPanel none = new JPanel(new java.awt.GridBagLayout());
         none.setOpaque(false);
