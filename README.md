@@ -133,7 +133,7 @@ Please see the [TESTING.md](TESTING.md) file for information on how we write tes
 
 ## Prerequisites
 
-In order to build BlockForge you need Java 17 or newer to run Gradle (Gradle 8.12 can't run on Java 25, so use 17 or 21).
+In order to build BlockForge you need Java 17 or newer (17 to 25 all work) to run Gradle 9.
 The code itself compiles to Java 8 compatibility.
 
 Everything else that's needed for the project is provided by Gradle, and accessed using the Gradle wrapper which can be
