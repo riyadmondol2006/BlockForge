@@ -57,7 +57,12 @@ public class Btn extends JButton {
     }
 
     public static Btn iconButton(Icons icon, String tooltip) {
-        Btn b = new Btn("", Kind.TEXT);
+        return iconButton(icon, tooltip, Kind.TEXT);
+    }
+
+    /** A round button with only an icon, in the given style, for example tonal to sit next to a tonal button. */
+    public static Btn iconButton(Icons icon, String tooltip, Kind kind) {
+        Btn b = new Btn("", kind);
         b.icon = icon;
         b.iconOnly = true;
         b.height = 36;
@@ -179,7 +184,7 @@ public class Btn extends JButton {
         FontMetrics fm = g.getFontMetrics();
 
         if (iconOnly) {
-            float s = 20;
+            float s = h >= 36 ? 20 : 18;
             icon.paint(g, (w - s) / 2f, (h - s) / 2f, s, fg);
         } else {
             int textW = fm.stringWidth(getText());

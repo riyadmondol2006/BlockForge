@@ -53,7 +53,7 @@ import io.reactivex.rxjava3.disposables.Disposable;
 public class InstanceTile extends RoundPanel {
     private static final long serialVersionUID = 1L;
 
-    public static final int WIDTH = 272;
+    public static final int WIDTH = 280;
     public static final int HEIGHT = 268;
 
     /** shared so that update checks are cached between tiles */
@@ -98,19 +98,23 @@ public class InstanceTile extends RoundPanel {
 
         Btn play = new Btn(GetText.tr("Play"), Btn.Kind.FILLED).icon(Icons.PLAY).compact();
         play.addActionListener(e -> InstanceActions.play(instance, false, hasUpdate));
-        Btn more = Btn.iconButton(Icons.MORE, GetText.tr("More options"));
+        Btn more = Btn.iconButton(Icons.MORE, GetText.tr("More options")).compact();
         more.addActionListener(e -> InstanceActions.showMenuBelow(more, instance, hasUpdate, changed));
 
         Btn mods = new Btn(GetText.tr("Mods"), Btn.Kind.TONAL).icon(Icons.PUZZLE).compact();
         mods.setToolTipText(GetText.tr("Add mods, resource packs and shaders"));
         mods.addActionListener(e -> InstanceActions.openContent(instance, com.blockforge.launcher.content.ContentKind.MODS,
             changed));
+        Btn folder = Btn.iconButton(Icons.FOLDER, GetText.tr("Open folder"), Btn.Kind.TONAL).compact();
+        folder.addActionListener(e -> InstanceActions.openFolder(instance));
 
         JPanel left = new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 0, 0));
         left.setOpaque(false);
         left.add(play);
-        left.add(javax.swing.Box.createHorizontalStrut(8));
+        left.add(javax.swing.Box.createHorizontalStrut(6));
         left.add(mods);
+        left.add(javax.swing.Box.createHorizontalStrut(6));
+        left.add(folder);
 
         JPanel actions = new JPanel(new BorderLayout());
         actions.setOpaque(false);

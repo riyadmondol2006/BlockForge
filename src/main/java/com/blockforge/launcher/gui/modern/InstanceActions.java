@@ -20,21 +20,14 @@ import java.awt.Component;
 import java.util.ArrayList;
 import java.util.List;
 
-import javax.swing.JMenu;
-import javax.swing.JMenuItem;
-import javax.swing.JPopupMenu;
 
 import org.mini2Dx.gettext.GetText;
 
 import com.blockforge.launcher.App;
 import com.blockforge.launcher.builders.HTMLBuilder;
 import com.blockforge.launcher.content.ContentKind;
-import com.blockforge.launcher.data.BackupMode;
 import com.blockforge.launcher.data.Instance;
 import com.blockforge.launcher.data.minecraft.loaders.LoaderType;
-import com.blockforge.launcher.gui.dialogs.AddModsDialog;
-import com.blockforge.launcher.gui.dialogs.EditModsDialog;
-import com.blockforge.launcher.gui.dialogs.InstanceExportDialog;
 import com.blockforge.launcher.gui.dialogs.InstanceSettingsDialog;
 import com.blockforge.launcher.gui.dialogs.ProgressDialog;
 import com.blockforge.launcher.managers.ConfigManager;
@@ -144,126 +137,37 @@ public final class InstanceActions {
         OS.openFileExplorer(instance.getRoot());
     }
 
-    private static JMenuItem item(String label, Runnable action) {
-        JMenuItem item = new JMenuItem(label);
-        item.addActionListener(e -> action.run());
-        return item;
-    }
-
-    /**
-     * Builds the "more" menu for an instance. {@code changed} runs after something that alters the instance.
-     */
-    public static JPopupMenu menu(Instance instance, boolean hasUpdate, Runnable changed) {
-        JPopupMenu menu = new JPopupMenu();
-
-        JMenuItem content = item(GetText.tr("Mods, resource packs and shaders"),
-            () -> openContent(instance, ContentKind.MODS, changed));
-        content.setFont(content.getFont().deriveFont(java.awt.Font.BOLD));
-        menu.add(content);
-        menu.add(item(GetText.tr("Settings"), () -> openSettings(instance)));
-        menu.add(item(GetText.tr("Open folder"), () -> openFolder(instance)));
-        menu.add(item(GetText.tr("Play offline with another name"), () -> play(instance, true, false)));
-
-        menu.addSeparator();
-        if (instance.isUpdatable()) {
-            JMenuItem update = item(GetText.tr("Update"), instance::update);
-            update.setEnabled(hasUpdate && instance.launcher.isPlayable);
-            menu.add(update);
-            menu.add(item(GetText.tr("Reinstall"), instance::startReinstall));
-        }
-        menu.add(item(GetText.tr("Clone"), instance::startClone));
-        if (instance.canBeExported()) {
-            menu.add(item(GetText.tr("Export"), () -> new InstanceExportDialog(instance).setVisible(true)));
-        }
-        JMenu loader = loaderMenu(instance, changed);
-        if (loader.getItemCount() > 0) {
-            menu.add(loader);
-        }
-        menu.add(backupMenu(instance));
-
-        menu.addSeparator();
-        menu.add(item(GetText.tr("Rename"), () -> {
-            instance.startRename();
-            changed.run();
-        }));
-        if (instance.canChangeDescription()) {
-            menu.add(item(GetText.tr("Change description"), () -> {
-                instance.startChangeDescription();
-                changed.run();
-            }));
-        }
-        menu.add(item(GetText.tr("Change image"), () -> {
-            instance.startChangeImage();
-            changed.run();
-        }));
-        menu.add(moreMenu(instance, changed));
-
-        menu.addSeparator();
-        JMenuItem delete = item(GetText.tr("Delete"), () -> delete(instance));
-        delete.setForeground(Palette.danger());
-        menu.add(delete);
-        return menu;
-    }
-
-    /** The less common things: the classic mod windows, a support bundle and the pack's website. */
-    private static JMenu moreMenu(Instance instance, Runnable changed) {
-        JMenu more = new JMenu(GetText.tr("More"));
-
-        // the classic windows still cover CurseForge, data packs, worlds and jar mods
-        boolean modsViaPlatforms = instance.launcher.enableCurseForgeIntegration
+    /** Whether the classic "Add mods" window has anything to offer for this instance. */
+    static boolean modsViaPlatforms(Instance instance) {
+        return instance.launcher.enableCurseForgeIntegration
             && (ConfigManager.getConfigItem("platforms.curseforge.modsEnabled", true)
                 || (ConfigManager.getConfigItem("platforms.modrinth.modsEnabled", true)
                     && instance.launcher.loaderVersion != null));
-        if (modsViaPlatforms) {
-            more.add(item(GetText.tr("Add mods (CurseForge, data packs, worlds)"), () -> {
-                new AddModsDialog(instance).setVisible(true);
-                changed.run();
-            }));
-        }
-        if (instance.launcher.enableEditingMods) {
-            more.add(item(GetText.tr("Edit mods (classic)"), () -> {
-                new EditModsDialog(instance).setVisible(true);
-                changed.run();
-            }));
-        }
-        if (more.getItemCount() > 0) {
-            more.addSeparator();
-        }
-
-        more.add(item(GetText.tr("Create support bundle"), () -> SupportActions.createBundle(instance)));
-        if (instance.hasWebsite()) {
-            more.add(item(GetText.tr("Open website"), () -> OS.openWebBrowser(instance.getWebsiteUrl())));
-        }
-        return more;
     }
 
-    /**
-     * Backups of the whole instance, and snapshots of the pack's files (also taken before updates) that can be put
-     * back.
-     */
-    private static JMenu backupMenu(Instance instance) {
-        JMenu menu = new JMenu(GetText.tr("Backups and snapshots"));
-        menu.add(item(GetText.tr("Back up worlds and settings"), () -> instance.backup(BackupMode.NORMAL)));
-        menu.add(item(GetText.tr("Back up worlds, settings and mods"),
-            () -> instance.backup(BackupMode.NORMAL_PLUS_MODS)));
-        menu.add(item(GetText.tr("Back up everything"), () -> instance.backup(BackupMode.FULL)));
-        menu.addSeparator();
-        menu.add(item(GetText.tr("Save a snapshot now"), () -> saveSnapshot(instance)));
-
-        List<InstanceSnapshots.Snapshot> recent = InstanceSnapshots.latest(SnapshotService.folderFor(instance), 6);
-
-        java.text.DateFormat format = java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.MEDIUM,
-            java.text.DateFormat.SHORT);
-        for (InstanceSnapshots.Snapshot snapshot : recent) {
-            String text = GetText.tr("Restore") + ": " + snapshot.label() + " ("
-                + format.format(new java.util.Date(snapshot.createdAt)) + ")";
-            menu.add(item(text, () -> restoreSnapshot(instance, snapshot)));
+    /** The mod loaders that can be added to an instance that doesn't have one. */
+    static List<LoaderType> addableLoaders(Instance instance) {
+        List<LoaderType> addable = new ArrayList<>();
+        if (enabled("fabric", true, instance)) {
+            addable.add(LoaderType.FABRIC);
         }
-        return menu;
+        if (enabled("forge", true, instance)) {
+            addable.add(LoaderType.FORGE);
+        }
+        if (enabled("neoforge", true, instance)) {
+            addable.add(LoaderType.NEOFORGE);
+        }
+        if (enabled("quilt", false, instance)) {
+            addable.add(LoaderType.QUILT);
+        }
+        if (enabled("legacyfabric", true, instance)) {
+            addable.add(LoaderType.LEGACY_FABRIC);
+        }
+        return addable;
     }
 
     /** Zipping the mods and configs can take a while for a big pack, so it happens behind a progress dialog. */
-    private static void saveSnapshot(Instance instance) {
+    static void saveSnapshot(Instance instance) {
         final ProgressDialog<Boolean> dialog = new ProgressDialog<>(GetText.tr("Saving Snapshot"), 0,
             GetText.tr("Saving Snapshot. Please wait..."), null, App.launcher.getParent());
         dialog.addThread(new Thread(() -> {
@@ -279,7 +183,7 @@ public final class InstanceActions {
         }
     }
 
-    private static void restoreSnapshot(Instance instance, InstanceSnapshots.Snapshot snapshot) {
+    static void restoreSnapshot(Instance instance, InstanceSnapshots.Snapshot snapshot) {
         int ret = DialogManager.yesNoDialog(false).setTitle(GetText.tr("Restore Snapshot"))
             .setContent(GetText.tr("Put the mods and configs of \"{0}\" back to how they were? Your worlds are not changed, and the current state is saved first so you can undo this.",
                 instance.launcher.name))
@@ -309,47 +213,6 @@ public final class InstanceActions {
         }
     }
 
-    private static JMenu loaderMenu(Instance instance, Runnable changed) {
-        JMenu loader = new JMenu(GetText.tr("Mod loader"));
-
-        if (instance.launcher.loaderVersion == null) {
-            List<LoaderType> addable = new ArrayList<>();
-            if (enabled("fabric", true, instance)) {
-                addable.add(LoaderType.FABRIC);
-            }
-            if (enabled("forge", true, instance)) {
-                addable.add(LoaderType.FORGE);
-            }
-            if (enabled("neoforge", true, instance)) {
-                addable.add(LoaderType.NEOFORGE);
-            }
-            if (enabled("quilt", false, instance)) {
-                addable.add(LoaderType.QUILT);
-            }
-            if (enabled("legacyfabric", true, instance)) {
-                addable.add(LoaderType.LEGACY_FABRIC);
-            }
-
-            for (LoaderType type : addable) {
-                loader.add(item(GetText.tr("Add {0}", type.toString()), () -> {
-                    instance.addLoader(type);
-                    changed.run();
-                }));
-            }
-        } else {
-            loader.add(item(GetText.tr("Change {0} version", instance.launcher.loaderVersion.type), () -> {
-                instance.changeLoaderVersion();
-                changed.run();
-            }));
-            loader.add(item(GetText.tr("Remove {0}", instance.launcher.loaderVersion.type), () -> {
-                instance.removeLoader();
-                changed.run();
-            }));
-        }
-
-        return loader;
-    }
-
     private static boolean enabled(String key, boolean defaultValue, Instance instance) {
         return ConfigManager.getConfigItem("loaders." + key + ".enabled", defaultValue)
             && !ConfigManager.getConfigItem("loaders." + key + ".disabledMinecraftVersions", new ArrayList<String>())
@@ -359,11 +222,11 @@ public final class InstanceActions {
     /** Shows the instance menu at a point, like where the user right clicked. */
     public static void showMenu(Component invoker, int x, int y, Instance instance, boolean hasUpdate,
         Runnable changed) {
-        Popups.at(menu(instance, hasUpdate, changed), invoker, x, y);
+        InstanceMenu.showAt(invoker, x, y, instance, hasUpdate, changed);
     }
 
-    /** Shows the instance menu under its "more" button, or above it near the bottom of the window. */
+    /** Drops the instance menu down from its "more" button, or opens it above near the bottom of the window. */
     public static void showMenuBelow(Component button, Instance instance, boolean hasUpdate, Runnable changed) {
-        Popups.below(menu(instance, hasUpdate, changed), button);
+        InstanceMenu.showBelow(button, instance, hasUpdate, changed);
     }
 }

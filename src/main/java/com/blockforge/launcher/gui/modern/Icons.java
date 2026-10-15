@@ -33,7 +33,8 @@ import javax.swing.Icon;
  */
 public enum Icons {
     HOME, LIBRARY, EXPLORE, PERSON, SETTINGS, PLAY, PLUS, MORE, FOLDER, TRASH, SEARCH, CLOSE, DOWNLOAD, TERMINAL,
-    SERVER, CUBE, INFO, REFRESH, CHECK, EXTERNAL, EDIT, IMPORT, WARNING, PUZZLE, IMAGE, SPARKLE, BOLT, GLOBE;
+    SERVER, CUBE, INFO, REFRESH, CHECK, EXTERNAL, EDIT, IMPORT, WARNING, PUZZLE, IMAGE, SPARKLE, BOLT, GLOBE,
+    COPY, ARCHIVE, NOTE;
 
     /**
      * Paints this icon into the square at (x, y) with the given size.
@@ -370,6 +371,47 @@ public enum Icons {
                 g.draw(new java.awt.geom.Line2D.Float(3.5f, 12, 20.5f, 12));
                 g.draw(new java.awt.geom.Line2D.Float(5, 7.5f, 19, 7.5f));
                 g.draw(new java.awt.geom.Line2D.Float(5, 16.5f, 19, 16.5f));
+                break;
+            }
+            case COPY:
+                g.draw(new RoundRectangle2D.Float(8.5f, 8.5f, 12, 12, 3, 3));
+                Path2D back = new Path2D.Float();
+                back.moveTo(15.5, 5.5);
+                back.lineTo(15.5, 5);
+                back.quadTo(15.5, 3.5, 14, 3.5);
+                back.lineTo(5, 3.5);
+                back.quadTo(3.5, 3.5, 3.5, 5);
+                back.lineTo(3.5, 14);
+                back.quadTo(3.5, 15.5, 5, 15.5);
+                back.lineTo(5.5, 15.5);
+                g.draw(back);
+                break;
+            case ARCHIVE:
+                g.draw(new RoundRectangle2D.Float(3, 4, 18, 5, 2, 2));
+                Path2D bin = new Path2D.Float();
+                bin.moveTo(4.5, 9);
+                bin.lineTo(4.5, 18.5);
+                bin.quadTo(4.5, 20, 6, 20);
+                bin.lineTo(18, 20);
+                bin.quadTo(19.5, 20, 19.5, 18.5);
+                bin.lineTo(19.5, 9);
+                g.draw(bin);
+                g.draw(new Line2D.Float(10, 13, 14, 13));
+                break;
+            case NOTE: {
+                Path2D page = new Path2D.Float();
+                page.moveTo(14, 3.5);
+                page.lineTo(6.5, 3.5);
+                page.quadTo(5, 3.5, 5, 5);
+                page.lineTo(5, 19);
+                page.quadTo(5, 20.5, 6.5, 20.5);
+                page.lineTo(17.5, 20.5);
+                page.quadTo(19, 20.5, 19, 19);
+                page.lineTo(19, 8.5);
+                page.closePath();
+                g.draw(page);
+                g.draw(new Line2D.Float(8.5f, 12, 15.5f, 12));
+                g.draw(new Line2D.Float(8.5f, 16, 13.5f, 16));
                 break;
             }
             default:
