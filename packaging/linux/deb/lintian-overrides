@@ -1,0 +1,2 @@
+# the package is built and published on GitHub, not uploaded to Debian, so there is no bug to close
+blockforge: initial-upload-closes-no-bugs

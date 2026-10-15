@@ -1,40 +1,24 @@
-# Getting support for ATLauncher
+# Getting support
 
-Hello there :wave:.
+## BlockForge itself
 
-Thanks for taking a look at this file.
+Something doesn't work, or you want a feature?
 
-If you've come to our GitHub looking for support then you've come to the wrong place :disappointed:.
+1. Look through the [open and closed issues](https://github.com/riyadmondol2006/BlockForge/issues) first.
+2. If it isn't there, [open a new issue](https://github.com/riyadmondol2006/BlockForge/issues/new/choose) and fill in
+   the form. A **support bundle** makes it much easier to help: open **Tools > Support bundle**, which writes a ZIP with
+   the launcher log and the last played instance's logs, with names, tokens and IDs removed. Attach it to the issue.
 
-## Launcher issues
+Questions that aren't bugs are welcome in
+[Discussions](https://github.com/riyadmondol2006/BlockForge/discussions).
 
-If you're looking for support for:
+## Modpacks and mods
 
-* Launcher install issues
-* Pack install issues
+BlockForge only installs modpacks and mods; it doesn't make them. Each one is made by a person or team, and they are the
+ones who can fix a bug in it or answer questions about it. Open the pack's page (the **Open website** button on an
+instance) to find where they take questions.
 
-Then please visit our [Discord server](https://atl.pw/discord) and post in one of the support channels, where the
-community and contributors to ATLauncher will be able to help you resolve your issue.
+## ATLauncher
 
-If we find that it's an issue with the launcher code itself, then we will raise issues (or ask you to raise them) in the
-correct place once triaged.
-
-## Pack/Mod issues
-
-If you're looking for support for:
-
-* Pack feature request
-* Pack bug reports
-* Mod issues
-
-Then please note that ATLauncher only hosts the modpacks, we do not create, maintain or even have the power to fix or
-make the changes you may be looking for/having.
-
-Each modpack is developed by a person (or team) and they're responsible for providing support. Your first step should be
-to reach out to the person (or team) who created the modpack.
-
-You can generally find contact information on the launcher or website information pages for the pack. Use the `Get Help`
-button on the instance within ATLauncher to find places to get help.
-
-If you fail to find support then you can visit our [Discord server](https://atl.pw/discord) and post in one of the
-support channels.
+BlockForge started as a fork of [ATLauncher](https://github.com/ATLauncher/ATLauncher) and is a separate project. Please
+don't ask ATLauncher's team for help with BlockForge.

@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- https://www.freedesktop.org/software/appstream/docs/chap-Metadata.html
+     The <release> line is rewritten with the real version and date by packaging/linux/build.sh -->
+<component type="desktop-application">
+  <id>io.github.riyadmondol2006.BlockForge</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <name>BlockForge</name>
+  <summary>A fast, modern Minecraft launcher</summary>
+  <developer id="io.github.riyadmondol2006">
+    <name>BlockForge contributors</name>
+  </developer>
+  <description>
+    <p>
+      BlockForge installs and starts Minecraft: Java Edition. It keeps every game in its own instance, installs mods
+      and modpacks from Modrinth, CurseForge, FTB, ATLauncher and Technic, and starts quickly on modest computers.
+    </p>
+    <ul>
+      <li>Vanilla, Fabric, Quilt, Forge and NeoForge instances, each with its own mods, settings and Java</li>
+      <li>Search and install mods, resource packs and shaders, with the mods they need</li>
+      <li>Import Modrinth (.mrpack), CurseForge and Prism / MultiMC modpacks and instances from other launchers, and export your own</li>
+      <li>Several accounts, Microsoft sign-in, and offline play without an account</li>
+      <li>Backups, a game console and the Java versions Minecraft needs, downloaded for you</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">blockforge.desktop</launchable>
+  <icon type="stock">blockforge</icon>
+  <categories>
+    <category>Game</category>
+  </categories>
+  <keywords>
+    <keyword>Minecraft</keyword>
+    <keyword>launcher</keyword>
+    <keyword>mods</keyword>
+    <keyword>modpacks</keyword>
+    <keyword>Modrinth</keyword>
+  </keywords>
+  <url type="homepage">https://github.com/riyadmondol2006/BlockForge</url>
+  <url type="bugtracker">https://github.com/riyadmondol2006/BlockForge/issues</url>
+  <url type="vcs-browser">https://github.com/riyadmondol2006/BlockForge</url>
+  <provides>
+    <binary>blockforge</binary>
+    <mediatype>application/x-modrinth-modpack+zip</mediatype>
+  </provides>
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </supports>
+  <requires>
+    <display_length compare="ge">860</display_length>
+  </requires>
+  <content_rating type="oars-1.1"/>
+  <branding>
+    <color type="primary" scheme_preference="light">#36B964</color>
+    <color type="primary" scheme_preference="dark">#0E5A2B</color>
+  </branding>
+  <releases>
+    <release version="4.0.0" date="2026-10-16"/>
+  </releases>
+</component>

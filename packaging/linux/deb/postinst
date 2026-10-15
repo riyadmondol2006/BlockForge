@@ -1,0 +1,32 @@
+#!/bin/sh
+# Runs after the files are unpacked. Everything here is a courtesy: the program is installed even when a helper
+# program is missing (minimal systems, containers), so no step may fail the installation.
+set -e
+
+case "$1" in
+    configure)
+        # The Java edition (3.4.x) lived in /opt/blockforge and added a menu entry of its own. Its files are gone by
+        # now (this package replaces it); this removes what the old program wrote next to them.
+        rm -f /usr/share/applications/blockforge-BlockForge.desktop
+        if [ -d /opt/blockforge/bin ] || [ -d /opt/blockforge/lib ]; then
+            rm -rf /opt/blockforge || true
+        fi
+
+        if command -v update-desktop-database > /dev/null 2>&1; then
+            update-desktop-database -q /usr/share/applications || true
+        fi
+        if command -v update-mime-database > /dev/null 2>&1; then
+            update-mime-database /usr/share/mime > /dev/null 2>&1 || true
+        fi
+        if command -v gtk-update-icon-cache > /dev/null 2>&1 && [ -d /usr/share/icons/hicolor ]; then
+            gtk-update-icon-cache -q -t -f /usr/share/icons/hicolor || true
+        fi
+        ;;
+    abort-upgrade | abort-remove | abort-deconfigure) ;;
+    *)
+        echo "postinst called with unknown argument '$1'" >&2
+        exit 1
+        ;;
+esac
+
+exit 0

@@ -1,0 +1,195 @@
+{
+  "curseForgeProject": {
+    "id": 263420,
+    "name": "Xaero's Minimap",
+    "authors": [
+      {
+        "id": 12362980,
+        "name": "xaero96",
+        "url": "https://www.curseforge.com/members/xaero96"
+      }
+    ],
+    "gameId": 432,
+    "summary": "Displays the nearby world terrain, players, mobs, entities in the corner of your screen. Lets you create waypoints which help you find the locations you've marked.",
+    "categories": [
+      {
+        "name": "Map and Information",
+        "slug": "map-information",
+        "url": "https://www.curseforge.com/minecraft/mc-mods/map-information",
+        "dateModified": "2014-05-08T17:42:23.74Z",
+        "gameId": 432,
+        "isClass": false,
+        "id": 423,
+        "iconUrl": "https://media.forgecdn.net/avatars/6/38/635351497437388438.png",
+        "parentCategoryId": 6,
+        "classId": 6
+      },
+      {
+        "name": "Player Transport",
+        "slug": "technology-player-transport",
+        "url": "https://www.curseforge.com/minecraft/mc-mods/technology/technology-player-transport",
+        "dateModified": "2014-05-08T17:38:58.357Z",
+        "gameId": 432,
+        "isClass": false,
+        "id": 414,
+        "iconUrl": "https://media.forgecdn.net/avatars/6/29/635351495383551178.png",
+        "parentCategoryId": 412,
+        "classId": 6
+      }
+    ],
+    "status": 4,
+    "primaryCategoryId": 423,
+    "classId": 6,
+    "slug": "xaeros-minimap",
+    "isFeatured": false,
+    "dateModified": "2026-09-15T18:24:40.003Z",
+    "dateCreated": "2017-03-22T16:16:57.37Z",
+    "dateReleased": "2026-09-15T09:17:37.28Z",
+    "links": {
+      "websiteUrl": "https://www.curseforge.com/minecraft/mc-mods/xaeros-minimap",
+      "wikiUrl": "",
+      "issuesUrl": "https://legacy.curseforge.com/minecraft/mc-mods/xaeros-minimap/issues"
+    },
+    "logo": {
+      "id": 92854,
+      "description": "",
+      "thumbnailUrl": "https://media.forgecdn.net/avatars/thumbnails/92/854/256/256/636258666554688823.png",
+      "title": "636258666554688823.png",
+      "url": "https://media.forgecdn.net/avatars/92/854/636258666554688823.png",
+      "modId": 263420
+    },
+    "allowModDistribution": true,
+    "screenshots": [],
+    "mainFileId": 8885210
+  },
+  "curseForgeFile": {
+    "id": 8885210,
+    "gameId": 432,
+    "isAvailable": true,
+    "displayName": "xaerominimap-fabric-26.3-26.5.1.jar",
+    "fileName": "xaerominimap-fabric-26.3-26.5.1.jar",
+    "releaseType": 1,
+    "fileStatus": 4,
+    "fileDate": "2026-09-15T09:17:37.28Z",
+    "fileLength": 2229181,
+    "dependencies": [
+      {
+        "fileId": 0,
+        "modId": 636608,
+        "relationType": 2
+      },
+      {
+        "fileId": 0,
+        "modId": 317780,
+        "relationType": 2
+      },
+      {
+        "fileId": 0,
+        "modId": 306612,
+        "relationType": 3
+      }
+    ],
+    "alternateFileId": 0,
+    "modules": [
+      {
+        "fingerprint": 2975122905,
+        "name": "META-INF"
+      },
+      {
+        "fingerprint": 783622179,
+        "name": "xaero"
+      },
+      {
+        "fingerprint": 254309856,
+        "name": "fabric.mod.json"
+      },
+      {
+        "fingerprint": 1956780562,
+        "name": "pack.mcmeta"
+      },
+      {
+        "fingerprint": 995706964,
+        "name": "xaerohud.fabric.mixins.json"
+      },
+      {
+        "fingerprint": 2958153077,
+        "name": "xaerohud.mixins.json"
+      },
+      {
+        "fingerprint": 4209588412,
+        "name": "xaerominimap.fabric.mixins.json"
+      },
+      {
+        "fingerprint": 4209588412,
+        "name": "xaerominimap.mixins.json"
+      },
+      {
+        "fingerprint": 1490048830,
+        "name": "assets"
+      },
+      {
+        "fingerprint": 2362711594,
+        "name": "LICENSE_xaerohud"
+      }
+    ],
+    "isServerPack": false,
+    "hashes": [
+      {
+        "value": "cfce17f4a407bdeef6df03e193473bc8090e1b17",
+        "algo": 1
+      },
+      {
+        "value": "2e3ac64efe345af7e4cada78ccd85079",
+        "algo": 2
+      }
+    ],
+    "sortableGameVersions": [
+      {
+        "gameVersionPadded": "0",
+        "gameVersion": "",
+        "gameVersionReleaseDate": "2022-12-08T00:00:00Z",
+        "gameVersionName": "Client"
+      },
+      {
+        "gameVersionPadded": "0",
+        "gameVersion": "",
+        "gameVersionReleaseDate": "2022-09-01T00:00:00Z",
+        "gameVersionName": "Fabric"
+      },
+      {
+        "gameVersionPadded": "0",
+        "gameVersion": "",
+        "gameVersionReleaseDate": "2022-12-08T00:00:00Z",
+        "gameVersionName": "Server"
+      },
+      {
+        "gameVersionPadded": "0",
+        "gameVersion": "",
+        "gameVersionReleaseDate": "2022-05-26T00:00:00Z",
+        "gameVersionName": "Quilt"
+      },
+      {
+        "gameVersionPadded": "0000000026.0000000003",
+        "gameVersion": "26.3",
+        "gameVersionReleaseDate": "2026-08-09T00:00:00Z",
+        "gameVersionName": "26.3-snapshot"
+      },
+      {
+        "gameVersionPadded": "0000000026.0000000003",
+        "gameVersion": "26.3",
+        "gameVersionReleaseDate": "2026-09-15T15:46:48.187Z",
+        "gameVersionName": "26.3"
+      }
+    ],
+    "gameVersions": [
+      "Client",
+      "Fabric",
+      "Server",
+      "Quilt",
+      "26.3-snapshot",
+      "26.3"
+    ],
+    "fileFingerprint": 3100092788,
+    "modId": 263420
+  }
+}

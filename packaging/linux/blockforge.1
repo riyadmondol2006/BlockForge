@@ -1,0 +1,54 @@
+.TH BLOCKFORGE 1 "" "BlockForge" "User Commands"
+.SH NAME
+blockforge \- a fast, modern Minecraft launcher
+.SH SYNOPSIS
+.B blockforge
+[\fB\-\-debug\fR] [\fB\-\-debug\-level\fR \fIN\fR] [\fICOMMAND\fR [\fIARGS\fR]]
+.SH DESCRIPTION
+.B blockforge
+installs and starts Minecraft: Java Edition. Without a command it opens the launcher window.
+.SH COMMANDS
+.TP
+.B gui
+Open the launcher window (the default).
+.TP
+.B list
+List instances.
+.TP
+.B create \fINAME\fR
+Create an instance.
+.TP
+.B launch \fIINSTANCE\fR
+Start an instance.
+.TP
+.B account
+Show accounts, add an offline one, or sign in with Microsoft.
+.TP
+.B search \fIQUERY\fR
+Search Modrinth.
+.TP
+.B import \fISOURCE\fR
+Create an instance from a Modrinth modpack (a .mrpack file or a project id).
+.TP
+.B java
+Show the Javas found on this computer.
+.TP
+.B paths
+Show where the data lives.
+.PP
+Run
+.B blockforge \-\-help
+or
+.B blockforge \fICOMMAND\fR \-\-help
+for all commands and options.
+.SH ENVIRONMENT
+.TP
+.B BLOCKFORGE_DIR
+Keep the launcher's files in this folder instead of
+.IR ~/.local/share/blockforge .
+.SH FILES
+.TP
+.I ~/.local/share/blockforge
+Instances, accounts, settings and downloaded game files.
+.SH SEE ALSO
+https://github.com/riyadmondol2006/BlockForge

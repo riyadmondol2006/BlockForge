@@ -1,0 +1,180 @@
+//! The console window: everything the launcher and the games print, with the Java edition's buttons
+//! (Clear, Copy Log, Upload Log, Kill Minecraft).
+
+use egui::{RichText, ScrollArea};
+
+use super::theme::*;
+use super::widgets::*;
+use super::{App, Msg};
+use crate::config::{Pos, Size};
+use crate::launch::{Level, LogLine};
+
+const PASTE_URL: &str = "https://paste.atlauncher.com/api/create-v2";
+const MAX_CONSOLE_LINES: usize = 8000;
+
+impl App {
+    /// Add launcher output to the console (and keep it from growing without end).
+    pub fn console_push(&mut self, level: Level, text: &str) {
+        for part in text.split('\n') {
+            self.console_lines.push(LogLine { level, text: part.trim_end_matches('\r').to_string() });
+        }
+        if self.console_lines.len() > MAX_CONSOLE_LINES {
+            self.console_lines.drain(..MAX_CONSOLE_LINES / 10);
+        }
+    }
+
+    pub(super) fn console_ui(&mut self, ctx: &egui::Context) {
+        if !self.settings.enable_console {
+            return;
+        }
+        let size = self
+            .settings
+            .console_size
+            .filter(|_| self.settings.remember_window_size_position)
+            .unwrap_or(Size { width: 650, height: 400 });
+        let mut builder = egui::ViewportBuilder::default()
+            .with_title(format!("{} Console", crate::NAME))
+            .with_inner_size([size.width as f32, size.height as f32])
+            .with_min_inner_size([400.0, 200.0]);
+        if let Some(p) = self.settings.console_position.filter(|_| self.settings.remember_window_size_position) {
+            builder = builder.with_position([p.x as f32, p.y as f32]);
+        }
+        let mut action = ConsoleAction::None;
+        let playing = self.games.values().any(|g| g.active());
+        let uploading = self.console_uploading;
+        let kill_confirm = self.console_confirm_kill;
+        let lines: Vec<(Level, String)> = self.console_lines.iter().map(|l| (l.level, l.text.clone())).collect();
+        let mut closed = false;
+        let mut geometry: Option<(Size, Pos)> = None;
+        ctx.show_viewport_immediate(egui::ViewportId::from_hash_of("blockforge-console"), builder, |ui, _class| {
+            let ctx = ui.ctx().clone();
+            if ctx.input(|i| i.viewport().close_requested()) {
+                closed = true;
+            }
+            ctx.input(|i| {
+                let v = i.viewport();
+                if let (Some(inner), Some(outer)) = (v.inner_rect, v.outer_rect) {
+                    geometry = Some((
+                        Size { width: inner.width() as i32, height: inner.height() as i32 },
+                        Pos { x: outer.min.x as i32, y: outer.min.y as i32 },
+                    ));
+                }
+            });
+            egui::Panel::bottom("console-bar")
+                .frame(egui::Frame::new().fill(c_surface()).inner_margin(egui::Margin::same(10)))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        if secondary(ui, "Clear").clicked() {
+                            action = ConsoleAction::Clear;
+                        }
+                        if secondary(ui, "Copy Log").clicked() {
+                            action = ConsoleAction::Copy;
+                        }
+                        if uploading {
+                            ui.spinner();
+                            muted(ui, "Uploading Logs");
+                        } else if secondary(ui, "Upload Log").clicked() {
+                            action = ConsoleAction::Upload;
+                        }
+                        if playing {
+                            if kill_confirm {
+                                ui.label(
+                                    RichText::new(
+                                        "Kill the Minecraft process? Doing so can cause corruption of your saves.",
+                                    )
+                                    .color(c_warn()),
+                                );
+                                if danger(ui, "Kill Minecraft").clicked() {
+                                    action = ConsoleAction::Kill;
+                                }
+                                if secondary(ui, "Cancel").clicked() {
+                                    action = ConsoleAction::CancelKill;
+                                }
+                            } else if danger(ui, "Kill Minecraft").clicked() {
+                                action = ConsoleAction::AskKill;
+                            }
+                        }
+                    });
+                });
+            egui::CentralPanel::default()
+                .frame(egui::Frame::new().fill(c_field()).inner_margin(egui::Margin::same(8)))
+                .show(ui, |ui| {
+                    ScrollArea::both().auto_shrink(false).stick_to_bottom(true).show_rows(
+                        ui,
+                        17.0,
+                        lines.len(),
+                        |ui, range| {
+                            for (level, text) in &lines[range] {
+                                let color = match level {
+                                    Level::Error => c_danger(),
+                                    Level::Warn => c_warn(),
+                                    Level::Debug => c_muted(),
+                                    Level::Info => c_text(),
+                                };
+                                ui.add(
+                                    egui::Label::new(RichText::new(text.as_str()).monospace().color(color)).extend(),
+                                );
+                            }
+                        },
+                    );
+                });
+        });
+        if closed {
+            self.settings.enable_console = false;
+            self.save_settings();
+        }
+        if let (Some((size, pos)), true) = (geometry, self.settings.remember_window_size_position) {
+            if self.settings.console_size != Some(size) || self.settings.console_position != Some(pos) {
+                self.settings.console_size = Some(size);
+                self.settings.console_position = Some(pos);
+                self.save_settings();
+            }
+        }
+        match action {
+            ConsoleAction::None => {}
+            ConsoleAction::Clear => self.console_lines.clear(),
+            ConsoleAction::Copy => {
+                let text: Vec<&str> = self.console_lines.iter().map(|l| l.text.as_str()).collect();
+                ctx.copy_text(text.join("\n"));
+                self.toast("Copied Log to clipboard");
+            }
+            ConsoleAction::Upload => {
+                self.console_uploading = true;
+                let text: Vec<String> = self.console_lines.iter().map(|l| l.text.clone()).collect();
+                let n = self.notifier();
+                self.rt.spawn(async move {
+                    let body = serde_json::json!({"title": format!("{} - Log", crate::NAME), "text": text.join("\n")});
+                    let r = async {
+                        let r = crate::http::client().post(PASTE_URL).json(&body).send().await?;
+                        anyhow::ensure!(r.status().is_success(), "the paste service answered {}", r.status());
+                        let t = r.text().await?;
+                        Ok::<String, anyhow::Error>(t.trim().trim_matches('"').to_string())
+                    }
+                    .await
+                    .map_err(|e| format!("{e:#}"));
+                    n.send(Msg::LogUploaded(r));
+                });
+            }
+            ConsoleAction::AskKill => self.console_confirm_kill = true,
+            ConsoleAction::CancelKill => self.console_confirm_kill = false,
+            ConsoleAction::Kill => {
+                self.console_confirm_kill = false;
+                let folders: Vec<String> =
+                    self.games.iter().filter(|(_, g)| g.active()).map(|(f, _)| f.clone()).collect();
+                for f in folders {
+                    self.stop(&f);
+                }
+            }
+        }
+    }
+}
+
+enum ConsoleAction {
+    None,
+    Clear,
+    Copy,
+    Upload,
+    AskKill,
+    CancelKill,
+    Kill,
+}

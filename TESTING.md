@@ -1,49 +1,45 @@
 # Testing
-While we haven't worked too much on testing in the past, we'd like to change that. Below is a simple set of rules we try
-to follow when making tests.
 
-## Directory structure
-When creating tests for a class it should be placed in the '/src/test/java/' folder within it's correct package name
-structure.
+## Automatic tests
 
-For instance a test for 'com.blockforge.launcher.SomeClass' would go in '/src/test/java/com/blockforge/launcher/'.
-
-## Filenames of tests
-Tests should be named after their class name with 'Test' appended to it in the correct directory structure explained
-above.
-
-For instance a test for 'SomeClass' would be 'SomeClassTest'.
-
-## Writing test classes
-When writing a test class you're free to do as you please.
-
-When testing a classes methods we tend to stick to a method name of 'testMethodName' for testing a method in the class
-of 'methodName'.
-
-When testing something that isn't a classes method (such as an overall test of the class) we use helpful method names
-which explain what the test does. For example 'testsThatADoesBWhenCDoesD'.
-
-The best example for writing up test classes is to take a look at something existing and going from there.
-
-## Testing with files
-If you need to test with files, then you can add the below to the top of your test class to get access to a temporary
-folder to work in.
-
-```java
-@Rule
-public TemporaryFolder temporaryFolder = new TemporaryFolder();
-
-private Path testStorage;
-
-@Before
-public void setUp() throws Exception {
-    testStorage = temporaryFolder.newFolder("ATLauncherTests").toPath();
-}
+```sh
+cargo test --release                       # unit tests, no network, about 5 seconds
+cargo test --release -- --ignored          # also the checks that talk to real services (Mojang, Modrinth, CurseForge, ...)
+cargo clippy --release --all-targets -- -D warnings
+cargo fmt --check
 ```
 
-## Is this necessary?
-While this isn't necessary, and we won't deny pull requests simply because it's not tested, we generally appreciate any
-large changes or any addition of new classes to have tests in order to help us know that everything is running fine.
+CI runs the first, third and fourth on every push, then builds and smoke-tests every package: the deb on Ubuntu, the rpm
+on a clean Fedora, the AppImage, the Windows installer (silent install, shortcut and uninstall entry present,
+`blockforge.exe --version` runs, uninstall) and the macOS disk image (mount, bundle layout, `--version`).
 
-If you're not good at writing tests or don't know how (hey we're like that too) then feel free to just not do it,
-someone might do it for you at some point.
+## Trying the program by hand
+
+Use a separate data folder so your own instances and accounts are never touched:
+
+```sh
+export BLOCKFORGE_DIR=$HOME/blockforge-test
+cargo run --release -- account offline Tester
+cargo run --release -- create "Test" --mc 1.21.1 --loader fabric
+cargo run --release -- launch Test --dry-run     # prints the command line without starting the game
+cargo run --release -- launch Test               # starts it
+```
+
+## Developer switches (environment variables)
+
+| Variable | What it does |
+|---|---|
+| `BLOCKFORGE_DIR` | the data folder to use |
+| `BLOCKFORGE_BENCH=1` | `blockforge gui` prints how long the first frame took and quits |
+| `BLOCKFORGE_SHOT=<folder>` | `blockforge gui` visits every page, saves a PNG of each into the folder and quits (used for the screenshots in `docs/`) |
+| `BLOCKFORGE_AUTOPLAY=<instance folder>` | with `BLOCKFORGE_SHOT`: presses Play through the window's own code, saves a picture of the log and stops the game |
+| `BLOCKFORGE_CF_KEY` | CurseForge API key to use instead of the built-in one |
+| `BLOCKFORGE_MS_CLIENT_ID` | Microsoft sign-in application id to use instead of the built-in one |
+| `BLOCKFORGE_UPDATE_API` | address that stands in for GitHub's "latest release" (for testing the updater) |
+
+## Before a release
+
+1. Raise `version` in `Cargo.toml` and add a section for it to `CHANGELOG.md`; the section text becomes the release notes.
+2. Push to `main`. CI builds everything and publishes `v<version>` the first time a version is built.
+3. Start the installer on a clean Windows, a Mac and a Linux machine, once, and check that the first start, play, update check
+   and uninstall all work.

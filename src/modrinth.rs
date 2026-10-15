@@ -1,0 +1,415 @@
+//! Modrinth: searching, installing mods (with the mods they need) and importing `.mrpack` modpacks.
+
+use std::collections::{BTreeMap, HashSet};
+use std::io::Read;
+use std::path::Path;
+use std::sync::Arc;
+
+use anyhow::{Context, Result, bail};
+use serde::{Deserialize, Serialize};
+
+use crate::http::{self, client};
+use crate::install::{self, Job, Progress};
+use crate::instances::{self, Instance};
+use crate::loaders::Loader;
+use crate::paths::Dirs;
+
+const API: &str = "https://api.modrinth.com/v2";
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Kind {
+    Mod,
+    Modpack,
+    ResourcePack,
+    Shader,
+}
+
+impl Kind {
+    pub const ALL: [Kind; 4] = [Kind::Mod, Kind::Modpack, Kind::ResourcePack, Kind::Shader];
+
+    pub fn api_name(self) -> &'static str {
+        match self {
+            Kind::Mod => "mod",
+            Kind::Modpack => "modpack",
+            Kind::ResourcePack => "resourcepack",
+            Kind::Shader => "shader",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Kind::Mod => "Mods",
+            Kind::Modpack => "Modpacks",
+            Kind::ResourcePack => "Resource packs",
+            Kind::Shader => "Shaders",
+        }
+    }
+
+    /// The instance folder this kind of file goes in.
+    pub fn folder(self) -> &'static str {
+        match self {
+            Kind::Mod => "mods",
+            Kind::Modpack => "mods",
+            Kind::ResourcePack => "resourcepacks",
+            Kind::Shader => "shaderpacks",
+        }
+    }
+
+    pub fn from_api(s: &str) -> Kind {
+        match s {
+            "modpack" => Kind::Modpack,
+            "resourcepack" => Kind::ResourcePack,
+            "shader" => Kind::Shader,
+            _ => Kind::Mod,
+        }
+    }
+}
+
+#[derive(Deserialize, Clone, Debug)]
+pub struct Hit {
+    pub project_id: String,
+    #[serde(default)]
+    pub slug: String,
+    pub title: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub icon_url: Option<String>,
+    #[serde(default)]
+    pub downloads: u64,
+    #[serde(default)]
+    pub author: String,
+    #[serde(default)]
+    pub project_type: String,
+    #[serde(default)]
+    pub categories: Vec<String>,
+}
+
+#[derive(Deserialize, Debug)]
+struct SearchAnswer {
+    hits: Vec<Hit>,
+    #[serde(default)]
+    total_hits: u64,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Sort {
+    Relevance,
+    Downloads,
+    Updated,
+}
+
+impl Sort {
+    fn api(self) -> &'static str {
+        match self {
+            Sort::Relevance => "relevance",
+            Sort::Downloads => "downloads",
+            Sort::Updated => "updated",
+        }
+    }
+}
+
+pub async fn search(
+    query: &str,
+    kind: Kind,
+    mc: Option<&str>,
+    loader: Loader,
+    sort: Sort,
+    offset: u32,
+    limit: u32,
+) -> Result<(Vec<Hit>, u64)> {
+    let mut facets: Vec<Vec<String>> = vec![vec![format!("project_type:{}", kind.api_name())]];
+    if let Some(mc) = mc.filter(|m| !m.is_empty()) {
+        facets.push(vec![format!("versions:{mc}")]);
+    }
+    if kind == Kind::Mod || kind == Kind::Modpack {
+        if let Some(l) = loader.modrinth_name() {
+            facets.push(vec![format!("categories:{l}")]);
+        }
+    }
+    let r = client()
+        .get(format!("{API}/search"))
+        .query(&[
+            ("query", query.to_string()),
+            ("facets", serde_json::to_string(&facets)?),
+            ("limit", limit.to_string()),
+            ("offset", offset.to_string()),
+            ("index", sort.api().to_string()),
+        ])
+        .send()
+        .await?;
+    if !r.status().is_success() {
+        bail!("Modrinth search failed: HTTP {}", r.status());
+    }
+    let answer: SearchAnswer = r.json().await?;
+    Ok((answer.hits, answer.total_hits))
+}
+
+#[derive(Deserialize, Clone, Debug)]
+pub struct Version {
+    pub id: String,
+    pub project_id: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub version_number: String,
+    #[serde(default)]
+    pub version_type: String,
+    #[serde(default)]
+    pub files: Vec<VersionFile>,
+    #[serde(default)]
+    pub dependencies: Vec<Dependency>,
+    #[serde(default)]
+    pub game_versions: Vec<String>,
+    #[serde(default)]
+    pub loaders: Vec<String>,
+}
+
+#[derive(Deserialize, Clone, Debug)]
+pub struct VersionFile {
+    pub url: String,
+    pub filename: String,
+    #[serde(default)]
+    pub primary: bool,
+    #[serde(default)]
+    pub size: u64,
+    #[serde(default)]
+    pub hashes: BTreeMap<String, String>,
+}
+
+#[derive(Deserialize, Clone, Debug)]
+pub struct Dependency {
+    #[serde(default)]
+    pub project_id: Option<String>,
+    #[serde(default)]
+    pub version_id: Option<String>,
+    #[serde(default)]
+    pub dependency_type: String,
+}
+
+impl Version {
+    pub fn primary_file(&self) -> Option<&VersionFile> {
+        self.files.iter().find(|f| f.primary).or_else(|| self.files.first())
+    }
+}
+
+/// Versions of a project that run on `mc` with `loader`, newest first, releases before betas.
+pub async fn versions(project: &str, mc: Option<&str>, loader: Loader, kind: Kind) -> Result<Vec<Version>> {
+    let mut req = client().get(format!("{API}/project/{project}/version"));
+    if let Some(mc) = mc.filter(|m| !m.is_empty()) {
+        req = req.query(&[("game_versions", serde_json::to_string(&[mc])?)]);
+    }
+    if kind == Kind::Mod {
+        if let Some(l) = loader.modrinth_name() {
+            req = req.query(&[("loaders", serde_json::to_string(&[l])?)]);
+        }
+    }
+    let r = req.send().await?;
+    if !r.status().is_success() {
+        bail!("Modrinth: HTTP {} for {project}", r.status());
+    }
+    let mut list: Vec<Version> = r.json().await?;
+    // stable sort keeps Modrinth's newest-first order inside each group
+    list.sort_by_key(|v| match v.version_type.as_str() {
+        "release" => 0,
+        "beta" => 1,
+        _ => 2,
+    });
+    Ok(list)
+}
+
+#[derive(Serialize, Deserialize, Default, Clone)]
+pub struct Installed {
+    /// project id -> file name in the instance
+    pub files: BTreeMap<String, String>,
+}
+
+fn installed_file(instance: &Instance) -> std::path::PathBuf {
+    instance.root.join("blockforge-modrinth.json")
+}
+
+pub fn load_installed(instance: &Instance) -> Installed {
+    std::fs::read(installed_file(instance)).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
+}
+
+/// Put `project` into `instance`, along with the projects it requires. Returns the files that were added.
+pub async fn install_into(
+    instance: &Instance,
+    project: &str,
+    kind: Kind,
+    progress: &Arc<Progress>,
+) -> Result<Vec<String>> {
+    let mc = instance.mc_version().to_string();
+    let loader = instance.loader().and_then(|(k, _)| Loader::parse(k)).unwrap_or(Loader::Vanilla);
+    let mut installed = load_installed(instance);
+    let mut done: HashSet<String> = HashSet::new();
+    let mut queue: Vec<(String, Kind)> = vec![(project.to_string(), kind)];
+    let mut added = Vec::new();
+    let mut jobs = Vec::new();
+
+    while let Some((id, k)) = queue.pop() {
+        if !done.insert(id.clone()) || installed.files.contains_key(&id) && id != project {
+            continue;
+        }
+        progress.stage(format!("Finding a version of {id}"));
+        let list = versions(&id, Some(&mc), loader, k).await?;
+        let Some(version) = list.first() else {
+            if id == project {
+                bail!(
+                    "no version of this project works with Minecraft {mc}{}",
+                    if loader == Loader::Vanilla { String::new() } else { format!(" and {}", loader.label()) }
+                );
+            }
+            continue; // a dependency with no matching version: leave it to the player
+        };
+        let Some(file) = version.primary_file() else { continue };
+        let dest = instance.root.join(k.folder()).join(&file.filename);
+        let mut job = Job::new(&file.url, &dest);
+        job.sha1 = file.hashes.get("sha1").cloned();
+        job.size = Some(file.size).filter(|s| *s > 0);
+        jobs.push(job);
+        // replace an older file of the same project
+        if let Some(old) = installed.files.get(&id) {
+            if old != &file.filename {
+                let _ = std::fs::remove_file(instance.root.join(k.folder()).join(old));
+            }
+        }
+        installed.files.insert(id.clone(), file.filename.clone());
+        added.push(file.filename.clone());
+        for dep in &version.dependencies {
+            if dep.dependency_type == "required" {
+                if let Some(p) = &dep.project_id {
+                    queue.push((p.clone(), Kind::Mod));
+                }
+            }
+        }
+    }
+    install::download_all(jobs, progress, true).await?;
+    crate::config::write_json_atomic(&installed_file(instance), &installed)?;
+    Ok(added)
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// .mrpack modpacks
+
+#[derive(Deserialize)]
+struct PackIndex {
+    #[serde(default)]
+    name: String,
+    #[serde(default, rename = "versionId")]
+    version_id: String,
+    #[serde(default)]
+    summary: Option<String>,
+    #[serde(default)]
+    files: Vec<PackFile>,
+    dependencies: BTreeMap<String, String>,
+}
+
+#[derive(Deserialize)]
+struct PackFile {
+    path: String,
+    hashes: BTreeMap<String, String>,
+    #[serde(default)]
+    env: Option<BTreeMap<String, String>>,
+    downloads: Vec<String>,
+    #[serde(default, rename = "fileSize")]
+    file_size: u64,
+}
+
+/// Create an instance from a Modrinth modpack file.
+pub async fn import_mrpack(dirs: &Dirs, pack: &Path, progress: &Arc<Progress>) -> Result<Instance> {
+    progress.stage("Reading the modpack");
+    let file = std::fs::File::open(pack).with_context(|| format!("opening {}", pack.display()))?;
+    let mut archive = zip::ZipArchive::new(file).context("that isn't a modpack file")?;
+    let index: PackIndex = {
+        let mut entry =
+            archive.by_name("modrinth.index.json").context("not a Modrinth modpack (no modrinth.index.json)")?;
+        let mut text = String::new();
+        entry.read_to_string(&mut text)?;
+        serde_json::from_str(&text).context("reading modrinth.index.json")?
+    };
+    let mc = index.dependencies.get("minecraft").context("the modpack doesn't say which Minecraft it needs")?.clone();
+    let (loader, loader_version) = if let Some(v) = index.dependencies.get("fabric-loader") {
+        (Loader::Fabric, Some(v.clone()))
+    } else if let Some(v) = index.dependencies.get("quilt-loader") {
+        (Loader::Quilt, Some(v.clone()))
+    } else if let Some(v) = index.dependencies.get("neoforge") {
+        (Loader::NeoForge, Some(v.clone()))
+    } else if let Some(v) = index.dependencies.get("forge") {
+        (Loader::Forge, Some(format!("{mc}-{v}")))
+    } else {
+        (Loader::Vanilla, None)
+    };
+
+    let name = if index.name.is_empty() { "Modpack".to_string() } else { index.name.clone() };
+    let mut instance = instances::create(dirs, &name, &mc, loader, loader_version.as_deref(), progress).await?;
+    instance.file.launcher.pack = name.clone();
+    instance.file.launcher.vanilla_instance = false;
+    if let Some(summary) = &index.summary {
+        instance.file.launcher.description = summary.clone();
+    }
+    if !index.version_id.is_empty() {
+        instance.file.launcher.version = index.version_id.clone();
+    }
+
+    // files meant only for servers are left out
+    let mut jobs = Vec::new();
+    for f in &index.files {
+        if f.env.as_ref().and_then(|e| e.get("client")).is_some_and(|c| c == "unsupported") {
+            continue;
+        }
+        let rel = Path::new(&f.path);
+        if rel.is_absolute() || rel.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+            bail!("the modpack has a file path that points outside the instance: {}", f.path);
+        }
+        let Some(url) = f.downloads.first() else { continue };
+        let mut job = Job::new(url, instance.root.join(rel));
+        job.sha1 = f.hashes.get("sha1").cloned();
+        job.size = Some(f.file_size).filter(|s| *s > 0);
+        jobs.push(job);
+    }
+    progress.stage(format!("Downloading {} files from the modpack", jobs.len()));
+    install::download_all(jobs, progress, true).await?;
+
+    progress.stage("Copying the modpack's own files");
+    for i in 0..archive.len() {
+        let mut entry = archive.by_index(i)?;
+        let Ok(name) = entry.name().map(|n| n.to_string()) else { continue };
+        let rel = name.strip_prefix("overrides/").or_else(|| name.strip_prefix("client-overrides/"));
+        let Some(rel) = rel.filter(|r| !r.is_empty()) else { continue };
+        if entry.is_dir() {
+            continue;
+        }
+        let rel = Path::new(rel);
+        if rel.is_absolute() || rel.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+            continue;
+        }
+        let out = instance.root.join(rel);
+        if let Some(dir) = out.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        let mut f = std::fs::File::create(&out)?;
+        std::io::copy(&mut entry, &mut f)?;
+    }
+    instance.save()?;
+    Ok(instance)
+}
+
+/// Download the newest version of a Modrinth modpack and import it.
+pub async fn install_modpack(dirs: &Dirs, project: &str, progress: &Arc<Progress>) -> Result<Instance> {
+    progress.stage("Finding the modpack");
+    let list = versions(project, None, Loader::Vanilla, Kind::Modpack).await?;
+    let version = list.first().context("this modpack has no versions")?;
+    let file = version.primary_file().context("this modpack version has no file")?;
+    let temp = dirs.temp.join(format!("pack-{}.mrpack", uuid::Uuid::new_v4().simple()));
+    let mut job = Job::new(&file.url, &temp);
+    job.sha1 = file.hashes.get("sha1").cloned();
+    install::download_all(vec![job], progress, true).await?;
+    let result = import_mrpack(dirs, &temp, progress).await;
+    let _ = std::fs::remove_file(&temp);
+    result
+}
+
+pub fn sha1_of_file(path: &Path) -> Result<String> {
+    Ok(http::sha1_hex(&std::fs::read(path)?))
+}

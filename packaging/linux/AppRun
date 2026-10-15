@@ -1,0 +1,6 @@
+#!/bin/sh
+# Starts BlockForge from inside an AppImage. The AppImage runtime sets APPIMAGE (the path of the .AppImage file) and
+# APPDIR; the launcher reads APPIMAGE to add its menu entry and to update the file.
+HERE="$(dirname "$(readlink -f "$0")")"
+export APPDIR="${APPDIR:-$HERE}"
+exec "$HERE/usr/bin/blockforge" "$@"

@@ -1,0 +1,164 @@
+[package]
+name = "blockforge"
+version = "4.0.0"
+description = "BlockForge: a fast, modern Minecraft launcher written in Rust"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/riyadmondol2006/BlockForge"
+homepage = "https://github.com/riyadmondol2006/BlockForge"
+readme = "README.md"
+authors = ["BlockForge contributors", "ATLauncher contributors"]
+keywords = ["minecraft", "launcher", "modpack"]
+categories = ["games"]
+rust-version = "1.88"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.104"
+chrono = "0.4.45"
+clap = { version = "4.6.7", features = ["derive"] }
+eframe = { version = "0.37.0", default-features = false, features = ["glow", "default_fonts", "wayland", "x11", "clipboard"] }
+egui = { version = "0.37", default-features = false, features = ["default_fonts", "bytemuck"] }
+egui_extras = { version = "0.37.0", default-features = false, features = ["image", "webp", "file"] }
+flate2 = "1.1.10"
+futures = "0.3.34"
+hex = "0.4.3"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
+md-5 = "0.11.0"
+open = "5.4.4"
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "json", "stream", "gzip", "http2", "query", "form", "socks"] }
+rfd = { version = "0.17.2", default-features = false, features = ["xdg-portal"] }
+rustls-pki-types = "1.15.1"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sha1 = "0.11.0"
+sysinfo = { version = "0.39.6", default-features = false, features = ["system"] }
+tar = "0.4.46"
+tokio = { version = "1.53.3", features = ["rt-multi-thread", "macros", "fs", "process", "sync", "time", "io-util", "net"] }
+uuid = { version = "1.28.0", features = ["v4"] }
+zip = { version = "9.0.3", default-features = false, features = ["deflate"] }
+
+regex = "1.11"
+base64 = "0.23"
+sha2 = "0.11"
+toml = "0.9"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 4
+panic = "abort"
+strip = true
+
+[profile.dev]
+opt-level = 1
+
+[target.'cfg(target_os = "linux")'.dependencies]
+ksni = "0.3.6"
+
+[target.'cfg(any(target_os = "windows", target_os = "macos"))'.dependencies]
+tray-icon = "0.26.1"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Console", "Win32_UI_Shell"] }
+
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1.34"
+
+# `cargo deb` and `cargo generate-rpm` give the same packages as packaging/linux/build.sh, which is what the releases
+# use (it also makes the AppImage). Build with `cargo build --release` first. The paths are relative to this file.
+[package.metadata.deb]
+name = "blockforge"
+maintainer = "BlockForge contributors <riyadmondol2006@gmail.com>"
+copyright = "2013-2026 ATLauncher contributors, 2026 BlockForge contributors"
+license-file = ["LICENSE", "0"]
+extended-description = """\
+BlockForge installs and starts Minecraft: Java Edition. Every game lives in its own instance, with its own mods, \
+settings and Java. It installs mods and modpacks from Modrinth, CurseForge, FTB, ATLauncher and Technic, imports \
+instances from other launchers, supports Microsoft accounts and offline play, and starts quickly on modest computers.
+
+This is the Rust edition. It replaces the Java edition and keeps its instances, accounts and settings in \
+~/.local/share/blockforge."""
+section = "misc"
+priority = "optional"
+revision = "1"
+depends = "$auto, libdbus-1-3, libegl1, libgl1, libwayland-client0, libwayland-egl1, libx11-6, libx11-xcb1, libxcursor1, libxi6, libxkbcommon0, libxkbcommon-x11-0, libxrender1"
+recommends = "xdg-desktop-portal, xdg-desktop-portal-gtk | xdg-desktop-portal-backend, xdg-utils, hicolor-icon-theme, libasound2t64 | libasound2, libpulse0, libudev1, libxrandr2, libxxf86vm1, libxext6, libxtst6"
+suggests = "gamemode"
+replaces = "blockforge (<< 4.0.0)"
+conflicts = "blockforge (<< 4.0.0)"
+maintainer-scripts = "packaging/linux/deb"
+assets = [
+    ["target/release/blockforge", "usr/bin/", "755"],
+    ["packaging/linux/blockforge.desktop", "usr/share/applications/", "644"],
+    ["packaging/linux/io.github.riyadmondol2006.BlockForge.metainfo.xml", "usr/share/metainfo/", "644"],
+    ["packaging/linux/blockforge-mime.xml", "usr/share/mime/packages/blockforge.xml", "644"],
+    ["packaging/linux/blockforge.1", "usr/share/man/man1/blockforge.1", "644"],
+    ["docs/logo/blockforge-icon.svg", "usr/share/icons/hicolor/scalable/apps/blockforge.svg", "644"],
+    ["docs/logo/png/blockforge-16.png", "usr/share/icons/hicolor/16x16/apps/blockforge.png", "644"],
+    ["docs/logo/png/blockforge-24.png", "usr/share/icons/hicolor/24x24/apps/blockforge.png", "644"],
+    ["docs/logo/png/blockforge-32.png", "usr/share/icons/hicolor/32x32/apps/blockforge.png", "644"],
+    ["docs/logo/png/blockforge-48.png", "usr/share/icons/hicolor/48x48/apps/blockforge.png", "644"],
+    ["docs/logo/png/blockforge-64.png", "usr/share/icons/hicolor/64x64/apps/blockforge.png", "644"],
+    ["docs/logo/png/blockforge-128.png", "usr/share/icons/hicolor/128x128/apps/blockforge.png", "644"],
+    ["docs/logo/png/blockforge-256.png", "usr/share/icons/hicolor/256x256/apps/blockforge.png", "644"],
+    ["docs/logo/png/blockforge-512.png", "usr/share/icons/hicolor/512x512/apps/blockforge.png", "644"],
+]
+
+[package.metadata.generate-rpm]
+name = "blockforge"
+summary = "A fast, modern Minecraft launcher"
+license = "GPL-3.0-or-later"
+url = "https://github.com/riyadmondol2006/BlockForge"
+release = "1"
+post_install_script = """\
+update-desktop-database -q /usr/share/applications > /dev/null 2>&1 || :
+update-mime-database /usr/share/mime > /dev/null 2>&1 || :
+gtk-update-icon-cache -q -t -f /usr/share/icons/hicolor > /dev/null 2>&1 || :"""
+post_uninstall_script = """\
+update-desktop-database -q /usr/share/applications > /dev/null 2>&1 || :
+update-mime-database /usr/share/mime > /dev/null 2>&1 || :
+gtk-update-icon-cache -q -t -f /usr/share/icons/hicolor > /dev/null 2>&1 || :"""
+post_trans_script = """\
+rm -f /usr/share/applications/blockforge-BlockForge.desktop || :
+if [ -d /opt/blockforge/bin ] || [ -d /opt/blockforge/lib ]; then rm -rf /opt/blockforge || :; fi"""
+assets = [
+    { source = "target/release/blockforge", dest = "/usr/bin/blockforge", mode = "0755" },
+    { source = "packaging/linux/blockforge.desktop", dest = "/usr/share/applications/blockforge.desktop", mode = "0644" },
+    { source = "packaging/linux/io.github.riyadmondol2006.BlockForge.metainfo.xml", dest = "/usr/share/metainfo/io.github.riyadmondol2006.BlockForge.metainfo.xml", mode = "0644" },
+    { source = "packaging/linux/blockforge-mime.xml", dest = "/usr/share/mime/packages/blockforge.xml", mode = "0644" },
+    { source = "packaging/linux/blockforge.1", dest = "/usr/share/man/man1/blockforge.1", mode = "0644", doc = true },
+    { source = "LICENSE", dest = "/usr/share/licenses/blockforge/LICENSE", mode = "0644", doc = true },
+    { source = "docs/logo/blockforge-icon.svg", dest = "/usr/share/icons/hicolor/scalable/apps/blockforge.svg", mode = "0644" },
+    { source = "docs/logo/png/blockforge-16.png", dest = "/usr/share/icons/hicolor/16x16/apps/blockforge.png", mode = "0644" },
+    { source = "docs/logo/png/blockforge-24.png", dest = "/usr/share/icons/hicolor/24x24/apps/blockforge.png", mode = "0644" },
+    { source = "docs/logo/png/blockforge-32.png", dest = "/usr/share/icons/hicolor/32x32/apps/blockforge.png", mode = "0644" },
+    { source = "docs/logo/png/blockforge-48.png", dest = "/usr/share/icons/hicolor/48x48/apps/blockforge.png", mode = "0644" },
+    { source = "docs/logo/png/blockforge-64.png", dest = "/usr/share/icons/hicolor/64x64/apps/blockforge.png", mode = "0644" },
+    { source = "docs/logo/png/blockforge-128.png", dest = "/usr/share/icons/hicolor/128x128/apps/blockforge.png", mode = "0644" },
+    { source = "docs/logo/png/blockforge-256.png", dest = "/usr/share/icons/hicolor/256x256/apps/blockforge.png", mode = "0644" },
+    { source = "docs/logo/png/blockforge-512.png", dest = "/usr/share/icons/hicolor/512x512/apps/blockforge.png", mode = "0644" },
+]
+
+[package.metadata.generate-rpm.obsoletes]
+blockforge = "< 4.0.0"
+
+[package.metadata.generate-rpm.requires]
+hicolor-icon-theme = "*"
+"libEGL.so.1()(64bit)" = "*"
+"libGL.so.1()(64bit)" = "*"
+"libdbus-1.so.3()(64bit)" = "*"
+"libwayland-client.so.0()(64bit)" = "*"
+"libwayland-egl.so.1()(64bit)" = "*"
+"libX11.so.6()(64bit)" = "*"
+"libX11-xcb.so.1()(64bit)" = "*"
+"libXcursor.so.1()(64bit)" = "*"
+"libXi.so.6()(64bit)" = "*"
+"libXrender.so.1()(64bit)" = "*"
+"libxkbcommon.so.0()(64bit)" = "*"
+"libxkbcommon-x11.so.0()(64bit)" = "*"
+
+[package.metadata.generate-rpm.recommends]
+xdg-desktop-portal = "*"
+xdg-utils = "*"
+shared-mime-info = "*"
+desktop-file-utils = "*"

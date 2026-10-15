@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=BlockForge
+GenericName=Minecraft Launcher
+Comment=A fast, modern Minecraft launcher
+Exec=blockforge %F
+Icon=blockforge
+Terminal=false
+Categories=Game;ActionGame;AdventureGame;Simulation;
+Keywords=Minecraft;Launcher;Mods;Modpacks;Modrinth;Java;
+MimeType=application/x-modrinth-modpack+zip;
+StartupWMClass=blockforge

@@ -1,7 +1,0 @@
-query GetPurpurLoaderVersionsForMinecraftVersion($minecraftVersion: String!) {
-    loaderVersions(minecraftVersion: $minecraftVersion) {
-        purpur {
-            build
-        }
-    }
-}

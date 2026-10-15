@@ -1,0 +1,56 @@
+{
+  "minecraft": {
+    "version": "26.1.1",
+    "modLoaders": [
+      {
+        "id": "fabric-0.18.6",
+        "primary": true
+      }
+    ]
+  },
+  "manifestType": "minecraftModpack",
+  "manifestVersion": 1,
+  "name": "Fabulously Optimized",
+  "version": "13.1.0-alpha.2",
+  "author": "robotkoer",
+  "files": [
+    {
+      "projectID": 1154099,
+      "fileID": 7825646,
+      "required": true,
+      "isLocked": false
+    },
+    {
+      "projectID": 634062,
+      "fileID": 7825701,
+      "required": true,
+      "isLocked": false
+    },
+    {
+      "projectID": 518319,
+      "fileID": 7807306,
+      "required": true,
+      "isLocked": false
+    },
+    {
+      "projectID": 1301799,
+      "fileID": 7807046,
+      "required": true,
+      "isLocked": false
+    },
+    {
+      "projectID": 630104,
+      "fileID": 7884320,
+      "required": true,
+      "isLocked": false
+    },
+    {
+      "projectID": 455508,
+      "fileID": 7867943,
+      "required": true,
+      "isLocked": false
+    }
+  ],
+  "overrides": "overrides",
+  "image": "https://media.forgecdn.net/avatars/286/772/637305737753885398.png"
+}

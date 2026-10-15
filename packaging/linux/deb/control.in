@@ -1,0 +1,22 @@
+Package: blockforge
+Version: @DEB_VERSION@
+Section: misc
+Priority: optional
+Architecture: amd64
+Installed-Size: @SIZE_KB@
+Maintainer: BlockForge contributors <riyadmondol2006@gmail.com>
+Depends: @DEPENDS@
+Recommends: xdg-desktop-portal, xdg-desktop-portal-gtk | xdg-desktop-portal-backend, xdg-utils, hicolor-icon-theme, libasound2t64 | libasound2, libpulse0, libudev1, libxrandr2, libxxf86vm1, libxext6, libxtst6
+Suggests: gamemode
+Replaces: blockforge (<< 4.0.0)
+Conflicts: blockforge (<< 4.0.0)
+Homepage: https://github.com/riyadmondol2006/BlockForge
+Description: Fast, modern Minecraft launcher
+ BlockForge installs and starts Minecraft: Java Edition. Every game lives in
+ its own instance, with its own mods, settings and Java. It installs mods and
+ modpacks from Modrinth, CurseForge, FTB, ATLauncher and Technic, imports
+ instances from other launchers, supports Microsoft accounts and offline play,
+ and starts quickly on modest computers.
+ .
+ This is the Rust edition. It replaces the Java edition and keeps its
+ instances, accounts and settings in ~/.local/share/blockforge.

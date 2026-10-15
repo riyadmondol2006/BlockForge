@@ -6,8 +6,8 @@
 </p>
 
 <p align="center">
-  <b>A fast, modern Minecraft launcher. Play offline without an account, install mods with one click, and run well on
-  low-end PCs.</b>
+  <b>A fast, modern Minecraft launcher, written in Rust. It opens instantly, uses a fraction of the memory of a Java
+  launcher, plays offline without an account and installs mods in one click.</b>
 </p>
 
 <p align="center">
@@ -22,54 +22,54 @@
 </p>
 
 <p align="center">
-  Windows &middot; macOS (Apple Silicon) &middot; Debian/Ubuntu &middot; Fedora<br>
-  Java is included in the installers, so there's nothing else to install.
+  Windows &middot; macOS (Apple Silicon) &middot; Debian/Ubuntu &middot; Fedora &middot; any Linux (AppImage)
 </p>
 
-> **BlockForge is a fork of [ATLauncher](https://github.com/ATLauncher/ATLauncher)** (GPL-3.0). The launcher's core
-> (modpack installs, mod loaders, instance handling, account and launch code) comes from ATLauncher and its
-> contributors, and their copyright notices are kept in the source. See
-> [What's different](#whats-different-from-atlauncher) for what this fork changes. BlockForge is not affiliated with or
-> endorsed by ATLauncher, Mojang or Microsoft.
+> **BlockForge is a fork of [ATLauncher](https://github.com/ATLauncher/ATLauncher)** (GPL-3.0), rewritten in Rust. The
+> way instances, accounts and modpacks are stored and how games are launched follow ATLauncher's, and ATLauncher's
+> authors and contributors keep their copyright. See [What changed from ATLauncher](#what-changed-from-atlauncher).
+> BlockForge is not affiliated with or endorsed by ATLauncher, Mojang or Microsoft.
+
+<p align="center">
+  <img src="docs/screenshots/home.png" alt="BlockForge home screen" width="860">
+</p>
 
 ## Why BlockForge?
 
-- **Play offline, no account needed.** BlockForge asks who's playing when it opens: type any name to play offline, pick a
-  saved player, or sign in with Microsoft. Signing in is optional.
-- **A modern, clean interface.** A sidebar with Home, Library, Discover and Settings, dark and light looks, and a Home
-  screen that puts your last-played instance one click away.
-- **Mods, resource packs and shaders in one window.** Browse Modrinth and install with one click. Mods a mod needs come
-  along automatically, and adding a shader offers to set up Iris and Sodium (or Oculus on Forge) for you.
-- **Drag and drop anything.** Drop a mod, resource pack, shader, data pack or whole modpack anywhere on the window.
-  BlockForge looks inside the file, works out what it is and puts it in the right place.
-- **Quick to open, quick to play.** The window opens sooner, pressing Play starts the game almost straight away, and
-  Minecraft itself starts faster: BlockForge keeps a class cache for each game and preloads its files while the
-  launcher sits idle. **Continue** drops you straight into the world you played last.
-- **Set up for your PC automatically.** Game memory is picked from your PC (RAM, free memory, cores) and from the
-  game (version, loader, number of mods, shaders, the pack's own advice), and a new game starts with graphics settings
-  that suit your hardware. Your own settings always win.
-- **Good on low-end PCs.** Light mode switches on by itself on computers with about 4 GB of RAM or 2 cores, the
-  launcher gives memory back while it sits idle, and a one-click performance pack adds Sodium, Lithium, FerriteCore and
-  ModernFix.
-- **Every modpack source in one place.** ATLauncher, CurseForge, Modrinth, FTB and Technic packs, or any Minecraft
-  version with Fabric, Forge, NeoForge or Quilt. It can also copy in instances from Prism, MultiMC, CurseForge,
-  GDLauncher and ATLauncher.
-- **Safe updates and crash help.** A snapshot of your mods and configs is taken before every update or reinstall, ready
-  to restore. After a crash it tells you in plain words what most likely went wrong.
-- **Private by default.** Usage statistics, play-time reporting and crash reports stay off unless you turn them on.
-- **Updates itself.** BlockForge checks its GitHub releases and installs a new version with one click (you can turn this
-  off).
+- **Native and fast.** The launcher is a single small Rust program: no Java to start up first, so the window is there in
+  a fifth of a second. Minecraft itself still runs on Java, and BlockForge downloads the right Java for each game for
+  you.
+- **Play offline, no account needed.** Type any name and play, pick a saved player, or sign in with Microsoft. Signing in
+  is optional.
+- **Every modpack source in one place.** ATLauncher, CurseForge, Modrinth, FTB and Technic packs, or any Minecraft version
+  with Fabric, Quilt, Forge or NeoForge.
+- **Mods, resource packs and shaders** with one-click installs from Modrinth and CurseForge, automatic dependencies,
+  update checks, switch-off and a safety scan before the game starts.
+- **Bring your instances.** Imports from Prism, MultiMC, CurseForge, GDLauncher and ATLauncher, and exports to Modrinth,
+  CurseForge and MultiMC formats.
+- **Set up for your PC automatically.** Game memory is picked from your RAM, free memory and cores and from the game
+  (version, loader, number of mods, shaders, what the pack asks for), or you set your own amount, for everything or per
+  instance. Light mode switches on by itself on older computers.
+- **Real desktop citizen.** Menu entries, icons and shortcuts on every system, a tray icon, a console window, light and
+  dark themes, skins with a preview, backups, and drag and drop of mods, packs and instances.
+- **Private by default.** No usage statistics and no crash reports exist in BlockForge. See [PRIVACY.md](PRIVACY.md).
+- **Updates itself, in one click.** BlockForge checks its GitHub releases and installs the new version in the way that
+  fits how you installed it.
 
 ## Screenshots
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/screenshots/home.png" alt="Home screen" width="100%"><br><sub>Home: jump back into your last instance</sub></td>
-    <td width="50%"><img src="docs/screenshots/mods-browse.png" alt="Browsing mods on Modrinth" width="100%"><br><sub>Browse Modrinth and install with one click</sub></td>
+    <td width="50%"><img src="docs/screenshots/library.png" alt="Library" width="100%"><br><sub>Library of your instances</sub></td>
+    <td width="50%"><img src="docs/screenshots/mods.png" alt="Mods" width="100%"><br><sub>Mods with icons, updates and one-click switches</sub></td>
   </tr>
   <tr>
-    <td width="50%"><img src="docs/screenshots/drag-and-drop.png" alt="Dropping files on the window" width="100%"><br><sub>Drop any file on the window to install it</sub></td>
-    <td width="50%"><img src="docs/screenshots/new-instance.png" alt="Creating a new instance" width="100%"><br><sub>New instance with any version and mod loader</sub></td>
+    <td width="50%"><img src="docs/screenshots/discover.png" alt="Discover" width="100%"><br><sub>Find mods on Modrinth or CurseForge</sub></td>
+    <td width="50%"><img src="docs/screenshots/packs.png" alt="Modpacks" width="100%"><br><sub>ATLauncher and Technic modpacks</sub></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/create.png" alt="New instance" width="100%"><br><sub>New instance with any version and mod loader</sub></td>
+    <td width="50%"><img src="docs/screenshots/logs.png" alt="Game log" width="100%"><br><sub>The game's log, live, with filter and copy</sub></td>
   </tr>
 </table>
 
@@ -78,240 +78,157 @@
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/screenshots/mods-installed.png" alt="Installed mods" width="100%"><br><sub>Installed mods: update, switch off or remove</sub></td>
-    <td width="50%"><img src="docs/screenshots/shaders-browse.png" alt="Browsing shaders" width="100%"><br><sub>Shaders, with Iris set up for you</sub></td>
+    <td width="50%"><img src="docs/screenshots/who-is-playing.png" alt="Who's playing" width="100%"><br><sub>Who's playing: an offline name or Microsoft</sub></td>
+    <td width="50%"><img src="docs/screenshots/instance-settings.png" alt="Instance settings" width="100%"><br><sub>Settings of one instance: memory, Java, commands</sub></td>
   </tr>
   <tr>
-    <td width="50%"><img src="docs/screenshots/discover.png" alt="Discover modpacks" width="100%"><br><sub>Discover modpacks from every source</sub></td>
-    <td width="50%"><img src="docs/screenshots/library.png" alt="Library of instances" width="100%"><br><sub>Library of your instances</sub></td>
+    <td width="50%"><img src="docs/screenshots/settings.png" alt="Settings" width="100%"><br><sub>Settings</sub></td>
+    <td width="50%"><img src="docs/screenshots/tools.png" alt="Tools" width="100%"><br><sub>Tools: network checker, support bundle, clean-up</sub></td>
   </tr>
   <tr>
-    <td width="50%"><img src="docs/screenshots/who-is-playing.png" alt="Who's playing dialog" width="100%"><br><sub>Who's playing: offline name or Microsoft</sub></td>
-    <td width="50%"><img src="docs/screenshots/change-skin.png" alt="Changing skin" width="100%"><br><sub>Change your skin with a live preview</sub></td>
+    <td width="50%"><img src="docs/screenshots/home-light.png" alt="Home, light look" width="100%"><br><sub>Home in the light look</sub></td>
+    <td width="50%"><img src="docs/screenshots/mods-light.png" alt="Mods, light look" width="100%"><br><sub>Mods in the light look</sub></td>
   </tr>
   <tr>
-    <td width="50%"><img src="docs/screenshots/settings.png" alt="Settings" width="100%"><br><sub>Settings on one page</sub></td>
-    <td width="50%"><img src="docs/screenshots/update-popup.png" alt="Update available" width="100%"><br><sub>One-click updates from GitHub releases</sub></td>
-  </tr>
-  <tr>
-    <td width="50%"><img src="docs/screenshots/home-light.png" alt="Home screen, light look" width="100%"><br><sub>Home in the light look</sub></td>
-    <td width="50%"><img src="docs/screenshots/mods-installed-light.png" alt="Installed mods, light look" width="100%"><br><sub>Mods manager in the light look</sub></td>
-  </tr>
-  <tr>
-    <td width="50%"><img src="docs/screenshots/about.png" alt="About page" width="100%"><br><sub>About: version, credits and update check</sub></td>
+    <td width="50%"><img src="docs/screenshots/about.png" alt="About" width="100%"><br><sub>About: version, update check and credits</sub></td>
     <td width="50%"></td>
   </tr>
 </table>
 
 </details>
 
-## BlockForge vs ATLauncher
+## BlockForge compared with ATLauncher
 
-| Feature | ATLauncher | BlockForge |
+The numbers below were measured on one computer (Fedora Linux, 16 cores, 30 GB of memory), starting each launcher on a
+copy of the same settings and the same instance, alternating the two programs, four runs each. The window time is the
+time from starting the program to its main window being on screen; memory is the resident memory 15 seconds after that.
+Your numbers will differ; the proportions are what matter. The original is ATLauncher 3.4.41.3 (the Java program).
+
+| | ATLauncher 3.4.41.3 | BlockForge 4.0 | Difference |
+|---|---|---|---|
+| Time to the main window (median) | 2.31 s | 0.18 s | **92% faster** (about 13 times) |
+| Memory with the window open (median) | 244 MB | 101 MB | **59% less** |
+| CPU while idle | 0.0% | 0.0% | same |
+| Needs Java installed to run the launcher | yes | no | |
+| Linux package size | 27 MB (jar), needs Java | 8 MB (.deb), 8 MB (.rpm), 12 MB (AppImage) | **about 70% smaller**, and nothing else to install |
+
+What does not change: Minecraft itself. It runs on the same Java in both launchers, so the time from pressing Play to the
+title screen is dominated by the game and your mods (about 7 to 8 seconds for Fabric 1.21.1 and 26.3 on the test
+computer). BlockForge's own preparation before the game starts takes 25 to 40 milliseconds.
+
+Other differences:
+
+| | ATLauncher | BlockForge |
 |---|---|---|
-| Play offline | Needs a Microsoft account | Any name, no account needed |
-| Interface | Tabbed layout | Sidebar with Home, Library, Discover and Settings; dark and light looks |
-| Mods, resource packs and shaders | Separate Add Mods and Edit Mods dialogs | One window with Installed and Browse tabs, one-click Modrinth installs, dependencies added automatically |
-| Drag and drop | Into the Edit Mods dialog | Anywhere on the window; detects mods, resource packs, shaders, data packs and modpacks |
-| Performance pack | No | One click: Sodium, Lithium, FerriteCore, ModernFix (or the equivalents for your loader) |
-| Game memory | 4 GB by default | Automatic: from your PC (RAM, free memory, cores) and the game (version, loader, mods, shaders, pack advice); e.g. 2.5 GB for vanilla 26.3, 3 GB for Fabric with the performance pack, 7–8 GB for a 200-mod Forge pack on a 16 GB PC |
-| First-launch graphics settings | Minecraft's defaults | Picked for your PC (low, medium or high tier from RAM, cores and graphics card) |
-| Continue into your last world | No | One click, Minecraft 1.20 and newer |
-| Light mode for slower PCs | No | Turns on by itself on PCs with about 4 GB of RAM or 2 cores |
-| Launcher RAM use after browsing\* | ~500 MB | ~250 MB |
-| Play button to game process (Fabric)\* | ~1.2 s | ~0.1 s |
-| Window open time\* | ~4.7 s | ~3.1 s |
-| Minecraft 26.3 (vanilla) to the title screen\* | ~7.8 s | ~7.2 s with the class cache |
-| Minecraft 26.3 + Fabric, cold start\* | ~10.4 s | ~9.9 s with file warm-up |
-| Self-update source | ATLauncher's server | BlockForge's GitHub releases |
-| Usage statistics and play-time reporting | On by default | Off unless you turn them on |
-| Installers | Downloads from atlauncher.com | Windows exe, macOS dmg (arm64 and x64), deb and rpm, all with Java bundled; plus the jar |
-
-\* Measured on one test machine, same computer and load for both launchers; window open time is the median of several
-runs. Your numbers will differ.
-
-## What's different from ATLauncher
-
-Compared to ATLauncher 3.4.41.4, this fork changes:
-
-**Look and feel**
-- A new main window written from scratch: sidebar navigation with Home, Library, Discover, New instance, Tools and
-  Settings, an About page, Material 3 dark and light themes, the Roboto font, and vector icons. The remaining pop-up
-  dialogs were restyled to match.
-- The old tab layout, the Servers screen, the all-in-one settings tabs and the social media buttons are gone.
-- New name, package (`com.blockforge.launcher`), logo, splash screen and data folder, so it never mixes with an
-  existing ATLauncher install. Text in Chinese, Japanese, Arabic and other scripts draws properly instead of as boxes.
-
-**Players and skins**
-- Offline players are built in, and the launcher asks who is playing on start (can be turned off in Settings).
-- A new skin dialog shows your current skin, lets you pick or drop a PNG and previews it before uploading.
-
-**Mods and content**
-- A content manager for each instance: installed and Modrinth browse tabs for mods, resource packs and shaders, with
-  updates, switching items on and off, and automatic dependencies. Shaders offer to add Iris and Sodium (Fabric and
-  Quilt) or Oculus (Forge).
-- Drag and drop on any window. Dropping on an instance card adds the files to that instance; dropping anywhere else asks
-  which instance, with the ones the files suit listed first. Modpacks become new instances.
-- A one-click performance pack picked for the instance's loader and Minecraft version.
-
-**Speed and memory**
-- Pressing Play skips re-hashing files that haven't changed, remembers the Java version, skips the login step for
-  offline players and logs how long each step took. The game's Java gets tuned G1 garbage collector flags.
-- Game memory is automatic unless you set it: it is sized from the PC and the game, never takes more than the
-  system can spare, and warns when a pack needs more than is free. New games get graphics settings for the PC's tier.
-- Minecraft starts faster: the first start records the classes it loads, a low-priority background job then builds a
-  class cache for that game (Java 17 and newer), and the launcher preloads the game's files while it sits idle.
-- The launcher hands memory back after a minute of no use, uses fewer threads, keeps smaller pictures and caps the
-  console, and drops picture caches while the game runs on low-memory computers.
-- Light mode (fewer redraws, no smooth-scroll animation, a smaller picture cache) switches on by itself on slower PCs.
-- Downloads use 16 connections instead of 8, and the window opens sooner thanks to a cached file list and background
-  loading.
-
-**Reliability**
-- Downloads retry on busy servers and network hiccups and are written to a temporary file first, so an interrupted
-  download never leaves a half-written file.
-- The launch log says which Java was chosen and why, and warns about a Java that is too old, 32-bit or running under
-  emulation.
-- Importing from other launchers, snapshots and rollback, crash diagnosis and support bundles with personal details
-  removed, all with unit tests.
-
-**Privacy and updates**
-- Usage statistics, pack install and play-time reporting and crash reports are off by default, and a remote setting can
-  no longer turn crash reporting on.
-- ATLauncher's self-updater is gone (it would have replaced BlockForge with ATLauncher). BlockForge checks its own GitHub
-  releases instead, shows what changed and installs the right file for your system (can be turned off in Settings).
+| Play offline | needs a Microsoft account | any name, no account needed |
+| Updates | its own servers | BlockForge's GitHub releases, one click |
+| Usage statistics and play-time reporting | on by default | do not exist |
+| Installers | Windows exe, jar | Windows installer, macOS disk image, deb, rpm, AppImage |
 
 ## Download and install
 
 Get the newest version from the [**Releases** page](https://github.com/riyadmondol2006/BlockForge/releases/latest). The
-`nightly` prerelease always holds the newest build from `master`, and every push also leaves its builds under
-**Actions** (open a run, then **Artifacts**).
+`nightly` prerelease always holds the newest build from `main`, and every push also leaves its builds under **Actions**
+(open a run, then **Artifacts**).
 
-| System | File | Notes |
+| System | File | How |
 |---|---|---|
-| Windows 10 and 11 (64-bit) | `BlockForge-<version>-windows-x64.exe` | Installs for your user, no administrator needed. Adds a Start menu entry and a shortcut. A newer installer replaces the older version. |
-| macOS on Apple Silicon (M1 and newer) | `BlockForge-<version>-macos-arm64.dmg` | Open it and drag BlockForge to Applications. |
-| Debian, Ubuntu and other deb systems | `BlockForge-<version>-linux-amd64.deb` | `sudo apt install ./BlockForge-*.deb` |
-| Fedora, RHEL and other RPM systems | `BlockForge-<version>-linux-x86_64.rpm` | `sudo dnf install ./BlockForge-*.rpm` |
-| Any system with Java 17 or newer | `BlockForge-<version>.jar` | `java -jar BlockForge-*.jar`, keeps its files next to the jar. |
+| Windows 10 and 11 (64-bit) | `BlockForge-<version>-windows-x64-setup.exe` | Run it. It installs for your user, no administrator needed, and adds a Start menu entry and an optional desktop shortcut. A newer setup replaces the older install. |
+| Windows, no install | `BlockForge-<version>-windows-x64-portable.zip` | Unzip it anywhere and run `blockforge.exe`. |
+| macOS on Apple Silicon (M1 and newer) | `BlockForge-<version>-macos-arm64.dmg` | Open it and drag BlockForge to Applications. The app is not signed with an Apple developer certificate, so on first start go to System Settings > Privacy & Security and choose **Open Anyway** (older macOS: right-click the app and choose Open). |
+| Debian, Ubuntu and relatives | `BlockForge-<version>-linux-x86_64.deb` | `sudo apt install ./BlockForge-*.deb` |
+| Fedora, RHEL, openSUSE and relatives | `BlockForge-<version>-linux-x86_64.rpm` | `sudo dnf install ./BlockForge-*.rpm` |
+| Any other Linux | `BlockForge-<version>-linux-x86_64.AppImage` | `chmod +x` it and run it. It adds itself to your applications menu the first time. |
 
-`SHA256SUMS.txt` next to them lists the checksum of every file.
+`SHA256SUMS.txt` next to them lists the checksum of every file. The Windows setup is not code-signed yet: choose **More
+info** and then **Run anyway** if SmartScreen asks.
 
-The installers carry their own Java, so nothing else needs to be installed. An installed BlockForge keeps its
-instances, settings and logs in your user folder (`%APPDATA%\BlockForge` on Windows,
-`~/Library/Application Support/BlockForge` on macOS, `~/.local/share/blockforge` on Linux), so uninstalling or updating
-it never touches them.
+Not built yet: Intel Macs, Windows on ARM and Linux on ARM.
 
-The builds aren't signed yet. Windows may show "Windows protected your PC": choose **More info** then **Run anyway**.
-On macOS, right-click the app and choose **Open** the first time.
+### Updating
 
-On Linux and macOS, `scripts/blockforge.sh` starts the jar with a class cache for a faster start (Java 19 or newer).
+BlockForge checks for a new version a few seconds after it opens and every six hours after that (turn it off in
+**Settings**, or press **Check for updates** on the **About** page). When there is one, a banner offers **Update now**
+and installs it the way your copy was installed: the AppImage is replaced in place, deb and rpm go through your package
+manager, the Windows setup replaces the install, and the macOS disk image opens for you.
 
-## Services it uses
+### Coming from an older BlockForge (3.x, the Java version) or ATLauncher
 
-To work, BlockForge talks to Mojang and Microsoft, CurseForge, Modrinth, the loader sites (Fabric, Quilt, Forge,
-NeoForge), GitHub (to look for BlockForge updates) and, for the modpack catalogue, news and launcher data files,
-**ATLauncher's servers** (`api.atlauncher.com`, `download.nodecdn.net`). Upstream asks that others don't use its CDN,
-files and modpacks in their own launcher without permission, so if you run or publish this fork widely, please check
-with ATLauncher or replace those endpoints in `Constants.java`. More detail is in [PRIVACY.md](PRIVACY.md).
+- **Installed copies of BlockForge 3.x** (Windows installer, macOS disk image, deb, rpm): press the update button in the
+  old launcher, or install the new package or setup over the old one. The new Windows setup finds the old Java install
+  and removes it first; the deb and rpm replace the old package. Your instances, accounts and settings stay where they
+  are, because BlockForge 4 uses the same folder and the same file formats.
+- **The plain `.jar` of BlockForge 3.x**: the update button downloads a small bridge jar. Running it once downloads the
+  native program next to your files and starts it; your data stays in the same folder.
+- **ATLauncher**: BlockForge keeps its own folder. Use **Import** to copy an ATLauncher instance in; nothing is moved or
+  changed in ATLauncher's folder.
 
-> [!WARNING]
-> **Before you publish builds:** `Constants.java` still holds ATLauncher's own CurseForge API key and Microsoft login
-> client ID, which upstream says forks must not reuse. Get your own
-> ([CurseForge key](https://forms.monday.com/forms/dce5ccb7afda9a1c21dab1a1aa1d84eb),
-> [Microsoft client ID](https://learn.microsoft.com/en-us/azure/active-directory/develop/quickstart-register-app)) and
-> replace them before sharing the launcher with other people.
+### Where BlockForge keeps its files
 
-## For developers
+| System | Folder |
+|---|---|
+| Linux | `~/.local/share/blockforge` |
+| Windows | `%APPDATA%\BlockForge` |
+| macOS | `~/Library/Application Support/BlockForge` |
 
-### Prerequisites
+Open it from **About > Open data folder**. Set the `BLOCKFORGE_DIR` environment variable to use another folder.
 
-Building needs Java 17 or newer (17 to 25 all work) to run Gradle 9. The code itself compiles to Java 8 compatibility.
-Everything else comes through the Gradle wrapper, `./gradlew`.
+## Command line
 
-### Building
-
-```sh
-./gradlew build        # compile, run the tests and build everything
-./gradlew shadowJar    # just the runnable jar, written to build/libs/
-```
-
-To run the launcher while developing, keeping its files in a gitignored folder:
+The same program also works from a terminal:
 
 ```sh
-./gradlew run --args="--debug --working-dir=testLauncher"
+blockforge list                                       # your instances
+blockforge versions                                   # Minecraft versions
+blockforge create "Survival" --mc 1.21.1 --loader fabric
+blockforge launch Survival                            # start it (add --dry-run to only print the command)
+blockforge account offline Steve                      # add an offline player
+blockforge search sodium --mc 1.21.1 --loader fabric  # search Modrinth
+blockforge add Survival sodium                        # install a mod with what it needs
+blockforge import MyPack.mrpack                       # create an instance from a modpack
+blockforge --help
 ```
 
-Any IDE that imports Gradle projects works; IntelliJ IDEA is the easiest. See [CONTRIBUTING.md](CONTRIBUTING.md) for
-how to contribute and [TESTING.md](TESTING.md) for how tests are written.
+Give it a modpack or instance file instead of a command (`blockforge MyPack.mrpack`) and it opens the window on the
+import screen, which is what double-clicking a `.mrpack` does.
 
-### Making a release
+## What changed from ATLauncher
 
-Raise the version in `src/main/resources/version` and push to `master`. When all builds pass,
-`.github/workflows/build.yml` publishes the release `v<version>` (marked as the latest release, with a trailing `.Beta`
-dropped) with every installer and `SHA256SUMS.txt` attached, and moves the `nightly` prerelease to the same commit. A
-push that keeps the version only updates `nightly`. Pushing a `v*` tag yourself also makes a release for that commit.
+- **Rewritten in Rust** with a new window written from scratch: sidebar navigation, Material-style dark and light looks,
+  18 themes, and vector icons.
+- **Offline players** are built in, and the launcher asks who is playing on start (can be turned off).
+- **One mods manager** per instance, with updates, dependencies, switch on and off, and a scan for known malicious mods
+  before the game starts.
+- **Memory and Java chosen for you**: automatic game memory sized to your PC and the game, the right Java downloaded
+  from Mojang for each version, and a class cache that speeds up later starts.
+- **Nothing is collected.** The usage statistics, pack-install reporting and crash reporting are gone.
+- **Its own updater** that checks BlockForge's releases, instead of ATLauncher's.
+- **Installers for every system** with proper shortcuts, and one-click updates.
+- New name, logo and data folder, so it never mixes with an existing ATLauncher install.
 
-Versions follow `Reserved.Major.Minor.Revision`: raise Major for large changes, Minor for small features, and Revision
-for bug-fix-only releases.
+## Building from source
 
-### Scripts
+You need the stable [Rust toolchain](https://rustup.rs) (1.88 or newer).
 
-- `scripts/package.sh` (Linux and macOS) and `scripts/package.ps1` (Windows) build the installers with `jpackage`; the
-  workflow runs them on every push, then installs or starts each one to check it works.
-- `scripts/blockforge.sh` starts the jar with a class cache, which opens the window faster.
-- `scripts/startup-budget.sh` fails if the window takes longer than a set time to appear.
-- `scripts/loader-canary.sh` checks that the Fabric, Quilt, Forge and NeoForge services still answer as the launcher
-  expects.
+```sh
+git clone https://github.com/riyadmondol2006/BlockForge
+cd BlockForge
+cargo run --release            # the launcher window
+cargo test --release           # about 600 tests, a few seconds
+```
 
-### Other tasks
+Packages are built by the scripts in [`packaging/`](packaging/) and by the
+[GitHub workflow](.github/workflows/build.yml), which builds, tests and publishes everything on every push to `main`.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for how the code is laid out and [TESTING.md](TESTING.md) for how to try it.
 
-- `./gradlew dependencyUpdates` lists dependencies that have newer versions.
-- After adding GraphQL queries or mutations to `src/main/graphql`, download the schema from
-  <https://studio.apollographql.com/public/ATLauncher/variant/current/schema/sdl> and run
-  `./gradlew generateApolloSources`.
-- License headers: `./gradlew updateLicenses` adds the `LICENSEHEADER` to Java files that don't have one, and
-  `./gradlew checkLicenses` fails if any file is missing it. Run it before committing new files.
+## Known limits
 
-### Themes
+- The Windows setup and the macOS app are not code-signed, so the system asks you to confirm the first start.
+- Minecraft versions older than 1.6 start through a small Java wrapper (`legacy-launch`), as in ATLauncher.
+- ATLauncher server packs are only partly supported (vanilla, Fabric and Forge up to 1.12.2).
 
-Themes are [FlatLaf](https://github.com/JFormDesigner/FlatLaf) look and feels. To add one:
+## Credits and license
 
-1. Create `MyTheme.java` in `src/main/java/com/blockforge/launcher/themes/`, extending `Dark`, `Light` or (only if you
-   need full control) `ATLauncherLaf`, which every theme must extend at some point.
-2. Add a matching `.properties` file in `src/main/resources/com/blockforge/launcher/themes/`; the existing files there
-   are good examples. IntelliJ `theme.json` files can be converted too (see the `DraculaContrast` theme).
-3. Add it to the list in `getThemes()` in
-   `src/main/java/com/blockforge/launcher/viewmodel/impl/settings/GeneralSettingsViewModel.java`. The default theme is
-   `DEFAULT_THEME_CLASS` in `Constants.java`.
-
-In a development build, `Ctrl + Shift + Alt + X` highlights UI components and their properties, and
-`Ctrl + Shift + Alt + Y` lists every UIManager default you can override.
-
-### Translations
-
-Text in the code is marked with `GetText.tr(...)`, and `./gradlew generatePots` collects it into
-`build/gettext/translations.pot`. Translations are `.po` files named like `de-DE.po` in
-`src/main/resources/assets/lang`, and the languages offered are listed in
-`src/main/java/com/blockforge/launcher/data/Language.java`.
-
-### Plugging in your own data
-
-Endpoints, keys and other launcher-wide values live in `src/main/java/com/blockforge/launcher/constants/Constants.java`.
-Using this source code doesn't give permission to use ATLauncher's CDN, files, assets or modpacks (see
-[Services it uses](#services-it-uses)).
-
-[PRIVACY.md](PRIVACY.md) lists what is and isn't sent, and [NOTICE.md](NOTICE.md) lists the third-party files.
-
-## Upstream
-
-BlockForge builds on [ATLauncher](https://github.com/ATLauncher/ATLauncher) by ATLauncher and its contributors. If you
-want the original launcher, get it from [atlauncher.com](https://atlauncher.com).
-
-## License
-
-BlockForge is a fork of ATLauncher and keeps its license: the GNU General Public License v3.0, see [LICENSE](LICENSE)
-or <https://www.gnu.org/licenses/gpl-3.0.txt>. If you build on it, keep your fork open source under the same license.
-
-ATLauncher also asks, beyond what the license can enforce, that its CDN, files, assets and modpacks are not used in
-other launchers without permission.
+BlockForge is free software under the [GNU General Public License v3](LICENSE). It is built on the work of
+[ATLauncher](https://github.com/ATLauncher/ATLauncher) and its contributors; see [NOTICE.md](NOTICE.md) for the full
+credits and third-party licenses. "Minecraft" is a trademark of Mojang AB.

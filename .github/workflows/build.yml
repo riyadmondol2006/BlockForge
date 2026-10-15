@@ -1,18 +1,23 @@
 name: Build
 
-# Every push builds the jar and the installers for Windows, macOS (Apple Silicon), Debian/Ubuntu and
-# Fedora. Download them from the run's "Artifacts" section.
+# Every push and pull request is checked (format, lint, tests) and built for every system. Download the builds from
+# the run's "Artifacts" section.
 #
-# Pushes to master also publish them on the Releases page:
-#   - "v<version>" (the version in src/main/resources/version, without ".Beta") becomes a normal release, marked as
-#     the latest one, the first time that version is built. Raising the version and pushing to master is all it takes
-#     to release; pushing a v* tag yourself works too.
-#   - "nightly" is a prerelease that always holds the files of the newest master build.
+# Pushes to main also publish them on the Releases page:
+#   - "v<version>" (the version in Cargo.toml) becomes a normal release, marked as the latest one, the first time that
+#     version is built. Raising the version and pushing to main is all it takes to release; pushing a v* tag yourself
+#     works too.
+#   - "nightly" is a prerelease that always holds the files of the newest main build.
+# Running the workflow by hand with "Make a draft release" on checks the whole publishing step without showing
+# anything to the public.
 #
-# File names (the in-app updater picks its download by these endings):
-#   BlockForge-<version>.jar                    BlockForge-<version>-windows-x64.exe
+# File names (the updater of every BlockForge version picks its download by these endings, so each ending must belong
+# to exactly one file):
+#   BlockForge-<version>-windows-x64-setup.exe      the Windows installer
+#   BlockForge-<version>-windows-x64-portable.zip   blockforge.exe on its own
 #   BlockForge-<version>-macos-arm64.dmg
-#   BlockForge-<version>-linux-amd64.deb        BlockForge-<version>-linux-x86_64.rpm
+#   BlockForge-<version>-linux-x86_64.deb / .rpm / .AppImage
+#   BlockForge-<version>.jar                        bridge that moves old jar installs to the native build
 #   SHA256SUMS.txt
 on:
   push:
@@ -20,218 +25,170 @@ on:
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
+    inputs:
+      draft_release:
+        description: "Make a draft release (not visible to the public) to test publishing"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 concurrency:
   group: build-${{ github.ref }}
-  # a newer push replaces a running build, except on master and tags, where a build may be publishing a release
-  cancel-in-progress: ${{ github.ref != 'refs/heads/master' && !startsWith(github.ref, 'refs/tags/') }}
+  # a newer push replaces a running build, except on main and tags, where a build may be publishing a release
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/') }}
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
 
 jobs:
-  test:
-    name: Tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-java@v6
-        with:
-          distribution: temurin
-          java-version: 21
-          cache: gradle
-      - run: ./gradlew --no-daemon test
-
-  jar:
-    name: Jar
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
+  checks:
+    name: Format, lint and tests
+    runs-on: ubuntu-22.04
+    timeout-minutes: 40
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-java@v6
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          distribution: temurin
-          java-version: 21
-          cache: gradle
-      - run: ./gradlew --no-daemon shadowJar
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
       - name: Read the version
         id: version
         run: |
-          version="$(tr -d ' \t\r\n' < src/main/resources/version | sed 's/\.Beta$//')"
+          version="$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)"
+          case "$version" in *[!0-9.]*|"") echo "::error::can't read a version from Cargo.toml"; exit 1 ;; esac
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          test -f "build/libs/BlockForge-$version.jar"
-      - name: Check that the jar starts
-        run: java -jar "build/libs/BlockForge-${{ steps.version.outputs.version }}.jar" --version
-      - uses: actions/upload-artifact@v7
-        with:
-          name: BlockForge-jar
-          path: build/libs/BlockForge-${{ steps.version.outputs.version }}.jar
-          if-no-files-found: error
+          echo "Version $version"
+      - run: cargo fmt --check
+      - run: cargo clippy --locked --release --all-targets -- -D warnings
+      - run: cargo test --locked --release
 
   linux:
-    name: Debian and Fedora packages
-    needs: jar
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+    name: Linux packages (deb, rpm, AppImage)
+    needs: checks
+    # the oldest runner on purpose: a program built on an older system runs on newer ones, not the other way round
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
     env:
-      VERSION: ${{ needs.jar.outputs.version }}
+      VERSION: ${{ needs.checks.outputs.version }}
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-java@v6
-        with:
-          distribution: temurin
-          java-version: 21
-      - name: Install packaging tools
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --locked --release
+      - name: Install the packaging tools
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends rpm fakeroot dpkg-dev desktop-file-utils
-      - uses: actions/download-artifact@v8
-        with:
-          name: BlockForge-jar
-          path: build/libs
+          sudo apt-get update -qq
+          sudo apt-get install -y dpkg-dev rpm squashfs-tools desktop-file-utils appstream curl
       - name: Build the packages
+        run: ./packaging/linux/build.sh "$VERSION"
+      - name: Check the deb on this system
         run: |
-          scripts/package.sh deb "build/libs/BlockForge-$VERSION.jar" build/installers
-          scripts/package.sh rpm "build/libs/BlockForge-$VERSION.jar" build/installers
-      - name: Check the packages
+          sudo apt-get update -qq
+          sudo apt-get install -y ./dist/BlockForge-$VERSION-linux-*.deb
+          blockforge --version
+          desktop-file-validate /usr/share/applications/blockforge.desktop
+          test -f /usr/share/icons/hicolor/256x256/apps/blockforge.png
+      - name: Check the rpm on a clean Fedora
         run: |
-          deb="build/installers/BlockForge-$VERSION-linux-amd64.deb"
-          rpm="build/installers/BlockForge-$VERSION-linux-x86_64.rpm"
-          dpkg-deb --info "$deb"
-          dpkg-deb --contents "$deb" | grep -E 'bin/BlockForge$|\.desktop$|BlockForge\.png$'
-          rpm -qpl "$rpm" | grep -E 'bin/BlockForge$|\.desktop$|BlockForge\.png$'
-          dpkg-deb -x "$deb" "$RUNNER_TEMP/deb-root"
-          desktop-file-validate "$RUNNER_TEMP/deb-root/opt/blockforge/lib/blockforge-BlockForge.desktop"
-          "$RUNNER_TEMP/deb-root/opt/blockforge/bin/BlockForge" --version
-      - name: Install the deb on a clean Debian and start it
+          docker run --rm -v "$PWD/dist:/dist:ro" fedora:latest sh -c \
+            'dnf install -y /dist/BlockForge-*-linux-*.rpm && blockforge --version && test -f /usr/share/applications/blockforge.desktop'
+      - name: Check the AppImage
         run: |
-          docker run --rm -v "$PWD/build/installers:/pkg:ro" debian:stable sh -ec '
-            apt-get update -qq
-            DEBIAN_FRONTEND=noninteractive apt-get install -y -qq /pkg/*.deb > /dev/null
-            /opt/blockforge/bin/BlockForge --version
-            apt-get remove -y -qq blockforge > /dev/null'
-      - name: Install the rpm on a clean Fedora and start it
-        run: |
-          docker run --rm -v "$PWD/build/installers:/pkg:ro" fedora:latest sh -ec '
-            dnf install -y -q /pkg/*.rpm > /dev/null
-            /opt/blockforge/bin/BlockForge --version
-            dnf remove -y -q blockforge > /dev/null'
+          chmod +x dist/BlockForge-$VERSION-linux-*.AppImage
+          dist/BlockForge-$VERSION-linux-*.AppImage --appimage-extract-and-run --version
       - uses: actions/upload-artifact@v7
         with:
-          name: BlockForge-linux-deb
-          path: build/installers/BlockForge-${{ env.VERSION }}-linux-amd64.deb
-          if-no-files-found: error
-      - uses: actions/upload-artifact@v7
-        with:
-          name: BlockForge-linux-rpm
-          path: build/installers/BlockForge-${{ env.VERSION }}-linux-x86_64.rpm
+          name: BlockForge-linux
+          path: |
+            dist/BlockForge-${{ env.VERSION }}-linux-*.deb
+            dist/BlockForge-${{ env.VERSION }}-linux-*.rpm
+            dist/BlockForge-${{ env.VERSION }}-linux-*.AppImage
           if-no-files-found: error
 
   windows:
-    name: Windows installer
-    needs: jar
-    # Windows Server 2025 comes with the WiX Toolset 3.14, which is what jpackage in JDK 21 works with
-    runs-on: windows-2025
-    timeout-minutes: 30
+    name: Windows installer and exe
+    needs: checks
+    runs-on: windows-latest
+    timeout-minutes: 45
     env:
-      VERSION: ${{ needs.jar.outputs.version }}
+      VERSION: ${{ needs.checks.outputs.version }}
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-java@v6
-        with:
-          distribution: temurin
-          java-version: 21
-      - name: Make sure the WiX Toolset 3 is installed
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: ilammy/setup-nasm@v1
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --locked --release
+      - name: Build the installer and the portable zip
         shell: pwsh
-        run: |
-          # jpackage finds WiX on the PATH or in "C:\Program Files (x86)\WiX Toolset v3.*"
-          $bin = Get-Item "${env:ProgramFiles(x86)}\WiX Toolset v3*\bin" -ErrorAction SilentlyContinue | Select-Object -First 1
-          if (-not (Get-Command candle.exe -ErrorAction SilentlyContinue) -and -not $bin) {
-            choco install wixtoolset --version 3.14.1 -y --no-progress
-            $bin = Get-Item "${env:ProgramFiles(x86)}\WiX Toolset v3*\bin" | Select-Object -First 1
-          }
-          if ($bin) { $bin.FullName | Out-File -Append -Encoding utf8 $env:GITHUB_PATH }
-      - uses: actions/download-artifact@v8
-        with:
-          name: BlockForge-jar
-          path: build/libs
-      - name: Build the installer
+        run: ./packaging/windows/build.ps1 -Version $env:VERSION
+      - name: Check the installer
         shell: pwsh
-        run: ./scripts/package.ps1 -Jar "build/libs/BlockForge-$env:VERSION.jar" -Out build/installers
-      - name: Check that the packaged program starts
-        shell: pwsh
-        run: |
-          ./scripts/package.ps1 -Jar "build/libs/BlockForge-$env:VERSION.jar" -Out build/app-image -Type app-image
-          $image = Resolve-Path build/app-image/BlockForge
-          Get-Content "$image/app/BlockForge.cfg"
-          # the program has no console, so its output is caught in a file
-          $p = Start-Process "$image/BlockForge.exe" -ArgumentList '--version' -Wait -PassThru -NoNewWindow `
-            -RedirectStandardOutput "$env:RUNNER_TEMP/version.txt"
-          $out = Get-Content -Raw "$env:RUNNER_TEMP/version.txt"
-          Write-Output "exit code $($p.ExitCode): $out"
-          if ($p.ExitCode -ne 0 -or $out -notmatch 'BlockForge') { throw 'BlockForge.exe --version failed' }
+        run: ./packaging/windows/smoke.ps1 -Version $env:VERSION
       - uses: actions/upload-artifact@v7
         with:
-          name: BlockForge-windows-exe
-          path: build/installers/BlockForge-${{ env.VERSION }}-windows-x64.exe
+          name: BlockForge-windows
+          path: |
+            dist/BlockForge-${{ env.VERSION }}-windows-x64-setup.exe
+            dist/BlockForge-${{ env.VERSION }}-windows-x64-portable.zip
           if-no-files-found: error
 
   macos:
-    name: macOS installer (${{ matrix.name }})
-    needs: jar
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 30
+    name: macOS disk image (Apple Silicon)
+    needs: checks
+    runs-on: macos-15
+    timeout-minutes: 45
     env:
-      VERSION: ${{ needs.jar.outputs.version }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: macos-15
-            name: Apple Silicon
-            arch: arm64
-            java-arch: aarch64
-            cpu: arm64
+      VERSION: ${{ needs.checks.outputs.version }}
+      # the oldest macOS the disk image says it runs on; the program is built for it
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --locked --release
+      - name: Build the disk image
+        run: ./packaging/macos/build.sh "$VERSION"
+      - name: Check the disk image
+        run: ./packaging/macos/smoke.sh "$VERSION"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: BlockForge-macos
+          path: dist/BlockForge-${{ env.VERSION }}-macos-arm64.dmg
+          if-no-files-found: error
+
+  bridge:
+    name: Bridge jar for old installs
+    needs: checks
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    env:
+      VERSION: ${{ needs.checks.outputs.version }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: 21
-          # the bundled Java is made from this JDK, so it has to match the Macs the disk image is for
-          architecture: ${{ matrix.java-arch }}
-      - uses: actions/download-artifact@v8
-        with:
-          name: BlockForge-jar
-          path: build/libs
-      - name: Build the disk image
-        run: scripts/package.sh dmg "build/libs/BlockForge-$VERSION.jar" build/installers
-      - name: Check the disk image
-        run: |
-          dmg="build/installers/BlockForge-$VERSION-macos-${{ matrix.arch }}.dmg"
-          mnt="$RUNNER_TEMP/dmg"
-          hdiutil attach -nobrowse -readonly -mountpoint "$mnt" "$dmg"
-          app="$mnt/BlockForge.app"
-          plutil -p "$app/Contents/Info.plist"
-          lipo -archs "$app/Contents/MacOS/BlockForge"
-          lipo -archs "$app/Contents/runtime/Contents/Home/lib/server/libjvm.dylib" | grep -qx '${{ matrix.cpu }}'
-          "$app/Contents/MacOS/BlockForge" --version
-          hdiutil detach "$mnt"
+      - run: OUT="$PWD/dist" ./packaging/bridge/build.sh "$VERSION"
       - uses: actions/upload-artifact@v7
         with:
-          name: BlockForge-macos-${{ matrix.arch }}-dmg
-          path: build/installers/BlockForge-${{ env.VERSION }}-macos-${{ matrix.arch }}.dmg
+          name: BlockForge-bridge
+          path: dist/BlockForge-${{ env.VERSION }}.jar
           if-no-files-found: error
 
   release:
     name: Publish
-    needs: [test, jar, linux, windows, macos]
-    runs-on: ubuntu-latest
+    needs: [checks, linux, windows, macos, bridge]
+    runs-on: ubuntu-22.04
     timeout-minutes: 15
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v'))
+    if: >-
+      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')))
+      || (github.event_name == 'workflow_dispatch' && inputs.draft_release)
     permissions:
       contents: write
     # never publish two builds at the same time
@@ -241,11 +198,13 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
-      VERSION: ${{ needs.jar.outputs.version }}
+      VERSION: ${{ needs.checks.outputs.version }}
+      DRAFT: ${{ github.event_name == 'workflow_dispatch' }}
       UNSIGNED: >-
         The installers aren't signed yet: on Windows choose "More info" and then "Run anyway", on macOS right-click
         BlockForge and choose Open the first time.
     steps:
+      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
         with:
           path: artifacts
@@ -254,32 +213,55 @@ jobs:
       - name: Check that every file is there
         working-directory: artifacts
         run: |
-          for f in "BlockForge-$VERSION.jar" "BlockForge-$VERSION-windows-x64.exe" \
+          for f in "BlockForge-$VERSION.jar" \
+              "BlockForge-$VERSION-windows-x64-setup.exe" "BlockForge-$VERSION-windows-x64-portable.zip" \
               "BlockForge-$VERSION-macos-arm64.dmg" \
-              "BlockForge-$VERSION-linux-amd64.deb" "BlockForge-$VERSION-linux-x86_64.rpm"; do
+              "BlockForge-$VERSION-linux-x86_64.deb" "BlockForge-$VERSION-linux-x86_64.rpm" \
+              "BlockForge-$VERSION-linux-x86_64.AppImage"; do
             [ -f "$f" ] || { echo "::error::$f is missing"; exit 1; }
+          done
+          # the updater of older versions takes the one file with the right ending, so no ending may appear twice
+          for ext in exe dmg deb rpm jar; do
+            n="$(ls -1 ./*."$ext" 2>/dev/null | wc -l)"
+            [ "$n" -eq 1 ] || { echo "::error::expected exactly one .$ext file, found $n"; exit 1; }
           done
           sha256sum BlockForge-* > SHA256SUMS.txt
           cat SHA256SUMS.txt
-      - name: Release v${{ needs.jar.outputs.version }}
+      - name: Write the release notes
+        run: |
+          {
+            # the section of CHANGELOG.md for this version, if there is one
+            awk -v v="$VERSION" '$0 ~ "^## " v "([^0-9.]|$)" {on=1; next} /^## / {on=0} on' CHANGELOG.md
+            echo
+            echo "$UNSIGNED"
+          } > notes.md
+          cat notes.md
+      - name: Release v${{ needs.checks.outputs.version }}
         run: |
           if [ "$GITHUB_REF_TYPE" = tag ]; then tag="$GITHUB_REF_NAME"; else tag="v$VERSION"; fi
+          if [ "$DRAFT" = true ]; then
+            # a draft is only for checking the steps: it makes no tag and nobody but the owner sees it
+            gh release delete "$tag" --yes 2>/dev/null || true
+            gh release create "$tag" artifacts/* --draft --target "$GITHUB_SHA" --title "BlockForge $VERSION (test)" \
+              --notes-file notes.md
+            exit 0
+          fi
           # the commit the tag points at, if the tag exists already
           tagged="$(gh api "repos/$GH_REPO/commits/$tag" --jq .sha 2>/dev/null || true)"
           case "$tagged" in *[!0-9a-f]*) tagged="" ;; esac
           if [ -n "$tagged" ] && [ "$tagged" != "$GITHUB_SHA" ]; then
-            echo "::notice::$tag was already released from $tagged. Raise the version in src/main/resources/version to publish a new release."
+            echo "::notice::$tag was already released from $tagged. Raise the version in Cargo.toml to publish a new release."
             exit 0
           fi
           if gh release view "$tag" > /dev/null 2>&1; then
             # a re-run of the same build: refresh the files
             gh release upload "$tag" artifacts/* --clobber
           else
-            gh release create "$tag" artifacts/* --target "$GITHUB_SHA" --title "BlockForge ${tag#v}" \
-              --notes "$UNSIGNED" --generate-notes --latest
+            gh release create "$tag" artifacts/* --target "$GITHUB_SHA" --title "BlockForge $VERSION" \
+              --notes-file notes.md --latest
           fi
       - name: Update the nightly build
-        if: github.ref == 'refs/heads/master'
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
         run: |
           # move the nightly tag to this commit, or make it
           if gh api "repos/$GH_REPO/git/ref/tags/nightly" > /dev/null 2>&1; then
@@ -287,7 +269,7 @@ jobs:
           else
             gh api -X POST "repos/$GH_REPO/git/refs" -f ref=refs/tags/nightly -f sha="$GITHUB_SHA" > /dev/null
           fi
-          notes="The newest build from master ($GITHUB_SHA). $UNSIGNED"
+          notes="The newest build from main ($GITHUB_SHA). $UNSIGNED"
           if gh release view nightly > /dev/null 2>&1; then
             gh release edit nightly --title "Nightly build" --notes "$notes" --prerelease --latest=false
             gh release upload nightly artifacts/* --clobber
