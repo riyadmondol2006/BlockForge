@@ -55,7 +55,8 @@ import com.blockforge.launcher.App;
 import com.blockforge.launcher.Gsons;
 import com.blockforge.launcher.builders.HTMLBuilder;
 import com.blockforge.launcher.constants.Constants;
-import com.blockforge.launcher.constants.UIConstants;
+import com.blockforge.launcher.gui.modern.Icons;
+import com.blockforge.launcher.gui.modern.ModernDialogs;
 import com.blockforge.launcher.data.Instance;
 import com.blockforge.launcher.data.Pack;
 import com.blockforge.launcher.data.PackVersion;
@@ -242,31 +243,32 @@ public class InstanceInstallerDialog extends JDialog {
         setResizable(false);
         this.setDefaultCloseOperation(JDialog.DISPOSE_ON_CLOSE);
 
-        install = new JButton(
+        install = ModernDialogs.primary(
             ((isReinstall) ? (isUpdate ? GetText.tr("Update") : GetText.tr("Reinstall")) : GetText.tr("Install")));
 
         // Top Panel Stuff
-        JPanel top = new JPanel();
         String packName = Optional.ofNullable(pack).map(Pack::getName).orElse("Pack");
-        top.add(new JLabel(((isReinstall) ? (isUpdate ? GetText.tr("Updating") : GetText.tr("Reinstalling"))
-            : GetText.tr("Installing")) + " " + packName
-            + (isReinstall ? GetText.tr(" (Current Version: {0})", instance.getVersionOfPack()) : "")));
+        JPanel top = ModernDialogs.header(((isReinstall) ? (isUpdate ? GetText.tr("Updating") : GetText.tr("Reinstalling"))
+            : GetText.tr("Installing")) + " " + packName,
+            isReinstall ? GetText.tr(" (Current Version: {0})", instance.getVersionOfPack()).trim() : null,
+            isServer ? Icons.SERVER : Icons.DOWNLOAD);
 
         // Middle Panel Stuff
         middle = new JPanel();
-        middle.setBorder(BorderFactory.createEmptyBorder(20, 20, 20, 20));
+        middle.setOpaque(false);
+        middle.setBorder(BorderFactory.createEmptyBorder(0, 0, 0, 0));
         middle.setLayout(new GridBagLayout());
         GridBagConstraints gbc = new GridBagConstraints();
 
         gbc.gridx = 0;
         gbc.gridy = 0;
-        gbc.insets = UIConstants.LABEL_INSETS;
+        gbc.insets = ModernDialogs.LABEL_INSETS;
         gbc.anchor = GridBagConstraints.BASELINE_TRAILING;
         JLabel instanceNameLabel = new JLabel(GetText.tr("Name") + ": ");
         middle.add(instanceNameLabel, gbc);
 
         gbc.gridx++;
-        gbc.insets = UIConstants.FIELD_INSETS;
+        gbc.insets = ModernDialogs.FIELD_INSETS;
         gbc.anchor = GridBagConstraints.BASELINE_LEADING;
         nameField = new JTextField(17);
         nameField.setText(((isReinstall) ? instance.launcher.name : packName));
@@ -293,7 +295,7 @@ public class InstanceInstallerDialog extends JDialog {
 
         gbc.gridx = 0;
         gbc.gridy++;
-        gbc.insets = UIConstants.LABEL_INSETS;
+        gbc.insets = ModernDialogs.LABEL_INSETS;
 
         gbc = this.setupVersionsDropdown(gbc);
 
@@ -317,7 +319,7 @@ public class InstanceInstallerDialog extends JDialog {
         if (!this.isServer && isReinstall) {
             gbc.gridx = 0;
             gbc.gridy++;
-            gbc.insets = UIConstants.LABEL_INSETS;
+            gbc.insets = ModernDialogs.LABEL_INSETS;
             gbc.anchor = GridBagConstraints.BASELINE_TRAILING;
             saveModsLabel = new JLabelWithHover(GetText.tr("Save Mods") + "? ",
                 Utils.getIconImage(App.THEME.getIconPath("question")),
@@ -327,7 +329,7 @@ public class InstanceInstallerDialog extends JDialog {
             middle.add(saveModsLabel, gbc);
 
             gbc.gridx++;
-            gbc.insets = UIConstants.FIELD_INSETS;
+            gbc.insets = ModernDialogs.FIELD_INSETS;
             gbc.anchor = GridBagConstraints.BASELINE_LEADING;
             saveModsCheckbox = new JCheckBox();
 
@@ -344,8 +346,6 @@ public class InstanceInstallerDialog extends JDialog {
         }
 
         // Bottom Panel Stuff
-        JPanel bottom = new JPanel();
-        bottom.setLayout(new FlowLayout());
         install.addActionListener(e -> {
             Installable installable;
 
@@ -421,16 +421,14 @@ public class InstanceInstallerDialog extends JDialog {
                 dispose();
             }
         });
-        JButton cancel = new JButton(GetText.tr("Cancel"));
+        JButton cancel = ModernDialogs.secondary(GetText.tr("Cancel"));
         cancel.addActionListener(e -> dispose());
-        bottom.add(install);
-        bottom.add(cancel);
 
-        add(top, BorderLayout.NORTH);
-        add(middle, BorderLayout.CENTER);
-        add(bottom, BorderLayout.SOUTH);
+        ModernDialogs.install(this, top, middle, ModernDialogs.footer(cancel, install));
 
         WindowUtils.resizeForContent(this);
+        setLocationRelativeTo(parent);
+        ModernDialogs.growToFitOnShow(this);
     }
 
     private void handlePackInstall(Object object) {
@@ -1062,7 +1060,7 @@ public class InstanceInstallerDialog extends JDialog {
         middle.add(versionLabel, gbc);
 
         gbc.gridx++;
-        gbc.insets = UIConstants.FIELD_INSETS;
+        gbc.insets = ModernDialogs.FIELD_INSETS;
         gbc.anchor = GridBagConstraints.BASELINE_LEADING;
 
         versionsDropDown = new JComboBox<>();
@@ -1177,7 +1175,7 @@ public class InstanceInstallerDialog extends JDialog {
         // ensures that there is a maximum width of 250 px to prevent overflow
         versionLength = Math.min(250, versionLength);
 
-        versionsDropDown.setPreferredSize(new Dimension(versionLength, 23));
+        ModernDialogs.preferWidth(versionsDropDown, versionLength);
     }
 
     protected void updateLoaderVersions(@Nonnull PackVersion item) {
@@ -1323,7 +1321,7 @@ public class InstanceInstallerDialog extends JDialog {
             // ensures that there is a maximum width of 250 px to prevent overflow
             loaderVersionLength = Math.min(250, loaderVersionLength);
 
-            loaderVersionsDropDown.setPreferredSize(new Dimension(loaderVersionLength, 23));
+            ModernDialogs.preferWidth(loaderVersionsDropDown, loaderVersionLength);
 
             loaderVersionsDropDown.setEnabled(true);
             loaderVersionLabel.setVisible(true);
@@ -1338,13 +1336,13 @@ public class InstanceInstallerDialog extends JDialog {
     private GridBagConstraints setupLoaderVersionsDropdown(GridBagConstraints gbc) {
         gbc.gridx = 0;
         gbc.gridy++;
-        gbc.insets = UIConstants.LABEL_INSETS;
+        gbc.insets = ModernDialogs.LABEL_INSETS;
         gbc.anchor = GridBagConstraints.BASELINE_TRAILING;
 
         middle.add(loaderVersionLabel, gbc);
 
         gbc.gridx++;
-        gbc.insets = UIConstants.FIELD_INSETS;
+        gbc.insets = ModernDialogs.FIELD_INSETS;
         gbc.anchor = GridBagConstraints.BASELINE_LEADING;
         if (this.versionsDropDown.getSelectedItem() != null) {
             this.updateLoaderVersions((PackVersion) this.versionsDropDown.getSelectedItem());

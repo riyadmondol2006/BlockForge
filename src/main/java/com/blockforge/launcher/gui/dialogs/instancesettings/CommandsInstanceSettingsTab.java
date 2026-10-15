@@ -33,7 +33,7 @@ import javax.swing.border.Border;
 import org.mini2Dx.gettext.GetText;
 
 import com.blockforge.launcher.App;
-import com.blockforge.launcher.constants.UIConstants;
+import com.blockforge.launcher.gui.modern.ModernDialogs;
 import com.blockforge.launcher.data.Instance;
 import com.blockforge.launcher.gui.components.JLabelWithHover;
 import com.blockforge.launcher.utils.ComboItem;
@@ -64,14 +64,14 @@ public class CommandsInstanceSettingsTab extends JPanel {
 
         gbc.gridx = 0;
         gbc.gridy++;
-        gbc.insets = UIConstants.LABEL_INSETS;
+        gbc.insets = ModernDialogs.LABEL_INSETS;
         gbc.anchor = GridBagConstraints.BASELINE_TRAILING;
         JLabelWithHover enableCommandsLabel = new JLabelWithHover(GetText.tr("Enable commands") + "?", HELP_ICON,
                 GetText.tr("This allows you to turn launch/exit commands on or off."));
         add(enableCommandsLabel, gbc);
 
         gbc.gridx++;
-        gbc.insets = UIConstants.FIELD_INSETS;
+        gbc.insets = ModernDialogs.FIELD_INSETS;
         gbc.anchor = GridBagConstraints.BASELINE_LEADING;
         enableCommands = new JComboBox<>();
         enableCommands.addItem(new ComboItem<>(null, GetText.tr("Use Launcher Default")));
@@ -91,7 +91,7 @@ public class CommandsInstanceSettingsTab extends JPanel {
         // Pre-launch command
         gbc.gridx = 0;
         gbc.gridy++;
-        gbc.insets = UIConstants.LABEL_INSETS;
+        gbc.insets = ModernDialogs.LABEL_INSETS;
         gbc.anchor = GridBagConstraints.BASELINE_TRAILING;
         JLabelWithHover preLaunchCommandLabel = new JLabelWithHover(GetText.tr("Pre-launch command") + ":", HELP_ICON,
                 GetText.tr(
@@ -99,10 +99,10 @@ public class CommandsInstanceSettingsTab extends JPanel {
         add(preLaunchCommandLabel, gbc);
 
         gbc.gridx++;
-        gbc.insets = UIConstants.FIELD_INSETS;
+        gbc.insets = ModernDialogs.FIELD_INSETS;
         gbc.anchor = GridBagConstraints.BASELINE_LEADING;
         preLaunchCommand = new JTextField(App.settings.preLaunchCommand, 32);
-        preLaunchCommand.setPreferredSize(new Dimension(516, 24));
+        ModernDialogs.preferWidth(preLaunchCommand, 516);
 
         if (this.instance.launcher.preLaunchCommand != null) {
             preLaunchCommand.setText(this.instance.launcher.preLaunchCommand);
@@ -113,7 +113,7 @@ public class CommandsInstanceSettingsTab extends JPanel {
         // Post-exit command
         gbc.gridx = 0;
         gbc.gridy++;
-        gbc.insets = UIConstants.LABEL_INSETS;
+        gbc.insets = ModernDialogs.LABEL_INSETS;
         gbc.anchor = GridBagConstraints.BASELINE_TRAILING;
         JLabelWithHover postExitCommandLabel = new JLabelWithHover(GetText.tr("Post-exit command") + ":", HELP_ICON,
                 GetText.tr(
@@ -121,10 +121,10 @@ public class CommandsInstanceSettingsTab extends JPanel {
         add(postExitCommandLabel, gbc);
 
         gbc.gridx++;
-        gbc.insets = UIConstants.FIELD_INSETS;
+        gbc.insets = ModernDialogs.FIELD_INSETS;
         gbc.anchor = GridBagConstraints.BASELINE_LEADING;
         postExitCommand = new JTextField(App.settings.postExitCommand, 32);
-        postExitCommand.setPreferredSize(new Dimension(516, 24));
+        ModernDialogs.preferWidth(postExitCommand, 516);
 
         if (this.instance.launcher.postExitCommand != null) {
             postExitCommand.setText(this.instance.launcher.postExitCommand);
@@ -135,7 +135,7 @@ public class CommandsInstanceSettingsTab extends JPanel {
         // wrapper command
         gbc.gridx = 0;
         gbc.gridy++;
-        gbc.insets = UIConstants.LABEL_INSETS;
+        gbc.insets = ModernDialogs.LABEL_INSETS;
         gbc.anchor = GridBagConstraints.BASELINE_TRAILING;
         JLabelWithHover wrapperCommandLabel = new JLabelWithHover(GetText.tr("Wrapper command") + ":", HELP_ICON,
                 GetText.tr(
@@ -143,10 +143,10 @@ public class CommandsInstanceSettingsTab extends JPanel {
         add(wrapperCommandLabel, gbc);
 
         gbc.gridx++;
-        gbc.insets = UIConstants.FIELD_INSETS;
+        gbc.insets = ModernDialogs.FIELD_INSETS;
         gbc.anchor = GridBagConstraints.BASELINE_LEADING;
         wrapperCommand = new JTextField(App.settings.wrapperCommand, 32);
-        wrapperCommand.setPreferredSize(new Dimension(516, 24));
+        ModernDialogs.preferWidth(wrapperCommand, 516);
 
         if (this.instance.launcher.wrapperCommand != null) {
             wrapperCommand.setText(this.instance.launcher.wrapperCommand);

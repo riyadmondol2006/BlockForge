@@ -18,7 +18,6 @@
 package com.blockforge.launcher.gui.dialogs;
 
 import java.awt.BorderLayout;
-import java.awt.FlowLayout;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.Window;
@@ -36,7 +35,8 @@ import org.mini2Dx.gettext.GetText;
 
 import com.blockforge.launcher.App;
 import com.blockforge.launcher.builders.HTMLBuilder;
-import com.blockforge.launcher.constants.UIConstants;
+import com.blockforge.launcher.gui.modern.Icons;
+import com.blockforge.launcher.gui.modern.ModernDialogs;
 import com.blockforge.launcher.managers.DialogManager;
 import com.blockforge.launcher.managers.LogManager;
 import com.blockforge.launcher.network.Analytics;
@@ -61,9 +61,8 @@ public class CreateMinecraftProfileDialog extends JDialog {
 
         Analytics.sendScreenView("Create Minecraft Profile Dialog");
 
-        setSize(320, 150);
+        setSize(440, 230);
         setLocationRelativeTo(parent);
-        setLayout(new BorderLayout());
         setIconImage(Utils.getImage("/assets/image/icon.png"));
         setDefaultCloseOperation(JDialog.DISPOSE_ON_CLOSE);
         setResizable(false);
@@ -80,32 +79,32 @@ public class CreateMinecraftProfileDialog extends JDialog {
 
     private void setupComponents() {
         // Top Panel Stuff
-        JPanel top = new JPanel();
-        top.add(new JLabel(GetText.tr("Create Minecraft Profile")));
+        JPanel top = ModernDialogs.header(GetText.tr("Create Minecraft Profile"), null, Icons.PERSON);
 
         // Middle Panel Stuff
         JPanel middle = new JPanel();
+        middle.setOpaque(false);
         middle.setLayout(new GridBagLayout());
         GridBagConstraints gbc = new GridBagConstraints();
 
         gbc.gridx = 0;
         gbc.gridy = 0;
-        gbc.insets = UIConstants.LABEL_INSETS;
+        gbc.insets = ModernDialogs.LABEL_INSETS;
         gbc.anchor = GridBagConstraints.BASELINE_TRAILING;
-        JLabel instanceNameLabel = new JLabel(GetText.tr("Username") + ": ");
+        JLabel instanceNameLabel = ModernDialogs.label(GetText.tr("Username") + ": ");
         middle.add(instanceNameLabel, gbc);
 
         gbc.gridx++;
-        gbc.insets = UIConstants.FIELD_INSETS;
+        gbc.insets = ModernDialogs.FIELD_INSETS;
+        gbc.weightx = 1;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
         gbc.anchor = GridBagConstraints.BASELINE_LEADING;
         profileName = new JTextField(16);
         profileName.setText("");
         middle.add(profileName, gbc);
 
         // Bottom Panel Stuff
-        JPanel bottom = new JPanel();
-        bottom.setLayout(new FlowLayout());
-        JButton createButton = new JButton(GetText.tr("Create"));
+        JButton createButton = ModernDialogs.primary(GetText.tr("Create"));
         createButton.addActionListener(e -> {
             ProgressDialog<Boolean> progressDialog = new ProgressDialog<>(GetText.tr("Creating Minecraft Profile"), 0,
                 GetText.tr("Creating Minecraft Profile"));
@@ -154,11 +153,13 @@ public class CreateMinecraftProfileDialog extends JDialog {
             }
 
         });
-        bottom.add(createButton);
 
-        add(top, BorderLayout.NORTH);
-        add(middle, BorderLayout.CENTER);
-        add(bottom, BorderLayout.SOUTH);
+        JPanel body = new JPanel(new BorderLayout());
+        body.setOpaque(false);
+        body.add(middle, BorderLayout.NORTH);
+
+        ModernDialogs.install(this, top, body, ModernDialogs.footer(createButton));
+        ModernDialogs.growToFitOnShow(this);
     }
 
     private void close() {

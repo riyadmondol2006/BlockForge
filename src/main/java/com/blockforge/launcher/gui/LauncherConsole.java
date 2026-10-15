@@ -17,9 +17,9 @@
  */
 package com.blockforge.launcher.gui;
 
-import java.awt.BorderLayout;
 import java.awt.Component;
 import java.awt.Dimension;
+import java.awt.Insets;
 import java.awt.Toolkit;
 import java.awt.datatransfer.Clipboard;
 import java.awt.datatransfer.StringSelection;
@@ -28,6 +28,7 @@ import java.awt.event.ComponentEvent;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 
+import javax.swing.BorderFactory;
 import javax.swing.JFrame;
 import javax.swing.JMenuItem;
 import javax.swing.JPopupMenu;
@@ -43,6 +44,7 @@ import com.blockforge.launcher.evnt.manager.ConsoleStateManager;
 import com.blockforge.launcher.evnt.manager.RelocalizationManager;
 import com.blockforge.launcher.gui.components.Console;
 import com.blockforge.launcher.gui.components.ConsoleBottomBar;
+import com.blockforge.launcher.gui.modern.ModernDialogs;
 import com.blockforge.launcher.managers.LogManager;
 import com.blockforge.launcher.utils.Utils;
 
@@ -60,10 +62,9 @@ public class LauncherConsole extends JFrame implements RelocalizationListener {
         setTitle(GetText.tr("{0} Console", Constants.LAUNCHER_NAME));
         setDefaultCloseOperation(JFrame.HIDE_ON_CLOSE);
         setIconImage(Utils.getImage("/assets/image/icon.png"));
-        setLayout(new BorderLayout());
 
         setMinimumSize(new Dimension(400, 200));
-        setSize(new Dimension(650, 400));
+        setSize(new Dimension(760, 480));
 
         try {
             if (App.settings.rememberWindowSizePosition && App.settings.consoleSize != null
@@ -81,10 +82,13 @@ public class LauncherConsole extends JFrame implements RelocalizationListener {
 
         bottomBar = new ConsoleBottomBar();
 
+        console.setMargin(new Insets(10, 12, 10, 12));
         JScrollPane scrollPane = new JScrollPane(console, JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED,
                 JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
-        add(scrollPane, BorderLayout.CENTER);
-        add(bottomBar, BorderLayout.SOUTH);
+        scrollPane.setBorder(ModernDialogs.outline());
+
+        ModernDialogs.Surface root = ModernDialogs.install(this, null, scrollPane, bottomBar);
+        root.setBorder(BorderFactory.createEmptyBorder(14, 14, 0, 14));
         RelocalizationManager.addListener(this);
 
         addComponentListener(new ComponentAdapter() {

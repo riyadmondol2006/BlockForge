@@ -18,7 +18,6 @@
 package com.blockforge.launcher.gui.dialogs;
 
 import java.awt.BorderLayout;
-import java.awt.Color;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.GridBagConstraints;
@@ -50,6 +49,10 @@ import com.blockforge.launcher.builders.HTMLBuilder;
 import com.blockforge.launcher.constants.UIConstants;
 import com.blockforge.launcher.data.json.Mod;
 import com.blockforge.launcher.downloads.RestrictedFileMatcher;
+import com.blockforge.launcher.gui.modern.Icons;
+import com.blockforge.launcher.gui.modern.Lbl;
+import com.blockforge.launcher.gui.modern.ModernDialogs;
+import com.blockforge.launcher.gui.modern.Palette;
 import com.blockforge.launcher.gui.layouts.WrapLayout;
 import com.blockforge.launcher.managers.DialogManager;
 import com.blockforge.launcher.network.Analytics;
@@ -66,13 +69,14 @@ public final class BrowserDownloadDialog extends JDialog {
 
     private final JPanel topPanel = new JPanel(new BorderLayout());
     private final JPanel mainPanel = new JPanel();
-    private final JPanel bottomPanel = new JPanel(new WrapLayout());
+    private final JPanel bottomPanel = new JPanel(new WrapLayout(WrapLayout.RIGHT, 8, 8));
 
     private JScrollPane mainScrollPanel = Utils.wrapInVerticalScroller(mainPanel, 16);
-    private final JButton openFolderButton = new JButton(GetText.tr("Open Folder"));
-    private final JButton openAllButton = new JButton(GetText.tr("Open All In Browser"));
-    private final JButton skipRemainingButton = new JButton(GetText.tr("Skip Remaining"));
-    private final JButton cancelInstallButton = new JButton(GetText.tr("Cancel Install"));
+    private final JButton openFolderButton = ModernDialogs.secondary(GetText.tr("Open Folder")).icon(Icons.FOLDER);
+    private final JButton openAllButton = ModernDialogs.primary(GetText.tr("Open All In Browser"))
+            .icon(Icons.EXTERNAL);
+    private final JButton skipRemainingButton = ModernDialogs.secondary(GetText.tr("Skip Remaining"));
+    private final JButton cancelInstallButton = ModernDialogs.danger(GetText.tr("Cancel Install"));
 
     private final Path downloadPath = FileSystem.getUserDownloadsPath();
 
@@ -255,7 +259,6 @@ public final class BrowserDownloadDialog extends JDialog {
     }
 
     private void setupComponents() {
-        this.topPanel.setBorder(BorderFactory.createEmptyBorder(0, 10, 0, 10));
         JTextPane explanationPane = new JTextPane();
         explanationPane.setContentType("text/html");
         explanationPane.setText(new HTMLBuilder().text(
@@ -266,11 +269,20 @@ public final class BrowserDownloadDialog extends JDialog {
         explanationPane.setEditable(false);
         explanationPane.setBackground(null);
         explanationPane.setBorder(null);
+        explanationPane.setOpaque(false);
+        this.topPanel.setOpaque(false);
+        this.topPanel.add(ModernDialogs.header(getTitle(), null, Icons.DOWNLOAD), BorderLayout.NORTH);
         this.topPanel.add(explanationPane, BorderLayout.CENTER);
-        this.topPanel.setBorder(BorderFactory.createMatteBorder(0, 0, 1, 0, Color.RED));
+        this.topPanel.setBorder(BorderFactory.createEmptyBorder(0, 0, 14, 0));
 
         this.mainPanel.setLayout(new GridBagLayout());
-        this.mainPanel.setBorder(BorderFactory.createEmptyBorder(5, 5, 5, 5));
+        this.mainPanel.setBorder(BorderFactory.createEmptyBorder(8, 12, 8, 12));
+        this.mainPanel.setOpaque(false);
+        this.mainScrollPanel.setBorder(ModernDialogs.outline());
+        this.mainScrollPanel.setOpaque(false);
+        this.mainScrollPanel.getViewport().setOpaque(false);
+        this.bottomPanel.setOpaque(false);
+        this.bottomPanel.setBorder(BorderFactory.createEmptyBorder(10, 0, 0, 0));
 
         setupMainPanel();
 
@@ -307,9 +319,7 @@ public final class BrowserDownloadDialog extends JDialog {
             dispose();
         });
 
-        add(this.topPanel, BorderLayout.NORTH);
-        add(this.mainScrollPanel, BorderLayout.CENTER);
-        add(this.bottomPanel, BorderLayout.SOUTH);
+        ModernDialogs.install(this, this.topPanel, this.mainScrollPanel, this.bottomPanel);
     }
 
     private void setupMainPanel() {
@@ -321,21 +331,21 @@ public final class BrowserDownloadDialog extends JDialog {
 
         gbc.insets = UIConstants.LEFT_TO_RIGHT_SPACER;
         gbc.anchor = GridBagConstraints.BASELINE_LEADING;
-        JLabel modLabel = new JLabel("Mod");
+        JLabel modLabel = Lbl.text("Mod", 12f, true, Palette::textDim);
         modLabel.setFont(App.THEME.getBoldFont());
         this.mainPanel.add(modLabel, gbc);
 
         gbc.gridx++;
         gbc.insets = UIConstants.LEFT_TO_RIGHT_SPACER;
         gbc.anchor = GridBagConstraints.BASELINE_LEADING;
-        JLabel filenameLabel = new JLabel("Filename");
+        JLabel filenameLabel = Lbl.text("Filename", 12f, true, Palette::textDim);
         filenameLabel.setFont(App.THEME.getBoldFont());
         this.mainPanel.add(filenameLabel, gbc);
 
         gbc.gridx++;
         gbc.insets = UIConstants.LEFT_TO_RIGHT_SPACER;
         gbc.anchor = GridBagConstraints.BASELINE_LEADING;
-        JLabel actionsLabel = new JLabel("Actions");
+        JLabel actionsLabel = Lbl.text("Actions", 12f, true, Palette::textDim);
         actionsLabel.setFont(App.THEME.getBoldFont());
         this.mainPanel.add(actionsLabel, gbc);
 
@@ -367,14 +377,15 @@ public final class BrowserDownloadDialog extends JDialog {
             gbc.anchor = GridBagConstraints.BASELINE_LEADING;
 
             if (modsDownloaded.contains(mod)) {
-                this.mainPanel.add(new JLabel(GetText.tr("Download Complete")), gbc);
+                this.mainPanel.add(Lbl.text(GetText.tr("Download Complete"), 13f, true, Palette::accent), gbc);
             } else {
-                JPanel buttonPanel = new JPanel(new FlowLayout());
-                JButton openButton = new JButton(GetText.tr("Open"));
+                JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
+                buttonPanel.setOpaque(false);
+                JButton openButton = ModernDialogs.secondary(GetText.tr("Open")).compact();
                 buttonPanel.add(openButton, gbc);
                 openButton.addActionListener(l -> OS.openWebBrowser(mod.url));
 
-                JButton copyLinkButton = new JButton(GetText.tr("Copy Link"));
+                JButton copyLinkButton = ModernDialogs.secondary(GetText.tr("Copy Link")).compact();
                 buttonPanel.add(copyLinkButton, gbc);
                 copyLinkButton.addActionListener(l -> OS.copyToClipboard(mod.url));
                 this.mainPanel.add(buttonPanel, gbc);
@@ -385,6 +396,8 @@ public final class BrowserDownloadDialog extends JDialog {
         gbc.gridx = 0;
         gbc.gridwidth = GridBagConstraints.REMAINDER;
         gbc.weighty = 1;
-        this.mainPanel.add(new JPanel(), gbc);
+        JPanel filler = new JPanel();
+        filler.setOpaque(false);
+        this.mainPanel.add(filler, gbc);
     }
 }

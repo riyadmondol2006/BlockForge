@@ -57,6 +57,10 @@ import com.blockforge.launcher.data.microsoft.OauthTokenResponse;
 import com.blockforge.launcher.data.microsoft.Profile;
 import com.blockforge.launcher.data.microsoft.XboxLiveAuthErrorResponse;
 import com.blockforge.launcher.data.microsoft.XboxLiveAuthResponse;
+import com.blockforge.launcher.gui.modern.Icons;
+import com.blockforge.launcher.gui.modern.Lbl;
+import com.blockforge.launcher.gui.modern.ModernDialogs;
+import com.blockforge.launcher.gui.modern.Palette;
 import com.blockforge.launcher.gui.panels.LoadingPanel;
 import com.blockforge.launcher.managers.AccountManager;
 import com.blockforge.launcher.managers.DialogManager;
@@ -88,7 +92,7 @@ public final class LoginWithMicrosoftDialog extends JDialog {
         super(App.launcher.getParent(), GetText.tr("Login with Microsoft"), ModalityType.DOCUMENT_MODAL);
 
         this.account = account;
-        this.setMinimumSize(new Dimension(500, 500));
+        this.setMinimumSize(new Dimension(520, 600));
         this.setResizable(false);
         this.setDefaultCloseOperation(JDialog.DISPOSE_ON_CLOSE);
 
@@ -100,11 +104,11 @@ public final class LoginWithMicrosoftDialog extends JDialog {
         });
 
         JPanel mainPanel = new JPanel(new BorderLayout(0, 10));
-        mainPanel.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
+        mainPanel.setOpaque(false);
 
         // Browser login at the top
         JPanel topPanel = new JPanel(new FlowLayout());
-        JButton browserLoginButton = new JButton(GetText.tr("Login with Browser"));
+        JButton browserLoginButton = ModernDialogs.primary(GetText.tr("Login with Browser")).icon(Icons.EXTERNAL);
         browserLoginButton.addActionListener(new ActionListener() {
             @Override
             public void actionPerformed(ActionEvent e) {
@@ -121,7 +125,7 @@ public final class LoginWithMicrosoftDialog extends JDialog {
 
         JPanel dividerPanel = new JPanel(new FlowLayout(FlowLayout.CENTER));
         JPanel linePanel = new JPanel(new BorderLayout(0, 0));
-        JLabel orLabel = new JLabel(GetText.tr("OR"));
+        JLabel orLabel = Lbl.text(GetText.tr("OR"), 12f, true, Palette::textDim);
         orLabel.setBorder(BorderFactory.createEmptyBorder(0, 10, 0, 10));
         JSeparator leftLine = new JSeparator();
         JSeparator rightLine = new JSeparator();
@@ -153,7 +157,7 @@ public final class LoginWithMicrosoftDialog extends JDialog {
         JPanel bottomPanel = new JPanel(new BorderLayout());
         JPanel linkPanel = new JPanel(new FlowLayout());
 
-        JButton copyCodeButton = new JButton(GetText.tr("Copy Code"));
+        JButton copyCodeButton = ModernDialogs.secondary(GetText.tr("Copy Code"));
         copyCodeButton.addActionListener(new ActionListener() {
             @Override
             public void actionPerformed(ActionEvent e) {
@@ -162,7 +166,7 @@ public final class LoginWithMicrosoftDialog extends JDialog {
         });
         linkPanel.add(copyCodeButton);
 
-        JButton openLinkButton = new JButton(GetText.tr("Open Link & Copy Code"));
+        JButton openLinkButton = ModernDialogs.secondary(GetText.tr("Open Link & Copy Code")).icon(Icons.EXTERNAL);
         openLinkButton.addActionListener(new ActionListener() {
             @Override
             public void actionPerformed(ActionEvent e) {
@@ -181,14 +185,17 @@ public final class LoginWithMicrosoftDialog extends JDialog {
                 OS.openWebBrowser(e.getURL());
             }
         });
-        infoPane.setBorder(BorderFactory.createEmptyBorder(20, 10, 20, 10));
+        infoPane.setBorder(BorderFactory.createEmptyBorder(14, 10, 14, 10));
+        infoPane.setOpaque(false);
 
         bottomPanel.add(infoPane, BorderLayout.CENTER);
         bottomPanel.add(linkPanel, BorderLayout.SOUTH);
         bottomContentPanel.add(bottomPanel, BorderLayout.SOUTH);
+        ModernDialogs.blend(bottomContentPanel);
 
         LoadingPanel loadingPanel = new LoadingPanel(GetText.tr("Fetching Login Code..."));
         loadingPanel.setBorder(BorderFactory.createEmptyBorder(0, 0, 100, 0));
+        loadingPanel.setOpaque(false);
         mainPanel.add(loadingPanel, BorderLayout.SOUTH);
 
         new Thread(() -> {
@@ -200,8 +207,8 @@ public final class LoginWithMicrosoftDialog extends JDialog {
                     .build()), BorderLayout.SOUTH);
                 mainPanel.revalidate();
                 mainPanel.repaint();
-                setMinimumSize(new Dimension(500, 180));
-                setSize(new Dimension(500, 180));
+                setMinimumSize(new Dimension(520, 280));
+                setSize(new Dimension(520, 280));
                 setLocationRelativeTo(App.launcher.getParent());
                 return;
             }
@@ -217,7 +224,9 @@ public final class LoginWithMicrosoftDialog extends JDialog {
             pollForToken(deviceCodeResponse);
         }).start();
 
-        this.add(mainPanel);
+        ModernDialogs.blend(mainPanel);
+        ModernDialogs.install(this, ModernDialogs.header(GetText.tr("Login with Microsoft"), null, Icons.PERSON),
+            mainPanel, null);
 
         setVisible(false);
         dispose();

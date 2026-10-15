@@ -18,7 +18,6 @@
 package com.blockforge.launcher.gui.dialogs;
 
 import java.awt.BorderLayout;
-import java.awt.FlowLayout;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.event.WindowAdapter;
@@ -32,6 +31,8 @@ import javax.swing.JLabel;
 import javax.swing.JPanel;
 
 import com.blockforge.launcher.App;
+import com.blockforge.launcher.gui.modern.Icons;
+import com.blockforge.launcher.gui.modern.ModernDialogs;
 
 public class FileTypeDialog extends JDialog {
 
@@ -41,28 +42,31 @@ public class FileTypeDialog extends JDialog {
 
     public FileTypeDialog(String title, String labelName, String bottomText, String selectorText, String[] subOptions) {
         super(App.launcher.getParent(), title, ModalityType.DOCUMENT_MODAL);
-        setSize(400, 175);
+        setSize(440, 230);
         setLocationRelativeTo(null);
-        setLayout(new BorderLayout());
         setDefaultCloseOperation(JFrame.DO_NOTHING_ON_CLOSE);
         setResizable(false);
 
         // Top Panel Stuff
-        JPanel top = new JPanel();
-        top.add(new JLabel(labelName));
+        JPanel top = ModernDialogs.header(labelName, null, Icons.FOLDER);
 
         // Middle Panel Stuff
         JPanel middle = new JPanel();
+        middle.setOpaque(false);
         middle.setLayout(new GridBagLayout());
         GridBagConstraints gbc = new GridBagConstraints();
 
         gbc.gridx = 0;
         gbc.gridy = 0;
+        gbc.insets = ModernDialogs.LABEL_INSETS;
         gbc.anchor = GridBagConstraints.BASELINE_TRAILING;
-        JLabel selectorLabel = new JLabel(selectorText + ": ");
+        JLabel selectorLabel = ModernDialogs.label(selectorText + ": ");
         middle.add(selectorLabel, gbc);
 
         gbc.gridx++;
+        gbc.insets = ModernDialogs.FIELD_INSETS;
+        gbc.weightx = 1;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
         gbc.anchor = GridBagConstraints.BASELINE_LEADING;
         selector = new JComboBox<>();
         for (String item : subOptions) {
@@ -71,15 +75,15 @@ public class FileTypeDialog extends JDialog {
         middle.add(selector, gbc);
 
         // Bottom Panel Stuff
-        JPanel bottom = new JPanel();
-        bottom.setLayout(new FlowLayout());
-        JButton bottomButton = new JButton(bottomText);
+        JButton bottomButton = ModernDialogs.primary(bottomText);
         bottomButton.addActionListener(e -> close());
-        bottom.add(bottomButton);
 
-        add(top, BorderLayout.NORTH);
-        add(middle, BorderLayout.CENTER);
-        add(bottom, BorderLayout.SOUTH);
+        JPanel body = new JPanel(new BorderLayout());
+        body.setOpaque(false);
+        body.add(middle, BorderLayout.NORTH);
+
+        ModernDialogs.install(this, top, body, ModernDialogs.footer(bottomButton));
+        ModernDialogs.growToFitOnShow(this);
 
         addWindowListener(new WindowAdapter() {
             @Override

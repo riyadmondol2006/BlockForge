@@ -54,7 +54,7 @@ import org.mini2Dx.gettext.GetText;
 import com.blockforge.launcher.App;
 import com.blockforge.launcher.Data;
 import com.blockforge.launcher.builders.HTMLBuilder;
-import com.blockforge.launcher.constants.UIConstants;
+import com.blockforge.launcher.gui.modern.ModernDialogs;
 import com.blockforge.launcher.data.Instance;
 import com.blockforge.launcher.data.minecraft.JavaRuntime;
 import com.blockforge.launcher.gui.components.JLabelWithHover;
@@ -101,7 +101,7 @@ public class JavaInstanceSettingsTab extends JPanel {
         // Maximum Memory Settings
         gbc.gridx = 0;
         gbc.gridy++;
-        gbc.insets = UIConstants.LABEL_INSETS;
+        gbc.insets = ModernDialogs.LABEL_INSETS;
         gbc.anchor = GridBagConstraints.BASELINE_TRAILING;
         JLabelWithHover maximumMemoryLabel = new JLabelWithHover(GetText.tr("Maximum Memory/Ram") + ":", HELP_ICON,
             "<html>" + Utils.splitMultilinedString(
@@ -116,7 +116,7 @@ public class JavaInstanceSettingsTab extends JPanel {
         add(maximumMemoryPanel, gbc);
 
         gbc.gridx++;
-        gbc.insets = UIConstants.FIELD_INSETS;
+        gbc.insets = ModernDialogs.FIELD_INSETS;
         gbc.anchor = GridBagConstraints.BASELINE_LEADING;
         SpinnerNumberModel maximumMemoryModel = new SpinnerNumberModel(
             getIfNotNull(this.instance.launcher.maximumMemory, App.settings.maximumMemory), null, null, 512);
@@ -129,14 +129,14 @@ public class JavaInstanceSettingsTab extends JPanel {
         // Perm Gen Settings
         gbc.gridx = 0;
         gbc.gridy++;
-        gbc.insets = UIConstants.LABEL_INSETS;
+        gbc.insets = ModernDialogs.LABEL_INSETS;
         gbc.anchor = GridBagConstraints.BASELINE_TRAILING;
         JLabelWithHover permGenLabel = new JLabelWithHover(GetText.tr("PermGen Size") + ":", HELP_ICON,
             GetText.tr("The PermGen Size for java to use when launching Minecraft in MB."));
         add(permGenLabel, gbc);
 
         gbc.gridx++;
-        gbc.insets = UIConstants.FIELD_INSETS;
+        gbc.insets = ModernDialogs.FIELD_INSETS;
         gbc.anchor = GridBagConstraints.BASELINE_LEADING;
         SpinnerNumberModel permGenModel = new SpinnerNumberModel(
             getIfNotNull(this.instance.launcher.permGen, App.settings.metaspace), null, null, 32);
@@ -170,7 +170,7 @@ public class JavaInstanceSettingsTab extends JPanel {
         gbc.gridx = 0;
         gbc.gridy++;
         gbc.gridwidth = 1;
-        gbc.insets = UIConstants.LABEL_INSETS;
+        gbc.insets = ModernDialogs.LABEL_INSETS;
         gbc.anchor = GridBagConstraints.BASELINE_TRAILING;
         JLabelWithHover javaMinecraftProvidedLabel = new JLabelWithHover(GetText.tr("Java Path") + ":", HELP_ICON,
             new HTMLBuilder().center().text(GetText.tr(
@@ -179,7 +179,7 @@ public class JavaInstanceSettingsTab extends JPanel {
         add(javaMinecraftProvidedLabel, gbc);
 
         gbc.gridx++;
-        gbc.insets = UIConstants.FIELD_INSETS;
+        gbc.insets = ModernDialogs.FIELD_INSETS;
         gbc.anchor = GridBagConstraints.BASELINE_LEADING;
         final JLabel javaPathDummy = new JLabel("Uses Java provided by Minecraft");
         javaPathDummy.setEnabled(false);
@@ -188,7 +188,7 @@ public class JavaInstanceSettingsTab extends JPanel {
         gbc.gridx = 0;
         gbc.gridy++;
         gbc.gridwidth = 1;
-        gbc.insets = UIConstants.LABEL_INSETS;
+        gbc.insets = ModernDialogs.LABEL_INSETS;
         gbc.anchor = GridBagConstraints.BASELINE_TRAILING;
         JLabelWithHover javaPathLabel = new JLabelWithHover(GetText.tr("Java Path") + ":", HELP_ICON, "<html>" + GetText
             .tr("This setting allows you to specify where your Java Path is.<br/><br/>This should be left as default, but if you know what you're doing, just set<br/>this to the path where the bin folder is for the version of Java you want to use.<br/><br/>If you mess up, click the Reset button to go back to the default")
@@ -196,7 +196,7 @@ public class JavaInstanceSettingsTab extends JPanel {
         add(javaPathLabel, gbc);
 
         gbc.gridx++;
-        gbc.insets = UIConstants.LABEL_INSETS;
+        gbc.insets = ModernDialogs.LABEL_INSETS;
         gbc.anchor = GridBagConstraints.BASELINE_LEADING;
 
         JPanel javaPathPanel = new JPanel();
@@ -209,9 +209,9 @@ public class JavaInstanceSettingsTab extends JPanel {
         javaPathPanelBottom.setLayout(new BoxLayout(javaPathPanelBottom, BoxLayout.X_AXIS));
 
         javaPath.setText(getIfNotNull(this.instance.launcher.javaPath, App.settings.javaPath));
-        JButton javaPathResetButton = new JButton(GetText.tr("Reset"));
+        JButton javaPathResetButton = ModernDialogs.secondary(GetText.tr("Reset")).compact();
         javaPathResetButton.addActionListener(e -> javaPath.setText(OS.getDefaultJavaPath()));
-        JButton javaBrowseButton = new JButton(GetText.tr("Browse"));
+        JButton javaBrowseButton = ModernDialogs.secondary(GetText.tr("Browse")).compact();
         javaBrowseButton.addActionListener(e -> {
             JFileChooser chooser = new JFileChooser();
             chooser.setCurrentDirectory(new File(javaPath.getText()));
@@ -235,7 +235,7 @@ public class JavaInstanceSettingsTab extends JPanel {
         });
 
         JComboBox<ComboItem<JavaInfo>> installedJavasComboBox = new JComboBox<>();
-        installedJavasComboBox.setPreferredSize(new Dimension(516, 24));
+        ModernDialogs.preferWidth(installedJavasComboBox, 516);
         installedJavasComboBox.addItem(new ComboItem<>(null, GetText.tr("Use Launcher Default")));
         List<JavaInfo> installedJavas = Java.getInstalledJavas();
         int selectedIndex = 0;
@@ -289,14 +289,14 @@ public class JavaInstanceSettingsTab extends JPanel {
         gbc.gridx = 0;
         gbc.gridy++;
         gbc.gridwidth = 1;
-        gbc.insets = UIConstants.LABEL_INSETS;
+        gbc.insets = ModernDialogs.LABEL_INSETS;
         gbc.anchor = GridBagConstraints.FIRST_LINE_END;
         JLabelWithHover javaParametersLabel = new JLabelWithHover(GetText.tr("Java Parameters") + ":", HELP_ICON,
             GetText.tr("Extra Java command line paramaters can be added here."));
         add(javaParametersLabel, gbc);
 
         gbc.gridx++;
-        gbc.insets = UIConstants.LABEL_INSETS;
+        gbc.insets = ModernDialogs.LABEL_INSETS;
         gbc.anchor = GridBagConstraints.FIRST_LINE_START;
         JPanel javaParametersPanel = new JPanel();
         javaParametersPanel.setLayout(new BoxLayout(javaParametersPanel, BoxLayout.X_AXIS));
@@ -323,7 +323,7 @@ public class JavaInstanceSettingsTab extends JPanel {
         javaParameters.setText(getIfNotNull(this.instance.launcher.javaArguments, App.settings.javaParameters));
         javaParameters.setLineWrap(true);
         javaParameters.setWrapStyleWord(true);
-        JButton javaParametersResetButton = new JButton(GetText.tr("Reset"));
+        JButton javaParametersResetButton = ModernDialogs.secondary(GetText.tr("Reset")).compact();
         javaParametersResetButton.addActionListener(e -> javaParameters.setText(App.settings.javaParameters));
 
         javaParametersScrollPane.setViewportView(javaParameters);
@@ -342,7 +342,7 @@ public class JavaInstanceSettingsTab extends JPanel {
 
         gbc.gridx = 0;
         gbc.gridy++;
-        gbc.insets = UIConstants.LABEL_INSETS;
+        gbc.insets = ModernDialogs.LABEL_INSETS;
         gbc.anchor = GridBagConstraints.BASELINE_TRAILING;
         JLabelWithHover javaRuntimeOverrideLabel = new JLabelWithHover(GetText.tr("Runtime Override") + ":",
             HELP_ICON,
@@ -352,7 +352,7 @@ public class JavaInstanceSettingsTab extends JPanel {
         add(javaRuntimeOverrideLabel, gbc);
 
         gbc.gridx++;
-        gbc.insets = UIConstants.LABEL_INSETS;
+        gbc.insets = ModernDialogs.LABEL_INSETS;
         gbc.anchor = GridBagConstraints.FIRST_LINE_START;
         javaRuntimeOverride = new JComboBox<>();
         if (instance.javaVersion != null) {
@@ -387,7 +387,7 @@ public class JavaInstanceSettingsTab extends JPanel {
         // Use Java Provided By Minecraft
         gbc.gridx = 0;
         gbc.gridy++;
-        gbc.insets = UIConstants.LABEL_INSETS;
+        gbc.insets = ModernDialogs.LABEL_INSETS;
         gbc.anchor = GridBagConstraints.BASELINE_TRAILING;
         JLabelWithHover useJavaProvidedByMinecraftLabel = new JLabelWithHover(
             GetText.tr("Use Java Provided By Minecraft") + "?", HELP_ICON,
@@ -397,7 +397,7 @@ public class JavaInstanceSettingsTab extends JPanel {
         add(useJavaProvidedByMinecraftLabel, gbc);
 
         gbc.gridx++;
-        gbc.insets = UIConstants.LABEL_INSETS;
+        gbc.insets = ModernDialogs.LABEL_INSETS;
         gbc.anchor = GridBagConstraints.FIRST_LINE_START;
         useJavaProvidedByMinecraft = new JComboBox<>();
         useJavaProvidedByMinecraft.addItem(new ComboItem<>(null, GetText.tr("Use Launcher Default")));
@@ -463,7 +463,7 @@ public class JavaInstanceSettingsTab extends JPanel {
         if (instance.launcher.loaderVersion == null || !instance.launcher.loaderVersion.isLegacyFabric()) {
             gbc.gridx = 0;
             gbc.gridy++;
-            gbc.insets = UIConstants.LABEL_INSETS;
+            gbc.insets = ModernDialogs.LABEL_INSETS;
             gbc.anchor = GridBagConstraints.BASELINE_TRAILING;
             JLabelWithHover disableLegacyLaunchingLabel = new JLabelWithHover(
                 GetText.tr("Disable Legacy Launching") + "?", HELP_ICON,
@@ -474,7 +474,7 @@ public class JavaInstanceSettingsTab extends JPanel {
             add(disableLegacyLaunchingLabel, gbc);
 
             gbc.gridx++;
-            gbc.insets = UIConstants.LABEL_INSETS;
+            gbc.insets = ModernDialogs.LABEL_INSETS;
             gbc.anchor = GridBagConstraints.FIRST_LINE_START;
             disableLegacyLaunching = new JComboBox<>();
             disableLegacyLaunching.addItem(new ComboItem<>(null, GetText.tr("Use Launcher Default")));
@@ -495,7 +495,7 @@ public class JavaInstanceSettingsTab extends JPanel {
         // Use System GLFW
         gbc.gridx = 0;
         gbc.gridy++;
-        gbc.insets = UIConstants.LABEL_INSETS;
+        gbc.insets = ModernDialogs.LABEL_INSETS;
         gbc.anchor = GridBagConstraints.BASELINE_TRAILING;
         JLabelWithHover useSystemGlfwLabel = new JLabelWithHover(GetText.tr("Use System GLFW") + "?", HELP_ICON,
             new HTMLBuilder().center().text(GetText.tr("Use the systems install for GLFW native library."))
@@ -503,7 +503,7 @@ public class JavaInstanceSettingsTab extends JPanel {
         add(useSystemGlfwLabel, gbc);
 
         gbc.gridx++;
-        gbc.insets = UIConstants.LABEL_INSETS;
+        gbc.insets = ModernDialogs.LABEL_INSETS;
         gbc.anchor = GridBagConstraints.FIRST_LINE_START;
         useSystemGlfw = new JComboBox<>();
         useSystemGlfw.addItem(new ComboItem<>(null, GetText.tr("Use Launcher Default")));
@@ -523,7 +523,7 @@ public class JavaInstanceSettingsTab extends JPanel {
         // Use System OpenAL
         gbc.gridx = 0;
         gbc.gridy++;
-        gbc.insets = UIConstants.LABEL_INSETS;
+        gbc.insets = ModernDialogs.LABEL_INSETS;
         gbc.anchor = GridBagConstraints.BASELINE_TRAILING;
         JLabelWithHover useSystemOpenAlLabel = new JLabelWithHover(GetText.tr("Use System OpenAL") + "?", HELP_ICON,
             new HTMLBuilder().center().text(GetText.tr("Use the systems install for OpenAL native library."))
@@ -531,7 +531,7 @@ public class JavaInstanceSettingsTab extends JPanel {
         add(useSystemOpenAlLabel, gbc);
 
         gbc.gridx++;
-        gbc.insets = UIConstants.LABEL_INSETS;
+        gbc.insets = ModernDialogs.LABEL_INSETS;
         gbc.anchor = GridBagConstraints.FIRST_LINE_START;
         useSystemOpenAl = new JComboBox<>();
         useSystemOpenAl.addItem(new ComboItem<>(null, GetText.tr("Use Launcher Default")));
