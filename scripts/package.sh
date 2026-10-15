@@ -83,9 +83,9 @@ case "$TYPE" in
     deb | rpm)
         # the libraries Minecraft itself needs from the system (graphics and sound), on top of what jpackage adds
         if [ "$TYPE" = deb ]; then
-            DEPS="libgl1,libasound2 | libasound2t64,libx11-6,libxext6,libxi6,libxrender1,libxtst6"
+            DEPS="libgl1,libasound2 | libasound2t64,libx11-6,libxext6,libxi6,libxrender1,libxtst6,libfontconfig1,fonts-dejavu-core"
         else
-            DEPS="mesa-libGL,alsa-lib"
+            DEPS="mesa-libGL,alsa-lib,fontconfig"
         fi
         "$JPACKAGE" --type "$TYPE" "$@" --app-version "$FULL_VERSION" \
             --resource-dir "$ROOT/packaging/jpackage/linux" \
