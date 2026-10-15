@@ -76,10 +76,10 @@ public class SettingsPage extends Page {
         column.add(Box.createVerticalStrut(16));
         column.add(section(GetText.tr("Game"), memoryRow(),
             toggleRow(GetText.tr("Speed up game start (class cache)"),
-                GetText.tr("Keeps the classes a game loads ready for its next start, which is then quicker (Minecraft 1.18 and newer)"),
+                GetText.tr("Makes the next start of a game quicker (Minecraft 1.18 and newer)"),
                 App.settings.classDataCache, v -> App.settings.classDataCache = v),
             toggleRow(GetText.tr("Pick game settings for this PC on first launch"),
-                GetText.tr("A new game starts with a view distance and graphics that suit this computer"),
+                GetText.tr("New games start with graphics that suit this computer"),
                 App.settings.autoGameOptions, v -> App.settings.autoGameOptions = v),
             textRow(GetText.tr("Java path"), GetText.tr("Leave empty to use the Java that comes with Minecraft"),
                 GetText.tr("Automatic (recommended)"),
