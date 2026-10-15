@@ -1,22 +1,101 @@
-# ATLauncher
+# BlockForge
 
-![Application](https://github.com/ATLauncher/ATLauncher/workflows/Application/badge.svg?branch=master)
-[![Discord](https://discordapp.com/api/guilds/117047818136322057/embed.png?style=shield)](https://atl.pw/discord)
+A Minecraft launcher with a modern interface that opens fast, plays offline without an account, and keeps working when
+downloads or mod sites misbehave.
 
-## What is it
+Repository: <https://github.com/riyadmondol2006/BlockForge>
 
-ATLauncher is a launcher for Minecraft which integrates multiple different modpacks to allow you to download and install
-modpacks easily and quickly.
+> **BlockForge is a fork of [ATLauncher](https://github.com/ATLauncher/ATLauncher)** (GPL-3.0). All of the launcher's
+> core (modpack installs, mod loaders, instance handling, account and launch code) comes from ATLauncher and its
+> contributors, and their copyright notices are kept in the source. See [What's different](#whats-different-from-atlauncher)
+> for what this fork changes. BlockForge is not affiliated with or endorsed by ATLauncher.
 
-## Links
+## Features
 
--   [ATLauncher Website](https://atlauncher.com)
--   [ATLauncher Discord](https://atl.pw/discord)
--   [ATLauncher Facebook](https://www.facebook.com/ATLauncher)
--   [ATLauncher Reddit](https://www.reddit.com/r/ATLauncher)
--   [ATLauncher Twitter](https://twitter.com/ATLauncher)
+- **Play without an account**: when BlockForge opens it asks who is playing. Type a name to play offline, pick a saved
+  player, or sign in with Microsoft. Microsoft sign-in is optional.
+- **Modpacks from many places**: search ATLauncher, CurseForge, Modrinth, FTB and Technic packs in one screen, or build
+  an instance from any Minecraft version with Fabric, Forge, NeoForge or Quilt.
+- **Modrinth first**: Modrinth is the default source for adding mods and for exporting.
+- **Import your old launcher**: finds Prism, MultiMC, CurseForge, GDLauncher and ATLauncher instances and copies them in.
+- **Safe updates**: a snapshot of mods and configs is taken before every update or reinstall, and can be restored.
+- **Plain-English crash help**: after a crash it says what most likely went wrong, and can make a support bundle with
+  all personal details removed.
+- **Private by default**: nothing about how you use it is sent unless you turn it on, see [PRIVACY.md](PRIVACY.md).
 
-## Contributing to ATLauncher
+## What's different from ATLauncher
+
+This fork is a work in progress. Compared to ATLauncher 3.4.41.4 it changes:
+
+**Look and feel**
+- A new main window written from scratch: a navigation sidebar and the screens Home, Library, Discover, Create, Tools
+  and Settings, with dark and light themes (Roboto font, vector icons drawn in code).
+- The original tab layout, the Servers and About screens, the all-in-one settings tabs, the old instance cards and the
+  social media buttons (Discord, GitHub, Reddit, Facebook, Twitter, Nodecraft) are removed.
+- New name, package (`com.blockforge.launcher`), logo, splash screen and data folder, so it never mixes with an
+  existing ATLauncher install. A Material 3 theme is included for the pop-up dialogs that still use the old style.
+
+**Accounts**
+- Offline players are built in. The launcher asks who is playing on every start (can be turned off in Settings), and
+  there is no longer a need for an account to play.
+
+**Speed**
+- The window appears in about 1 second instead of about 2 (about 0.8 with `scripts/blockforge.sh`). The launcher file
+  list is cached, the console, tray icon and system information load in the background, and the old forced garbage
+  collection is gone.
+- Launching Minecraft skips re-hashing files that haven't changed, remembers the Java version, skips the login step for
+  offline players and no longer keeps a CPU core busy while waiting on downloads.
+
+**Reliability**
+- Downloads retry on busy servers (HTTP 429/5xx) and network hiccups, wait as the server asks, and are written to a
+  temporary file so an interrupted download never leaves a half-written file.
+- The launch log says which Java was chosen and why, and warns about a Java that is too old, 32-bit or running under
+  emulation on ARM.
+- New code for importing instances, snapshots and rollback, a mod dependency planner, and matching hand-downloaded
+  CurseForge files, all with unit tests.
+
+**Privacy**
+- Usage statistics, pack install/play-time reporting and crash reports are off by default, and a remote setting can no
+  longer turn crash reporting on. Self-updating is turned off, since it would replace BlockForge with ATLauncher.
+
+## Download and run
+
+Build the jar (see [Building](#building)) and run it:
+
+```sh
+java -jar build/libs/BlockForge-<version>.jar
+```
+
+On Linux and macOS `scripts/blockforge.sh` starts it with a class cache for a faster start (Java 19 or newer).
+
+## Services it uses
+
+To work, BlockForge talks to Mojang and Microsoft, CurseForge, Modrinth, the loader sites (Fabric, Quilt, Forge,
+NeoForge) and, for the modpack catalogue, news and launcher data files, **ATLauncher's servers**
+(`api.atlauncher.com`, `download.nodecdn.net`). Upstream asks that others don't use its CDN, files and modpacks in their
+own launcher without permission, so if you run or publish this fork widely, please check with ATLauncher or replace
+those endpoints in `Constants.java`. More detail is in [PRIVACY.md](PRIVACY.md).
+
+**Before you publish builds:** `Constants.java` still holds ATLauncher's own CurseForge API key and Microsoft login
+client ID, which upstream says forks must not reuse. Get your own
+([CurseForge key](https://forms.monday.com/forms/dce5ccb7afda9a1c21dab1a1aa1d84eb),
+[Microsoft client ID](https://learn.microsoft.com/en-us/azure/active-directory/develop/quickstart-register-app)) and
+replace them before sharing the launcher with other people.
+
+## For developers
+
+- `scripts/blockforge.sh` starts the jar with a class cache, which opens the window faster.
+- `scripts/startup-budget.sh` fails if the window takes longer than a set time to appear.
+- `scripts/loader-canary.sh` checks that the Fabric, Quilt, Forge and NeoForge services still answer as the launcher
+  expects.
+- [PRIVACY.md](PRIVACY.md) lists what is and isn't sent, and [NOTICE.md](NOTICE.md) lists the third-party files.
+
+## Upstream
+
+BlockForge builds on [ATLauncher](https://github.com/ATLauncher/ATLauncher) by ATLauncher and its contributors. If you
+want the original launcher, get it from [atlauncher.com](https://atlauncher.com).
+
+## Contributing
 
 Take a look at [CONTRIBUTING.md](CONTRIBUTING.md)
 
@@ -26,8 +105,8 @@ Please see the [TESTING.md](TESTING.md) file for information on how we write tes
 
 ## Prerequisites
 
-In order to build ATLauncher, you will need any Java version 8 or above. Java 8 is recommended since we compile to Java
-8 compatability regardless.
+In order to build BlockForge you need Java 17 or newer to run Gradle (Gradle 8.12 can't run on Java 25, so use 17 or 21).
+The code itself compiles to Java 8 compatibility.
 
 Everything else that's needed for the project is provided by Gradle, and accessed using the Gradle wrapper which can be
 invoked by using `./gradlew`.
@@ -40,7 +119,7 @@ To build this project, simply run:
 ./gradlew build
 ```
 
-This will build the application and output the resulting files for Windows, Linux and OSX in the `dist` directory.
+To build just the runnable jar, run `./gradlew shadowJar`. It is written to `build/libs/`.
 
 ## Running in test
 
@@ -106,10 +185,10 @@ this to all new files you create.
 
 ## Create Custom Themes
 
-ATLauncher supports custom themes. The process is fairly straight forward, but may require a lot of trial and error.
+BlockForge supports custom themes. The process is fairly straight forward, but may require a lot of trial and error.
 
-First you must create a `MyThemeName.java` in the `src/main/java/com/atlauncher/themes/` directory. Your theme should
-extend one of the base ATLauncher themes depending on what you need:
+First you must create a `MyThemeName.java` in the `src/main/java/com/blockforge/launcher/themes/` directory. Your theme should
+extend one of the base themes depending on what you need:
 
 -   `Dark` is the default theme and is a dark theme. It's a good place to start with some defaults for new dark themes.
 -   `Light` is a light theme. It's a good place to start with some defaults for new light themes.
@@ -117,10 +196,10 @@ extend one of the base ATLauncher themes depending on what you need:
     brand colours and some defaults. This shouldn't be extended from unless you need absolute power.
 
 Once you've created your class (look at other themes in the directory for an idea on what you can do), you'll need to
-create a properties file in the `src/main/resources/com/atlauncher/themes/` directory. This properties file is how you
+create a properties file in the `src/main/resources/com/blockforge/launcher/themes/` directory. This properties file is how you
 setup and change UI elements. You should use the existing examples in that directory as examples.
 
-Last step is to register the theme in the file `src/main/java/com/atlauncher/gui/tabs/settings/GeneralSettingsTab.java`.
+Last step is to register the theme in the file `src/main/java/com/blockforge/launcher/gui/tabs/settings/GeneralSettingsTab.java`.
 
 Now you can open the launcher and then switch to your theme.
 
@@ -156,7 +235,7 @@ in your `.properties` file.
 ## Plugging In Your Data
 
 To get started with the code and plug in your own data, you need to edit the
-`/src/main/java/com/atlauncher/constants/Constants.java` file.
+`/src/main/java/com/blockforge/launcher/constants/Constants.java` file.
 
 By using this source code you don't get permissions to use our CDN/files/assets/modpacks. See the License section at the
 bottom for more.
@@ -257,7 +336,7 @@ Now the launcher should have the option to change to the language/s.
 
 ## License
 
-This work is licensed under the GNU General Public License v3.0. To view a copy of this license, visit
+BlockForge is a fork of ATLauncher and keeps its license. This work is licensed under the GNU General Public License v3.0. To view a copy of this license, visit
 <http://www.gnu.org/licenses/gpl-3.0.txt>.
 
 A simple way to keep in terms of the license is by forking this repository and leaving it open source under the same

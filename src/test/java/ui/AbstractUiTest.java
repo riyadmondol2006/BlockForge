@@ -40,9 +40,9 @@ import org.mockserver.logging.MockServerLogger;
 import org.mockserver.socket.PortFactory;
 import org.mockserver.socket.tls.KeyStoreFactory;
 
-import com.atlauncher.App;
-import com.atlauncher.constants.Constants;
-import com.atlauncher.utils.FileUtils;
+import com.blockforge.launcher.App;
+import com.blockforge.launcher.constants.Constants;
+import com.blockforge.launcher.utils.FileUtils;
 
 import ui.mocks.MockHelper;
 

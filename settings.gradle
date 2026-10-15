@@ -8,7 +8,7 @@ plugins {
     id("org.gradle.toolchains.foojay-resolver") version "0.9.0"
 }
 
-rootProject.name = name
+rootProject.name = 'BlockForge'
 
 toolchainManagement {
     jvm {

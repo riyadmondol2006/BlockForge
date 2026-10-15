@@ -4,7 +4,7 @@ on:
   push:
     branches: [master]
     paths:
-      - "src/main/java/com/atlauncher/**"
+      - "src/main/java/com/blockforge/launcher/**"
 
 jobs:
   synchronize-with-crowdin:

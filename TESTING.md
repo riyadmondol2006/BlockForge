@@ -6,7 +6,7 @@ to follow when making tests.
 When creating tests for a class it should be placed in the '/src/test/java/' folder within it's correct package name
 structure.
 
-For instance a test for 'com.atlauncher.SomeClass' would go in '/src/test/java/com/atlauncher/'.
+For instance a test for 'com.blockforge.launcher.SomeClass' would go in '/src/test/java/com/blockforge/launcher/'.
 
 ## Filenames of tests
 Tests should be named after their class name with 'Test' appended to it in the correct directory structure explained

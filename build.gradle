@@ -38,7 +38,7 @@ apply plugin: 'net.ltgt.errorprone'
 sourceCompatibility = '1.8'
 targetCompatibility = '1.8'
 
-group = 'com.atlauncher'
+group = 'com.blockforge.launcher'
 version = rootProject.file('src/main/resources/version').text.trim().replace('.Beta', '')
 
 repositories {
@@ -112,7 +112,7 @@ dependencies {
 }
 
 application {
-    mainClass = 'com.atlauncher.App'
+    mainClass = 'com.blockforge.launcher.App'
     applicationDefaultJvmArgs = [
         "-Djna.nosys=true",
         "-Djava.net.preferIPv4Stack=true",
@@ -179,8 +179,8 @@ jar {
             'SplashScreen-Image': '/assets/image/splash-screen.png',
             'Implementation-Title': project.name,
             'Implementation-Version': archiveVersion,
-            'Implementation-Vender': 'ATLauncher',
-            'Main-Class': 'com.atlauncher.App',
+            'Implementation-Vender': 'BlockForge',
+            'Main-Class': 'com.blockforge.launcher.App',
             'Multi-Release': 'true'
         )
     }
@@ -191,22 +191,22 @@ apollo {
         "ID"      : "java.lang.String",
         "DateTime": "java.util.Date"
     ]
-    packageName = "com.atlauncher.graphql"
+    packageName = "com.blockforge.launcher.graphql"
 }
 
 gettext {
     translations {
         srcDir = 'src'
-        include = 'main/java/com/atlauncher/**/*.java'
+        include = 'main/java/com/blockforge/launcher/**/*.java'
         excludes = [
-            'main/java/com/atlauncher/adapter/**/*.java',
-            'main/java/com/atlauncher/annot/**/*.java',
-            'main/java/com/atlauncher/collection/**/*.java',
-            'main/java/com/atlauncher/evnt/**/*.java',
-            'main/java/com/atlauncher/exceptions/**/*.java',
-            'main/java/com/atlauncher/interfaces/**/*.java',
-            'main/java/com/atlauncher/listener/**/*.java',
-            'main/java/com/atlauncher/utils/**/*.java'
+            'main/java/com/blockforge/launcher/adapter/**/*.java',
+            'main/java/com/blockforge/launcher/annot/**/*.java',
+            'main/java/com/blockforge/launcher/collection/**/*.java',
+            'main/java/com/blockforge/launcher/evnt/**/*.java',
+            'main/java/com/blockforge/launcher/exceptions/**/*.java',
+            'main/java/com/blockforge/launcher/interfaces/**/*.java',
+            'main/java/com/blockforge/launcher/listener/**/*.java',
+            'main/java/com/blockforge/launcher/utils/**/*.java'
         ]
         commentFormat = ' #. '
         outputFilename = 'translations.pot'
@@ -218,9 +218,9 @@ license {
     include '**/*.java'
     exclude 'io/github/**/*.java'
     exclude 'net/minecraft/**/*.java'
-    exclude 'com/atlauncher/graphql/**/*.java'
-    exclude 'com/atlauncher/gui/layouts/WrapLayout.java'
-    exclude 'com/atlauncher/gui/WheelScrollLayerUI.java'
+    exclude 'com/blockforge/launcher/graphql/**/*.java'
+    exclude 'com/blockforge/launcher/gui/layouts/WrapLayout.java'
+    exclude 'com/blockforge/launcher/gui/WheelScrollLayerUI.java'
     newLine = false
     skipExistingHeaders = true
     properties {
@@ -257,8 +257,8 @@ shadowJar {
 }
 
 macAppBundle {
-    mainClassName = 'com.atlauncher.App'
-    appName = 'ATLauncher'
+    mainClassName = 'com.blockforge.launcher.App'
+    appName = 'BlockForge'
     appStyle = 'universalJavaApplicationStub'
     runtimeConfigurationName = 'shadow'
     jarTask = 'shadowJar'
@@ -273,7 +273,7 @@ macAppBundle {
 }
 
 copyToResourcesJava {
-    rename("ATLauncher-${project.version}.jar", "ATLauncher.jar")
+    rename("BlockForge-${project.version}.jar", "BlockForge.jar")
 }
 
 def currentYear() {
@@ -283,9 +283,9 @@ def currentYear() {
 }
 
 launch4j {
-    outfile = "ATLauncher-${project.version}.exe"
+    outfile = "BlockForge-${project.version}.exe"
     jreMinVersion = "${project.targetCompatibility.toString()}"
-    mainClassName = 'com.atlauncher.App'
+    mainClassName = 'com.blockforge.launcher.App'
     icon = "${projectDir}/src/main/resources/assets/image/icon.ico"
     version = "${project.version}"
     textVersion = "${project.version}"
@@ -361,7 +361,7 @@ task generateThirdPartyLibraries {
 }
 
 copyArtifacts.finalizedBy {
-    println 'ATLauncher has been built. Distribution files are located in the dist directory.'
+    println 'BlockForge has been built. Distribution files are located in the dist directory.'
 }
 
 clean.doFirst {

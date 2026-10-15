@@ -33,10 +33,10 @@ import org.mockserver.model.BinaryBody;
 import org.mockserver.model.HttpRequest;
 import org.mockserver.model.HttpResponse;
 
-import com.atlauncher.Gsons;
-import com.atlauncher.constants.Constants;
-import com.atlauncher.data.DownloadableFile;
-import com.atlauncher.utils.Hashing;
+import com.blockforge.launcher.Gsons;
+import com.blockforge.launcher.constants.Constants;
+import com.blockforge.launcher.data.DownloadableFile;
+import com.blockforge.launcher.utils.Hashing;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 

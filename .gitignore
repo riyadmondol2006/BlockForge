@@ -37,3 +37,8 @@ mockserver_keystore_*
 
 # crowdin config
 crowdin.yml
+
+# Local files
+logs/
+.idea/
+*.log

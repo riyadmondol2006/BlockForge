@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<Configuration packages="com.atlauncher.thread">
+<Configuration packages="com.blockforge.launcher.thread">
     <Appenders>
         <Console name="LogToConsole" target="SYSTEM_OUT">
             <PatternLayout pattern="%d{HH:mm:ss.SSS} [%t] %-5level - %msg%n"/>
         </Console>
-        <RollingFile name="LogToRollingFile" fileName="logs/atlauncher.log" filePattern="logs/old/%d{yyyy-MM-dd-HH-mm-ss}.log">
+        <RollingFile name="LogToRollingFile" fileName="logs/blockforge.log" filePattern="logs/old/%d{yyyy-MM-dd-HH-mm-ss}.log">
             <PatternLayout pattern="%d{HH:mm:ss.SSS} [%t] %-5level - %msg%n"/>
             <Policies>
                 <OnStartupTriggeringPolicy />
@@ -18,7 +18,7 @@
         </RollingFile>
     </Appenders>
     <Loggers>
-        <Logger name="com.atlauncher" level="debug" additivity="false">
+        <Logger name="com.blockforge.launcher" level="debug" additivity="false">
             <AppenderRef ref="LogToRollingFile"/>
         </Logger>
         <Root level="error">
