@@ -174,7 +174,7 @@ jobs:
       - name: Check the disk image
         run: |
           set -o pipefail
-          ./packaging/macos/smoke.sh "$VERSION" 2>&1 | tee smoke.log || { .github/scripts/why.sh smoke.log "Checking the macOS disk image"; exit 1; }
+          ./packaging/macos/smoke.sh "dist/BlockForge-$VERSION-macos-arm64.dmg" 2>&1 | tee smoke.log || { .github/scripts/why.sh smoke.log "Checking the macOS disk image"; exit 1; }
       - uses: actions/upload-artifact@v7
         with:
           name: BlockForge-macos
