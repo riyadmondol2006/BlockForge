@@ -11,7 +11,7 @@ import java.nio.file.Path;
  */
 public class StartupBudget {
     public static void main(String[] args) throws Exception {
-        long budget = args.length > 0 ? Long.parseLong(args[0]) : 3000;
+        long budget = args.length > 0 ? Long.parseLong(args[0]) : 4000;
         Path work = Files.createTempDirectory("blockforge-budget");
 
         Class<?> app = Class.forName("com.blockforge.launcher.App");

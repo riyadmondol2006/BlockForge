@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=BlockForge
+GenericName=Minecraft Launcher
+Comment=A Minecraft launcher with a modern interface that plays offline without an account.
+Exec=/opt/blockforge/bin/BlockForge
+Icon=/opt/blockforge/lib/BlockForge.png
+Terminal=false
+Type=Application
+Categories=Game;
+Keywords=Minecraft;game;launcher;mods;modpacks;
+StartupNotify=true
+StartupWMClass=com-blockforge-launcher-App

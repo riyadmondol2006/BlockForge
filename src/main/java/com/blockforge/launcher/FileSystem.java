@@ -262,9 +262,36 @@ public final class FileSystem {
         FileUtils.createDirectory(FAILED_DOWNLOADS);
     }
 
+    /**
+     * Where an installed copy keeps its files. The installers set {@code blockforge.installed}, and from then on the
+     * data lives in the user's own folder, because the install folder is read-only for normal users. A jar that is
+     * simply run stays portable and keeps its files next to itself.
+     */
+    public static Path userDataDirectory(String os, String home, String appData, String xdgDataHome) {
+        String name = Constants.LAUNCHER_NAME;
+        if (os.toLowerCase(java.util.Locale.ROOT).contains("win")) {
+            Path base = appData != null && !appData.isEmpty() ? Paths.get(appData)
+                : Paths.get(home, "AppData", "Roaming");
+            return base.resolve(name);
+        }
+
+        if (os.toLowerCase(java.util.Locale.ROOT).contains("mac")) {
+            return Paths.get(home, "Library", "Application Support", name);
+        }
+
+        Path base = xdgDataHome != null && !xdgDataHome.isEmpty() ? Paths.get(xdgDataHome)
+            : Paths.get(home, ".local", "share");
+        return base.resolve(name.toLowerCase(java.util.Locale.ROOT));
+    }
+
     public static Path getCoreGracefully() {
         if (App.workingDir != null) {
             return App.workingDir;
+        }
+
+        if (Boolean.getBoolean("blockforge.installed")) {
+            return userDataDirectory(System.getProperty("os.name", ""), System.getProperty("user.home"),
+                System.getenv("APPDATA"), System.getenv("XDG_DATA_HOME"));
         }
 
         if (OS.isLinux()) {

@@ -4,13 +4,13 @@
         <Console name="LogToConsole" target="SYSTEM_OUT">
             <PatternLayout pattern="%d{HH:mm:ss.SSS} [%t] %-5level - %msg%n"/>
         </Console>
-        <RollingFile name="LogToRollingFile" fileName="logs/blockforge.log" filePattern="logs/old/%d{yyyy-MM-dd-HH-mm-ss}.log">
+        <RollingFile name="LogToRollingFile" fileName="${sys:blockforge.logs:-logs}/blockforge.log" filePattern="${sys:blockforge.logs:-logs}/old/%d{yyyy-MM-dd-HH-mm-ss}.log">
             <PatternLayout pattern="%d{HH:mm:ss.SSS} [%t] %-5level - %msg%n"/>
             <Policies>
                 <OnStartupTriggeringPolicy />
             </Policies>
             <DefaultRolloverStrategy>
-                <Delete basePath="logs/old/" maxDepth="1">
+                <Delete basePath="${sys:blockforge.logs:-logs}/old/" maxDepth="1">
                     <IfFileName glob="*.log" />
                     <IfLastModified age="14d" />
                 </Delete>

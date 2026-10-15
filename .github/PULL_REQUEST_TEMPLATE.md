@@ -1,14 +1,11 @@
-**IMPORTANT: Please do not create a Pull Request without first discussing it with the maintainers.**
-*Please visit [our Discord](https://atl.pw/discord) to discuss your changes with the maintainers in the #development channel.*
+### What this changes
 
-### Description of the Change
+<!-- A short description of the change and why it is needed. -->
 
-<!-- Give us a description about this Pull Request. The more information you include the better -->
+### How it was tested
 
-### Testing
+<!-- What you ran or clicked through to check it. -->
 
-<!-- Have the changes in this Pull Request been test? If so how thoroughly? -->
+### Related issues
 
-### Related Issues
-
-<!-- Enter any related GitHub issues here -->
+<!-- For example: Fixes #123 -->

@@ -196,10 +196,13 @@ public class Java {
             .filter(javaInfo -> javaInfo.majorVersion != null && javaInfo.minorVersion != null)
             .collect(Collectors.toList());
 
-        JavaInfo systemJava = new JavaInfo(Java.getPathToSystemJavaExecutable());
-        if (javas.isEmpty()
-            || javas.stream().noneMatch(java -> java.rootPath.equalsIgnoreCase(systemJava.rootPath))) {
-            javas.add(systemJava);
+        // the Java running the launcher, unless it is a trimmed runtime from an installer that has no java program
+        if (java.nio.file.Files.isExecutable(java.nio.file.Paths.get(Java.getPathToSystemJavaExecutable()))) {
+            JavaInfo systemJava = new JavaInfo(Java.getPathToSystemJavaExecutable());
+            if (javas.isEmpty()
+                || javas.stream().noneMatch(java -> java.rootPath.equalsIgnoreCase(systemJava.rootPath))) {
+                javas.add(systemJava);
+            }
         }
 
         PerformanceManager.end();

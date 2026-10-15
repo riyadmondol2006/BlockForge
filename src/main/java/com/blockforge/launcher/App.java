@@ -292,6 +292,9 @@ public class App {
         // Parse all the command line arguments
         parseCommandLineArguments(args);
 
+        // the log file belongs in the launcher's own folder, not in whatever folder it was started from
+        System.setProperty("blockforge.logs", FileSystem.LOGS.toString());
+
         // Workaround for Windows and GUI rendering funny
         if (OS.isWindows()) {
             try {

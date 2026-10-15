@@ -58,9 +58,28 @@ This fork is a work in progress. Compared to ATLauncher 3.4.41.4 it changes:
 - Usage statistics, pack install/play-time reporting and crash reports are off by default, and a remote setting can no
   longer turn crash reporting on. Self-updating is turned off, since it would replace BlockForge with ATLauncher.
 
-## Download and run
+## Download and install
 
-Build the jar (see [Building](#building)) and run it:
+Every push to this repository builds installers for each system. Get them from the **Actions** tab (open a run, then
+**Artifacts**), or from the **Releases** page: the `nightly` release always holds the latest build from `master`.
+
+| System | File | Notes |
+|---|---|---|
+| Windows | `BlockForge-<version>-windows-setup.exe` | Installs for your user, no administrator needed. Adds a Start menu entry and a shortcut. |
+| macOS | `BlockForge-<version>-macos-arm64.dmg` (Apple Silicon) or `-macos-x64.dmg` (Intel) | Drag BlockForge to Applications. |
+| Fedora, RHEL and other RPM systems | `BlockForge-<version>-fedora-x86_64.rpm` | `sudo dnf install ./BlockForge-*.rpm` |
+| Debian, Ubuntu and other deb systems | `BlockForge-<version>-debian-ubuntu-amd64.deb` | `sudo apt install ./BlockForge-*.deb` |
+| Any system with Java 17 or newer | `BlockForge-<version>.jar` | `java -jar BlockForge-*.jar`, keeps its files next to the jar. |
+
+The installers carry their own Java, so nothing else needs to be installed. An installed BlockForge keeps its
+instances, settings and logs in your user folder (`%APPDATA%\BlockForge` on Windows,
+`~/Library/Application Support/BlockForge` on macOS, `~/.local/share/blockforge` on Linux), so uninstalling or updating
+it never touches them.
+
+The builds aren't signed yet. Windows may show "Windows protected your PC": choose **More info** then **Run anyway**.
+On macOS, right-click the app and choose **Open** the first time.
+
+## Run the jar
 
 ```sh
 java -jar build/libs/BlockForge-<version>.jar
@@ -84,6 +103,8 @@ replace them before sharing the launcher with other people.
 
 ## For developers
 
+- `scripts/package.sh` (Linux and macOS) and `scripts/package.ps1` (Windows) build the installers with `jpackage`;
+  `.github/workflows/build.yml` runs them on every push.
 - `scripts/blockforge.sh` starts the jar with a class cache, which opens the window faster.
 - `scripts/startup-budget.sh` fails if the window takes longer than a set time to appear.
 - `scripts/loader-canary.sh` checks that the Fabric, Quilt, Forge and NeoForge services still answer as the launcher
