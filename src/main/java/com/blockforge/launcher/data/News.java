@@ -21,7 +21,6 @@ import java.text.DateFormat;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
 
-import com.blockforge.launcher.App;
 import com.blockforge.launcher.annot.Json;
 import com.blockforge.launcher.managers.LogManager;
 import com.google.gson.annotations.SerializedName;
@@ -49,7 +48,7 @@ public class News {
 
     private String getFormattedDate() {
         DateFormat iso8601Format = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSSSSX");
-        SimpleDateFormat formatter = new SimpleDateFormat(App.settings.dateFormat + " HH:mm:ss a");
+        SimpleDateFormat formatter = new SimpleDateFormat("d MMM yyyy");
 
         try {
             return formatter.format(iso8601Format.parse(this.createdAt));

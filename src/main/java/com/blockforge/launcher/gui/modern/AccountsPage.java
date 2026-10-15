@@ -96,7 +96,7 @@ public class AccountsPage extends Page {
         card.line(Palette::outline);
         card.pad(18, 20, 18, 20);
         card.setAlignmentX(LEFT_ALIGNMENT);
-        card.setMaximumSize(new java.awt.Dimension(640, 170));
+        card.setMaximumSize(new java.awt.Dimension(760, 170));
 
         JPanel text = new JPanel();
         text.setOpaque(false);
@@ -146,7 +146,7 @@ public class AccountsPage extends Page {
         card.line(Palette::outline);
         card.pad(18, 20, 18, 20);
         card.setAlignmentX(LEFT_ALIGNMENT);
-        card.setMaximumSize(new java.awt.Dimension(640, 110));
+        card.setMaximumSize(new java.awt.Dimension(760, 110));
 
         JPanel text = new JPanel();
         text.setOpaque(false);
@@ -211,7 +211,7 @@ public class AccountsPage extends Page {
         row.hover(active ? Palette::accentSoft : Palette::cardHover);
         row.pad(14, 16, 14, 14);
         row.setAlignmentX(LEFT_ALIGNMENT);
-        row.setMaximumSize(new java.awt.Dimension(640, 84));
+        row.setMaximumSize(new java.awt.Dimension(760, 84));
 
         Avatar avatar = new Avatar(52);
         avatar.setAccount(account);

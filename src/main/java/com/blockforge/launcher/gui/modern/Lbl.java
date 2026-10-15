@@ -81,6 +81,13 @@ public final class Lbl {
         private final int maxLines;
         private final Supplier<Color> color;
         private int width;
+        private boolean bold;
+
+        /** Draws the text in the bold weight, for wrapped titles. */
+        public Paragraph bold() {
+            this.bold = true;
+            return this;
+        }
 
         public Paragraph(String text, float size, int maxLines, int width, Supplier<Color> color) {
             this.text = text == null ? "" : text;
@@ -118,7 +125,7 @@ public final class Lbl {
         }
 
         private int lineHeight() {
-            FontMetrics fm = getFontMetrics(Palette.fontFor(text, size, false));
+            FontMetrics fm = getFontMetrics(Palette.fontFor(text, size, bold));
             return fm.getHeight() + 2;
         }
 
@@ -146,7 +153,7 @@ public final class Lbl {
                     continue;
                 }
                 AttributedString as = new AttributedString(paragraph);
-                as.addAttribute(TextAttribute.FONT, Palette.fontFor(paragraph, size, false));
+                as.addAttribute(TextAttribute.FONT, Palette.fontFor(paragraph, size, bold));
                 AttributedCharacterIterator it = as.getIterator();
                 LineBreakMeasurer m = new LineBreakMeasurer(it, g.getFontRenderContext());
                 while (m.getPosition() < it.getEndIndex() && lines < maxLines) {
@@ -172,7 +179,8 @@ public final class Lbl {
             float w = Math.max(20, getWidth());
             float y = 0;
             int lines = 0;
-            Font font = Palette.fontFor(text, size, false);
+            Font font = Palette.fontFor(text, size, bold);
+
             boolean stop = false;
             String[] paragraphs = text.split("\n");
 

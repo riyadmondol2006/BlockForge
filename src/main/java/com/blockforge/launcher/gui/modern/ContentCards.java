@@ -182,14 +182,19 @@ final class ContentCards {
             line(Palette::outline);
             hover(Palette::cardHover);
             pad(14, 14, 14, 14);
-            setPreferredSize(new Dimension(WIDTH, 178));
+            setPreferredSize(new Dimension(WIDTH, 190));
 
             Picture picture = new Picture(52, iconFor(kind)).load(hit.iconUrl);
 
             JPanel names = new JPanel();
             names.setOpaque(false);
             names.setLayout(new BoxLayout(names, BoxLayout.Y_AXIS));
-            JLabel title = Lbl.text(hit.title, 14.5f, true, Palette::text);
+            // up to two lines, so packs whose names only differ at the end ("... Reimagined", "... Unbound") can
+            // be told apart; the full name is in the tooltip too
+            Lbl.Paragraph title = new Lbl.Paragraph(hit.title, 14.5f, 2, WIDTH - 140, Palette::text).bold();
+            title.setToolTipText(hit.title);
+            title.setMaximumSize(new Dimension(Integer.MAX_VALUE, title.getPreferredSize().height));
+
             JLabel author = Lbl.text(GetText.tr("by {0}", hit.author), 12f, false, Palette::textDim);
             title.setAlignmentX(LEFT_ALIGNMENT);
             author.setAlignmentX(LEFT_ALIGNMENT);

@@ -227,7 +227,7 @@ public class InstanceTile extends RoundPanel {
         String key = "instance:" + instance.getRoot() + "#" + custom.lastModified();
         ImageCache.async(() -> {
             BufferedImage source = ImageCache.toBuffered(instance.getImage());
-            return source == null ? null : ImageCache.cover(source, ImageCache.px(WIDTH), ImageCache.px(128));
+            return source == null ? null : ImageCache.cover(source, ImageCache.px(WIDTH * 4 / 3), ImageCache.px(128));
         }, key, image -> {
             banner.image = image;
             banner.repaint();
@@ -296,7 +296,11 @@ public class InstanceTile extends RoundPanel {
             g.clip(clip);
 
             if (image != null) {
-                g.drawImage(image, 0, 0, w, h, null);
+                // cards stretch to fill their row, so the picture is scaled to cover rather than squashed
+                double scale = Math.max(w / (double) image.getWidth(), h / (double) image.getHeight());
+                int iw = (int) Math.ceil(image.getWidth() * scale);
+                int ih = (int) Math.ceil(image.getHeight() * scale);
+                g.drawImage(image, (w - iw) / 2, (h - ih) / 2, iw, ih, null);
                 g.setPaint(new GradientPaint(0, h * 0.5f, new Color(0, 0, 0, 0), 0, h, new Color(0, 0, 0, 90)));
                 g.fillRect(0, 0, w, h);
             } else {

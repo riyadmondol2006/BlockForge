@@ -77,43 +77,62 @@ public class FileDropOverlay extends JComponent {
             java.awt.geom.Area dim = new java.awt.geom.Area(new Rectangle(0, 0, w, h));
             dim.subtract(new java.awt.geom.Area(new RoundRectangle2D.Float(target.x, target.y, target.width,
                 target.height, 22, 22)));
-            g.setColor(Palette.alpha(Palette.bg(), 190));
+            g.setColor(Palette.alpha(Palette.bg(), 215));
             g.fill(dim);
             g.setColor(Palette.accent());
             g.setStroke(new BasicStroke(3f));
             g.draw(new RoundRectangle2D.Float(target.x - 2, target.y - 2, target.width + 4, target.height + 4, 24,
                 24));
             if (targetLabel != null) {
-                g.setFont(Palette.bold(13f));
+                // inside the card, over the top of its picture, so it never covers the card above
+                g.setFont(Palette.fontFor(targetLabel, 13f, true));
                 FontMetrics fm = g.getFontMetrics();
-                int pw = fm.stringWidth(targetLabel) + 28;
+                int pw = Math.min(fm.stringWidth(targetLabel) + 28, Math.max(40, target.width - 20));
                 int px = target.x + (target.width - pw) / 2;
-                int py = Math.max(6, target.y - 40);
+                int py = target.y + 12;
                 g.fill(new RoundRectangle2D.Float(px, py, pw, 30, 30, 30));
                 g.setColor(Palette.onAccent());
+                java.awt.Shape clip = g.getClip();
+                g.clipRect(px + 10, py, pw - 20, 30);
                 g.drawString(targetLabel, px + 14, py + (30 - fm.getHeight()) / 2 + fm.getAscent());
+                g.setClip(clip);
             }
             g.dispose();
             return;
         }
 
-        g.setColor(Palette.alpha(Palette.bg(), 225));
+        // strong enough that the cards underneath don't read through the message
+        g.setColor(Palette.alpha(Palette.bg(), 238));
         g.fillRect(0, 0, w, h);
         g.setColor(Palette.accent());
         g.setStroke(new BasicStroke(2.5f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND, 10f,
             new float[] { 10f, 8f }, 0f));
         g.draw(new RoundRectangle2D.Float(18, 18, w - 36, h - 36, 28, 28));
 
-        Icons.IMPORT.paint(g, (w - 56) / 2f, h / 2f - 86, 56, Palette.accent());
-        g.setFont(Palette.bold(22f));
-        FontMetrics fm = g.getFontMetrics();
+        java.awt.Font titleFont = Palette.fontFor(title, 22f, true);
+        java.awt.Font subFont = Palette.fontFor(subtitle, 14f, false);
+        FontMetrics tfm = g.getFontMetrics(titleFont);
+        FontMetrics sfm = g.getFontMetrics(subFont);
+        int textW = Math.max(tfm.stringWidth(title), subtitle == null ? 0 : sfm.stringWidth(subtitle));
+        int cw = Math.min(w - 80, textW + 64);
+        int ch = subtitle == null ? 168 : 196;
+        int cx = (w - cw) / 2;
+        int cy = h / 2 - 116;
+        // a solid card behind the message
+        g.setColor(Palette.card());
+        g.fill(new RoundRectangle2D.Float(cx, cy, cw, ch, 26, 26));
+        g.setStroke(new BasicStroke(1f));
+        g.setColor(Palette.outline());
+        g.draw(new RoundRectangle2D.Float(cx + 0.5f, cy + 0.5f, cw - 1, ch - 1, 26, 26));
+
+        Icons.IMPORT.paint(g, (w - 56) / 2f, h / 2f - 92, 56, Palette.accent());
+        g.setFont(titleFont);
         g.setColor(Palette.text());
-        g.drawString(title, (w - fm.stringWidth(title)) / 2, h / 2 + 4);
+        g.drawString(title, (w - tfm.stringWidth(title)) / 2, h / 2 + 4);
         if (subtitle != null) {
-            g.setFont(Palette.font(14f));
-            fm = g.getFontMetrics();
+            g.setFont(subFont);
             g.setColor(Palette.textDim());
-            g.drawString(subtitle, (w - fm.stringWidth(subtitle)) / 2, h / 2 + 34);
+            g.drawString(subtitle, (w - sfm.stringWidth(subtitle)) / 2, h / 2 + 34);
         }
         g.dispose();
     }

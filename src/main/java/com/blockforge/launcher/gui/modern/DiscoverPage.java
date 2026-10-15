@@ -19,7 +19,6 @@ package com.blockforge.launcher.gui.modern;
 import java.awt.BorderLayout;
 import java.awt.CardLayout;
 import java.awt.Dimension;
-import java.awt.FlowLayout;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.image.BufferedImage;
@@ -63,6 +62,11 @@ public class DiscoverPage extends Page {
     private final JPanel body = new JPanel(cards);
     private final FitWidthPanel grid = new FitWidthPanel(18);
     private final JLabel emptyText = Lbl.dim("");
+    /** only offered when the servers couldn't be reached; trying an empty list again changes nothing */
+    private final Btn retry = new Btn(GetText.tr("Try again"), Btn.Kind.TONAL).icon(Icons.REFRESH);
+    /** the query whose platform-only results (for platforms the combined search leaves out) were fetched */
+    private String platformFetchedFor;
+    private int platformFetched = -1;
     private List<UnifiedModPackResultsFragment> results = new ArrayList<>();
     private int request;
     private boolean loadedOnce;
@@ -86,8 +90,7 @@ public class DiscoverPage extends Page {
         titles.add(sub);
         titleRow.add(titles, BorderLayout.WEST);
 
-        JPanel actions = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 0));
-        actions.setOpaque(false);
+        JPanel actions = FitWidthPanel.rightButtons();
         Btn custom = new Btn(GetText.tr("Custom instance"), Btn.Kind.TONAL).icon(Icons.CUBE);
         custom.addActionListener(e -> App.navigate(UIConstants.LAUNCHER_CREATE_PACK_TAB));
         actions.add(custom);
@@ -95,25 +98,17 @@ public class DiscoverPage extends Page {
         header.add(titleRow);
         header.add(Box.createVerticalStrut(18));
 
-        JPanel filterRow = new JPanel(new BorderLayout(16, 0));
-        filterRow.setOpaque(false);
-        search.setPreferredSize(new Dimension(420, 44));
         search.onChange(450, () -> load());
         search.addActionListener(e -> load());
-        JPanel searchWrap = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
-        searchWrap.setOpaque(false);
-        searchWrap.add(search);
-        filterRow.add(searchWrap, BorderLayout.WEST);
 
         String[] labels = new String[PLATFORMS.length];
         for (int i = 0; i < labels.length; i++) {
             labels[i] = i == 0 ? GetText.tr("All") : PLATFORMS[i];
         }
         platformChips = new ChipRow(labels, 0, i -> render());
-        JPanel chipWrap = new JPanel(new FlowLayout(FlowLayout.RIGHT, 0, 4));
-        chipWrap.setOpaque(false);
-        chipWrap.add(platformChips);
-        filterRow.add(chipWrap, BorderLayout.EAST);
+        FilterRow filterRow = new FilterRow(search, platformChips);
+        filterRow.setAlignmentX(LEFT_ALIGNMENT);
+        titleRow.setAlignmentX(LEFT_ALIGNMENT);
         header.add(filterRow);
         add(header, BorderLayout.NORTH);
 
@@ -131,7 +126,10 @@ public class DiscoverPage extends Page {
         FitWidthPanel scrollContent = new FitWidthPanel(0);
         scrollContent.setLayout(new BorderLayout());
         scrollContent.add(gridWrap, BorderLayout.CENTER);
-        body.add(FitWidthPanel.scroll(scrollContent), "results");
+        javax.swing.JScrollPane resultsScroll = FitWidthPanel.scroll(scrollContent);
+        FitWidthPanel.alignHeader(header, resultsScroll, 28, 36, 12);
+        body.add(resultsScroll, "results");
+
 
         JPanel empty = new JPanel(new GridBagLayout());
         empty.setOpaque(false);
@@ -141,7 +139,6 @@ public class DiscoverPage extends Page {
         JLabel emptyIcon = new JLabel(Icons.SEARCH.asIcon(44, Palette::textDim));
         emptyIcon.setAlignmentX(CENTER_ALIGNMENT);
         emptyText.setAlignmentX(CENTER_ALIGNMENT);
-        Btn retry = new Btn(GetText.tr("Try again"), Btn.Kind.TONAL).icon(Icons.REFRESH);
         retry.setAlignmentX(CENTER_ALIGNMENT);
         retry.addActionListener(e -> load());
         emptyBox.add(emptyIcon);
@@ -177,12 +174,16 @@ public class DiscoverPage extends Page {
         }
 
         final int ticket = ++request;
+        final int chip = platformChips.getSelected();
         cards.show(body, "loading");
 
         App.TASKPOOL.execute(() -> {
             List<UnifiedModPackResultsFragment> found = null;
             try {
                 found = fetch(query);
+                if (found != null && chip == TECHNIC) {
+                    found.addAll(technic(query, found));
+                }
             } catch (Exception e) {
                 com.blockforge.launcher.managers.LogManager.debug("Couldn't search for modpacks: " + e.getMessage());
             }
@@ -192,9 +193,12 @@ public class DiscoverPage extends Page {
                 if (ticket != request) {
                     return;
                 }
+                platformFetched = chip;
+                platformFetchedFor = query;
                 if (finalFound == null) {
                     results = new ArrayList<>();
                     emptyText.setText(GetText.tr("Couldn't reach the modpack servers. Check your connection."));
+                    retry.setVisible(true);
                     cards.show(body, "empty");
                     return;
                 }
@@ -202,6 +206,44 @@ public class DiscoverPage extends Page {
                 render();
             });
         });
+    }
+
+    private static final int TECHNIC = 5;
+
+    /**
+     * Technic's own trending list or search. The combined search rarely returns Technic packs, so picking the Technic
+     * chip asks Technic directly; packs already in the list aren't added twice.
+     */
+    private static List<UnifiedModPackResultsFragment> technic(String query,
+        List<UnifiedModPackResultsFragment> already) {
+        List<UnifiedModPackResultsFragment> items = new ArrayList<>();
+        com.blockforge.launcher.data.technic.TechnicSearchResults found;
+        try {
+            found = query.isEmpty() ? com.blockforge.launcher.utils.TechnicApi.getTrendingModpacks()
+                : com.blockforge.launcher.utils.TechnicApi
+                    .searchModpacks(java.net.URLEncoder.encode(query, "UTF-8"));
+        } catch (Exception e) {
+            com.blockforge.launcher.managers.LogManager.debug("Couldn't search Technic: " + e.getMessage());
+            return items;
+        }
+        if (found == null || found.modpacks == null) {
+            return items;
+        }
+        java.util.Set<String> seen = new java.util.HashSet<>();
+        for (UnifiedModPackResultsFragment r : already) {
+            if (r.platform() == ModPackPlatformType.TECHNIC) {
+                seen.add(r.id());
+            }
+        }
+        for (com.blockforge.launcher.data.technic.TechnicModpackSlim pack : found.modpacks) {
+            if (pack == null || pack.slug == null || pack.name == null || !seen.add(pack.slug)) {
+                continue;
+            }
+            items.add(new UnifiedModPackResultsFragment("LauncherModPackResult", pack.slug, pack.name,
+                ModPackPlatformType.TECHNIC, "", "https://www.technicpack.net/modpack/" + pack.slug,
+                pack.iconUrl));
+        }
+        return items;
     }
 
     private static List<UnifiedModPackResultsFragment> fetch(String query) {
@@ -255,9 +297,23 @@ public class DiscoverPage extends Page {
             shown++;
         }
 
+        String query = search.getText().trim();
+        if (shown == 0 && chip == TECHNIC && !(platformFetched == chip && query.equals(platformFetchedFor))) {
+            // nothing from Technic in the combined results: ask Technic itself
+            load();
+            return;
+        }
+
         if (shown == 0) {
-            emptyText.setText(search.getText().trim().isEmpty() ? GetText.tr("Nothing to show here yet")
-                : GetText.tr("No modpacks found for that search"));
+            retry.setVisible(false);
+            if (chip != 0) {
+                emptyText.setText(query.isEmpty()
+                    ? GetText.tr("No {0} modpacks in this list. Search above to find more.", PLATFORMS[chip])
+                    : GetText.tr("No {0} modpacks found for that search", PLATFORMS[chip]));
+            } else {
+                emptyText.setText(query.isEmpty() ? GetText.tr("No modpacks to show right now")
+                    : GetText.tr("No modpacks found for that search"));
+            }
             cards.show(body, "empty");
         } else {
             cards.show(body, "results");
@@ -273,6 +329,68 @@ public class DiscoverPage extends Page {
         }
         return text.replaceAll("<[^>]+>", " ").replaceAll("!?\\[([^\\]]*)\\]\\([^)]*\\)", "$1")
             .replaceAll("[*_`#>]+", "").replaceAll("&nbsp;", " ").replaceAll("[ \\t]+", " ").trim();
+    }
+
+    /**
+     * The search box with the platform chips on the right. The box gives up width first; when even a short box and
+     * the chips don't fit side by side (a narrow window), the chips move to their own line under the box.
+     */
+    static final class FilterRow extends JPanel {
+        private static final long serialVersionUID = 1L;
+        private static final int GAP = 16;
+        private static final int SEARCH_MAX = 420;
+        private static final int SEARCH_MIN = 220;
+
+        private final JComponent search;
+        private final JComponent chips;
+        private boolean stacked;
+
+        FilterRow(JComponent search, JComponent chips) {
+            super(null);
+            this.search = search;
+            this.chips = chips;
+            setOpaque(false);
+            add(search);
+            add(chips);
+            addComponentListener(new java.awt.event.ComponentAdapter() {
+                @Override
+                public void componentResized(java.awt.event.ComponentEvent e) {
+                    if (stacked != stacked(getWidth())) {
+                        revalidate();
+                    }
+                }
+            });
+        }
+
+        private boolean stacked(int width) {
+            return width > 0 && width < SEARCH_MIN + GAP + chips.getPreferredSize().width;
+        }
+
+        @Override
+        public Dimension getPreferredSize() {
+            Dimension c = chips.getPreferredSize();
+            stacked = stacked(getWidth());
+            return stacked ? new Dimension(SEARCH_MIN, 44 + 10 + c.height)
+                : new Dimension(SEARCH_MIN + GAP + c.width, 44);
+        }
+
+        @Override
+        public Dimension getMaximumSize() {
+            return new Dimension(Integer.MAX_VALUE, getPreferredSize().height);
+        }
+
+        @Override
+        public void doLayout() {
+            int w = getWidth();
+            Dimension c = chips.getPreferredSize();
+            if (stacked(w)) {
+                search.setBounds(0, 0, Math.min(SEARCH_MAX, w), 44);
+                chips.setBounds(0, 54, Math.min(c.width, w), c.height);
+            } else {
+                search.setBounds(0, 0, Math.min(SEARCH_MAX, w - GAP - c.width), 44);
+                chips.setBounds(w - c.width, (44 - c.height) / 2, c.width, c.height);
+            }
+        }
     }
 
     /** One modpack search result. */
@@ -350,7 +468,8 @@ public class DiscoverPage extends Page {
 
         private void loadIcon(UnifiedModPackResultsFragment result, JComponent view) {
             if (result.iconUrl() != null && !result.iconUrl().isEmpty()) {
-                ImageCache.load(result.iconUrl(), ImageCache.px(60), ImageCache.px(60), image -> {
+                // the whole picture is shown: logos with words in them read wrong when cropped
+                ImageCache.load(result.iconUrl(), ImageCache.px(60), ImageCache.px(60), true, image -> {
                     icon = image;
                     view.repaint();
                 });
@@ -367,8 +486,8 @@ public class DiscoverPage extends Page {
                 Pack pack = PackManager.getPackByID(Integer.parseInt(result.id()));
                 ImageCache.async(() -> {
                     BufferedImage source = ImageCache.toBuffered(pack.getImage());
-                    return source == null ? null : ImageCache.cover(source, ImageCache.px(60), ImageCache.px(60));
-                }, "pack:" + result.id(), image -> {
+                    return source == null ? null : ImageCache.fit(source, ImageCache.px(60), ImageCache.px(60));
+                }, "pack-fit:" + result.id(), image -> {
                     icon = image;
                     view.repaint();
                 });

@@ -19,7 +19,6 @@ package com.blockforge.launcher.data;
 
 import java.text.SimpleDateFormat;
 
-import com.blockforge.launcher.App;
 import com.blockforge.launcher.graphql.GetNewsQuery.GeneralNew;
 
 /**
@@ -53,7 +52,7 @@ public class AbstractNews {
      * @param networkNews GraphQL network result
      */
     public AbstractNews(GeneralNew networkNews) {
-        final SimpleDateFormat formatter = new SimpleDateFormat(App.settings.dateFormat + " HH:mm:ss a");
+        final SimpleDateFormat formatter = new SimpleDateFormat("d MMM yyyy");
         source = networkNews;
         htmlEntry = "<h2>" + networkNews.title() + " (" + formatter.format(networkNews.createdAt()) + ")</h2>" + "<p>"
             + networkNews.content() + "</p>";

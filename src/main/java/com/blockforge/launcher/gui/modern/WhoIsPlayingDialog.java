@@ -184,6 +184,8 @@ public final class WhoIsPlayingDialog extends JDialog {
 
         JPanel buttons = new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 10, 0));
         buttons.setOpaque(false);
+        // FlowLayout puts its gap before the first button too; start the row at the column edge
+        buttons.setBorder(javax.swing.BorderFactory.createEmptyBorder(0, -10, 0, 0));
         buttons.setAlignmentX(Component.LEFT_ALIGNMENT);
         Btn play = new Btn(GetText.tr("Continue"), Btn.Kind.FILLED).icon(Icons.PLAY);
         play.addActionListener(e -> useName());

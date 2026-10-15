@@ -152,7 +152,7 @@ public class AboutPage extends Page {
 
     private static JComponent section(String text) {
         JLabel label = Lbl.text(text, 11f, true, Palette::textDim);
-        label.setBorder(BorderFactory.createEmptyBorder(0, 4, 10, 0));
+        label.setBorder(BorderFactory.createEmptyBorder(0, 0, 10, 0));
         label.setAlignmentX(Component.LEFT_ALIGNMENT);
         label.setMaximumSize(new Dimension(Integer.MAX_VALUE, 28));
         return label;
@@ -190,7 +190,7 @@ public class AboutPage extends Page {
 
         JPanel top = new JPanel(new BorderLayout(12, 0));
         top.setOpaque(false);
-        top.add(new JLabel(icon.asIcon(22, Palette.accent())), BorderLayout.WEST);
+        top.add(new JLabel(icon.asIcon(22, Palette::accent)), BorderLayout.WEST);
         top.add(Lbl.text(title, 14.5f, true, Palette::text), BorderLayout.CENTER);
         card.add(top, BorderLayout.NORTH);
         card.add(new Lbl.Paragraph(description, 12.5f, 4, 232, Palette::textDim), BorderLayout.CENTER);

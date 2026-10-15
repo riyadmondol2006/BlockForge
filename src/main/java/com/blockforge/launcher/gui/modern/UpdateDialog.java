@@ -41,7 +41,6 @@ import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JProgressBar;
 import javax.swing.JScrollPane;
-import javax.swing.JTextArea;
 import javax.swing.SwingUtilities;
 import javax.swing.Timer;
 import javax.swing.WindowConstants;
@@ -148,7 +147,7 @@ public final class UpdateDialog extends JDialog {
         column.setOpaque(false);
         column.add(Lbl.text(GetText.tr("WHAT'S NEW"), 11f, true, Palette::textDim), BorderLayout.NORTH);
 
-        JTextArea area = new JTextArea(plainNotes(release.body)) {
+        javax.swing.JTextPane area = new javax.swing.JTextPane() {
             private static final long serialVersionUID = 1L;
 
             @Override
@@ -162,9 +161,8 @@ public final class UpdateDialog extends JDialog {
             }
         };
         area.setEditable(false);
-        area.setLineWrap(true);
-        area.setWrapStyleWord(true);
         area.setFont(Palette.font(13f));
+        fillNotes(area.getStyledDocument(), plainNotes(release.body), Palette.font(13f));
         area.setBorder(BorderFactory.createEmptyBorder(12, 14, 12, 14));
         area.setCaretPosition(0);
         // read-only notes: no blinking text cursor
@@ -185,6 +183,8 @@ public final class UpdateDialog extends JDialog {
 
         JPanel left = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
         left.setOpaque(false);
+        // FlowLayout also puts its gap before the first button; start at the dialog's edge like the text above
+        left.setBorder(BorderFactory.createEmptyBorder(0, -8, 0, 0));
         Btn skip = new Btn(GetText.tr("Skip this version"), Btn.Kind.TEXT);
         skip.addActionListener(e -> skip());
         left.add(skip);
@@ -359,12 +359,56 @@ public final class UpdateDialog extends JDialog {
     }
 
     /** Turns GitHub's Markdown release notes into readable plain text. */
+    /**
+     * Puts the notes in the document with bullet points as hanging paragraphs, so a bullet that wraps continues
+     * under its text rather than under the bullet.
+     */
+    private static void fillNotes(javax.swing.text.StyledDocument doc, String notes, java.awt.Font font) {
+        javax.swing.text.SimpleAttributeSet text = new javax.swing.text.SimpleAttributeSet();
+        javax.swing.text.StyleConstants.setFontFamily(text, font.getFamily());
+        javax.swing.text.StyleConstants.setFontSize(text, Math.round(font.getSize2D()));
+        int bulletIndent = font.getSize() + 2;
+        try {
+            String[] lines = notes.split("\n", -1);
+            for (int i = 0; i < lines.length; i++) {
+                int start = doc.getLength();
+                doc.insertString(start, lines[i] + (i < lines.length - 1 ? "\n" : ""), text);
+                javax.swing.text.SimpleAttributeSet paragraph = new javax.swing.text.SimpleAttributeSet();
+                javax.swing.text.StyleConstants.setSpaceBelow(paragraph, 2f);
+                String trimmed = lines[i].trim();
+                if (trimmed.startsWith("•")) {
+                    int depth = lines[i].indexOf('•');
+                    javax.swing.text.StyleConstants.setLeftIndent(paragraph, bulletIndent * (1 + depth / 2f));
+                    javax.swing.text.StyleConstants.setFirstLineIndent(paragraph, -bulletIndent);
+                }
+                doc.setParagraphAttributes(start, Math.max(1, lines[i].length()), paragraph, false);
+            }
+        } catch (javax.swing.text.BadLocationException e) {
+            // can't happen: text is only ever appended
+        }
+    }
+
+    /** A first heading like "What's new" says the same as the WHAT'S NEW label above the notes. */
+    private static final java.util.regex.Pattern WHATS_NEW_HEADING = java.util.regex.Pattern
+        .compile("(?i)^\\s*#{0,6}\\s*(what'?s|what’s)\\s+(new|changed)\\s*[:!.]?\\s*$");
+
     static String plainNotes(String markdown) {
         if (markdown == null || markdown.trim().isEmpty()) {
             return GetText.tr("Bug fixes and improvements.");
         }
         StringBuilder out = new StringBuilder();
+        boolean first = true;
         for (String line : markdown.replace("\r", "").split("\n")) {
+            if (first && line.trim().isEmpty()) {
+                continue;
+            }
+            if (first) {
+                first = false;
+                if (WHATS_NEW_HEADING.matcher(line).matches()) {
+                    continue;
+                }
+            }
+
             String l = line.replaceAll("^\\s*#{1,6}\\s*", "").replaceAll("^(\\s*)[-*+]\\s+", "$1• ")
                 .replaceAll("\\*\\*(.+?)\\*\\*", "$1").replaceAll("__(.+?)__", "$1").replaceAll("`([^`]*)`", "$1")
                 .replaceAll("!?\\[([^\\]]*)\\]\\(([^)]*)\\)", "$1").replaceAll("<!--.*?-->", "");

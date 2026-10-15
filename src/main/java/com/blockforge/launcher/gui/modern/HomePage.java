@@ -136,11 +136,12 @@ public class HomePage extends Page {
         row.setOpaque(false);
         row.setAlignmentX(LEFT_ALIGNMENT);
         row.setMaximumSize(new Dimension(Integer.MAX_VALUE, 84));
-        row.add(action(Icons.EXPLORE, GetText.tr("Browse modpacks"), GetText.tr("Find something new to play"),
+        row.add(action(Icons.EXPLORE, GetText.tr("Browse modpacks"), GetText.tr("Find something to play"),
             () -> App.navigate(UIConstants.LAUNCHER_PACKS_TAB)));
-        row.add(action(Icons.PLUS, GetText.tr("New instance"), GetText.tr("Newest Minecraft, ready to play"),
+        row.add(action(Icons.PLUS, GetText.tr("New instance"), GetText.tr("The newest Minecraft"),
             () -> App.navigate(UIConstants.LAUNCHER_CREATE_PACK_TAB)));
-        row.add(action(Icons.PERSON, GetText.tr("Change skin"), GetText.tr("Pick how you look in game"),
+        row.add(action(Icons.PERSON, GetText.tr("Change skin"), GetText.tr("Choose how you look"),
+
             () -> SkinDialog.open(null)));
         return row;
     }
@@ -426,7 +427,15 @@ public class HomePage extends Page {
                 fg.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC);
                 fg.drawImage(image, 0, 0, iw, h, null);
                 fg.setComposite(java.awt.AlphaComposite.DstIn);
-                fg.setPaint(new GradientPaint(0, 0, new Color(0, 0, 0, 0), iw * 0.55f, 0, new Color(0, 0, 0, 255)));
+                // an eased fade: a straight ramp starts with a visible kink that reads as a seam on the pale wash
+                float[] stops = new float[9];
+                Color[] alphas = new Color[9];
+                for (int i = 0; i < stops.length; i++) {
+                    float t = i / (float) (stops.length - 1);
+                    stops[i] = t;
+                    alphas[i] = new Color(0, 0, 0, Math.round(255 * t * t * (3 - 2 * t)));
+                }
+                fg.setPaint(new java.awt.LinearGradientPaint(0, 0, iw * 0.8f, 0, stops, alphas));
                 fg.fillRect(0, 0, iw, h);
                 fg.dispose();
             }
@@ -438,7 +447,9 @@ public class HomePage extends Page {
             if (instance.launcher.loaderVersion != null && instance.launcher.loaderVersion.type != null) {
                 sb.append(" · ").append(instance.launcher.loaderVersion.type);
             }
-            if (instance.launcher.pack != null && !instance.launcher.pack.equals(instance.launcher.name)) {
+            // a plain Minecraft instance has "Minecraft" as its pack, already said at the start
+            if (instance.launcher.pack != null && !instance.launcher.pack.equals(instance.launcher.name)
+                && !instance.launcher.vanillaInstance && !"Minecraft".equals(instance.launcher.pack)) {
                 sb.append(" · ").append(instance.launcher.pack);
             }
             return sb.toString();

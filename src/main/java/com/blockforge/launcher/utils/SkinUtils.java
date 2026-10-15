@@ -34,6 +34,10 @@ public class SkinUtils {
     }
 
     public static ImageIcon getHead(BufferedImage image) {
+        // a missing or unreadable skin gives no head instead of failing while the interface paints
+        if (image == null || image.getWidth() < 48 || image.getHeight() < 16) {
+            return null;
+        }
         BufferedImage main = image.getSubimage(8, 8, 8, 8);
         BufferedImage helmet = image.getSubimage(40, 8, 8, 8);
         BufferedImage head = new BufferedImage(8, 8, BufferedImage.TYPE_INT_ARGB);

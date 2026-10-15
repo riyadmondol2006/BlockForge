@@ -120,6 +120,10 @@ public class Btn extends JButton {
         boolean pressed = getModel().isPressed();
         boolean hover = getModel().isRollover();
 
+        if (kind == Kind.FILLED && !isEnabled()) {
+            // a faded accent fill reads as white on pale green in the light theme; a neutral fill stays legible
+            return Palette.field();
+        }
         switch (kind) {
             case FILLED:
                 return pressed ? Palette.accentPressed() : hover ? Palette.accentHover() : Palette.accent();
@@ -134,6 +138,9 @@ public class Btn extends JButton {
     }
 
     private Color foreground() {
+        if (kind == Kind.FILLED && !isEnabled()) {
+            return Palette.textDim();
+        }
         switch (kind) {
             case FILLED:
                 return Palette.onAccent();
@@ -155,7 +162,7 @@ public class Btn extends JButton {
 
         int w = getWidth();
         int h = getHeight();
-        float alpha = isEnabled() ? 1f : 0.4f;
+        float alpha = isEnabled() || kind == Kind.FILLED ? 1f : 0.4f;
         g.setComposite(java.awt.AlphaComposite.SrcOver.derive(alpha));
 
         g.setColor(background());
