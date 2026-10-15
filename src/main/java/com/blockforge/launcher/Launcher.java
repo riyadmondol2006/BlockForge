@@ -528,10 +528,11 @@ public class Launcher {
     }
 
     /**
-     * Refreshes the Discover screen, if it has been opened
+     * Called when the account or the added pack codes change. The old packs tab filtered its list by those; the
+     * Discover screen's results come from the modpack search and don't depend on them, so there is nothing to do.
+     * (Searching again here made every account switch throw away the results on screen and hit the network.)
      */
     public void refreshPacksBrowserPanel() {
-        reloadPacksBrowserPanel();
     }
 
     public void showKillMinecraft(Process minecraft) {

@@ -95,10 +95,12 @@ public final class RuntimeResolver {
         List<JavaRuntime> candidates = new ArrayList<>(request.installed);
         candidates.removeIf(j -> j.major > 0 && request.requiredMajor > 0 && j.major < request.requiredMajor);
 
+        // a Java whose version is known beats one that isn't; then the closest to the requirement, or the newest
+        // when there is no requirement
         return candidates.stream().min(Comparator
             .comparing((JavaRuntime j) -> request.hostArch != null && !request.hostArch.equals(j.arch))
-            .thenComparingInt(j -> request.requiredMajor > 0 && j.major > 0 ? j.major - request.requiredMajor : 0)
-            .thenComparing(j -> j.major <= 0));
+            .thenComparing(j -> j.major <= 0)
+            .thenComparingInt(j -> request.requiredMajor > 0 ? j.major - request.requiredMajor : -j.major));
     }
 
     private static void check(Choice choice, Request request) {

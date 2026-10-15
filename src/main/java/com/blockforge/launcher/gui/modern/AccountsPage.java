@@ -238,7 +238,7 @@ public class AccountsPage extends Page {
         actions.setOpaque(false);
         if (active) {
             JLabel badge = Lbl.text(GetText.tr("In use"), 13f, true, Palette::accent);
-            badge.setIcon(Icons.CHECK.asIcon(18, Palette.accent()));
+            badge.setIcon(Icons.CHECK.asIcon(18, Palette::accent));
             badge.setIconTextGap(6);
             actions.add(badge);
         } else {

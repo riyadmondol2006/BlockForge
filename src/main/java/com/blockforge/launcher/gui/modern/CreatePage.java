@@ -50,6 +50,8 @@ import com.blockforge.launcher.builders.HTMLBuilder;
 import com.blockforge.launcher.data.MCVersionRow;
 import com.blockforge.launcher.data.minecraft.loaders.LoaderType;
 import com.blockforge.launcher.data.minecraft.loaders.LoaderVersion;
+import com.blockforge.launcher.evnt.listener.SettingsListener;
+import com.blockforge.launcher.evnt.manager.SettingsManager;
 import com.blockforge.launcher.managers.DialogManager;
 import com.blockforge.launcher.utils.ComboItem;
 import com.blockforge.launcher.viewmodel.base.ICreatePackViewModel;
@@ -381,6 +383,14 @@ public class CreatePage extends Page {
     @Override
     public void onShow() {
         scrolledToSelection = false;
+    }
+
+    @Override
+    public void dispose() {
+        subscriptions.dispose();
+        if (viewModel instanceof SettingsListener) {
+            SettingsManager.removeListener((SettingsListener) viewModel);
+        }
     }
 
     /** One row of the Minecraft version list. */

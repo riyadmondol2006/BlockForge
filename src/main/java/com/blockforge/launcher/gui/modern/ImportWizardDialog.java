@@ -30,6 +30,8 @@ import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 import javax.swing.BorderFactory;
 import javax.swing.Box;
@@ -64,6 +66,12 @@ import com.blockforge.launcher.utils.Utils;
  */
 public final class ImportWizardDialog extends JDialog {
     private static final long serialVersionUID = 1L;
+
+    private static final ExecutorService PREVIEWS = Executors.newSingleThreadExecutor(r -> {
+        Thread thread = new Thread(r, "import-preview");
+        thread.setDaemon(true);
+        return thread;
+    });
 
     private final JPanel list = new JPanel();
     private final JLabel status = Lbl.dim(GetText.tr("Looking for other launchers…"));
@@ -196,8 +204,9 @@ public final class ImportWizardDialog extends JDialog {
         right.add(importButton);
         row.add(right, BorderLayout.EAST);
 
-        // what is inside is worked out in the background so the list appears straight away
-        new Thread(() -> {
+        // what is inside is worked out in the background so the list appears straight away. One at a time: walking
+        // dozens of instances' files at once (a thread each) thrashes the disk and makes every row slow
+        PREVIEWS.execute(() -> {
             try {
                 InstanceImporter.Preview p = InstanceImporter.preview(instance);
                 String summary = p.mods + " " + GetText.tr("mods") + "  ·  " + p.worlds + " " + GetText.tr("worlds")
@@ -206,7 +215,7 @@ public final class ImportWizardDialog extends JDialog {
             } catch (IOException e) {
                 SwingUtilities.invokeLater(() -> counts.setText(GetText.tr("Couldn't read this instance's files")));
             }
-        }, "import-preview").start();
+        });
 
         row.setCursor(Cursor.getPredefinedCursor(Cursor.DEFAULT_CURSOR));
         row.addMouseListener(new MouseAdapter() {
@@ -230,10 +239,14 @@ public final class ImportWizardDialog extends JDialog {
 
         dispose();
 
+        // an instance with the same name (say, one imported before) would stop the install with "rename it and try
+        // again", and the import has nowhere to rename it, so a free name is picked instead
+        String name = InstanceImporter.uniqueName(imported.name, InstanceManager::isInstance);
+
         try {
             final Installable installable = new VanillaInstallable(
-                MinecraftManager.getMinecraftVersion(imported.minecraftVersion), null, imported.name);
-            installable.instanceName = imported.name;
+                MinecraftManager.getMinecraftVersion(imported.minecraftVersion), null, name);
+            installable.instanceName = name;
             installable.isReinstall = false;
             installable.isServer = false;
 
@@ -241,9 +254,9 @@ public final class ImportWizardDialog extends JDialog {
                 return;
             }
 
-            Instance created = InstanceManager.getInstanceByName(imported.name);
+            Instance created = InstanceManager.getInstanceByName(name);
             if (created == null) {
-                LogManager.error("Imported instance " + imported.name + " was created but couldn't be found");
+                LogManager.error("Imported instance " + name + " was created but couldn't be found");
                 return;
             }
 

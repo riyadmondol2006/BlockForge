@@ -126,6 +126,44 @@ class InstanceSnapshotsTest {
     }
 
     @Test
+    void restoringRemovesPackFoldersThatDidNotExistYet(@TempDir Path temp) throws IOException {
+        Path root = instance(temp);
+        Files.createDirectories(root.resolve("defaultconfigs"));
+        Path dir = temp.resolve("snapshots");
+        InstanceSnapshots.Snapshot snapshot = InstanceSnapshots.create(root, dir, "before-update");
+
+        // the update brings a scripts folder and fills the empty defaultconfigs folder
+        write(root.resolve("kubejs/startup.js"), "new script");
+        write(root.resolve("defaultconfigs/new.toml"), "x=1");
+
+        InstanceSnapshots.restore(snapshot, root, dir);
+
+        assertFalse(Files.exists(root.resolve("kubejs")));
+        assertTrue(Files.isDirectory(root.resolve("defaultconfigs")));
+        assertFalse(Files.exists(root.resolve("defaultconfigs/new.toml")));
+        assertEquals("A1", read(root.resolve("mods/a.jar")));
+        assertEquals("my world", read(root.resolve("saves/World/level.dat")));
+    }
+
+    @Test
+    void theOldestKeptSnapshotCanBeRestored(@TempDir Path temp) throws IOException {
+        Path root = instance(temp);
+        Path dir = temp.resolve("snapshots");
+
+        InstanceSnapshots.Snapshot oldest = InstanceSnapshots.create(root, dir, "oldest");
+        write(root.resolve("mods/a.jar"), "A2");
+        for (int i = 1; i < InstanceSnapshots.KEEP; i++) {
+            InstanceSnapshots.create(root, dir, "s" + i);
+        }
+        assertEquals(InstanceSnapshots.KEEP, InstanceSnapshots.list(dir).size());
+
+        // saving the state before the restore pushes the oldest snapshot out of the kept ones
+        InstanceSnapshots.restore(oldest, root, dir);
+
+        assertEquals("A1", read(root.resolve("mods/a.jar")));
+    }
+
+    @Test
     void leavesNoTemporaryFoldersBehind(@TempDir Path temp) throws IOException {
         Path root = instance(temp);
         Path dir = temp.resolve("snapshots");

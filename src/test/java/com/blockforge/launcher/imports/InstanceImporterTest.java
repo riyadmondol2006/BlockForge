@@ -81,6 +81,35 @@ class InstanceImporterTest {
     }
 
     @Test
+    void curseForgeFabricVersionsLeaveOutTheMinecraftVersion(@TempDir Path temp) throws IOException {
+        // CurseForge names Fabric and Quilt loaders "fabric-<loader>-<minecraft>"
+        Path named = temp.resolve("Named");
+        write(named.resolve("minecraftinstance.json"), "{\"name\":\"Named\",\"gameVersion\":\"1.20.1\","
+            + "\"baseModLoader\":{\"name\":\"fabric-0.14.21-1.20.1\",\"minecraftVersion\":\"1.20.1\"}}");
+        ImportedInstance fromName = InstanceImporter.read(named);
+        assertEquals("fabric", fromName.loaderType);
+        assertEquals("0.14.21", fromName.loaderVersion);
+
+        // and when it says the version on its own, that is used
+        Path stored = temp.resolve("Stored");
+        write(stored.resolve("minecraftinstance.json"), "{\"name\":\"Stored\",\"gameVersion\":\"1.21.1\","
+            + "\"baseModLoader\":{\"name\":\"quilt-0.26.4-1.21.1\",\"forgeVersion\":\"0.26.4\"}}");
+        ImportedInstance fromField = InstanceImporter.read(stored);
+        assertEquals("quilt", fromField.loaderType);
+        assertEquals("0.26.4", fromField.loaderVersion);
+    }
+
+    @Test
+    void picksANameThatIsNotTakenYet() {
+        java.util.Set<String> taken = new java.util.HashSet<>(java.util.Arrays.asList("My Pack", "My Pack (2)"));
+
+        assertEquals("Other", InstanceImporter.uniqueName("Other", taken::contains));
+        assertEquals("My Pack (3)", InstanceImporter.uniqueName("My Pack", taken::contains));
+        assertEquals("Imported instance", InstanceImporter.uniqueName("★★★", taken::contains));
+        assertEquals("Imported instance", InstanceImporter.uniqueName(null, taken::contains));
+    }
+
+    @Test
     void readsAtlauncherAndGdLauncherInstances(@TempDir Path temp) throws IOException {
         Path atl = temp.resolve("atl");
         write(atl.resolve("instance.json"), "{\"id\":\"1.19.2\",\"launcher\":{\"name\":\"Old Pack\",\"loaderVersion\":{\"type\":\"Forge\",\"version\":\"43.2.0\"}}}");

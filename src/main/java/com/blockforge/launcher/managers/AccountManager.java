@@ -195,17 +195,21 @@ public class AccountManager {
     public static void removeAccount(MicrosoftAccount account) {
         List<MicrosoftAccount> accounts = new ArrayList<>(getAccounts());
         if (SELECTED_ACCOUNT.getValue().orElse(null) == account) {
-            if (accounts.size() == 1) {
-                // if this was the only account, don't set an account
-                switchAccount(null);
-            } else {
-                // if they have more accounts, switch to the first one
-                switchAccount(accounts.get(0));
-            }
+            // switch to another account, or to none if this was the only one
+            switchAccount(accountToSelectAfterRemoving(accounts, account));
         }
         accounts.remove(account);
         ACCOUNTS.onNext(immutableAccounts(accounts));
         saveAccounts();
+    }
+
+    /**
+     * The account to use once the selected one is removed: the first other account, or null if there is none. (Just
+     * taking the first account would pick the one being removed whenever it is first in the list.)
+     */
+    @Nullable
+    static MicrosoftAccount accountToSelectAfterRemoving(List<MicrosoftAccount> accounts, MicrosoftAccount removed) {
+        return accounts.stream().filter(a -> a != removed).findFirst().orElse(null);
     }
 
     /**

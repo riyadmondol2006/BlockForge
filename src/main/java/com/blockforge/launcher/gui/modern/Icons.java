@@ -317,11 +317,19 @@ public enum Icons {
      * A Swing icon that renders this icon with a fixed colour.
      */
     public Icon asIcon(int size, Color color) {
+        return asIcon(size, () -> color);
+    }
+
+    /**
+     * A Swing icon whose colour is looked up each time it is painted, so it follows a switch between light and dark
+     * themes. Use this for icons that stay on screen.
+     */
+    public Icon asIcon(int size, java.util.function.Supplier<Color> color) {
         Icons self = this;
         return new Icon() {
             @Override
             public void paintIcon(java.awt.Component c, java.awt.Graphics g, int x, int y) {
-                self.paint((Graphics2D) g, x, y, size, color);
+                self.paint((Graphics2D) g, x, y, size, color.get());
             }
 
             @Override

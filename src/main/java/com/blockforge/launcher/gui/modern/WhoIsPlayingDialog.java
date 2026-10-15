@@ -134,7 +134,7 @@ public final class WhoIsPlayingDialog extends JDialog {
         card.pad(18, 18, 18, 18);
         card.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
 
-        JLabel iconLabel = new JLabel(icon.asIcon(30, Palette.accent()));
+        JLabel iconLabel = new JLabel(icon.asIcon(30, Palette::accent));
         iconLabel.setHorizontalAlignment(JLabel.LEFT);
         card.add(iconLabel, BorderLayout.NORTH);
         JPanel text = new JPanel();

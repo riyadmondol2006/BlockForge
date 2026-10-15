@@ -38,4 +38,11 @@ public abstract class Page extends JPanel {
     /** Called every time the page is brought to the front. */
     public void onShow() {
     }
+
+    /**
+     * Called when the window throws this page away (for example to rebuild everything in a new language). Anything
+     * the page registered outside itself must be let go here, or the old page and its view model live on.
+     */
+    public void dispose() {
+    }
 }

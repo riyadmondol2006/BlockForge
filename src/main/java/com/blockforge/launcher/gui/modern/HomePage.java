@@ -29,7 +29,6 @@ import java.awt.GridLayout;
 import java.awt.RenderingHints;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
-import java.awt.geom.Area;
 import java.awt.geom.RoundRectangle2D;
 import java.awt.image.BufferedImage;
 import java.io.File;
@@ -210,6 +209,9 @@ public class HomePage extends Page {
                 refreshInstances();
             })));
         subscriptions.add(NewsManager.getNews().subscribe(news -> SwingUtilities.invokeLater(() -> showNews(news))));
+        // the greeting names the player, so it follows account switches made from the sidebar
+        subscriptions.add(AccountManager.getSelectedAccountObservable()
+            .subscribe(account -> SwingUtilities.invokeLater(() -> MicrosoftAccountName.apply(greeting))));
     }
 
     @Override
@@ -429,7 +431,10 @@ public class HomePage extends Page {
             g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC);
             int w = getWidth();
             int h = getHeight();
-            RoundPanelShape.clip(g, w, h, 30);
+            // the clip handed in keeps painting inside the scroll pane, so it is narrowed and later put back,
+            // never replaced (setClip(null) let a half scrolled card paint over the window around it)
+            java.awt.Shape visible = g.getClip();
+            g.clip(new RoundRectangle2D.Float(0, 0, w, h, 30, 30));
 
             Color a = Palette.mix(Palette.card(), Palette.accent(), Palette.dark() ? 0.22f : 0.12f);
             g.setPaint(new GradientPaint(0, 0, a, w, h, Palette.card()));
@@ -442,17 +447,10 @@ public class HomePage extends Page {
                 Icons.CUBE.paint(g, w - 190, (h - 110) / 2f, 110, Palette.alpha(Palette.accent(), 70));
             }
 
-            g.setClip(null);
+            g.setClip(visible);
             g.setColor(Palette.outline());
             g.draw(new RoundRectangle2D.Float(0.5f, 0.5f, w - 1, h - 1, 30, 30));
             g.dispose();
-        }
-    }
-
-    /** Small helper for clipping to a rounded rectangle. */
-    private static final class RoundPanelShape {
-        static void clip(Graphics2D g, int w, int h, int arc) {
-            g.setClip(new Area(new RoundRectangle2D.Float(0, 0, w, h, arc, arc)));
         }
     }
 }

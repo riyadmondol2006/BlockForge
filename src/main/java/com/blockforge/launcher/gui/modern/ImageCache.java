@@ -22,36 +22,89 @@ import java.awt.RenderingHints;
 import java.awt.image.BufferedImage;
 import java.net.URL;
 import java.net.URLConnection;
-import java.util.Collections;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.function.Consumer;
 
 import javax.imageio.ImageIO;
 import javax.swing.ImageIcon;
 import javax.swing.SwingUtilities;
 
-import com.blockforge.launcher.App;
 import com.blockforge.launcher.managers.LogManager;
 
 /**
  * Loads and scales images off the UI thread and keeps recently used ones in memory.
  */
 public final class ImageCache {
-    private static final int MAX_ENTRIES = 160;
+    /**
+     * How much decoded image data is kept. A banner for a big instance card is over half a megabyte once decoded, so
+     * the limit is on bytes rather than on the number of pictures.
+     */
+    static final long MAX_BYTES = 48L * 1024 * 1024;
 
-    private static final Map<String, BufferedImage> CACHE = Collections
-        .synchronizedMap(new LinkedHashMap<String, BufferedImage>(64, 0.75f, true) {
-            private static final long serialVersionUID = 1L;
+    private static final Lru CACHE = new Lru(MAX_BYTES);
 
-            @Override
-            protected boolean removeEldestEntry(Map.Entry<String, BufferedImage> eldest) {
-                return size() > MAX_ENTRIES;
-            }
-        });
+    /**
+     * Images are loaded on their own threads: a page of modpack icons from a slow server would otherwise queue up in
+     * front of the launcher's other background work (searches, log uploads, play time reports).
+     */
+    private static final ExecutorService LOADER = Executors.newFixedThreadPool(3, r -> {
+        Thread thread = new Thread(r, "image-loader");
+        thread.setDaemon(true);
+        return thread;
+    });
 
     private ImageCache() {
+    }
+
+    /** Least recently used images go first once the total size is over the limit. */
+    static final class Lru {
+        private final long maxBytes;
+        private final LinkedHashMap<String, BufferedImage> images = new LinkedHashMap<>(64, 0.75f, true);
+        private long bytes;
+
+        Lru(long maxBytes) {
+            this.maxBytes = maxBytes;
+        }
+
+        synchronized BufferedImage get(String key) {
+            return images.get(key);
+        }
+
+        synchronized void put(String key, BufferedImage image) {
+            BufferedImage old = images.put(key, image);
+            if (old != null) {
+                bytes -= sizeOf(old);
+            }
+            bytes += sizeOf(image);
+
+            Iterator<Map.Entry<String, BufferedImage>> eldest = images.entrySet().iterator();
+            // the image just added always stays, even if it is bigger than the whole limit on its own
+            while (bytes > maxBytes && images.size() > 1 && eldest.hasNext()) {
+                Map.Entry<String, BufferedImage> entry = eldest.next();
+                if (entry.getKey().equals(key)) {
+                    continue;
+                }
+                bytes -= sizeOf(entry.getValue());
+                eldest.remove();
+            }
+        }
+
+        synchronized long bytes() {
+            return bytes;
+        }
+
+        synchronized int size() {
+            return images.size();
+        }
+
+        static long sizeOf(BufferedImage image) {
+            return (long) image.getWidth() * image.getHeight() * 4;
+        }
     }
 
     /**
@@ -91,7 +144,7 @@ public final class ImageCache {
             return;
         }
 
-        App.TASKPOOL.execute(() -> {
+        LOADER.execute(() -> {
             BufferedImage result = null;
             try {
                 result = loader.call();

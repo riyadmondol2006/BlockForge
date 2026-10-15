@@ -140,7 +140,7 @@ public class LibraryPage extends Page {
         card.line(Palette::outline);
         card.pad(40, 56, 40, 56);
 
-        JLabel icon = new JLabel(Icons.CUBE.asIcon(56, Palette.accent()));
+        JLabel icon = new JLabel(Icons.CUBE.asIcon(56, Palette::accent));
         icon.setAlignmentX(Component.CENTER_ALIGNMENT);
         JLabel heading = Lbl.heading(GetText.tr("No instances yet"));
         heading.setAlignmentX(Component.CENTER_ALIGNMENT);

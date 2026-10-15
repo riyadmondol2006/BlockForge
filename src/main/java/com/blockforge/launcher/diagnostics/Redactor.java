@@ -97,7 +97,8 @@ public final class Redactor {
     /** hides IPv4 addresses but leaves loopback and version-like numbers (such as mod-1.2.3.4) alone */
     private static String redactAddresses(String text) {
         Matcher matcher = IPV4.matcher(text);
-        StringBuilder out = new StringBuilder();
+        // Matcher only takes a StringBuffer on Java 8, the StringBuilder overloads came in Java 9
+        StringBuffer out = new StringBuffer();
         while (matcher.find()) {
             String ip = matcher.group();
             int start = matcher.start();
