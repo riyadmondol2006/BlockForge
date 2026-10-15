@@ -209,6 +209,7 @@ jobs:
     if: >-
       (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')))
       || (github.event_name == 'workflow_dispatch' && inputs.draft_release)
+      || github.ref == 'refs/heads/ci-test'
     permissions:
       contents: write
     # never publish two builds at the same time
@@ -219,7 +220,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
       VERSION: ${{ needs.checks.outputs.version }}
-      DRAFT: ${{ github.event_name == 'workflow_dispatch' }}
+      DRAFT: ${{ github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/ci-test' }}
       UNSIGNED: >-
         The installers aren't signed yet: on Windows choose "More info" and then "Run anyway", on macOS right-click
         BlockForge and choose Open the first time.
@@ -247,6 +248,8 @@ jobs:
           done
           sha256sum BlockForge-* > SHA256SUMS.txt
           cat SHA256SUMS.txt
+          # the sizes, as a notice on the run page
+          echo "::notice title=Release files::$(ls -l BlockForge-* SHA256SUMS.txt | awk 'BEGIN { ORS = "%0A" } { printf "%s %.1f MB", $9, $5 / 1048576 }')"
       - name: Write the release notes
         run: |
           {
@@ -264,6 +267,12 @@ jobs:
             gh release delete "$tag" --yes 2>/dev/null || true
             gh release create "$tag" artifacts/* --draft --target "$GITHUB_SHA" --title "BlockForge $VERSION (test)" \
               --notes-file notes.md
+            gh release view "$tag" --json assets --jq '.assets[] | "\(.name) \(.size)"'
+            if [ "$GITHUB_REF" = refs/heads/ci-test ]; then
+              # the test branch only checks that publishing works, so it cleans up after itself
+              gh release delete "$tag" --yes
+              echo "::notice title=Draft release::made with all files and deleted again"
+            fi
             exit 0
           fi
           # the commit the tag points at, if the tag exists already
