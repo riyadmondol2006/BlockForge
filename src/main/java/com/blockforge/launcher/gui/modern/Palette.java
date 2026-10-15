@@ -65,6 +65,11 @@ public final class Palette {
         return pick(0x2C362D, 0xD5DECE);
     }
 
+    /** outline of text fields and dropdowns, the same as md.fieldBorder in the Material themes */
+    public static Color fieldBorder() {
+        return pick(0x2E382F, 0xC9D3C2);
+    }
+
     public static Color outline() {
         return pick(0x2E382F, 0xD3DCCC);
     }

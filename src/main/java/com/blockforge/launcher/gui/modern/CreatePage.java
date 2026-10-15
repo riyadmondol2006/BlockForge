@@ -241,7 +241,7 @@ public class CreatePage extends Page {
         chips.add(loader("Purpur", LoaderType.PURPUR, viewModel.loaderTypePurpurSelected(),
             viewModel.loaderTypePurpurEnabled(), viewModel.isPurpurVisible(), viewModel.showPurpurOption()));
 
-        loaderVersions.setPreferredSize(new Dimension(320, 40));
+        SearchBox.styleLike(loaderVersions, 320);
         loaderVersions.addActionListener(e -> {
             // a person can't change the version within 100ms of the view model doing it
             if (!updating && e.getWhen() > lastLoaderVersionChange + 100) {

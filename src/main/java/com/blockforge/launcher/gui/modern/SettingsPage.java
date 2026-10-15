@@ -74,6 +74,7 @@ public class SettingsPage extends Page {
         column.add(Box.createVerticalStrut(16));
         column.add(section(GetText.tr("Game"), memoryRow(),
             textRow(GetText.tr("Java path"), GetText.tr("Leave empty to use the Java that comes with Minecraft"),
+                GetText.tr("Automatic (recommended)"),
                 App.settings.usingCustomJavaPath ? App.settings.javaPath : "", SettingsPage::setJavaPath),
             textRow(GetText.tr("Java arguments"), GetText.tr("Extra options passed to the Java virtual machine"),
                 App.settings.javaParameters, v -> App.settings.javaParameters = v),
@@ -195,9 +196,13 @@ public class SettingsPage extends Page {
     }
 
     private JPanel textRow(String label, String hint, String value, Consumer<String> save) {
-        SearchBox field = new SearchBox(null, false, 22);
+        return textRow(label, hint, null, value, save);
+    }
+
+    private JPanel textRow(String label, String hint, String placeholder, String value, Consumer<String> save) {
+        SearchBox field = new SearchBox(placeholder, false, 22);
         field.setText(value == null ? "" : value);
-        field.setPreferredSize(new Dimension(300, 40));
+        field.setPreferredSize(new Dimension(300, 44));
         String[] committed = { field.getText().trim() };
         Runnable commit = () -> {
             String text = field.getText().trim();
@@ -230,7 +235,7 @@ public class SettingsPage extends Page {
             }
         }
         box.setSelectedIndex(selected);
-        box.setPreferredSize(new Dimension(230, 38));
+        SearchBox.styleLike(box, 300);
         box.addActionListener(e -> {
             int index = box.getSelectedIndex();
             if (index >= 0 && !themes.get(index).id.equals(App.settings.theme)) {
@@ -250,7 +255,7 @@ public class SettingsPage extends Page {
                 box.setSelectedIndex(i);
             }
         }
-        box.setPreferredSize(new Dimension(230, 38));
+        SearchBox.styleLike(box, 300);
         box.addActionListener(e -> {
             String chosen = (String) box.getSelectedItem();
             if (chosen != null && !chosen.equals(App.settings.language)) {

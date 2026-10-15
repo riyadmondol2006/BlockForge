@@ -130,7 +130,8 @@ public class Chip extends JComponent {
         g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
         int w = getWidth();
         int h = getHeight();
-        g.setComposite(java.awt.AlphaComposite.SrcOver.derive(isEnabled() ? 1f : 0.4f));
+        // a selected chip that can't be turned off (the only filter left) still looks selected, not greyed out
+        g.setComposite(java.awt.AlphaComposite.SrcOver.derive(isEnabled() || selected ? 1f : 0.4f));
 
         g.setColor(selected ? Palette.accentSoft() : hover ? Palette.fieldHover() : Palette.field());
         g.fill(new RoundRectangle2D.Float(0, 0, w, h, h, h));

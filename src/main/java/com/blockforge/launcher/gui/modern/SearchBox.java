@@ -34,7 +34,11 @@ import javax.swing.event.DocumentListener;
 public class SearchBox extends JTextField {
     private static final long serialVersionUID = 1L;
 
+    /** corner diameter, matching TextComponent.arc and Component.arc in the Material themes */
+    private static final float ARC = 20f;
+
     private final String placeholder;
+    private boolean hover;
     private final boolean showIcon;
     private Timer debounce;
 
@@ -43,9 +47,52 @@ public class SearchBox extends JTextField {
         this.placeholder = placeholder;
         this.showIcon = showIcon;
         setOpaque(false);
-        setBorder(javax.swing.BorderFactory.createEmptyBorder(0, showIcon ? 44 : 18, 0, 18));
+        setBorder(javax.swing.BorderFactory.createEmptyBorder(0, showIcon ? 42 : 14, 0, 14));
         setFont(Palette.font(14f));
         setMargin(new Insets(0, 0, 0, 0));
+
+        // repaint the outline on focus changes, and show long values from their start when not editing
+        addFocusListener(new java.awt.event.FocusAdapter() {
+            @Override
+            public void focusGained(java.awt.event.FocusEvent e) {
+                repaint();
+            }
+
+            @Override
+            public void focusLost(java.awt.event.FocusEvent e) {
+                setCaretPosition(0);
+                repaint();
+            }
+        });
+        addMouseListener(new java.awt.event.MouseAdapter() {
+            @Override
+            public void mouseEntered(java.awt.event.MouseEvent e) {
+                hover = true;
+                repaint();
+            }
+
+            @Override
+            public void mouseExited(java.awt.event.MouseEvent e) {
+                hover = false;
+                repaint();
+            }
+        });
+    }
+
+    /** Gives a dropdown the same height, font and padding as this text field, for use next to one. */
+    public static <T> javax.swing.JComboBox<T> styleLike(javax.swing.JComboBox<T> box, int width) {
+        box.setFont(Palette.font(14f));
+        box.setPreferredSize(new Dimension(width, 44));
+        box.setMaximumSize(new Dimension(Integer.MAX_VALUE, 44));
+        return box;
+    }
+
+    @Override
+    public void setText(String text) {
+        super.setText(text);
+        if (!isFocusOwner()) {
+            setCaretPosition(0);
+        }
     }
 
     /** Calls the action once the user pauses typing. */
@@ -88,13 +135,15 @@ public class SearchBox extends JTextField {
         int w = getWidth();
         int h = getHeight();
 
-        g.setColor(isFocusOwner() ? Palette.card() : Palette.field());
-        g.fill(new RoundRectangle2D.Float(0, 0, w, h, h, h));
-        g.setColor(isFocusOwner() ? Palette.accent() : Palette.outline());
-        g.setStroke(new java.awt.BasicStroke(isFocusOwner() ? 2f : 1f));
-        float inset = isFocusOwner() ? 1f : 0.5f;
-        g.draw(new RoundRectangle2D.Float(inset, inset, w - 2 * inset, h - 2 * inset, h - 2 * inset,
-            h - 2 * inset));
+        // same shape and colours as the theme's dropdowns: 10px corners, filled, soft outline, green when focused
+        boolean focused = isFocusOwner();
+        boolean hovered = !focused && hover;
+        g.setColor(hovered ? Palette.fieldHover() : Palette.field());
+        g.fill(new RoundRectangle2D.Float(0, 0, w, h, ARC, ARC));
+        g.setColor(focused ? Palette.accent() : Palette.fieldBorder());
+        g.setStroke(new java.awt.BasicStroke(focused ? 2f : 1f));
+        float inset = focused ? 1f : 0.5f;
+        g.draw(new RoundRectangle2D.Float(inset, inset, w - 2 * inset, h - 2 * inset, ARC - inset, ARC - inset));
 
         if (showIcon) {
             Icons.SEARCH.paint(g, 16, (h - 20) / 2f, 20, Palette.textDim());
