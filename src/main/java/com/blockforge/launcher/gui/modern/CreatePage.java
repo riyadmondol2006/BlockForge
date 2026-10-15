@@ -261,8 +261,60 @@ public class CreatePage extends Page {
         wrap.setOpaque(false);
         wrap.add(chips, BorderLayout.NORTH);
         wrap.add(versionRow, BorderLayout.CENTER);
-        wrap.setMaximumSize(new Dimension(Integer.MAX_VALUE, 140));
+        wrap.add(performanceRow(), BorderLayout.SOUTH);
+        wrap.setMaximumSize(new Dimension(Integer.MAX_VALUE, 240));
         return wrap;
+    }
+
+    /** The switch that adds a few speed-up mods after the instance is made, for loaders that have them. */
+    private JComponent performanceRow() {
+        Toggle toggle = new Toggle(false, GetText.tr("Add performance mods"));
+        toggle.onChange(viewModel::setAddPerformanceMods);
+
+        JLabel heading = Lbl.text(GetText.tr("Add performance mods"), 14f, true, Palette::text);
+        JLabel detail = Lbl.text(" ", 12.5f, false, Palette::textDim);
+        JPanel words = new JPanel();
+        words.setOpaque(false);
+        words.setLayout(new BoxLayout(words, BoxLayout.Y_AXIS));
+        JPanel headingRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
+        headingRow.setOpaque(false);
+        headingRow.add(heading);
+        if (com.blockforge.launcher.utils.LightMode.detectedLowEnd()) {
+            headingRow.add(Box.createHorizontalStrut(10));
+            headingRow.add(Lbl.text(GetText.tr("Recommended for this computer"), 11.5f, true, Palette::accent));
+        }
+        headingRow.setAlignmentX(LEFT_ALIGNMENT);
+        detail.setAlignmentX(LEFT_ALIGNMENT);
+        words.add(headingRow);
+        words.add(Box.createVerticalStrut(2));
+        words.add(detail);
+
+        RoundPanel row = new RoundPanel(new BorderLayout(14, 0), 18, Palette::field);
+        row.pad(10, 14, 10, 14);
+        JLabel bolt = new JLabel(Icons.BOLT.asIcon(22, Palette::accent));
+        row.add(bolt, BorderLayout.WEST);
+        row.add(words, BorderLayout.CENTER);
+        JPanel toggleWrap = new JPanel(new java.awt.GridBagLayout());
+        toggleWrap.setOpaque(false);
+        toggleWrap.add(toggle);
+        row.add(toggleWrap, BorderLayout.EAST);
+
+        JPanel outer = new JPanel(new BorderLayout());
+        outer.setOpaque(false);
+        outer.setBorder(BorderFactory.createEmptyBorder(10, 0, 0, 0));
+        outer.add(row, BorderLayout.CENTER);
+        outer.setVisible(false);
+
+        subscriptions.add(viewModel.addPerformanceMods().subscribe(on -> ui(() -> toggle.setOn(Boolean.TRUE.equals(on)))));
+        subscriptions.add(viewModel.performanceModsOffered().subscribe(names -> ui(() -> {
+            outer.setVisible(names.isPresent());
+            if (names.isPresent()) {
+                detail.setText(GetText.tr("{0}. Smoother and faster, especially on slower computers.", names.get()));
+                detail.setToolTipText(GetText.tr("Added from Modrinth after the instance is made. They don't change how the game plays."));
+            }
+            outer.revalidate();
+        })));
+        return outer;
     }
 
     private Chip loader(String label, LoaderType type, Observable<Boolean> selected, Observable<Boolean> enabled,

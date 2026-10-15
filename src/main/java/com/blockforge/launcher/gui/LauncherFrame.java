@@ -93,6 +93,7 @@ public final class LauncherFrame extends JFrame implements RelocalizationListene
     private final JPanel stack = new JPanel(cards);
     private final Map<Integer, Supplier<Page>> factories = new HashMap<>();
     private final Map<Integer, Page> pages = new HashMap<>();
+    private com.blockforge.launcher.gui.modern.WindowFileDrop fileDrop;
     private final JPanel runningBanner = new JPanel(new BorderLayout());
     private Sidebar sidebar;
     private int current = -1;
@@ -132,6 +133,8 @@ public final class LauncherFrame extends JFrame implements RelocalizationListene
 
         LogManager.info("Setting up interface");
         buildInterface();
+        // files dropped anywhere on the window go into an instance (or become one, for modpacks)
+        fileDrop = com.blockforge.launcher.gui.modern.WindowFileDrop.install(this, null, null);
         LogManager.info("Finished setting up interface");
 
         int start = App.settings.selectedTabOnStartup;
@@ -332,6 +335,11 @@ public final class LauncherFrame extends JFrame implements RelocalizationListene
     /**
      * Brings the screen for the given {@link UIConstants} destination to the front.
      */
+    /** Dropping files on the window. */
+    public com.blockforge.launcher.gui.modern.WindowFileDrop getFileDrop() {
+        return fileDrop;
+    }
+
     public void navigate(int destination) {
         Supplier<Page> factory = factories.get(destination);
         if (factory == null) {

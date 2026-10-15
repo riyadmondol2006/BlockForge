@@ -332,6 +332,10 @@ public class HomePage extends Page {
         Hero(Instance instance) {
             super(new BorderLayout());
             setOpaque(false);
+            if (instance != null) {
+                // files dropped on the "continue playing" banner go into that instance
+                putClientProperty(FileDropFlow.INSTANCE_KEY, instance);
+            }
             setPreferredSize(new Dimension(0, 200));
             setMinimumSize(new Dimension(0, 200));
             setMaximumSize(new Dimension(Integer.MAX_VALUE, 200));
@@ -374,7 +378,12 @@ public class HomePage extends Page {
                 play.addActionListener(e -> InstanceActions.play(instance, false, false));
                 Btn settings = new Btn(GetText.tr("Settings"), Btn.Kind.TONAL).icon(Icons.SETTINGS);
                 settings.addActionListener(e -> InstanceActions.openSettings(instance));
+                Btn mods = new Btn(GetText.tr("Mods and packs"), Btn.Kind.TONAL).icon(Icons.PUZZLE);
+                mods.addActionListener(e -> InstanceActions.openContent(instance,
+                    com.blockforge.launcher.content.ContentKind.MODS, null));
                 buttons.add(play);
+                buttons.add(Box.createHorizontalStrut(10));
+                buttons.add(mods);
                 buttons.add(Box.createHorizontalStrut(10));
                 buttons.add(settings);
             }

@@ -28,6 +28,7 @@ import org.mini2Dx.gettext.GetText;
 
 import com.blockforge.launcher.App;
 import com.blockforge.launcher.builders.HTMLBuilder;
+import com.blockforge.launcher.content.ContentKind;
 import com.blockforge.launcher.data.BackupMode;
 import com.blockforge.launcher.data.Instance;
 import com.blockforge.launcher.data.minecraft.loaders.LoaderType;
@@ -124,6 +125,11 @@ public final class InstanceActions {
         new InstanceSettingsDialog(instance).setVisible(true);
     }
 
+    /** Opens the mods, resource packs and shaders of an instance on the given tab. */
+    public static void openContent(Instance instance, ContentKind tab, Runnable changed) {
+        ContentManagerDialog.open(App.launcherFrame, instance, tab, changed);
+    }
+
     public static void openFolder(Instance instance) {
         OS.openFileExplorer(instance.getRoot());
     }
@@ -140,23 +146,32 @@ public final class InstanceActions {
     public static JPopupMenu menu(Instance instance, boolean hasUpdate, Runnable changed) {
         JPopupMenu menu = new JPopupMenu();
 
+        JMenuItem content = item(GetText.tr("Mods, resource packs and shaders"),
+            () -> openContent(instance, ContentKind.MODS, changed));
+        content.setFont(content.getFont().deriveFont(java.awt.Font.BOLD));
+        menu.add(content);
         menu.add(item(GetText.tr("Settings"), () -> openSettings(instance)));
 
+        // the classic windows still cover CurseForge, data packs, worlds and jar mods
+        JMenu classic = new JMenu(GetText.tr("Classic mod tools"));
         boolean modsViaPlatforms = instance.launcher.enableCurseForgeIntegration
             && (ConfigManager.getConfigItem("platforms.curseforge.modsEnabled", true)
                 || (ConfigManager.getConfigItem("platforms.modrinth.modsEnabled", true)
                     && instance.launcher.loaderVersion != null));
         if (modsViaPlatforms) {
-            menu.add(item(GetText.tr("Add Mods"), () -> {
+            classic.add(item(GetText.tr("Add Mods (CurseForge, data packs, worlds)"), () -> {
                 new AddModsDialog(instance).setVisible(true);
                 changed.run();
             }));
         }
         if (instance.launcher.enableEditingMods) {
-            menu.add(item(GetText.tr("Edit Mods"), () -> {
+            classic.add(item(GetText.tr("Edit Mods"), () -> {
                 new EditModsDialog(instance).setVisible(true);
                 changed.run();
             }));
+        }
+        if (classic.getItemCount() > 0) {
+            menu.add(classic);
         }
 
         menu.addSeparator();

@@ -437,6 +437,40 @@ public class ModrinthApi {
         return versions;
     }
 
+    /**
+     * Looks up the newest version of each file's project in one request. Files Modrinth doesn't know are left out
+     * of the result.
+     *
+     * @param sha1Hashes   sha1 hashes of the files
+     * @param loaders      only versions for these loaders, or null for any
+     * @param gameVersions only versions for these Minecraft versions, or null for any
+     * @return file hash to the newest version, or null if Modrinth couldn't be reached
+     */
+    public static @Nullable Map<String, ModrinthVersion> getLatestVersionsFromSha1Hashes(String[] sha1Hashes,
+        @Nullable List<String> loaders, @Nullable List<String> gameVersions) {
+        if (sha1Hashes.length == 0) {
+            return new HashMap<>();
+        }
+
+        Map<String, Object> body = new HashMap<>();
+        body.put("hashes", sha1Hashes);
+        body.put("algorithm", "sha1");
+        if (loaders != null && !loaders.isEmpty()) {
+            body.put("loaders", loaders);
+        }
+        if (gameVersions != null && !gameVersions.isEmpty()) {
+            body.put("game_versions", gameVersions);
+        }
+
+        java.lang.reflect.Type type = new TypeToken<Map<String, ModrinthVersion>>() {
+        }.getType();
+
+        return NetworkClient.post(String.format("%s/version_files/update", Constants.MODRINTH_API_URL),
+            getHeaders(), RequestBody.create(Gsons.DEFAULT_SLIM.toJson(body),
+                MediaType.get("application/json; charset=utf-8")),
+            type);
+    }
+
     public static List<ModrinthProject> getProjects(String[] projectIds) {
         java.lang.reflect.Type type = new TypeToken<List<ModrinthProject>>() {
         }.getType();

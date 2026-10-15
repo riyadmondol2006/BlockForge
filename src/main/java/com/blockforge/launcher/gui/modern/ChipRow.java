@@ -94,6 +94,14 @@ public class ChipRow extends JComponent {
         }
     }
 
+    /** Selects a choice without telling the listener, for when the program changes it. */
+    public void setSelected(int index) {
+        if (index >= 0 && index < labels.length) {
+            selected = index;
+            repaint();
+        }
+    }
+
     public int getSelected() {
         return selected;
     }

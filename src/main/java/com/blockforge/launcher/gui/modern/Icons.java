@@ -33,7 +33,7 @@ import javax.swing.Icon;
  */
 public enum Icons {
     HOME, LIBRARY, EXPLORE, PERSON, SETTINGS, PLAY, PLUS, MORE, FOLDER, TRASH, SEARCH, CLOSE, DOWNLOAD, TERMINAL,
-    SERVER, CUBE, INFO, REFRESH, CHECK, EXTERNAL, EDIT, IMPORT, WARNING;
+    SERVER, CUBE, INFO, REFRESH, CHECK, EXTERNAL, EDIT, IMPORT, WARNING, PUZZLE, IMAGE, SPARKLE, BOLT;
 
     /**
      * Paints this icon into the square at (x, y) with the given size.
@@ -304,6 +304,64 @@ public enum Icons {
                 g.draw(tri);
                 g.draw(new Line2D.Float(12, 9.5f, 12, 14));
                 g.fill(new Ellipse2D.Float(11, 15.6f, 2, 2));
+                break;
+            }
+            case PUZZLE: {
+                // a jigsaw piece: a square with a knob on top and one on the right
+                Path2D p = new Path2D.Float();
+                p.moveTo(4.5, 8);
+                p.lineTo(9, 8);
+                p.curveTo(8, 4, 14, 4, 13, 8);
+                p.lineTo(17.5, 8);
+                p.lineTo(17.5, 11);
+                p.curveTo(21.5, 10, 21.5, 16, 17.5, 15);
+                p.lineTo(17.5, 20);
+                p.lineTo(4.5, 20);
+                p.closePath();
+                g.draw(p);
+                break;
+            }
+            case IMAGE: {
+                g.draw(new RoundRectangle2D.Float(3.5f, 4.5f, 17, 15, 3.5f, 3.5f));
+                g.draw(new Ellipse2D.Float(7.2f, 7.8f, 3.2f, 3.2f));
+                Path2D hills = new Path2D.Float();
+                hills.moveTo(4, 17.5);
+                hills.lineTo(9.5, 12.5);
+                hills.lineTo(13, 15.5);
+                hills.lineTo(15.5, 13);
+                hills.lineTo(20, 17);
+                g.draw(hills);
+                break;
+            }
+            case SPARKLE: {
+                Path2D star = new Path2D.Float();
+                star.moveTo(10, 3.5);
+                star.quadTo(11, 10, 17, 11);
+                star.quadTo(11, 12, 10, 18.5);
+                star.quadTo(9, 12, 3, 11);
+                star.quadTo(9, 10, 10, 3.5);
+                star.closePath();
+                g.draw(star);
+                Path2D small = new Path2D.Float();
+                small.moveTo(18, 14.5);
+                small.quadTo(18.4, 17.1, 21, 17.5);
+                small.quadTo(18.4, 17.9, 18, 20.5);
+                small.quadTo(17.6, 17.9, 15, 17.5);
+                small.quadTo(17.6, 17.1, 18, 14.5);
+                small.closePath();
+                g.fill(small);
+                break;
+            }
+            case BOLT: {
+                Path2D bolt = new Path2D.Float();
+                bolt.moveTo(13.5, 3);
+                bolt.lineTo(5.5, 13.5);
+                bolt.lineTo(11.5, 13.5);
+                bolt.lineTo(10.5, 21);
+                bolt.lineTo(18.5, 10.5);
+                bolt.lineTo(12.5, 10.5);
+                bolt.closePath();
+                g.draw(bolt);
                 break;
             }
             default:

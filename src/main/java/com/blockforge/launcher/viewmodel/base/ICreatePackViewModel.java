@@ -458,6 +458,23 @@ public interface ICreatePackViewModel {
     void createInstance();
 
     /**
+     * Names of the performance mods that can be added for the selected loader, or empty when there are none for it
+     */
+    @NotNull
+    Observable<Optional<String>> performanceModsOffered();
+
+    /**
+     * Whether performance mods are added after the instance is created
+     */
+    @NotNull
+    Observable<Boolean> addPerformanceMods();
+
+    /**
+     * Turns adding performance mods on or off
+     */
+    void setAddPerformanceMods(boolean add);
+
+    /**
      * Warn the user about creating a server =/= playing the game themselves
      */
     @NotNull
