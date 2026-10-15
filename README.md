@@ -120,7 +120,7 @@
 | Light mode for slower PCs | No | Turns on by itself on PCs with about 4 GB of RAM or 2 cores |
 | Launcher RAM use after browsing\* | ~500 MB | ~250 MB |
 | Play button to game process (Fabric)\* | ~1.2 s | ~0.1 s |
-| Window open time\* | ~4.9 s | ~3.8 s |
+| Window open time\* | ~4.7 s | ~3.1 s |
 | Minecraft 26.3 (vanilla) to the title screen\* | ~7.8 s | ~7.2 s with the class cache |
 | Minecraft 26.3 + Fabric, cold start\* | ~10.4 s | ~9.9 s with file warm-up |
 | Self-update source | ATLauncher's server | BlockForge's GitHub releases |
