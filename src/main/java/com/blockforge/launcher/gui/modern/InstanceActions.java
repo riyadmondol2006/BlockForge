@@ -356,9 +356,14 @@ public final class InstanceActions {
                 .contains(instance.id);
     }
 
-    /** Shows the instance menu under a component. */
+    /** Shows the instance menu at a point, like where the user right clicked. */
     public static void showMenu(Component invoker, int x, int y, Instance instance, boolean hasUpdate,
         Runnable changed) {
-        menu(instance, hasUpdate, changed).show(invoker, x, y);
+        Popups.at(menu(instance, hasUpdate, changed), invoker, x, y);
+    }
+
+    /** Shows the instance menu under its "more" button, or above it near the bottom of the window. */
+    public static void showMenuBelow(Component button, Instance instance, boolean hasUpdate, Runnable changed) {
+        Popups.below(menu(instance, hasUpdate, changed), button);
     }
 }

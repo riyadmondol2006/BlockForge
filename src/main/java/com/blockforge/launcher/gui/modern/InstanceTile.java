@@ -99,7 +99,7 @@ public class InstanceTile extends RoundPanel {
         Btn play = new Btn(GetText.tr("Play"), Btn.Kind.FILLED).icon(Icons.PLAY).compact();
         play.addActionListener(e -> InstanceActions.play(instance, false, hasUpdate));
         Btn more = Btn.iconButton(Icons.MORE, GetText.tr("More options"));
-        more.addActionListener(e -> InstanceActions.showMenu(more, 0, more.getHeight(), instance, hasUpdate, changed));
+        more.addActionListener(e -> InstanceActions.showMenuBelow(more, instance, hasUpdate, changed));
 
         Btn mods = new Btn(GetText.tr("Mods"), Btn.Kind.TONAL).icon(Icons.PUZZLE).compact();
         mods.setToolTipText(GetText.tr("Add mods, resource packs and shaders"));

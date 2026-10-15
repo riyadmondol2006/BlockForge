@@ -249,7 +249,7 @@ public class AccountsPage extends Page {
             actions.add(use);
         }
         Btn more = Btn.iconButton(Icons.MORE, GetText.tr("More options"));
-        more.addActionListener(e -> menu(account).show(more, 0, more.getHeight()));
+        more.addActionListener(e -> Popups.below(menu(account), more));
         actions.add(more);
         JPanel actionsWrap = new JPanel(new GridBagLayout());
         actionsWrap.setOpaque(false);

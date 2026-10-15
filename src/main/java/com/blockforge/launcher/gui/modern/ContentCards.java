@@ -213,7 +213,7 @@ final class ContentCards {
                 web.addActionListener(a -> OS.openWebBrowser(modrinthUrl(kind, hit.slug)));
                 menu.add(versions);
                 menu.add(web);
-                menu.show(more, 0, more.getHeight());
+                Popups.below(menu, more);
             });
             JPanel moreWrap = new JPanel(new BorderLayout());
             moreWrap.setOpaque(false);
