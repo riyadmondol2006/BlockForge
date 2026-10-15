@@ -63,20 +63,25 @@ This fork is a work in progress. Compared to ATLauncher 3.4.41.4 it changes:
 
 **Privacy**
 - Usage statistics, pack install/play-time reporting and crash reports are off by default, and a remote setting can no
-  longer turn crash reporting on. Self-updating is turned off, since it would replace BlockForge with ATLauncher.
+  longer turn crash reporting on. ATLauncher's self-updater is gone (it would have replaced BlockForge with
+  ATLauncher); BlockForge checks its own GitHub releases instead and offers to install the update (can be turned off
+  in Settings).
 
 ## Download and install
 
-Every push to this repository builds installers for each system. Get them from the **Actions** tab (open a run, then
-**Artifacts**), or from the **Releases** page: the `nightly` release always holds the latest build from `master`.
+Get the newest version from the **Releases** page. The `nightly` prerelease always holds the newest build from
+`master`, and every push also leaves its builds under **Actions** (open a run, then **Artifacts**).
 
 | System | File | Notes |
 |---|---|---|
-| Windows | `BlockForge-<version>-windows-setup.exe` | Installs for your user, no administrator needed. Adds a Start menu entry and a shortcut. |
-| macOS | `BlockForge-<version>-macos-arm64.dmg` (Apple Silicon) or `-macos-x64.dmg` (Intel) | Drag BlockForge to Applications. |
-| Fedora, RHEL and other RPM systems | `BlockForge-<version>-fedora-x86_64.rpm` | `sudo dnf install ./BlockForge-*.rpm` |
-| Debian, Ubuntu and other deb systems | `BlockForge-<version>-debian-ubuntu-amd64.deb` | `sudo apt install ./BlockForge-*.deb` |
+| Windows 10 and 11 (64-bit) | `BlockForge-<version>-windows-x64.exe` | Installs for your user, no administrator needed. Adds a Start menu entry and a shortcut. A newer installer replaces the older version. |
+| macOS on Apple Silicon (M1 and newer) | `BlockForge-<version>-macos-arm64.dmg` | Open it and drag BlockForge to Applications. |
+| macOS on Intel | `BlockForge-<version>-macos-x64.dmg` | Open it and drag BlockForge to Applications. |
+| Debian, Ubuntu and other deb systems | `BlockForge-<version>-linux-amd64.deb` | `sudo apt install ./BlockForge-*.deb` |
+| Fedora, RHEL and other RPM systems | `BlockForge-<version>-linux-x86_64.rpm` | `sudo dnf install ./BlockForge-*.rpm` |
 | Any system with Java 17 or newer | `BlockForge-<version>.jar` | `java -jar BlockForge-*.jar`, keeps its files next to the jar. |
+
+`SHA256SUMS.txt` next to them lists the checksum of every file.
 
 The installers carry their own Java, so nothing else needs to be installed. An installed BlockForge keeps its
 instances, settings and logs in your user folder (`%APPDATA%\BlockForge` on Windows,
@@ -111,7 +116,11 @@ replace them before sharing the launcher with other people.
 ## For developers
 
 - `scripts/package.sh` (Linux and macOS) and `scripts/package.ps1` (Windows) build the installers with `jpackage`;
-  `.github/workflows/build.yml` runs them on every push.
+  `.github/workflows/build.yml` runs them on every push, then installs or starts each one to check it works.
+- **Making a release:** raise the version in `src/main/resources/version` and push to `master`. When all builds pass,
+  the workflow creates the release `v<version>` (marked as the latest release) with every installer attached, and
+  moves the `nightly` prerelease to the same commit. A push that keeps the version only updates `nightly`. Pushing a
+  `v*` tag yourself also makes a release for that commit.
 - `scripts/blockforge.sh` starts the jar with a class cache, which opens the window faster.
 - `scripts/startup-budget.sh` fails if the window takes longer than a set time to appear.
 - `scripts/loader-canary.sh` checks that the Fabric, Quilt, Forge and NeoForge services still answer as the launcher
