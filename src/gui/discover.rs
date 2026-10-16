@@ -1,14 +1,15 @@
 //! Discover: search Modrinth and install into an instance.
 
 use std::collections::HashSet;
+use std::time::SystemTime;
 
 use egui::{Align, CornerRadius, Layout, RichText, ScrollArea, Stroke, Ui};
 
 use super::theme::*;
 use super::widgets::*;
-use super::{App, Msg};
-use crate::loaders::Loader;
+use super::{App, Msg, Page};
 use crate::modrinth::{self, Hit, Kind, Sort};
+use crate::mods::metadata::ContentKind;
 
 pub struct DiscoverState {
     pub kind: Kind,
@@ -23,6 +24,10 @@ pub struct DiscoverState {
     pub error: Option<String>,
     pub installing: HashSet<String>,
     offset_pending: u32,
+    /// A search has been started since the page first opened.
+    searched: bool,
+    /// The Modrinth projects in the target instance, with the instance file's time they were read at.
+    installed: Option<(String, Option<SystemTime>, HashSet<String>)>,
 }
 
 impl Default for DiscoverState {
@@ -39,7 +44,19 @@ impl Default for DiscoverState {
             error: None,
             installing: HashSet::new(),
             offset_pending: 0,
+            searched: false,
+            installed: None,
         }
+    }
+}
+
+/// The Modrinth kind as the mod manager files it.
+fn content_kind(kind: Kind) -> Option<ContentKind> {
+    match kind {
+        Kind::Mod => Some(ContentKind::Mods),
+        Kind::ResourcePack => Some(ContentKind::ResourcePacks),
+        Kind::Shader => Some(ContentKind::Shaders),
+        Kind::Modpack => None,
     }
 }
 
@@ -66,31 +83,50 @@ impl DiscoverState {
 
 const PAGE: u32 = 20;
 
+/// A card for a list that couldn't be fetched: what failed and what to do in plain words, the technical details
+/// small underneath, and a button to try again. Returns whether "Try again" was pressed.
+pub(super) fn fetch_error_card(ui: &mut Ui, title: &str, detail: &str) -> bool {
+    let mut retry = false;
+    card(ui, |ui| {
+        ui.label(RichText::new(title).color(c_danger()).strong());
+        muted(ui, "Check your internet connection, or try again in a few minutes.");
+        ui.add(egui::Label::new(RichText::new(detail).color(c_muted()).size(11.5)).wrap());
+        ui.add_space(4.0);
+        retry = secondary(ui, "Try again").clicked();
+    });
+    retry
+}
+
 impl App {
     /// Start a search. `reset` begins again from the first result; otherwise the next page is added.
     pub(super) fn discover_search(&mut self, reset: bool) {
+        // what the target instance runs: its Minecraft version, and every loader whose mods it can use
+        let kind = self.discover.kind;
+        let (mc, loaders) = match (self.discover.target.as_ref().and_then(|f| self.instance(f)), kind) {
+            (Some(inst), Kind::Mod | Kind::ResourcePack | Kind::Shader) => {
+                let loaders = if kind == Kind::Mod {
+                    crate::mods::InstanceTarget::of(inst, &crate::mods::RemoteConfig::load(&self.dirs))
+                        .accepted_loaders()
+                } else {
+                    Vec::new()
+                };
+                (Some(inst.mc_version().to_string()), loaders)
+            }
+            _ => (None, Vec::new()),
+        };
         let d = &mut self.discover;
         if reset {
             d.hits.clear();
+            d.total = 0;
         }
+        d.searched = true;
         d.offset_pending = d.hits.len() as u32;
         d.seq += 1;
         d.loading = true;
-        let (seq, query, kind, sort, offset) = (d.seq, d.query.clone(), d.kind, d.sort, d.offset_pending);
-        let (mc, loader) = match (&d.target, kind) {
-            (Some(folder), Kind::Mod | Kind::ResourcePack | Kind::Shader) => {
-                let inst = self.instances.iter().find(|i| &i.folder == folder);
-                (
-                    inst.map(|i| i.mc_version().to_string()),
-                    inst.and_then(|i| i.loader()).and_then(|(k, _)| Loader::parse(k)).unwrap_or(Loader::Vanilla),
-                )
-            }
-            _ => (None, Loader::Vanilla),
-        };
-        let loader = if kind == Kind::Mod { loader } else { Loader::Vanilla };
+        let (seq, query, sort, offset) = (d.seq, d.query.clone(), d.sort, d.offset_pending);
         let n = self.notifier();
         self.rt.spawn(async move {
-            let r = modrinth::search(&query, kind, mc.as_deref(), loader, sort, offset, PAGE)
+            let r = modrinth::search_for_loaders(&query, kind, mc.as_deref(), &loaders, sort, offset, PAGE)
                 .await
                 .map_err(|e| format!("{e:#}"));
             n.send(Msg::Search { seq, result: r });
@@ -101,37 +137,86 @@ impl App {
         let id = hit.project_id.clone();
         let title = hit.title.clone();
         let kind = self.discover.kind;
-        self.discover.installing.insert(id.clone());
-        if kind == Kind::Modpack {
+        let Some(content) = content_kind(kind) else {
+            self.discover.installing.insert(id.clone());
             let dirs = self.dirs.clone();
             self.start_task(format!("Installing {title}"), move |p, _| async move {
                 let inst = modrinth::install_modpack(&dirs, &id, &p).await?;
                 Ok(format!("Created {}", inst.name()))
             });
             return;
-        }
-        let Some(inst) = folder.and_then(|f| self.instance(&f).cloned()) else { return };
-        self.start_task(format!("Installing {title}"), move |p, _| async move {
-            let added = modrinth::install_into(&inst, &id, kind, &p).await?;
-            Ok(format!("Added {} to {}", added.join(", "), inst.name()))
+        };
+        let Some(root) = folder.as_deref().and_then(|f| self.instance(f)).map(|i| i.root.clone()) else {
+            self.toast_err("That instance isn't there any more. Choose another one.");
+            return;
+        };
+        self.discover.installing.insert(id.clone());
+        // the mod manager's install: it records the file in the instance, adds what it needs, and says when what
+        // it needs clashes with something already installed
+        let (dirs, settings, lock) = (self.dirs.clone(), self.settings.clone(), super::mods::instance_lock(&root));
+        self.start_task(format!("Installing {title}"), move |p, n| async move {
+            let _turn = lock.lock().await;
+            let mut inst = crate::instances::load_one(&root)
+                .ok_or_else(|| anyhow::anyhow!("that instance can't be read any more"))?;
+            let ctx = crate::mods::ModContext::build(&dirs, &inst, &settings).await;
+            let r = crate::mods::install::install_project(&mut inst, &ctx, &id, content, &p).await?;
+            if !r.warnings.is_empty() {
+                n.send(Msg::Toast(format!("{title}: {}", r.warnings.join(" ")), true));
+            }
+            Ok(format!("Added {} to {}", r.installed.join(", "), inst.name()))
         });
         self.mods_cache = None;
     }
 
+    /// Discover lists Modrinth's and CurseForge's modpacks; the other sources have pages of their own.
+    pub(super) fn other_modpack_sources(&mut self, ui: &mut Ui) {
+        ui.horizontal_wrapped(|ui| {
+            small_muted(ui, "More modpacks:");
+            if ui.link("ATLauncher and Technic").clicked() {
+                self.page = Page::Packs;
+            }
+            small_muted(ui, "and");
+            if ui.link("Feed The Beast").clicked() {
+                self.page = Page::Ftb;
+            }
+        });
+    }
+
+    /// Keeps the list of Modrinth projects in the target instance current, reading it again only when the
+    /// instance's file changes.
+    fn discover_refresh_installed(&mut self) {
+        let Some(inst) = self.discover.target.as_ref().and_then(|f| self.instance(f)) else {
+            self.discover.installed = None;
+            return;
+        };
+        let stamp = std::fs::metadata(inst.instance_file()).and_then(|m| m.modified()).ok();
+        let fresh = matches!(&self.discover.installed, Some((folder, at, _)) if *folder == inst.folder && *at == stamp);
+        if !fresh {
+            let ids = crate::mods::files::installed_project_ids(inst);
+            self.discover.installed = Some((inst.folder.clone(), stamp, ids));
+        }
+    }
+
     pub(super) fn discover_ui(&mut self, ui: &mut Ui) {
+        // an instance that was deleted or renamed can't be the target any more
+        if self.discover.target.as_ref().is_some_and(|f| self.instance(f).is_none()) {
+            self.discover.target = None;
+            self.discover.searched = false;
+        }
         // the CurseForge page, when that platform is chosen
         if self.cf_discover_ui(ui) {
             return;
         }
-        let mut search = false;
-        ui.horizontal(|ui| {
+        // the first visit shows the most downloaded right away
+        let mut search = !self.discover.searched;
+        ui.horizontal_wrapped(|ui| {
             heading(ui, "Discover");
             muted(ui, "from Modrinth");
             ui.add_space(8.0);
             self.cf_platform_chips(ui);
         });
         ui.add_space(4.0);
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             for k in Kind::ALL {
                 if chip(ui, k.label(), self.discover.kind == k).clicked() && self.discover.kind != k {
                     self.discover.kind = k;
@@ -139,9 +224,14 @@ impl App {
                 }
             }
         });
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             let mut q = std::mem::take(&mut self.discover.query);
-            let r = search_field(ui, &mut q, &format!("Search {}", self.discover.kind.label().to_lowercase()), 340.0);
+            let r = search_field(
+                ui,
+                &mut q,
+                &format!("Search {}", self.discover.kind.label().to_lowercase()),
+                340.0f32.min(ui.available_width()),
+            );
             self.discover.query = q;
             if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                 search = true;
@@ -167,8 +257,10 @@ impl App {
                     }
                 });
         });
-        if self.discover.kind != Kind::Modpack {
-            ui.horizontal(|ui| {
+        if self.discover.kind == Kind::Modpack {
+            self.other_modpack_sources(ui);
+        } else {
+            ui.horizontal_wrapped(|ui| {
                 muted(ui, "Install into");
                 let current = self
                     .discover
@@ -208,17 +300,19 @@ impl App {
         }
         ui.add_space(6.0);
 
-        if let Some(e) = &self.discover.error {
-            card(ui, |ui| {
-                ui.label(RichText::new("Couldn't reach Modrinth").color(c_danger()).strong());
-                muted(ui, e.clone());
-            });
+        if let Some(e) = self.discover.error.clone() {
+            if fetch_error_card(ui, "Couldn't reach Modrinth", &e) && !self.discover.loading {
+                // the first page again, or the page that failed to load
+                self.discover_search(self.discover.hits.is_empty());
+            }
         }
         if self.discover.hits.is_empty() && !self.discover.loading && self.discover.error.is_none() {
             card(ui, |ui| muted(ui, "No results. Try a different search."));
             return;
         }
 
+        self.discover_refresh_installed();
+        let installed = self.discover.installed.take();
         let hits = std::mem::take(&mut self.discover.hits);
         let kind = self.discover.kind;
         let target = self.discover.target.clone();
@@ -241,22 +335,29 @@ impl App {
                                 }
                             }
                             ui.vertical(|ui| {
-                                ui.set_max_width((ui.available_width() - 150.0).max(240.0));
-                                ui.horizontal(|ui| {
+                                ui.set_max_width((ui.available_width() - 150.0).max(120.0));
+                                ui.horizontal_wrapped(|ui| {
                                     ui.label(RichText::new(&hit.title).strong().size(16.0));
                                     small_muted(ui, format!("by {}", hit.author));
                                 });
                                 ui.add(egui::Label::new(RichText::new(&hit.description).color(c_muted())).truncate());
-                                ui.horizontal(|ui| {
+                                let is_installed = kind != Kind::Modpack
+                                    && installed.as_ref().is_some_and(|(_, _, ids)| ids.contains(&hit.project_id));
+                                ui.horizontal_wrapped(|ui| {
                                     small_muted(ui, format!("{} downloads", human_count(hit.downloads)));
                                     for c in hit.categories.iter().take(4) {
                                         tag(ui, c, c_muted());
+                                    }
+                                    if is_installed {
+                                        tag(ui, "Installed", c_accent());
                                     }
                                 });
                             });
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                 let busy = self.discover.installing.contains(&hit.project_id)
-                                    && self.tasks.iter().any(|t| t.label.ends_with(&hit.title));
+                                    && self.tasks.iter().any(|t| t.label == format!("Installing {}", hit.title));
+                                let is_installed = kind != Kind::Modpack
+                                    && installed.as_ref().is_some_and(|(_, _, ids)| ids.contains(&hit.project_id));
                                 if busy {
                                     ui.spinner();
                                 } else if kind == Kind::Modpack {
@@ -264,7 +365,15 @@ impl App {
                                         install = Some((hit.clone(), None));
                                     }
                                 } else if let Some(t) = &target {
-                                    if primary(ui, "Install").clicked() {
+                                    // installing again puts the newest fitting version in place of the old one
+                                    let clicked = if is_installed {
+                                        secondary(ui, "Reinstall")
+                                            .on_hover_text("Puts the newest version that fits in place of this one")
+                                            .clicked()
+                                    } else {
+                                        primary(ui, "Install").clicked()
+                                    };
+                                    if clicked {
                                         install = Some((hit.clone(), Some(t.clone())));
                                     }
                                 } else {
@@ -298,6 +407,9 @@ impl App {
             }
         });
         self.discover.hits = hits;
+        if self.discover.installed.is_none() {
+            self.discover.installed = installed;
+        }
         if let Some((hit, folder)) = install {
             self.install_hit(&hit, folder);
         }

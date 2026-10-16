@@ -9,6 +9,7 @@
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::SystemTime;
 
 use egui::{Align, Color32, CornerRadius, Layout, RichText, ScrollArea, Stroke, Ui};
@@ -105,6 +106,12 @@ pub struct ModsState {
     selected: HashSet<ModKey>,
     expanded: Option<ModKey>,
     busy: Option<String>,
+    /// Quick changes still running for this instance; `busy` clears when the last one ends.
+    jobs: usize,
+    /// What the instance is (loader, Minecraft version) and what shaders need, worked out when the instance changes
+    /// rather than on every frame (both read files).
+    target: Option<crate::mods::InstanceTarget>,
+    shader_setup: Option<versions::ShaderSetup>,
     confirm_remove: Vec<ModKey>,
     confirm_restore: Option<PathBuf>,
     confirm_pack: bool,
@@ -203,6 +210,36 @@ fn modified(path: &Path) -> Option<SystemTime> {
     std::fs::metadata(path).and_then(|m| m.modified()).ok()
 }
 
+/// A long list in a scroll area where only the rows in view (and a little around them) are laid out; the others
+/// take the height they had when last drawn, or `guess`. Hundreds of rows then cost what a screenful costs.
+pub(super) fn lazy_list<T>(ui: &mut Ui, id: egui::Id, items: &[T], guess: f32, mut row: impl FnMut(&mut Ui, &T)) {
+    let mut heights: Vec<f32> = ui.data(|d| d.get_temp(id)).unwrap_or_default();
+    heights.resize(items.len(), guess);
+    ScrollArea::vertical().id_salt(id).auto_shrink(false).show_viewport(ui, |ui, viewport| {
+        let origin = ui.max_rect().top();
+        let margin = 120.0;
+        for (i, item) in items.iter().enumerate() {
+            let top = ui.cursor().min.y - origin;
+            if top + heights[i] < viewport.min.y - margin || top > viewport.max.y + margin {
+                ui.add_space(heights[i]);
+                continue;
+            }
+            row(ui, item);
+            // what the row took, gaps included, so skipping it later moves the same distance
+            heights[i] = ui.cursor().min.y - origin - top;
+        }
+    });
+    ui.data_mut(|d| d.insert_temp(id, heights));
+}
+
+/// One lock per instance. Changes read `instance.json`, change the mod list and save it; two at once (switching
+/// two mods off quickly, or an update while one is removed) would each save their own copy and lose the other's.
+pub(super) fn instance_lock(root: &Path) -> Arc<tokio::sync::Mutex<()>> {
+    static LOCKS: OnceLock<Mutex<HashMap<PathBuf, Arc<tokio::sync::Mutex<()>>>>> = OnceLock::new();
+    let mut locks = LOCKS.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
+    locks.entry(root.to_path_buf()).or_default().clone()
+}
+
 fn short(text: &str, max: usize) -> String {
     if text.chars().count() <= max {
         text.to_string()
@@ -223,10 +260,13 @@ impl App {
     {
         let Some(root) = self.instance(folder).map(|i| i.root.clone()) else { return };
         self.mods.busy = Some(label.to_string());
+        self.mods.jobs += 1;
         let (dirs, settings, n, folder) =
             (self.dirs.clone(), self.settings.clone(), self.notifier(), folder.to_string());
+        let lock = instance_lock(&root);
         self.rt.spawn(async move {
             let result = async {
+                let _turn = lock.lock().await;
                 let inst = instances::load_one(&root)
                     .ok_or_else(|| anyhow::anyhow!("that instance can't be read any more"))?;
                 let ctx = ModContext::build(&dirs, &inst, &settings).await;
@@ -245,8 +285,9 @@ impl App {
         Fut: Future<Output = anyhow::Result<String>> + Send + 'static,
     {
         let Some(root) = self.instance(folder).map(|i| i.root.clone()) else { return };
-        let (dirs, settings) = (self.dirs.clone(), self.settings.clone());
+        let (dirs, settings, lock) = (self.dirs.clone(), self.settings.clone(), instance_lock(&root));
         self.start_task(label, move |progress, _| async move {
+            let _turn = lock.lock().await;
             let inst =
                 instances::load_one(&root).ok_or_else(|| anyhow::anyhow!("that instance can't be read any more"))?;
             let ctx = ModContext::build(&dirs, &inst, &settings).await;
@@ -260,8 +301,10 @@ impl App {
         let (root, settings, n, folder) =
             (inst.root.clone(), ModSettings::from_settings(&self.settings), self.notifier(), inst.folder.clone());
         self.mods.synced = true;
+        let lock = instance_lock(&root);
         self.rt.spawn(async move {
             let result = async {
+                let _turn = lock.lock().await;
                 let mut inst = instances::load_one(&root)
                     .ok_or_else(|| anyhow::anyhow!("that instance can't be read any more"))?;
                 files::sync(&mut inst, &settings, ScanScope::Full).await
@@ -332,6 +375,9 @@ impl App {
         let stamp = modified(&inst.instance_file());
         if first_time || stamp != self.mods.signature {
             self.mods.signature = stamp;
+            let target = crate::mods::InstanceTarget::of(inst, &crate::mods::RemoteConfig::load(&self.dirs));
+            self.mods.shader_setup = Some(install::shader_setup(inst, &target));
+            self.mods.target = Some(target);
             self.mods.entries = ContentKind::ALL.iter().map(|k| (*k, files::entries(inst, *k))).collect();
             let keys: HashSet<ModKey> = self.mods.entries.values().flatten().map(|e| e.key()).collect();
             self.mods.selected.retain(|k| keys.contains(k));
@@ -402,7 +448,12 @@ impl App {
                 }
             }
             ModsMsg::Done { folder, result } => {
-                self.mods.busy = None;
+                if folder == self.mods.folder {
+                    self.mods.jobs = self.mods.jobs.saturating_sub(1);
+                    if self.mods.jobs == 0 {
+                        self.mods.busy = None;
+                    }
+                }
                 match result {
                     Ok(m) if !m.is_empty() => self.toast(m),
                     Ok(_) => {}
@@ -521,9 +572,10 @@ impl App {
                 let kind = self.mods.kind();
                 let offers: Vec<UpdateOffer> = self.mods.updates.values().filter(|o| o.kind == kind).cloned().collect();
                 if !offers.is_empty() {
+                    let what = if offers.len() == 1 { "item".to_string() } else { kind.label().to_lowercase() };
                     self.mods_task(
                         &folder,
-                        format!("Updating {} mods", offers.len()),
+                        format!("Updating {} {what}", offers.len()),
                         move |mut inst, ctx, progress| async move {
                             let sources = external_sources();
                             let refs: Vec<&dyn updates::ExternalSource> = sources.iter().map(|b| b.as_ref()).collect();
@@ -667,17 +719,14 @@ impl App {
             || self.tasks.iter().any(|t| {
                 t.label.starts_with("Updating") || t.label.starts_with("Reinstalling") || t.label.starts_with("Adding")
             });
-        let target = crate::mods::InstanceTarget::of(inst, &crate::mods::RemoteConfig::load(&self.dirs));
+        let target = self
+            .mods
+            .target
+            .clone()
+            .unwrap_or_else(|| crate::mods::InstanceTarget::of(inst, &crate::mods::RemoteConfig::load(&self.dirs)));
 
         // kinds, search and filters
-        ui.horizontal(|ui| {
-            for k in ContentKind::ALL {
-                let count = self.mods.entries.get(&k).map_or(0, Vec::len);
-                let label = if count > 0 { format!("{} {count}", k.label()) } else { k.label().to_string() };
-                if chip(ui, &label, kind == k).clicked() && kind != k {
-                    acts.push(Act::Kind(k));
-                }
-            }
+        let buttons = |ui: &mut Ui, acts: &mut Vec<Act>| {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if primary_icon(ui, Icon::Plus, "Add").clicked() {
                     acts.push(Act::Add);
@@ -686,10 +735,34 @@ impl App {
                     acts.push(Act::OpenFolder);
                 }
             });
-        });
+        };
+        // the buttons sit beside the kinds, or on a row of their own when the window (or a large interface
+        // scale) leaves no room for them there
+        let mut room = 0.0;
         ui.horizontal(|ui| {
+            for k in ContentKind::ALL {
+                let count = self.mods.entries.get(&k).map_or(0, Vec::len);
+                let label = if count > 0 { format!("{} {count}", k.label()) } else { k.label().to_string() };
+                if chip(ui, &label, kind == k).clicked() && kind != k {
+                    acts.push(Act::Kind(k));
+                }
+            }
+            room = ui.available_width();
+            if room >= 260.0 {
+                buttons(ui, &mut acts);
+            }
+        });
+        if room < 260.0 {
+            ui.horizontal(|ui| buttons(ui, &mut acts));
+        }
+        ui.horizontal_wrapped(|ui| {
             let mut f = std::mem::take(&mut self.mods.filter);
-            search_field(ui, &mut f, &format!("Filter {}", kind.label().to_lowercase()), 260.0);
+            search_field(
+                ui,
+                &mut f,
+                &format!("Filter {}", kind.label().to_lowercase()),
+                260.0f32.min(ui.available_width()),
+            );
             self.mods.filter = f;
             for (s, label) in [(Show::All, "All"), (Show::On, "On"), (Show::Off, "Off"), (Show::Updates, "Updates")] {
                 if chip(ui, label, self.mods.show == s).clicked() {
@@ -823,11 +896,9 @@ impl App {
         } else if rows.is_empty() {
             muted(ui, "Nothing matches.");
         }
-        ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
-            for e in rows {
-                self.mod_row(ui, e, busy, &mut acts);
-                ui.add_space(2.0);
-            }
+        lazy_list(ui, egui::Id::unique(("mod-list", kind)), &rows, 66.0, |ui, e| {
+            self.mod_row(ui, e, busy, &mut acts);
+            ui.add_space(2.0);
         });
 
         let ctx = ui.ctx().clone();
@@ -880,7 +951,7 @@ impl App {
             });
         }
         if kind == ContentKind::Shaders {
-            match install::shader_setup(inst, target) {
+            match self.mods.shader_setup.unwrap_or_else(|| install::shader_setup(inst, target)) {
                 versions::ShaderSetup::AddIris => {
                     card(ui, |ui| {
                         ui.label(RichText::new("Shaders need Iris to work").strong());
@@ -1241,7 +1312,10 @@ impl App {
         }
         // performance pack
         if self.mods.confirm_pack {
-            let target = crate::mods::InstanceTarget::of(inst, &crate::mods::RemoteConfig::load(&self.dirs));
+            let target =
+                self.mods.target.clone().unwrap_or_else(|| {
+                    crate::mods::InstanceTarget::of(inst, &crate::mods::RemoteConfig::load(&self.dirs))
+                });
             let (mut yes, mut no) = (false, false);
             egui::Modal::new(egui::Id::unique("mods-confirm-pack")).show(ctx, |ui| {
                 ui.set_width(420.0);
@@ -1390,6 +1464,43 @@ mod tests {
         // fine for the version it asks for
         assert!(read_details(vec![(key, jar)], Some("fabric"), "1.20.1")[0].1.problem.is_none());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_long_list_only_lays_out_what_is_in_view() {
+        let ctx = egui::Context::default();
+        let items: Vec<u32> = (0..300).collect();
+        let mut drawn: Vec<u32> = Vec::new();
+        for _ in 0..3 {
+            drawn.clear();
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0))),
+                ..Default::default()
+            };
+            let mut out = ctx.run_ui(input, |ui| {
+                lazy_list(ui, egui::Id::unique("test-list"), &items, 40.0, |ui, i| {
+                    drawn.push(*i);
+                    ui.allocate_space(egui::vec2(100.0, 40.0));
+                });
+            });
+            // nothing paints here, so the font pictures are thrown away
+            out.textures_delta.clear();
+        }
+        // a screenful and a margin around it, not all 300
+        assert_eq!(drawn.first(), Some(&0));
+        assert!(drawn.len() > 10 && drawn.len() < 30, "{} rows laid out", drawn.len());
+    }
+
+    #[test]
+    fn changes_to_one_instance_take_turns() {
+        let a = instance_lock(Path::new("/instances/a"));
+        assert!(Arc::ptr_eq(&a, &instance_lock(Path::new("/instances/a"))));
+        assert!(!Arc::ptr_eq(&a, &instance_lock(Path::new("/instances/b"))));
+        let held = a.try_lock().unwrap();
+        assert!(instance_lock(Path::new("/instances/a")).try_lock().is_err());
+        assert!(instance_lock(Path::new("/instances/b")).try_lock().is_ok());
+        drop(held);
+        assert!(a.try_lock().is_ok());
     }
 
     #[test]

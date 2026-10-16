@@ -50,10 +50,10 @@ impl Detected {
             Detected::Path(Source::Modrinth(_)) => ("A Modrinth modpack (.mrpack).".into(), true),
             Detected::Path(Source::CurseForge(_)) => ("A CurseForge modpack.".into(), true),
             Detected::Path(Source::MultiMcArchive(_)) => ("An instance exported from Prism Launcher or MultiMC.".into(), true),
-            Detected::Path(Source::LauncherFolder(p)) => {
-                let what = imports::read(p).map(|i| format!("{} instance, Minecraft {}, {}", i.source, i.minecraft_version, i.loader_label())).unwrap_or_else(|e| format!("An instance folder that can't be read: {e:#}"));
-                (what, imports::read(p).is_ok())
-            }
+            Detected::Path(Source::LauncherFolder(p)) => match imports::read(p) {
+                Ok(i) => (format!("{} instance, Minecraft {}, {}", i.source, i.minecraft_version, i.loader_label()), true),
+                Err(e) => (format!("An instance folder that can't be read: {e:#}"), false),
+            },
             Detected::Path(Source::World(_)) => ("A Minecraft world. Worlds go into an instance's saves folder: drop it on the instance instead.".into(), false),
             Detected::Path(Source::MinecraftFolder(_)) => ("A plain Minecraft folder. Choose the instance folder from Prism, MultiMC, CurseForge, GDLauncher or ATLauncher.".into(), false),
             Detected::Path(Source::Unknown) => ("BlockForge can't tell what this is. It reads Modrinth (.mrpack), CurseForge and MultiMC / Prism zips, and launcher instance folders.".into(), false),
@@ -73,6 +73,9 @@ pub struct ImportState {
     pub name: String,
     detected: Detected,
     detected_for: String,
+    /// What `detected` says about itself; for an instance folder that means reading its files, so it is worked
+    /// out once when the field changes, not on every frame.
+    described: (String, bool),
     scan: Option<Vec<ImportedInstance>>,
     scanning: bool,
     previews: HashMap<PathBuf, Option<Preview>>,
@@ -92,6 +95,7 @@ impl Default for ImportState {
             name: String::new(),
             detected: Detected::Empty,
             detected_for: String::new(),
+            described: Detected::Empty.describe(),
             scan: None,
             scanning: false,
             previews: HashMap::new(),
@@ -107,8 +111,13 @@ impl Default for ImportState {
 /// background thread. `None` when cancelled or when the system has no chooser we can start.
 pub fn pick_path_blocking(folder: bool) -> Option<PathBuf> {
     use std::process::Command;
+    // the chooser through the desktop portal, for a system where the usual program isn't there
+    let portal = || {
+        let dialog = rfd::FileDialog::new();
+        if folder { dialog.pick_folder() } else { dialog.add_filter("Modpacks", &["mrpack", "zip"]).pick_file() }
+    };
     let run = |mut c: Command| -> Option<PathBuf> {
-        let out = c.output().ok()?;
+        let Ok(out) = c.output() else { return portal() };
         if !out.status.success() {
             return None;
         }
@@ -282,6 +291,7 @@ impl App {
         }
         if self.import.detected_for != self.import.input {
             self.import.detected = Detected::of(&self.import.input);
+            self.import.described = self.import.detected.describe();
             self.import.detected_for = self.import.input.clone();
         }
 
@@ -290,8 +300,9 @@ impl App {
         let mut pick_file = false;
         let mut pick_folder = false;
         let mut use_found: Option<ImportedInstance> = None;
+        let (width, room) = super::curseforge::modal_size(ctx, 620.0, 360.0);
         let modal = egui::Modal::new(egui::Id::new("import-modal")).show(ctx, |ui| {
-            ui.set_width(620.0);
+            ui.set_width(width);
             ui.horizontal(|ui| {
                 ui.label(RichText::new("Import an instance").size(21.0).strong());
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -306,7 +317,7 @@ impl App {
             ui.label(RichText::new("File, folder or link").strong());
             ui.horizontal(|ui| {
                 ui.add_sized(
-                    [ui.available_width() - 214.0, 36.0],
+                    [(ui.available_width() - 214.0).max(160.0), 36.0],
                     egui::TextEdit::singleline(&mut self.import.input)
                         .hint_text("Paste a link, or choose a .mrpack / .zip / instance folder")
                         .margin(egui::Margin::symmetric(12, 8))
@@ -325,7 +336,7 @@ impl App {
                     small_muted(ui, "Waiting for the file chooser");
                 });
             }
-            let (text, ok) = self.import.detected.describe();
+            let (text, ok) = self.import.described.clone();
             ui.horizontal_wrapped(|ui| {
                 if self.import.detected == Detected::Empty {
                     small_muted(ui, text);
@@ -373,7 +384,7 @@ impl App {
                 Some(found) => {
                     ScrollArea::vertical()
                         .id_salt("found-instances")
-                        .max_height(260.0)
+                        .max_height(room.min(260.0))
                         .auto_shrink([false, true])
                         .show(ui, |ui| {
                             for i in found {

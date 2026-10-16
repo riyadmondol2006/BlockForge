@@ -711,11 +711,14 @@ impl App {
     /// until it arrives, and when it never does, a coloured letter stands in.
     pub fn remote_image(&mut self, ui: &mut Ui, url: &str, size: f32, fallback: &str) {
         let radius = CornerRadius::same((size * 0.22) as u8);
+        // a long list (hundreds of packs) only fetches the pictures that scroll into view
+        let visible = ui.is_rect_visible(egui::Rect::from_min_size(ui.cursor().min, vec2(size, size)));
         match self.icons.get(url).copied() {
             Some(IconState::Ready) => {
                 ui.add(egui::Image::new(icon_uri(url)).fit_to_exact_size(vec2(size, size)).corner_radius(radius));
                 return;
             }
+            _ if !visible => {}
             Some(IconState::Failed { at, tries }) if tries < ICON_TRIES => {
                 let wait = Duration::from_secs(10 * u64::from(tries) * u64::from(tries));
                 match wait.checked_sub(at.elapsed()) {
@@ -1320,6 +1323,7 @@ impl eframe::App for App {
         self.confirm_ui(&ctx);
         self.svc_overlays(&ctx);
         self.cf_windows(&ctx);
+        self.poll_ftb();
         self.rename_ui(&ctx);
         self.instance_dialogs_ui(&ctx);
         self.startup_ui(&ctx);

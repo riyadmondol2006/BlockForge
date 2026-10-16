@@ -118,15 +118,34 @@ pub async fn search(
     offset: u32,
     limit: u32,
 ) -> Result<(Vec<Hit>, u64)> {
+    let loaders: Vec<String> = loader.modrinth_name().map(str::to_string).into_iter().collect();
+    search_for_loaders(query, kind, mc, &loaders, sort, offset, limit).await
+}
+
+/// The search filters: the kind, the Minecraft version, and any one of `loaders` (a Quilt instance also runs Fabric
+/// mods, so both are asked for). Loaders only filter mods and modpacks.
+fn search_facets(kind: Kind, mc: Option<&str>, loaders: &[String]) -> Vec<Vec<String>> {
     let mut facets: Vec<Vec<String>> = vec![vec![format!("project_type:{}", kind.api_name())]];
     if let Some(mc) = mc.filter(|m| !m.is_empty()) {
         facets.push(vec![format!("versions:{mc}")]);
     }
-    if kind == Kind::Mod || kind == Kind::Modpack {
-        if let Some(l) = loader.modrinth_name() {
-            facets.push(vec![format!("categories:{l}")]);
-        }
+    if (kind == Kind::Mod || kind == Kind::Modpack) && !loaders.is_empty() {
+        facets.push(loaders.iter().map(|l| format!("categories:{l}")).collect());
     }
+    facets
+}
+
+/// Like [`search`], for an instance whose mods may be made for any of several loaders.
+pub async fn search_for_loaders(
+    query: &str,
+    kind: Kind,
+    mc: Option<&str>,
+    loaders: &[String],
+    sort: Sort,
+    offset: u32,
+    limit: u32,
+) -> Result<(Vec<Hit>, u64)> {
+    let facets = search_facets(kind, mc, loaders);
     let r = client()
         .get(format!("{API}/search"))
         .query(&[
@@ -412,4 +431,22 @@ pub async fn install_modpack(dirs: &Dirs, project: &str, progress: &Arc<Progress
 
 pub fn sha1_of_file(path: &Path) -> Result<String> {
     Ok(http::sha1_hex(&std::fs::read(path)?))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_quilt_instance_also_finds_fabric_mods() {
+        let loaders = vec!["quilt".to_string(), "fabric".to_string()];
+        let f = search_facets(Kind::Mod, Some("1.21.1"), &loaders);
+        assert_eq!(f[0], vec!["project_type:mod"]);
+        assert_eq!(f[1], vec!["versions:1.21.1"]);
+        // one group: any of the loaders matches
+        assert_eq!(f[2], vec!["categories:quilt", "categories:fabric"]);
+        // resource packs don't have a loader
+        assert_eq!(search_facets(Kind::ResourcePack, Some("1.21.1"), &loaders).len(), 2);
+        assert_eq!(search_facets(Kind::Mod, None, &[]).len(), 1);
+    }
 }

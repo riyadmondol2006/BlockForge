@@ -24,10 +24,25 @@ pub enum PackTab {
 /// What the background work reports back.
 pub enum PacksMsg {
     AtlList(Result<Arc<PackList>, String>),
-    Technic { seq: u64, result: Result<Vec<Slim>, String> },
-    TechnicPack { token: u64, result: Result<(Modpack, Vec<Build>), String> },
-    Prepared { token: u64, result: Result<Arc<Prepared>, String> },
-    LoaderVersions { token: u64, result: Result<Vec<LoaderVersion>, String> },
+    Technic {
+        seq: u64,
+        result: Result<Vec<Slim>, String>,
+    },
+    TechnicPack {
+        token: u64,
+        result: Result<(Modpack, Vec<Build>), String>,
+    },
+    /// `prep` tells which reading of the version this answers: picking another version starts a new one.
+    Prepared {
+        token: u64,
+        prep: u64,
+        result: Result<Arc<Prepared>, String>,
+    },
+    LoaderVersions {
+        token: u64,
+        prep: u64,
+        result: Result<Vec<LoaderVersion>, String>,
+    },
 }
 
 /// One version in the picker.
@@ -49,6 +64,8 @@ struct Detail {
     name: String,
     versions: Vec<VersionRow>,
     selected: usize,
+    /// Counts the readings of the selected version, so an answer for a version picked earlier is ignored.
+    prep: u64,
     prepared: Option<Arc<Prepared>>,
     choices: Option<ModChoices>,
     loading: bool,
@@ -80,6 +97,9 @@ pub struct PacksState {
     token: u64,
     /// An update asked for before the pack list had arrived.
     pending_update: Option<String>,
+    /// The packs the list shows with their descriptions as plain text, for the search, order and account they
+    /// were made for. Searching and cleaning up hundreds of descriptions on every frame is wasted work.
+    atl_view: Option<(String, Vec<(Pack, String)>)>,
 }
 
 impl Default for PacksState {
@@ -101,6 +121,7 @@ impl Default for PacksState {
             detail: None,
             token: 0,
             pending_update: None,
+            atl_view: None,
         }
     }
 }
@@ -146,6 +167,7 @@ impl App {
                 match r {
                     Ok(list) => {
                         self.packs.atl = Some(list);
+                        self.packs.atl_view = None;
                         self.packs.atl_error = None;
                         if let Some(folder) = self.packs.pending_update.take() {
                             self.packs_open_update(&folder);
@@ -198,8 +220,8 @@ impl App {
                     }
                 }
             }
-            PacksMsg::Prepared { token, result } => {
-                let Some(d) = self.packs.detail.as_mut().filter(|d| d.token == token) else { return };
+            PacksMsg::Prepared { token, prep, result } => {
+                let Some(d) = self.packs.detail.as_mut().filter(|d| d.token == token && d.prep == prep) else { return };
                 d.loading = false;
                 match result {
                     Ok(p) => {
@@ -216,8 +238,8 @@ impl App {
                     }
                 }
             }
-            PacksMsg::LoaderVersions { token, result } => {
-                let Some(d) = self.packs.detail.as_mut().filter(|d| d.token == token) else { return };
+            PacksMsg::LoaderVersions { token, prep, result } => {
+                let Some(d) = self.packs.detail.as_mut().filter(|d| d.token == token && d.prep == prep) else { return };
                 if let Ok(list) = result {
                     d.loader_pick = 0;
                     d.loader_versions = list;
@@ -234,17 +256,19 @@ impl App {
         let n = self.notifier();
         let Some(d) = self.packs.detail.as_mut() else { return };
         let Some(row) = d.versions.get(d.selected).cloned() else { return };
+        d.prep += 1;
         d.loading = true;
+        d.error = None;
         d.prepared = None;
         d.choices = None;
         d.loader_versions.clear();
-        let (token, source, is_server) = (d.token, d.source.clone(), d.is_server);
+        let (token, prep, source, is_server) = (d.token, d.prep, d.source.clone(), d.is_server);
         self.rt.spawn(async move {
             let r = engine::prepare(&ctx, &source, &row.info, is_server, existing.as_ref())
                 .await
                 .map(Arc::new)
                 .map_err(|e| format!("{e:#}"));
-            n.send(Msg::Packs(PacksMsg::Prepared { token, result: r }));
+            n.send(Msg::Packs(PacksMsg::Prepared { token, prep, result: r }));
         });
     }
 
@@ -256,10 +280,10 @@ impl App {
         if !p.json.loader.as_ref().is_some_and(|l| l.choose) {
             return;
         }
-        let (token, mc) = (d.token, p.json.minecraft.clone());
+        let (token, prep, mc) = (d.token, d.prep, p.json.minecraft.clone());
         self.rt.spawn(async move {
             let r = loader::choosable(&dirs, kind, &mc).await.map_err(|e| format!("{e:#}"));
-            n.send(Msg::Packs(PacksMsg::LoaderVersions { token, result: r }));
+            n.send(Msg::Packs(PacksMsg::LoaderVersions { token, prep, result: r }));
         });
     }
 
@@ -293,6 +317,7 @@ impl App {
             name: pack.name.clone(),
             versions,
             selected,
+            prep: 0,
             prepared: None,
             choices: None,
             loading: false,
@@ -320,6 +345,7 @@ impl App {
             name,
             versions: Vec::new(),
             selected: 0,
+            prep: 0,
             prepared: None,
             choices: None,
             loading: true,
@@ -372,11 +398,10 @@ impl App {
                 }
                 self.packs_prepare_selected();
             }
-            InstanceOrigin::Technic | InstanceOrigin::TechnicSolder => {
-                if let Some(m) = technic::installed_pack(&inst) {
-                    self.packs_open_technic(&m.name, Some(folder.to_string()), inst.file.launcher.name.clone());
-                }
-            }
+            InstanceOrigin::Technic | InstanceOrigin::TechnicSolder => match technic::installed_pack(&inst) {
+                Some(m) => self.packs_open_technic(&m.name, Some(folder.to_string()), inst.file.launcher.name.clone()),
+                None => self.toast_err("Couldn't tell which Technic pack this instance was made from"),
+            },
             _ => self.toast("This instance doesn't come from an ATLauncher or Technic pack"),
         }
     }
@@ -446,9 +471,9 @@ impl App {
     }
 
     fn packs_atl_ui(&mut self, ui: &mut Ui) {
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             let mut q = std::mem::take(&mut self.packs.query);
-            search_field(ui, &mut q, "Search ATLauncher packs", 320.0);
+            search_field(ui, &mut q, "Search ATLauncher packs", 320.0f32.min(ui.available_width()));
             self.packs.query = q;
             egui::ComboBox::from_id_salt("pack-order")
                 .selected_text(match self.packs.order {
@@ -474,61 +499,73 @@ impl App {
             }
         });
         if let Some(e) = self.packs.atl_error.clone() {
-            card(ui, |ui| {
-                ui.label(RichText::new("Couldn't load the ATLauncher pack list").color(c_danger()).strong());
-                muted(ui, e);
-                if secondary(ui, "Try again").clicked() {
-                    self.packs.atl_error = None;
-                }
-            });
+            if super::discover::fetch_error_card(ui, "Couldn't load the ATLauncher pack list", &e) {
+                // the page asks again once the error is gone
+                self.packs.atl_error = None;
+            }
             return;
         }
         let Some(list) = self.packs.atl.clone() else {
-            ui.spinner();
+            ui.horizontal(|ui| {
+                ui.spinner();
+                muted(ui, "Getting the pack list");
+            });
             return;
         };
         let user = self.packs_user();
-        let packs: Vec<Pack> = list.search(&user, &self.packs.query, self.packs.order).into_iter().cloned().collect();
+        let key = format!(
+            "{}\u{1f}{:?}\u{1f}{:?}\u{1f}{}",
+            self.packs.query,
+            self.packs.order,
+            user.username,
+            user.added_codes.join(",")
+        );
+        if self.packs.atl_view.as_ref().is_none_or(|(k, _)| *k != key) {
+            let packs = list
+                .search(&user, &self.packs.query, self.packs.order)
+                .into_iter()
+                .map(|p| (p.clone(), plain_text(&p.description)))
+                .collect();
+            self.packs.atl_view = Some((key, packs));
+        }
+        let Some((key, packs)) = self.packs.atl_view.take() else { return };
         if packs.is_empty() {
             card(ui, |ui| muted(ui, "No packs found."));
+            self.packs.atl_view = Some((key, packs));
             return;
         }
         let mut open: Option<Pack> = None;
-        ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
-            for pack in &packs {
-                pack_card(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        self.remote_image(ui, &pack.image_url(), 60.0, &pack.name);
-                        ui.vertical(|ui| {
-                            ui.set_max_width((ui.available_width() - 150.0).max(240.0));
-                            ui.horizontal(|ui| {
-                                ui.label(RichText::new(&pack.name).strong().size(16.0));
-                                if pack.is_private() {
-                                    tag(ui, "Private", c_warn());
-                                } else if pack.is_semi_public() {
-                                    tag(ui, "Code", c_warn());
-                                }
-                            });
-                            ui.add(
-                                egui::Label::new(RichText::new(plain_text(&pack.description)).color(c_muted()))
-                                    .truncate(),
-                            );
-                            ui.horizontal(|ui| {
-                                if let Some(v) = pack.latest_version() {
-                                    small_muted(ui, format!("{} \u{00B7} Minecraft {}", v.version, v.minecraft));
-                                }
-                                small_muted(ui, format!("{} versions", pack.versions.len()));
-                            });
-                        });
-                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            if primary(ui, "Install").clicked() {
-                                open = Some(pack.clone());
+        super::mods::lazy_list(ui, egui::Id::unique("atl-packs"), &packs, 104.0, |ui, (pack, description)| {
+            pack_card(ui, |ui| {
+                ui.horizontal(|ui| {
+                    self.remote_image(ui, &pack.image_url(), 60.0, &pack.name);
+                    ui.vertical(|ui| {
+                        ui.set_max_width((ui.available_width() - 150.0).max(120.0));
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new(&pack.name).strong().size(16.0));
+                            if pack.is_private() {
+                                tag(ui, "Private", c_warn());
+                            } else if pack.is_semi_public() {
+                                tag(ui, "Code", c_warn());
                             }
                         });
+                        ui.add(egui::Label::new(RichText::new(description).color(c_muted())).truncate());
+                        ui.horizontal(|ui| {
+                            if let Some(v) = pack.latest_version() {
+                                small_muted(ui, format!("{} \u{00B7} Minecraft {}", v.version, v.minecraft));
+                            }
+                            small_muted(ui, format!("{} versions", pack.versions.len()));
+                        });
+                    });
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if primary(ui, "Install").clicked() {
+                            open = Some(pack.clone());
+                        }
                     });
                 });
-            }
+            });
         });
+        self.packs.atl_view = Some((key, packs));
         if let Some(p) = open {
             self.packs_open_atl(&p);
         }
@@ -556,9 +593,9 @@ impl App {
 
     fn packs_technic_ui(&mut self, ui: &mut Ui) {
         let mut search = false;
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             let mut q = std::mem::take(&mut self.packs.tech_query);
-            let r = search_field(ui, &mut q, "Search Technic packs", 340.0);
+            let r = search_field(ui, &mut q, "Search Technic packs", 340.0f32.min(ui.available_width()));
             self.packs.tech_query = q;
             if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                 search = true;
@@ -566,21 +603,24 @@ impl App {
             if primary(ui, "Search").clicked() {
                 search = true;
             }
-            small_muted(ui, if self.packs.tech_query.trim().is_empty() { "Showing what's trending" } else { "" });
         });
+        if self.packs.tech_query.trim().is_empty() {
+            small_muted(ui, "Showing what's trending");
+        }
+        if let Some(e) = self.packs.tech_error.clone() {
+            if super::discover::fetch_error_card(ui, "Couldn't reach Technic", &e) && !self.packs.tech_loading {
+                search = true;
+            }
+        }
         if search {
             self.packs_search_technic();
         }
-        if let Some(e) = self.packs.tech_error.clone() {
-            card(ui, |ui| {
-                ui.label(RichText::new("Couldn't reach Technic").color(c_danger()).strong());
-                muted(ui, e);
-            });
-        }
         if self.packs.tech_loading {
             ui.spinner();
+        } else if self.packs.tech.is_empty() && self.packs.tech_error.is_none() && self.packs.tech_started {
+            card(ui, |ui| muted(ui, "No packs found. Try other words."));
         }
-        let results = self.packs.tech.clone();
+        let results = std::mem::take(&mut self.packs.tech);
         let mut open: Option<Slim> = None;
         ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
             for m in &results {
@@ -593,7 +633,7 @@ impl App {
                             }
                         }
                         ui.vertical(|ui| {
-                            ui.set_max_width((ui.available_width() - 150.0).max(240.0));
+                            ui.set_max_width((ui.available_width() - 150.0).max(120.0));
                             ui.label(RichText::new(&m.name).strong().size(16.0));
                             small_muted(ui, &m.slug);
                         });
@@ -606,6 +646,7 @@ impl App {
                 });
             }
         });
+        self.packs.tech = results;
         if let Some(m) = open {
             self.packs_open_technic(&m.slug, None, m.name.clone());
         }
@@ -793,16 +834,23 @@ fn choices_ui(ui: &mut Ui, choices: &mut ModChoices, prepared: &Prepared) {
                     tag(ui, "pick one", c_muted());
                 }
             });
+            // the Java edition asks before a mod with a warning is switched on; here the warning stays under the
+            // box for as long as it is ticked
+            if c.selected {
+                if let Some(w) = choices.warning_for(i, &prepared.json.warnings) {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.add_space(indent + 26.0);
+                        ui.label(RichText::new(plain_text(&w)).color(c_warn()).size(12.5));
+                    });
+                }
+            }
             if on != c.selected {
                 toggled = Some((i, on));
             }
         }
         if let Some((i, on)) = toggled {
-            // a mod with a warning asks before it is switched on; here the warning is shown beside the box
             choices.toggle(i, on);
-            if let Some(w) = on.then(|| choices.warning_for(i, &prepared.json.warnings)).flatten() {
-                ui.label(RichText::new(plain_text(&w)).color(c_warn()).size(12.5));
-            }
+            ui.ctx().request_repaint();
         }
         let required = choices.choices.iter().filter(|c| !c.optional && c.visible).count();
         small_muted(ui, format!("{required} required mods are always installed"));
