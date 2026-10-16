@@ -553,7 +553,8 @@ public final class SelfTest {
                 && r2b.out.contains("fake game: ok"), r2b.out);
 
         // 2. another key: the list is for another setup and is replaced
-        Result r3 = runGame(agent, gameJar, opts.replace("key=k1", "key=k2"), "record", rec + ".none");
+        // the game only has to stay a moment: the helper says at its start that the list is for another setup
+        Result r3 = runGame(agent, gameJar, opts.replace("key=k1", "key=k2"), "sleep", "3");
         check("agent: a list for another setup is not used", r3.code == 0 && r3.out.contains(
                 "another Java or other game files"), r3.out);
         Files.delete(list);

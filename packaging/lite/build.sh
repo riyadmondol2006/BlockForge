@@ -19,8 +19,18 @@ mkdir -p "$work/agent" "$work/core" "$work/asm" "$work/jar/META-INF/blockforge-l
 
 asm_jars=("$here"/lib/asm-9.10.1.jar "$here"/lib/asm-tree-9.10.1.jar "$here"/lib/asm-analysis-9.10.1.jar)
 cp_sep=":"
-case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) cp_sep=";" ;; esac
-asm_cp="$(IFS="$cp_sep"; echo "${asm_jars[*]}")"
+asm_cp_jars=("${asm_jars[@]}")
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*)
+        # Windows' javac wants Windows paths in a class path list, which the shell does not convert by itself
+        cp_sep=";"
+        if command -v cygpath > /dev/null 2>&1; then
+            asm_cp_jars=()
+            for j in "${asm_jars[@]}"; do asm_cp_jars+=("$(cygpath -m "$j")"); done
+        fi
+        ;;
+esac
+asm_cp="$(IFS="$cp_sep"; echo "${asm_cp_jars[*]}")"
 
 javac_opts=(--release 8 -Xlint:-options -encoding UTF-8 -nowarn)
 javac "${javac_opts[@]}" -d "$work/agent" $(find "$here/src/agent" -name '*.java')
