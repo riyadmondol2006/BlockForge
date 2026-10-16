@@ -106,7 +106,9 @@ pub struct Prepared {
 impl Prepared {
     /// The command line with the player's token and id hidden, safe to show or save.
     pub fn display(&self) -> String {
-        let mut s = format!("{} {}", self.program.display(), self.args.join(" "));
+        let mut parts = vec![quote_argument(&self.program.display().to_string())];
+        parts.extend(self.args.iter().map(|a| quote_argument(a)));
+        let mut s = parts.join(" ");
         for secret in self.secrets.iter().filter(|s| s.len() > 3) {
             s = s.replace(secret.as_str(), "REDACTED");
         }
@@ -268,6 +270,19 @@ pub fn split_args(line: &str) -> Vec<String> {
         out.push(cur);
     }
     out
+}
+
+/// One argument as it has to be written so [`split_args`] (or a shell) reads it back as one argument: in quotes when it
+/// is empty or has spaces or quotes in it. Fabric's `-DFabricMcEmu= net.minecraft.client.main.Main ` is one such.
+pub fn quote_argument(argument: &str) -> String {
+    let plain = !argument.is_empty() && !argument.chars().any(|c| c.is_whitespace() || c == '"' || c == '\'');
+    if plain {
+        argument.to_string()
+    } else if argument.contains('"') {
+        format!("'{argument}'")
+    } else {
+        format!("\"{argument}\"")
+    }
 }
 
 pub fn executable_in_path(name: &str) -> bool {
@@ -929,6 +944,21 @@ mod tests {
     fn splits_like_a_shell() {
         assert_eq!(split_args(r#"-Xms1G -Dname="a b" 'c d'"#), vec!["-Xms1G", "-Dname=a b", "c d"]);
         assert!(split_args("   ").is_empty());
+    }
+
+    #[test]
+    fn quoted_arguments_split_back_the_same() {
+        let args = [
+            "-Xmx2G",
+            "-DFabricMcEmu= net.minecraft.client.main.Main ",
+            "",
+            r"C:\Program Files\Java\bin\java.exe",
+            r#"say "hi""#,
+            "it's",
+        ];
+        let line = args.iter().map(|a| quote_argument(a)).collect::<Vec<_>>().join(" ");
+        assert_eq!(split_args(&line), args);
+        assert_eq!(quote_argument("-Xmx2G"), "-Xmx2G");
     }
 
     #[test]
