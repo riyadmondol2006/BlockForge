@@ -23,6 +23,33 @@ Smoother games, on every computer and every mod loader.
   meantime. Automatic (the default) turns it on when the computer looks slow (4 processor threads or fewer, 6 GB of
   memory or less, built-in graphics with 8 GB or less, or a hard disk with 8 GB or less); On and Off force it, for all
   games or for one instance.
+- **What the smoothness helper changes.** Each change checks the game's code first, steps aside when another mod has
+  changed that code or does the same thing (Sodium, Lithium, FerriteCore, EntityCulling and others), checks its own
+  result before it is used, and leaves the game untouched if anything is unexpected:
+  - 10 frames a second while the window is minimised, as Minecraft 1.21.2 and newer do by themselves (1.8 to 1.21.1).
+  - No forced full memory clean-up at every world open and close (Minecraft 1.7 to 1.12: about 2 s of freezes less).
+  - No debug thread guard in every chunk section (25 to 37 MB less memory on 26.3), kept when mods are installed.
+  - A shorter loading-screen fade (the game is ready about 1.5 s sooner).
+  - No empty full-screen outline pass when nothing glows (1.20 to 1.21.1).
+  - Block states share their neighbour tables (17 to 18 MB less memory on 1.20.1 and 1.21.1).
+  - Biome colours (grass, leaves, water) remember their last lookups: about a quarter less chunk-building work.
+  - Chests, signs, banners and similar blocks outside your view are not drawn (26.2 and newer).
+  - Empty sign lines, empty effect lists and unused collision shapes are no longer processed.
+  - While Low-end mode is on: the frame limiter on 26.x waits less, a sound starts without waiting for the sound
+    thread, and music at volume 0 is not decoded in the background.
+- **Fast start was rebuilt.** It loads the game's classes in the order the game needs them, on spare processor threads,
+  and checks them ahead of time. Its saved list now carries a fingerprint of Java, the game files and the mods, so a
+  loader or version change can never leave it loading the wrong classes; damaged or half-written lists are ignored. It
+  never runs on a single processor and never keeps the game from closing. About 5 to 10 % quicker starts on vanilla,
+  up to 19 % together with the class cache; Fabric, Forge and NeoForge are unchanged.
+- **The launcher window got a long review.** More than 110 problems were fixed across the pages, among them: a crash
+  on file paths with odd characters, the window redrawing all the time while a game ran, deleting or clearing big
+  folders freezing the window, settings switches shown twice with stale values, text fields that could not be typed
+  in, a cleared Java path that stayed, a backup restore that could lose an instance if it failed halfway, two quick
+  changes to one instance's mod list overwriting each other, Modrinth installs that skipped the mod records and the
+  dependency check, late search answers replacing newer ones, pages wider than the window at the smallest size or when
+  zoomed, missing keyboard focus and screen-reader names, and plain-word labels and errors.
+- **The game command shown by `--dry-run` can be copied and run as it is** (arguments with spaces are quoted).
 - **Which helpers are on** is written at the top of every game's log and printed by `blockforge launch --dry-run`.
 
 ### Changes you may notice
