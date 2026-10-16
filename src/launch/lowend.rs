@@ -568,6 +568,9 @@ impl Drop for InUse {
 
 // ---- putting it together for one start
 
+/// How the log line starts when settings were lowered at this start (the window then says so too).
+pub const LOWERED_NOTE: &str = "Low-end mode: lowered";
+
 /// What happened to the settings file at a start.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Outcome {
@@ -595,9 +598,9 @@ impl Outcome {
                         format!("{k} {} -> {}", old.as_deref().map(unquote).unwrap_or("default"), unquote(new))
                     })
                     .collect();
-                Some(format!("Low-end mode: lowered {} settings ({})", keys.len(), shown.join(", ")))
+                Some(format!("{LOWERED_NOTE} {} settings ({})", keys.len(), shown.join(", ")))
             }
-            Outcome::AlreadyLow => Some("Low-end mode: lowered 0 settings (they are low already)".to_string()),
+            Outcome::AlreadyLow => Some("Low-end mode: on, the settings are low already".to_string()),
             Outcome::Restored(n) => Some(format!("Low-end mode is off: put back {n} settings it had lowered")),
             Outcome::Skipped(why) => Some(format!("Low-end mode: {why}")),
         }
@@ -691,6 +694,16 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    #[test]
+    fn only_a_start_that_lowered_something_is_announced() {
+        let lowered = Outcome::Lowered(vec![("renderDistance".into(), Some("12".into()), "6".into())]);
+        assert!(lowered.note().unwrap().starts_with(LOWERED_NOTE));
+        for quiet in [Outcome::AlreadyLow, Outcome::Restored(3), Outcome::Skipped("read-only".into())] {
+            assert!(!quiet.note().unwrap().starts_with(LOWERED_NOTE), "{quiet:?}");
+        }
+        assert_eq!(Outcome::Nothing.note(), None);
     }
 
     fn c(cores: usize, gb: f64, gpu: Gpu, spinning_disk: bool) -> Computer {

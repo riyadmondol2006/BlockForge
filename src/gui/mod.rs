@@ -647,6 +647,15 @@ impl App {
                         LogLine { text: format!("[BlockForge] {note}"), level: Level::Info },
                     ));
                 }
+                // settings changed in the player's own file are worth saying out loud, not only in the log
+                if prepared.notes.iter().any(|n| n.starts_with(launch::lowend::LOWERED_NOTE)) {
+                    n.send(Msg::Toast(
+                        "Low-end mode lowered some graphics settings for smoother play. Settings > Performance \
+                         switches it off and puts them back."
+                            .to_string(),
+                        false,
+                    ));
+                }
                 n.send(Msg::GameLog(
                     folder_s.clone(),
                     LogLine { text: format!("[BlockForge] {}", prepared.display()), level: Level::Debug },
