@@ -73,8 +73,23 @@ fn styled_button(
             icons::paint(ui.painter(), icon, egui::pos2(left + 8.0, rect.center().y), 16.0, fg);
         }
         ui.painter().galley(egui::pos2(left + icon_w, rect.center().y - galley.size().y / 2.0), galley, fg);
+        focus_ring(ui, &resp, rect, 10);
     }
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, text));
     if enabled { resp.on_hover_cursor(egui::CursorIcon::PointingHand) } else { resp }
+}
+
+/// The outline a hand-drawn control gets when the keyboard (Tab) has moved to it, so Tab and Enter can be used
+/// without guessing where the focus is.
+pub fn focus_ring(ui: &Ui, resp: &Response, rect: egui::Rect, radius: u8) {
+    if resp.has_focus() {
+        ui.painter().rect_stroke(
+            rect.expand(2.0),
+            CornerRadius::same(radius.saturating_add(2)),
+            Stroke::new(2.0, c_accent()),
+            egui::StrokeKind::Outside,
+        );
+    }
 }
 
 pub fn primary(ui: &mut Ui, text: &str) -> Response {
@@ -149,6 +164,20 @@ pub fn danger(ui: &mut Ui, text: &str) -> Response {
     )
 }
 
+pub fn danger_enabled(ui: &mut Ui, text: &str, enabled: bool) -> Response {
+    styled_button(
+        ui,
+        text,
+        None,
+        c_danger_bg(),
+        c_danger_hover(),
+        c_danger(),
+        Stroke::new(1.0, c_danger_line()),
+        Vec2::ZERO,
+        enabled,
+    )
+}
+
 pub fn danger_icon(ui: &mut Ui, icon: Icon, text: &str) -> Response {
     styled_button(
         ui,
@@ -198,6 +227,8 @@ pub fn chip(ui: &mut Ui, text: &str, selected: bool) -> Response {
         egui::StrokeKind::Inside,
     );
     ui.painter().galley(rect.center() - galley.size() / 2.0, galley, fg);
+    focus_ring(ui, &resp, rect, 15);
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, text));
     resp.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
@@ -281,21 +312,60 @@ pub fn toggle(ui: &mut Ui, on: &mut bool) -> Response {
     ui.painter().rect_filled(rect, CornerRadius::same(12), bg);
     let cx = rect.left() + 12.0 + t * (size.x - 24.0);
     ui.painter().circle_filled(egui::pos2(cx, rect.center().y), 9.0, if *on { c_on_accent() } else { c_muted() });
+    focus_ring(ui, &resp, rect, 12);
+    let state = *on;
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Switch, true, state, ""));
     resp.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
-/// A setting row: title and explanation on the left, the control on the right.
+/// A setting row: title and explanation on the left, the control on the right. The text makes room for the control
+/// (as wide as it was on the last frame), so a wide drop-down never runs over the text or out of the card.
 pub fn setting_row(ui: &mut Ui, title: &str, hint: &str, control: impl FnOnce(&mut Ui)) {
+    let id = ui.scope_id().with(("setting-row", title));
+    let control_w = remembered_width(ui, id, 190.0);
     ui.horizontal(|ui| {
         ui.vertical(|ui| {
-            ui.set_max_width((ui.available_width() - 190.0).max(200.0));
+            ui.set_max_width((ui.available_width() - control_w - 12.0).max(140.0));
             ui.label(RichText::new(title).strong());
             if !hint.is_empty() {
                 small_muted(ui, hint);
             }
         });
-        ui.with_layout(Layout::right_to_left(Align::Center), control);
+        let used = ui
+            .with_layout(Layout::right_to_left(Align::Center), |ui| {
+                control(ui);
+                ui.min_rect().width()
+            })
+            .inner;
+        remember_width(ui, id, used);
     });
+}
+
+/// How wide a group of controls was on the last frame (see [`remember_width`]), or `guess` the first time.
+pub fn remembered_width(ui: &Ui, id: egui::Id, guess: f32) -> f32 {
+    ui.data(|d| d.get_temp::<f32>(id)).unwrap_or(guess)
+}
+
+/// Keep how wide a group of controls turned out, for what is laid out beside it on the next frame. When it changed,
+/// the frame is laid out once more before it is shown, so nothing overlaps even for a moment.
+pub fn remember_width(ui: &Ui, id: egui::Id, width: f32) {
+    let before = ui.data(|d| d.get_temp::<f32>(id));
+    if before.is_none_or(|b| (b - width).abs() > 0.5) {
+        ui.data_mut(|d| d.insert_temp(id, width));
+        ui.ctx().request_discard("the width of a row changed");
+    }
+}
+
+/// Give a dialog's text field the keyboard focus on the first frame it is shown, so typing can start at once (Tab still
+/// moves on from it afterwards).
+pub fn focus_when_shown(ui: &Ui, field: &Response) {
+    let pass = ui.ctx().cumulative_pass_nr();
+    let key = field.id.with("shown-in-pass");
+    let before = ui.data_mut(|d| d.get_temp::<u64>(key));
+    ui.data_mut(|d| d.insert_temp(key, pass));
+    if before.is_none_or(|b| b + 1 < pass) {
+        field.request_focus();
+    }
 }
 
 pub fn search_field(ui: &mut Ui, text: &mut String, hint: &str, width: f32) -> Response {
@@ -338,12 +408,41 @@ pub fn time_ago(ms: i64) -> String {
     if ms <= 0 {
         return "Never played".into();
     }
-    let secs = (chrono::Utc::now().timestamp_millis() - ms) / 1000;
+    ago(chrono::Utc::now().timestamp_millis().saturating_sub(ms) / 1000)
+}
+
+/// "5 minutes ago" for a number of seconds (a time in the future, from a clock that was wrong, is "just now").
+fn ago(secs: i64) -> String {
+    let n = |count: i64, one: &str| {
+        if count == 1 { format!("1 {one} ago") } else { format!("{count} {one}s ago") }
+    };
     match secs {
         s if s < 60 => "Just now".into(),
-        s if s < 3600 => format!("{} min ago", s / 60),
-        s if s < 86400 => format!("{} h ago", s / 3600),
-        s if s < 86400 * 30 => format!("{} days ago", s / 86400),
-        s => format!("{} months ago", s / (86400 * 30)),
+        s if s < 3600 => n(s / 60, "minute"),
+        s if s < 86400 => n(s / 3600, "hour"),
+        s if s < 86400 * 30 => n(s / 86400, "day"),
+        s if s < 86400 * 365 => n(s / (86400 * 30), "month"),
+        s => n(s / (86400 * 365), "year"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn times_ago_read_naturally() {
+        assert_eq!(ago(-5000), "Just now");
+        assert_eq!(ago(59), "Just now");
+        assert_eq!(ago(60), "1 minute ago");
+        assert_eq!(ago(150), "2 minutes ago");
+        assert_eq!(ago(3600), "1 hour ago");
+        assert_eq!(ago(86400), "1 day ago");
+        assert_eq!(ago(86400 * 3), "3 days ago");
+        assert_eq!(ago(86400 * 45), "1 month ago");
+        assert_eq!(ago(86400 * 400), "1 year ago");
+        assert_eq!(time_ago(0), "Never played");
+        assert_eq!(time_ago(i64::MIN + 1), "Never played");
+        assert!(time_ago(1).ends_with(" years ago"));
     }
 }

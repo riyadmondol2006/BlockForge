@@ -71,8 +71,8 @@ impl App {
             Act::Stop(f) => self.stop(&f),
             Act::StopSession(key) => self.stop_session(&key),
             Act::Folder(f) => {
-                if let Some(i) = self.instance(&f) {
-                    let _ = open::that(&i.root);
+                if let Some(root) = self.instance(&f).map(|i| i.root.clone()) {
+                    self.open_path(&root);
                 }
             }
             Act::Mods(f) => {
@@ -265,24 +265,36 @@ impl App {
             PickPurpose::InstanceImage(folder) => {
                 let Some(inst) = self.instance(&folder) else { return };
                 let target = inst.root.join("instance.png");
-                let result = image::open(&path).map_err(anyhow::Error::from).and_then(|img| {
-                    img.resize(256, 256, image::imageops::FilterType::Lanczos3)
-                        .save_with_format(&target, image::ImageFormat::Png)
-                        .map_err(anyhow::Error::from)
+                // a photo of several megabytes takes a moment to read and shrink: not on the window's thread
+                let n = self.notifier();
+                self.rt.spawn_blocking(move || {
+                    let result = image::open(&path)
+                        .and_then(|img| {
+                            img.resize(256, 256, image::imageops::FilterType::Lanczos3)
+                                .save_with_format(&target, image::ImageFormat::Png)
+                        })
+                        .map_err(|e| e.to_string());
+                    n.send(Msg::InstanceImage(folder, result));
                 });
-                match result {
-                    Ok(()) => {
-                        self.ctx.forget_image(&format!("file://{}", target.to_string_lossy().replace('\\', "/")));
-                        self.toast("Image changed");
-                    }
-                    Err(e) => self.toast_err(format!("Couldn't use that image: {e:#}")),
-                }
             }
             PickPurpose::JavaFolder => {
                 self.settings.java_path = path.to_string_lossy().to_string();
                 self.settings.using_custom_java_path = true;
                 self.save_settings();
             }
+        }
+    }
+
+    pub(super) fn instance_image_saved(&mut self, folder: &str, result: Result<(), String>) {
+        match result {
+            Ok(()) => {
+                // shown at once, without waiting for the next look at the file
+                if let Some(root) = self.instance(folder).map(|i| i.root.clone()) {
+                    self.local_pictures.forget(&root.join("instance.png"));
+                }
+                self.toast("Image changed");
+            }
+            Err(e) => self.toast_err(format!("Couldn't use that picture: {e}")),
         }
     }
 
@@ -332,7 +344,7 @@ impl App {
         // description
         if let Some((folder, mut text)) = self.desc_edit.clone() {
             let (mut save, mut close) = (false, false);
-            egui::Modal::new(egui::Id::unique("desc")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
+            let modal = egui::Modal::new(egui::Id::unique("desc")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
                 ui.set_width(440.0);
                 ui.label(RichText::new("Change description").size(19.0).strong());
                 ui.add_space(6.0);
@@ -353,6 +365,7 @@ impl App {
                 });
             });
             self.desc_edit = Some((folder.clone(), text.clone()));
+            close |= modal.should_close();
             if save {
                 if let Some(idx) = self.instances.iter().position(|i| i.folder == folder) {
                     self.instances[idx].file.launcher.description = text;
@@ -370,7 +383,7 @@ impl App {
         // play offline with another name
         if let Some((folder, mut name, mut bad)) = self.offline_play.clone() {
             let (mut go, mut close) = (false, false);
-            egui::Modal::new(egui::Id::unique("offline")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
+            let modal = egui::Modal::new(egui::Id::unique("offline")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
                 ui.set_width(400.0);
                 ui.label(RichText::new("Play offline with another name").size(19.0).strong());
                 muted(ui, "3-16 letters, numbers or underscores. No account needed.");
@@ -382,6 +395,7 @@ impl App {
                         .margin(egui::Margin::symmetric(12, 9))
                         .background_color(c_field()),
                 );
+                focus_when_shown(ui, &r);
                 if bad {
                     ui.label(RichText::new("Use 3-16 letters, numbers or underscores.").color(c_danger()));
                 }
@@ -397,6 +411,7 @@ impl App {
                     }
                 });
             });
+            close |= modal.should_close();
             if go {
                 if super::whoplays::valid_player_name(name.trim()) {
                     let acc = crate::accounts::Account::offline(name.trim());
@@ -435,6 +450,8 @@ impl App {
                         keep = true;
                     }
                 });
+                // Esc keeps it as it is
+                keep |= ui.input(|i| i.key_pressed(egui::Key::Escape));
             });
             if off {
                 self.set_fast_start(&folder, false);
@@ -449,7 +466,7 @@ impl App {
             let (mut apply, mut close, mut changed) = (false, false, false);
             let mut d = self.loader_dialog.take().unwrap();
             let current = self.instance(&d.folder).and_then(|i| i.loader().map(|(k, v)| format!("{k} {v}")));
-            egui::Modal::new(egui::Id::unique("loader")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
+            let modal = egui::Modal::new(egui::Id::unique("loader")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
                 ui.set_width(440.0);
                 ui.label(RichText::new("Mod loader").size(19.0).strong());
                 muted(ui, format!("Now: {}", current.clone().unwrap_or_else(|| "None (vanilla)".into())));
@@ -510,6 +527,7 @@ impl App {
                     }
                 });
             });
+            close |= modal.should_close();
             if apply {
                 if let Some(inst) = self.instance(&d.folder).cloned() {
                     let (dirs, loader) = (self.dirs.clone(), d.loader);

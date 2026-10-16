@@ -41,9 +41,13 @@ impl App {
         }
         let mut action = ConsoleAction::None;
         let playing = self.games.values().any(|g| g.active());
+        if !playing {
+            // the question about stopping the game is gone with the game
+            self.console_confirm_kill = false;
+        }
         let uploading = self.console_uploading;
         let kill_confirm = self.console_confirm_kill;
-        let lines: Vec<(Level, String)> = self.console_lines.iter().map(|l| (l.level, l.text.clone())).collect();
+        let lines = &self.console_lines;
         let mut closed = false;
         let mut geometry: Option<(Size, Pos)> = None;
         ctx.show_viewport_immediate(egui::ViewportId::from_hash_of("blockforge-console"), builder, |ui, _class| {
@@ -67,30 +71,33 @@ impl App {
                         if secondary(ui, "Clear").clicked() {
                             action = ConsoleAction::Clear;
                         }
-                        if secondary(ui, "Copy Log").clicked() {
+                        if secondary(ui, "Copy log").clicked() {
                             action = ConsoleAction::Copy;
                         }
                         if uploading {
                             ui.spinner();
-                            muted(ui, "Uploading Logs");
-                        } else if secondary(ui, "Upload Log").clicked() {
+                            muted(ui, "Uploading the log");
+                        } else if secondary(ui, "Upload log")
+                            .on_hover_text(
+                                "Puts the log on a public page and copies its link, to share when asking for help",
+                            )
+                            .clicked()
+                        {
                             action = ConsoleAction::Upload;
                         }
                         if playing {
                             if kill_confirm {
                                 ui.label(
-                                    RichText::new(
-                                        "Kill the Minecraft process? Doing so can cause corruption of your saves.",
-                                    )
-                                    .color(c_warn()),
+                                    RichText::new("Stop Minecraft at once? A world that wasn't saved can be damaged.")
+                                        .color(c_warn()),
                                 );
-                                if danger(ui, "Kill Minecraft").clicked() {
+                                if danger(ui, "Stop Minecraft").clicked() {
                                     action = ConsoleAction::Kill;
                                 }
                                 if secondary(ui, "Cancel").clicked() {
                                     action = ConsoleAction::CancelKill;
                                 }
-                            } else if danger(ui, "Kill Minecraft").clicked() {
+                            } else if danger(ui, "Stop Minecraft").clicked() {
                                 action = ConsoleAction::AskKill;
                             }
                         }
@@ -99,21 +106,15 @@ impl App {
             egui::CentralPanel::default()
                 .frame(egui::Frame::new().fill(c_field()).inner_margin(egui::Margin::same(8)))
                 .show(ui, |ui| {
+                    ui.spacing_mut().item_spacing.y = 2.0;
+                    let row_h = ui.text_style_height(&egui::TextStyle::Monospace);
                     ScrollArea::both().auto_shrink(false).stick_to_bottom(true).show_rows(
                         ui,
-                        17.0,
+                        row_h,
                         lines.len(),
                         |ui, range| {
-                            for (level, text) in &lines[range] {
-                                let color = match level {
-                                    Level::Error => c_danger(),
-                                    Level::Warn => c_warn(),
-                                    Level::Debug => c_muted(),
-                                    Level::Info => c_text(),
-                                };
-                                ui.add(
-                                    egui::Label::new(RichText::new(text.as_str()).monospace().color(color)).extend(),
-                                );
+                            for line in &lines[range] {
+                                ui.add(egui::Label::new(super::library::log_text(line)).extend());
                             }
                         },
                     );
@@ -127,7 +128,8 @@ impl App {
             if self.settings.console_size != Some(size) || self.settings.console_position != Some(pos) {
                 self.settings.console_size = Some(size);
                 self.settings.console_position = Some(pos);
-                self.save_settings();
+                // changes on every frame while the window is dragged: written once it stops
+                self.save_settings_soon();
             }
         }
         match action {
@@ -136,7 +138,7 @@ impl App {
             ConsoleAction::Copy => {
                 let text: Vec<&str> = self.console_lines.iter().map(|l| l.text.as_str()).collect();
                 ctx.copy_text(text.join("\n"));
-                self.toast("Copied Log to clipboard");
+                self.toast("Log copied");
             }
             ConsoleAction::Upload => {
                 self.console_uploading = true;
