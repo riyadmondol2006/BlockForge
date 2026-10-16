@@ -179,12 +179,29 @@ impl Prepared {
 /// Command output goes nowhere by itself; kept as a hook so a window could show it.
 fn tracing_log(_lines: &[String]) {}
 
+/// Only one renewal of a Microsoft login runs at a time: Microsoft hands out a new refresh token each time, so two
+/// renewals at once could leave the saved one useless.
+static REFRESH_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 /// Renew the Microsoft login if it ran out, and save the new tokens.
 pub async fn fresh_account(dirs: &Dirs, account: &Account) -> Result<Account> {
-    if !account.needs_refresh() {
+    refresh_if_expiring(dirs, account, 120).await
+}
+
+/// Renew the login now if its token runs out within `seconds`, and save the new tokens. The renewal takes several
+/// seconds (five requests to Microsoft, Xbox and Minecraft in a row), so the window does it ahead of time and
+/// pressing Play finds a fresh token waiting.
+pub async fn refresh_if_expiring(dirs: &Dirs, account: &Account, seconds: i64) -> Result<Account> {
+    if !account.needs_refresh_within(seconds) {
         return Ok(account.clone());
     }
-    let mut renewed = account.clone();
+    let _only_one = REFRESH_LOCK.lock().await;
+    // a renewal that finished while this one waited has saved newer tokens already
+    let current = accounts::load(dirs).into_iter().find(|a| a.uuid == account.uuid).unwrap_or_else(|| account.clone());
+    if !current.needs_refresh_within(seconds) {
+        return Ok(current);
+    }
+    let mut renewed = current;
     msauth::refresh(&mut renewed).await?;
     let mut all = accounts::load(dirs);
     match all.iter_mut().find(|a| a.uuid == renewed.uuid) {

@@ -71,6 +71,11 @@ impl Account {
 
     /// True when the Minecraft token has run out (or is about to) and has to be renewed before launching.
     pub fn needs_refresh(&self) -> bool {
+        self.needs_refresh_within(120)
+    }
+
+    /// True when the Minecraft token is missing, or runs out within `seconds`.
+    pub fn needs_refresh_within(&self, seconds: i64) -> bool {
         if self.offline {
             return false;
         }
@@ -78,7 +83,7 @@ impl Account {
             return true;
         }
         match self.access_token_expires_at.as_deref().and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok()) {
-            Some(t) => t.timestamp() - 120 < chrono::Utc::now().timestamp(),
+            Some(t) => t.timestamp() - seconds < chrono::Utc::now().timestamp(),
             None => true,
         }
     }
@@ -133,5 +138,20 @@ mod tests {
         assert_eq!(a[0].name(), "B");
         let v = serde_json::to_value(&a).unwrap();
         assert!(v[0].get("collapsedPacks").is_some());
+    }
+
+    #[test]
+    fn token_renewal_window() {
+        let mut a: Account =
+            serde_json::from_str(r#"{"accessToken":"x","offline":false,"username":"a","uuid":"u"}"#).unwrap();
+        let in_secs = |n: i64| (chrono::Utc::now() + chrono::Duration::seconds(n)).to_rfc3339();
+        a.access_token_expires_at = Some(in_secs(3600));
+        assert!(!a.needs_refresh());
+        assert!(!a.needs_refresh_within(1800));
+        assert!(a.needs_refresh_within(7200));
+        a.access_token_expires_at = Some(in_secs(30));
+        assert!(a.needs_refresh());
+        a.offline = true;
+        assert!(!a.needs_refresh_within(7200));
     }
 }

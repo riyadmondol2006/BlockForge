@@ -59,7 +59,13 @@ impl Dirs {
         Dirs::at(base)
     }
 
+    /// Create every folder BlockForge needs. A failure names the folder, because "File exists" alone says nothing (it
+    /// happens when a shortcut in the data folder points somewhere that is gone, such as an unplugged drive).
     pub fn ensure(&self) -> std::io::Result<()> {
+        let make = |dir: &Path| {
+            std::fs::create_dir_all(dir)
+                .map_err(|e| std::io::Error::new(e.kind(), format!("can't use the folder {}: {e}", dir.display())))
+        };
         for d in [
             &self.base,
             &self.instances,
@@ -72,11 +78,11 @@ impl Dirs {
             &self.temp,
             &self.loaders,
         ] {
-            std::fs::create_dir_all(d)?;
+            make(d)?;
         }
-        std::fs::create_dir_all(self.assets.join("indexes"))?;
-        std::fs::create_dir_all(self.assets.join("objects"))?;
-        std::fs::create_dir_all(self.assets.join("log_configs"))?;
+        make(&self.assets.join("indexes"))?;
+        make(&self.assets.join("objects"))?;
+        make(&self.assets.join("log_configs"))?;
         Ok(())
     }
 

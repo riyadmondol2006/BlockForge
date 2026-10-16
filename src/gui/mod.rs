@@ -103,6 +103,7 @@ pub enum Msg {
     DialogLoaderVersions { loader: Loader, mc: String, result: Result<Vec<String>, String> },
     Update(updates::UpdateMsg),
     Tray(tray::TrayCmd),
+    AccountRefreshed(Result<Account, String>),
     Toast(String, bool),
     Svc(services::SvcMsg),
     Mods(mods::ModsMsg),
@@ -212,6 +213,7 @@ pub struct App {
     frames: u64,
     /// Files the program was started with, handed to the import flow once the window is up.
     pending_open: Vec<std::path::PathBuf>,
+    last_account_check: Instant,
 }
 
 pub fn run(dirs: Dirs, open_files: Vec<std::path::PathBuf>) -> anyhow::Result<()> {
@@ -323,6 +325,7 @@ impl App {
             autoplay: AutoPlay::from_env(),
             frames: 0,
             pending_open: open_files,
+            last_account_check: Instant::now() - Duration::from_secs(3600),
         };
         app.refresh_manifest();
         app.ftb_check_updates();
@@ -382,6 +385,21 @@ impl App {
         self.rt.spawn(async move {
             let r = crate::install::manifest(&dirs).await.map_err(|e| format!("{e:#}"));
             n.send(Msg::Manifest(r));
+        });
+    }
+
+    /// Renew the selected Microsoft account's sign-in in the background when it runs out within two hours, so that
+    /// pressing Play doesn't wait several seconds for it.
+    pub fn renew_account_early(&mut self) {
+        let Some(account) =
+            self.current_account().filter(|a| !a.must_login && a.needs_refresh_within(2 * 3600)).cloned()
+        else {
+            return;
+        };
+        let (dirs, n) = (self.dirs.clone(), self.notifier());
+        self.rt.spawn(async move {
+            let result = launch::refresh_if_expiring(&dirs, &account, 2 * 3600).await.map_err(|e| format!("{e:#}"));
+            n.send(Msg::AccountRefreshed(result));
         });
     }
 
@@ -606,6 +624,11 @@ impl App {
                 self.reload_instances();
             }
             Msg::GameRunning(f) => {
+                if std::env::var_os("BLOCKFORGE_AUTOPLAY").is_some() {
+                    if let Some(g) = self.games.get(&f) {
+                        eprintln!("play pressed -> game process started: {} ms", g.started.elapsed().as_millis());
+                    }
+                }
                 // the "Starting ..." progress card is done once the game is up
                 if let Some(name) = self.instance(&f).map(|i| format!("Starting {}", i.name())) {
                     self.tasks.retain(|t| t.label != name);
@@ -688,6 +711,16 @@ impl App {
             }
             Msg::Java(list) => self.java_list = list,
             Msg::Runtimes(list) => self.runtimes = list,
+            Msg::AccountRefreshed(result) => match result {
+                Ok(fresh) => {
+                    if let Some(slot) = self.accounts.iter_mut().find(|a| a.uuid == fresh.uuid) {
+                        *slot = fresh;
+                    }
+                }
+                // not worth a message now; pressing Play tries again and says what is wrong
+                Err(e) => self
+                    .console_push(Level::Warn, &format!("[BlockForge] Couldn't renew the sign-in ahead of time: {e}")),
+            },
             Msg::Svc(m) => self.svc_msg(m),
             Msg::Mods(m) => self.mods_handle(m),
             Msg::Packs(m) => self.packs_msg(m),
@@ -982,6 +1015,15 @@ impl eframe::App for App {
             ctx.request_repaint_after(Duration::from_millis(120));
         }
         self.frames += 1;
+        if self.last_account_check.elapsed() > Duration::from_secs(600)
+            && self.shot.is_none()
+            && self.autoplay.is_none()
+        {
+            self.last_account_check = Instant::now();
+            self.renew_account_early();
+        }
+        // wake up now and then even when nothing is happening, to look at the sign-in again
+        ctx.request_repaint_after(Duration::from_secs(600));
         if self.frames == 3 && !self.pending_open.is_empty() {
             let files = std::mem::take(&mut self.pending_open);
             self.handle_dropped_files(files);
