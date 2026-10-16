@@ -352,22 +352,68 @@ pub fn restore(
         return Err(e.context("the backup could not be unpacked; the instance was not changed"));
     }
     std::fs::create_dir_all(instance_root)?;
-    for top in &tops {
-        let from = staging.join(top);
-        if !from.exists() {
-            continue;
-        }
-        let to = instance_root.join(top);
-        if to.is_dir() {
-            std::fs::remove_dir_all(&to).with_context(|| format!("replacing {}", to.display()))?;
-        } else if to.exists() {
-            std::fs::remove_file(&to).with_context(|| format!("replacing {}", to.display()))?;
-        }
-        std::fs::rename(&from, &to).with_context(|| format!("restoring {}", to.display()))?;
+    // what is replaced is moved aside first and only deleted once everything new is in place; when a step fails
+    // (a file in use, for example) what was moved aside goes back, so the instance is never left with neither
+    let aside = instance_root.with_file_name(format!(".restore-old-{}-{}", safe_name(instance_name), timestamp_now()));
+    if let Err(e) = std::fs::create_dir(&aside) {
+        let _ = std::fs::remove_dir_all(&staging);
+        return Err(anyhow::Error::from(e).context("the instance was not changed"));
     }
+    let mut done: Vec<(PathBuf, Option<PathBuf>)> = Vec::new();
+    let swapped = (|| -> Result<()> {
+        for top in &tops {
+            let from = staging.join(top);
+            if !from.exists() {
+                continue;
+            }
+            let to = instance_root.join(top);
+            let old = if std::fs::symlink_metadata(&to).is_ok() {
+                let old = aside.join(top);
+                std::fs::rename(&to, &old).with_context(|| format!("replacing {}", to.display()))?;
+                Some(old)
+            } else {
+                None
+            };
+            if let Err(e) = std::fs::rename(&from, &to) {
+                if let Some(old) = &old {
+                    let _ = std::fs::rename(old, &to);
+                }
+                return Err(anyhow::Error::from(e).context(format!("restoring {}", to.display())));
+            }
+            done.push((to, old));
+        }
+        Ok(())
+    })();
     let _ = std::fs::remove_dir_all(&staging);
+    if let Err(e) = swapped {
+        // put back what was already swapped, newest first
+        let mut all_back = true;
+        for (to, old) in done.iter().rev() {
+            if let Some(old) = old {
+                all_back &= remove_any(to).and_then(|_| std::fs::rename(old, to)).is_ok();
+            } else {
+                let _ = remove_any(to);
+            }
+        }
+        if !all_back {
+            // never delete what couldn't be put back: say where it is
+            return Err(e.context(format!(
+                "the backup could not be put back, and some of the old files are still in {}",
+                aside.display()
+            )));
+        }
+        let _ = std::fs::remove_dir_all(&aside);
+        return Err(e.context("the backup could not be put back; the instance was left as it was"));
+    }
+    // everything replaced is in the safety backup (when one was asked for), so the old copies can go now
+    let _ = std::fs::remove_dir_all(&aside);
     crate::logs::info(format!("Restored {} into {}", backup_zip.display(), instance_root.display()));
     Ok(())
+}
+
+/// Removes a file or a whole folder.
+fn remove_any(path: &Path) -> std::io::Result<()> {
+    if std::fs::symlink_metadata(path)?.is_dir() { std::fs::remove_dir_all(path) } else { std::fs::remove_file(path) }
 }
 
 /// Delete one backup file. Only `.zip` files inside the backups folder are ever removed.
@@ -509,6 +555,62 @@ mod tests {
         delete(&dirs, &settings, &victim).unwrap();
         assert!(!victim.exists());
         assert!(delete(&dirs, &settings, &root.join("options.txt")).is_err(), "only backups can be deleted");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// The folders a restore works in, next to the instance.
+    fn leftovers(root: &Path) -> Vec<String> {
+        std::fs::read_dir(root.parent().unwrap())
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|n| n.starts_with(".restore"))
+            .collect()
+    }
+
+    #[test]
+    fn a_restore_leaves_nothing_behind() {
+        let base = scratch("tidy");
+        let dirs = Dirs::at(base.join("data"));
+        let settings = ServiceSettings::default();
+        let root = base.join("inst");
+        sample_instance(&root);
+        let normal = create(&dirs, &settings, &root, "Pack", BackupMode::Normal).unwrap();
+        restore(&dirs, &settings, &normal, &root, "Pack", true).unwrap();
+        assert!(leftovers(&root).is_empty(), "{:?}", leftovers(&root));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A part that can't be replaced (here a folder that may not be moved) puts back what was already replaced.
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_restore_puts_everything_back() {
+        use std::os::unix::fs::PermissionsExt;
+        let base = scratch("rollback");
+        let dirs = Dirs::at(base.join("data"));
+        let settings = ServiceSettings::default();
+        let root = base.join("inst");
+        sample_instance(&root);
+        let normal = create(&dirs, &settings, &root, "Pack", BackupMode::Normal).unwrap();
+        std::fs::write(root.join("options.txt"), "fov:90").unwrap();
+        std::fs::write(root.join("config/sodium.json"), "{\"changed\":1}").unwrap();
+        // a folder without write permission can't be moved to another folder (unless this runs as root)
+        let saves = root.join("saves");
+        std::fs::set_permissions(&saves, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let probe = base.join("probe");
+        std::fs::create_dir_all(&probe).unwrap();
+        let root_user = std::fs::rename(&saves, probe.join("saves")).is_ok();
+        if root_user {
+            std::fs::rename(probe.join("saves"), &saves).unwrap();
+        } else {
+            let err = restore(&dirs, &settings, &normal, &root, "Pack", true).unwrap_err();
+            assert!(format!("{err:#}").contains("left as it was"), "{err:#}");
+            assert_eq!(std::fs::read_to_string(root.join("options.txt")).unwrap(), "fov:90");
+            assert_eq!(std::fs::read_to_string(root.join("config/sodium.json")).unwrap(), "{\"changed\":1}");
+            assert_eq!(std::fs::read_to_string(saves.join("World1/level.dat")).unwrap(), "world");
+            assert!(leftovers(&root).is_empty(), "{:?}", leftovers(&root));
+        }
+        std::fs::set_permissions(&saves, std::fs::Permissions::from_mode(0o755)).unwrap();
         let _ = std::fs::remove_dir_all(&base);
     }
 

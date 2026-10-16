@@ -2,21 +2,35 @@
 
 use egui::{CornerRadius, RichText, ScrollArea, Stroke, Ui};
 
-use super::services::{NetReport, SvcMsg, confirm_modal};
+use super::services::{NetReport, SvcMsg, confirm_modal, modal_scroll_height, modal_width};
 use super::theme::*;
 use super::widgets::*;
 use super::{App, Msg};
-use crate::svcsettings::ServiceSettings;
 use crate::tools::{self, NetworkCheckOptions, TOOLS, ToolInfo};
 
 const CARD_WIDTH: f32 = 300.0;
+
+/// Whether this copy runs in a Flatpak; it can't change while the launcher runs, so it is looked up once.
+static FLATPAK: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
+/// Why a tool that deletes shared files can't run now: a game or another job (an install, a download) may be using
+/// them. `None` when nothing is running.
+fn busy_reason(games_running: bool, jobs_running: bool) -> Option<&'static str> {
+    match (games_running, jobs_running) {
+        (true, _) => Some("Close Minecraft first, it is using these files"),
+        (false, true) => Some("Wait for the jobs in progress to finish first, they may be using these files"),
+        _ => None,
+    }
+}
 
 impl App {
     pub(super) fn tools_ui(&mut self, ui: &mut Ui) {
         heading(ui, "Tools");
         muted(ui, "Clean up, diagnose problems and keep things tidy");
         ui.add_space(10.0);
-        let svc = ServiceSettings::from_settings(&self.settings);
+        // the network checker needs `enableLogs`, which is a plain field of the settings (no need to read them all)
+        let logs_on = self.settings.enable_logs;
+        let flatpak = *FLATPAK.get_or_init(tools::is_flatpak);
         let per_row = ((ui.available_width() + 12.0) / (CARD_WIDTH + 12.0)).floor().max(1.0) as usize;
         let mut clicked: Option<&'static str> = None;
         ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
@@ -24,10 +38,10 @@ impl App {
                 ui.horizontal_top(|ui| {
                     for tool in row {
                         let (enabled, hint) = match tool.id {
-                            "network_checker" if !tools::can_run_network_checker(&svc) => {
+                            "network_checker" if !logs_on => {
                                 (false, Some("Turn on \"Report pack installs and play time\" in Settings first."))
                             }
-                            "debug_mode" if tools::is_flatpak() => (false, Some("Not available in a Flatpak.")),
+                            "debug_mode" if flatpak => (false, Some("Not available in a Flatpak.")),
                             "debug_mode" if tools::is_debug_enabled() => (false, Some("Debug mode is already on.")),
                             "skin_updater" if self.accounts.is_empty() => (false, Some("Add an account first.")),
                             _ => (true, None),
@@ -82,7 +96,7 @@ impl App {
                     })
                     .await??;
                     if let Some(folder) = zip.parent() {
-                        let _ = open::that(folder);
+                        let _ = open::that_detached(folder);
                     }
                     Ok(match found.first() {
                         Some(d) => format!("Support bundle saved to your downloads ({})", d.title),
@@ -90,17 +104,26 @@ impl App {
                     })
                 });
             }
+            // the clean-up tools can take a while on a big folder, so they run off the window's thread
             "log_clearer" => {
-                tools::clear_logs(&dirs);
-                self.toast("Successfully cleared the logs.");
+                self.start_task("Clearing old logs", move |_p, _n| async move {
+                    let n = tokio::task::spawn_blocking(move || tools::clear_logs(&dirs)).await?;
+                    Ok(format!("Old logs cleared ({n} removed)"))
+                });
             }
             "debug_mode" => match tools::relaunch_in_debug() {
                 Ok(()) => self.ctx.send_viewport_cmd(egui::ViewportCommand::Close),
                 Err(e) => self.toast_err(format!("{e:#}")),
             },
             "download_clearer" => {
-                tools::clear_downloads(&dirs);
-                self.toast("Successfully cleared the downloads.");
+                if let Some(why) = busy_reason(self.games.values().any(super::Game::active), !self.tasks.is_empty()) {
+                    self.toast_err(why);
+                    return;
+                }
+                self.start_task("Clearing downloads", move |_p, _n| async move {
+                    let n = tokio::task::spawn_blocking(move || tools::clear_downloads(&dirs)).await?;
+                    Ok(format!("Downloads cleared ({n} removed)"))
+                });
             }
             "skin_updater" => {
                 let accounts = self.accounts.clone();
@@ -111,7 +134,7 @@ impl App {
                         n.send(Msg::Svc(SvcMsg::SkinFetched(a.uuid.clone())));
                     }
                     if failed == 0 {
-                        Ok("Successfully updated skins.".to_string())
+                        Ok("Skins updated".to_string())
                     } else {
                         Err(anyhow::anyhow!(
                             "{failed} of {} skins couldn't be updated. Try again later.",
@@ -124,13 +147,21 @@ impl App {
                 if self.games.values().any(super::Game::active) {
                     self.toast_err("Close Minecraft first, it is using the cache");
                 } else {
-                    let freed = crate::classcache::clear(&dirs);
-                    self.toast(format!("Game start cache cleared ({} MB freed)", freed / (1024 * 1024)));
+                    self.start_task("Clearing the game start cache", move |_p, _n| async move {
+                        let freed = tokio::task::spawn_blocking(move || crate::classcache::clear(&dirs)).await?;
+                        Ok(format!("Game start cache cleared ({} MB freed)", freed / (1024 * 1024)))
+                    });
                 }
             }
             "libraries_deleter" => {
-                tools::delete_libraries(&dirs);
-                self.toast("Successfully deleted libraries.");
+                if let Some(why) = busy_reason(self.games.values().any(super::Game::active), !self.tasks.is_empty()) {
+                    self.toast_err(why);
+                    return;
+                }
+                self.start_task("Deleting libraries", move |_p, _n| async move {
+                    let n = tokio::task::spawn_blocking(move || tools::delete_libraries(&dirs)).await?;
+                    Ok(format!("Libraries deleted ({n} removed). They download again when a game starts"))
+                });
             }
             _ => {}
         }
@@ -142,8 +173,8 @@ impl App {
             let answer = match id {
                 "network_checker" => {
                     let mut answer = None;
-                    egui::Modal::new(egui::Id::unique("tool-confirm")).show(ctx, |ui| {
-                        ui.set_width(460.0);
+                    egui::Modal::new(egui::Id::unique("tool-confirm")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
+                        ui.set_width(modal_width(ctx, 460.0));
                         ui.label(RichText::new("Network checker").size(19.0).strong());
                         ui.add_space(4.0);
                         muted(ui, tools::NETWORK_CHECKER_WARNING);
@@ -198,8 +229,8 @@ impl App {
             let mut close = false;
             let mut copy: Option<String> = None;
             if let Some(report) = &self.svc.net_report {
-                egui::Modal::new(egui::Id::unique("net-report")).show(ctx, |ui| {
-                    ui.set_width(680.0);
+                egui::Modal::new(egui::Id::unique("net-report")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
+                    ui.set_width(modal_width(ctx, 680.0));
                     ui.label(RichText::new("Network checker").size(21.0).strong());
                     match (&report.link, &report.error) {
                         (Some(link), _) => {
@@ -217,13 +248,16 @@ impl App {
                         _ => {}
                     }
                     ui.add_space(6.0);
-                    ScrollArea::vertical().max_height(360.0).auto_shrink([false, true]).show(ui, |ui| {
-                        ui.add(
-                            egui::TextEdit::multiline(&mut report.text.as_str())
-                                .font(egui::TextStyle::Monospace)
-                                .desired_width(f32::INFINITY),
-                        );
-                    });
+                    ScrollArea::vertical()
+                        .max_height(modal_scroll_height(ctx, 360.0, 160.0))
+                        .auto_shrink([false, true])
+                        .show(ui, |ui| {
+                            ui.add(
+                                egui::TextEdit::multiline(&mut report.text.as_str())
+                                    .font(egui::TextStyle::Monospace)
+                                    .desired_width(f32::INFINITY),
+                            );
+                        });
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
                         if secondary(ui, "Copy report").clicked() {
@@ -287,5 +321,13 @@ mod tests {
         });
         assert!(out.shapes.len() >= TOOLS.len());
         out.textures_delta.clear();
+    }
+
+    #[test]
+    fn shared_files_are_only_deleted_when_nothing_uses_them() {
+        assert_eq!(busy_reason(false, false), None);
+        assert!(busy_reason(true, false).is_some_and(|r| r.contains("Minecraft")));
+        assert!(busy_reason(true, true).is_some_and(|r| r.contains("Minecraft")), "the game is named first");
+        assert!(busy_reason(false, true).is_some_and(|r| r.contains("jobs")));
     }
 }

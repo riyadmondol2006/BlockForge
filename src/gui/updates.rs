@@ -169,7 +169,7 @@ impl App {
         if self.upd.shown && !matches!(self.upd.stage, Stage::Offer) {
             return;
         }
-        let kind = update::install_kind();
+        let kind = super::about::install_kind();
         self.upd.asset = update::pick_asset(&release, kind, std::env::consts::ARCH).cloned();
         self.upd.kind = kind;
         self.upd.latest = Some(release);
@@ -291,7 +291,7 @@ impl App {
                         ui.ctx().request_repaint_after(Duration::from_millis(100));
                     }
                     Stage::Installing => {
-                        ui.label(RichText::new(format!("Installing BlockForge {version}...")).strong());
+                        ui.label(RichText::new(installing_text(self.upd.kind, &version)).strong());
                         ui.add_space(4.0);
                         ui.add(
                             egui::ProgressBar::new(0.0)
@@ -303,16 +303,16 @@ impl App {
                         ui.ctx().request_repaint_after(Duration::from_millis(100));
                     }
                     Stage::Restarting => {
-                        ui.label(RichText::new(format!("BlockForge {version} is ready. Restarting...")).strong());
+                        ui.label(RichText::new(closing_text(self.upd.kind, &version)).strong());
                     }
                     Stage::Note { message, command } => {
                         ui.label(RichText::new(message).strong());
                         if let Some(command) = command {
                             ui.add_space(4.0);
-                            ui.label(RichText::new(command).monospace().color(c_text()));
+                            ui.add(egui::Label::new(RichText::new(command).monospace().color(c_text())).wrap());
                         }
                         ui.add_space(6.0);
-                        ui.horizontal(|ui| {
+                        ui.horizontal_wrapped(|ui| {
                             if let Some(command) = command {
                                 if primary(ui, "Copy command").clicked() {
                                     action = Some(Action::Copy(command.clone()));
@@ -380,6 +380,33 @@ impl App {
     }
 }
 
+/// The banner's line while the downloaded update is being put in place.
+fn installing_text(kind: Kind, version: &str) -> String {
+    match kind {
+        // the package manager asks for the password in a window of its own
+        Kind::Deb | Kind::Rpm => {
+            format!("Installing BlockForge {version}. Enter your password if you are asked for it")
+        }
+        Kind::WindowsInstaller => format!("Starting the BlockForge {version} installer\u{2026}"),
+        Kind::MacApp => format!("Opening the BlockForge {version} disk image\u{2026}"),
+        _ => format!("Installing BlockForge {version}\u{2026}"),
+    }
+}
+
+/// The banner's line just before this copy closes for the update.
+fn closing_text(kind: Kind, version: &str) -> String {
+    match kind {
+        Kind::WindowsInstaller => {
+            format!("The BlockForge {version} installer is starting. BlockForge closes so it can be updated")
+        }
+        Kind::MacApp => {
+            "The disk image is open. Drag BlockForge into Applications, replace the old copy, then open it again"
+                .to_string()
+        }
+        _ => format!("BlockForge {version} is ready. Restarting\u{2026}"),
+    }
+}
+
 enum Action {
     Install,
     OpenPage,
@@ -387,4 +414,22 @@ enum Action {
     Later,
     Cancel,
     Copy(String),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_banner_says_what_happens_for_each_kind_of_install() {
+        assert!(installing_text(Kind::Deb, "4.2.0").contains("password"));
+        assert!(installing_text(Kind::Rpm, "4.2.0").contains("password"));
+        assert!(installing_text(Kind::WindowsInstaller, "4.2.0").contains("installer"));
+        assert!(closing_text(Kind::MacApp, "4.2.0").contains("Applications"), "a disk image doesn't restart by itself");
+        assert!(closing_text(Kind::WindowsInstaller, "4.2.0").contains("installer"));
+        for kind in [Kind::AppImage, Kind::WindowsPortable, Kind::Deb, Kind::Rpm] {
+            assert!(closing_text(kind, "4.2.0").contains("Restarting"), "{kind:?}");
+            assert!(installing_text(kind, "4.2.0").contains("4.2.0"), "{kind:?}");
+        }
+    }
 }

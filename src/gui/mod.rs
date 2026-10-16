@@ -1185,8 +1185,12 @@ mod tests {
 
 /// Computers with 4 GB of memory or less get the lighter look by default, like the Java edition.
 pub fn low_end_pc() -> bool {
-    let total = crate::platform::memory_mb().0;
-    total > 0 && total <= 4096
+    // asked on every frame of the Settings page; the memory a computer has doesn't change, so it is read once
+    static LOW: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *LOW.get_or_init(|| {
+        let total = crate::platform::memory_mb().0;
+        total > 0 && total <= 4096
+    })
 }
 
 /// The frame every dialog uses: the window look with room around the content.

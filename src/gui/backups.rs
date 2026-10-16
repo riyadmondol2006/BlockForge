@@ -21,11 +21,23 @@ const REFRESH_AFTER: Duration = Duration::from_secs(5);
 pub struct BackupsState {
     folder: String,
     list: Vec<Backup>,
+    /// The backup settings when the list was read (the folder and the automatic backup switch).
+    svc: Option<ServiceSettings>,
     loaded: Option<Instant>,
     stale: bool,
     show_all: bool,
-    restore: Option<PathBuf>,
+    /// The backup to restore and the folder of the instance it goes back into (the one whose card was clicked).
+    restore: Option<(String, PathBuf)>,
     delete: Option<PathBuf>,
+}
+
+/// The label of the job that restores into an instance, also used to see whether one is running.
+fn restore_label(name: &str) -> String {
+    format!("Restoring {name}")
+}
+
+fn backup_label(name: &str) -> String {
+    format!("Backing up {name}")
 }
 
 impl BackupsState {
@@ -42,24 +54,31 @@ fn when(b: &Backup) -> String {
 impl App {
     /// The card on the instance page's overview. Call it with the instance being shown.
     pub(super) fn backups_card(&mut self, ui: &mut Ui, inst: &Instance) {
-        let svc = ServiceSettings::from_settings(&self.settings);
         let st = &mut self.svc.backups;
         if st.folder != inst.folder || st.stale || st.loaded.is_none_or(|t| t.elapsed() > REFRESH_AFTER) {
             if st.folder != inst.folder {
                 st.show_all = false;
             }
+            let svc = ServiceSettings::from_settings(&self.settings);
             st.folder = inst.folder.clone();
             st.list = backups::list(&self.dirs, &svc, inst.name());
+            st.svc = Some(svc);
             st.loaded = Some(Instant::now());
             st.stale = false;
         }
-        let list: Vec<Backup> = st.list.clone();
+        // the list is handed back after drawing, so it isn't copied on every frame
+        let list: Vec<Backup> = std::mem::take(&mut st.list);
+        let svc = st.svc.clone().unwrap_or_default();
         let show_all = st.show_all;
+        let working = {
+            let (restoring, backing_up) = (restore_label(inst.name()), backup_label(inst.name()));
+            self.tasks.iter().any(|t| t.label == restoring || t.label == backing_up)
+        };
         let mut make: Option<BackupMode> = None;
         let mut restore = None;
         let mut delete = None;
         let mut toggle_all = false;
-        let folder_to_open = backups::backups_dir(&self.dirs, &svc);
+        let mut open_folder = false;
 
         card(ui, |ui| {
             ui.horizontal(|ui| {
@@ -73,30 +92,48 @@ impl App {
                 "A backup is a zip file of this instance. Worlds and settings are small; adding the mods or everything makes it bigger.",
             );
             ui.add_space(4.0);
-            ui.horizontal_wrapped(|ui| {
-                for mode in BackupMode::ALL {
-                    if secondary(ui, mode.label()).clicked() {
-                        make = Some(mode);
+            if working {
+                // a backup or a restore of this instance is running: another one now would read half-written files
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    muted(ui, "A backup or restore of this instance is running\u{2026}");
+                });
+            } else {
+                ui.horizontal_wrapped(|ui| {
+                    for mode in BackupMode::ALL {
+                        if secondary(ui, mode.label()).clicked() {
+                            make = Some(mode);
+                        }
                     }
-                }
-            });
+                });
+            }
             ui.add_space(6.0);
             if list.is_empty() {
                 small_muted(ui, "No backups of this instance yet.");
             }
             for b in list.iter().take(if show_all { usize::MAX } else { SHOWN }) {
                 ui.horizontal(|ui| {
-                    ui.vertical(|ui| {
-                        ui.label(when(b));
-                        small_muted(ui, format!("{}  \u{00B7}  {}", human_size(b.size), b.file_name));
-                    });
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if danger(ui, "Delete").clicked() {
-                            delete = Some(b.path.clone());
-                        }
-                        if secondary(ui, "Restore").clicked() {
-                            restore = Some(b.path.clone());
-                        }
+                        ui.add_enabled_ui(!working, |ui| {
+                            if danger(ui, "Delete").clicked() {
+                                delete = Some(b.path.clone());
+                            }
+                            if secondary(ui, "Restore").clicked() {
+                                restore = Some(b.path.clone());
+                            }
+                        });
+                        // a long file name wraps next to the buttons instead of running under them
+                        ui.with_layout(Layout::top_down(Align::Min), |ui| {
+                            ui.label(when(b));
+                            ui.add(
+                                egui::Label::new(
+                                    RichText::new(format!("{}  \u{00B7}  {}", human_size(b.size), b.file_name))
+                                        .color(c_muted())
+                                        .size(12.0),
+                                )
+                                .wrap(),
+                            );
+                        });
                     });
                 });
                 ui.separator();
@@ -106,17 +143,20 @@ impl App {
                     toggle_all = true;
                 }
                 if secondary_icon(ui, super::icons::Icon::Folder, "Open backups folder").clicked() {
-                    let _ = std::fs::create_dir_all(&folder_to_open);
-                    let _ = open::that(&folder_to_open);
+                    open_folder = true;
                 }
             });
         });
 
+        self.svc.backups.list = list;
+        if open_folder {
+            self.open_folder(&backups::backups_dir(&self.dirs, &svc));
+        }
         if toggle_all {
             self.svc.backups.show_all = !show_all;
         }
         if let Some(path) = restore {
-            self.svc.backups.restore = Some(path);
+            self.svc.backups.restore = Some((inst.folder.clone(), path));
         }
         if let Some(path) = delete {
             self.svc.backups.delete = Some(path);
@@ -131,7 +171,7 @@ impl App {
         let (dirs, svc) = (self.dirs.clone(), ServiceSettings::from_settings(&self.settings));
         let (root, name) = (inst.root.clone(), inst.name().to_string());
         self.svc.backups.mark_stale();
-        self.start_task(format!("Backing up {name}"), move |_p, _n| async move {
+        self.start_task(backup_label(&name), move |_p, _n| async move {
             let made = tokio::task::spawn_blocking(move || backups::create(&dirs, &svc, &root, &name, mode)).await??;
             Ok(format!(
                 "Backup is complete ({})",
@@ -142,8 +182,9 @@ impl App {
 
     /// The confirmation windows for restoring and deleting.
     pub(super) fn backups_overlays(&mut self, ctx: &egui::Context) {
-        if let Some(path) = self.svc.backups.restore.clone() {
-            let Some(inst) = self.selected.as_deref().and_then(|f| self.instance(f)).cloned() else {
+        if let Some((folder, path)) = self.svc.backups.restore.clone() {
+            // the instance whose card was clicked, even if another one is selected by now
+            let Some(inst) = self.instance(&folder).cloned() else {
                 self.svc.backups.restore = None;
                 return;
             };
@@ -160,9 +201,14 @@ impl App {
                         self.toast_err("Close Minecraft first, it is using these files");
                         return;
                     }
+                    let (restoring, backing_up) = (restore_label(inst.name()), backup_label(inst.name()));
+                    if self.tasks.iter().any(|t| t.label == restoring || t.label == backing_up) {
+                        self.toast_err("Wait for the backup or restore of this instance to finish first");
+                        return;
+                    }
                     let (dirs, svc) = (self.dirs.clone(), ServiceSettings::from_settings(&self.settings));
                     self.svc.backups.mark_stale();
-                    self.start_task(format!("Restoring {}", inst.name()), move |_p, _n| async move {
+                    self.start_task(restoring, move |_p, _n| async move {
                         let label = inst.name().to_string();
                         tokio::task::spawn_blocking(move || {
                             backups::restore(&dirs, &svc, &path, &inst.root, inst.name(), true)

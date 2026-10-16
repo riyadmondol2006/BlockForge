@@ -546,14 +546,26 @@ pub async fn upload_skin(access_token: &str, png: &[u8], slim: bool) -> Result<(
         .send()
         .await
         .context("couldn't reach Mojang")?;
+    let status = r.status().as_u16();
     if !r.status().is_success() {
         let body = r.text().await.unwrap_or_default();
-        crate::logs::error(format!("Error updating skin. Response was {body}"));
-        bail!(
-            "The skin couldn't be uploaded. Check your connection and try again, or sign in again if it keeps failing."
-        );
+        crate::logs::error(format!("Error updating skin. HTTP {status}, response was {body}"));
+        bail!("{}", upload_error_text(status));
     }
     Ok(())
+}
+
+/// What to tell the player when Minecraft's skin service answers `status` to an upload.
+pub fn upload_error_text(status: u16) -> &'static str {
+    match status {
+        400 => "Minecraft's skin service didn't accept this picture. Pick a 64x64 PNG skin and try again.",
+        401 | 403 => "Microsoft didn't accept the sign-in. Sign in to this account again, then try once more.",
+        429 => "The skin was changed too many times in a short while. Wait a minute and try again.",
+        500..=599 => "Minecraft's skin service isn't working right now. Try again in a little while.",
+        _ => {
+            "The skin couldn't be uploaded. Check your connection and try again, or sign in again if it keeps failing."
+        }
+    }
 }
 
 /// The whole "Change skin" action: renew the sign-in if needed, upload, and fetch the new skin so it shows.
@@ -744,6 +756,16 @@ mod tests {
         assert_eq!(t.cape_url.as_deref(), Some("http://t/cape"));
         let none = parse_service_profile(br#"{"id":"abc","name":"Alex","skins":[],"capes":[]}"#).unwrap();
         assert!(none.skin_url.is_none() && none.cape_url.is_none());
+    }
+
+    #[test]
+    fn a_refused_upload_says_why() {
+        assert!(upload_error_text(401).contains("Sign in"));
+        assert!(upload_error_text(403).contains("Sign in"));
+        assert!(upload_error_text(400).contains("64x64"));
+        assert!(upload_error_text(429).contains("Wait"));
+        assert!(upload_error_text(503).contains("isn't working"));
+        assert!(upload_error_text(418).contains("connection"));
     }
 
     #[test]

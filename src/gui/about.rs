@@ -24,11 +24,28 @@ fn install_label(kind: Kind) -> &'static str {
     }
 }
 
+/// How this copy was installed. Finding out may ask the package manager (`dpkg -S`, `rpm -qf`), so it is done once
+/// and remembered; it doesn't change while the launcher runs.
+pub fn install_kind() -> Kind {
+    static KIND: std::sync::OnceLock<Kind> = std::sync::OnceLock::new();
+    *KIND.get_or_init(update::install_kind)
+}
+
+/// [`os_text`], worked out once (it reads a file or runs a program).
+fn os_text_cached() -> &'static str {
+    static TEXT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    TEXT.get_or_init(os_text)
+}
+
 /// The version with the commit it was built from when CI recorded one: `4.0.0 (a1b2c3d)`.
 pub fn version_text() -> String {
-    match option_env!("GITHUB_SHA").filter(|s| s.len() >= 7) {
-        Some(sha) => format!("{} ({})", crate::VERSION, &sha[..7]),
-        None => crate::VERSION.to_string(),
+    version_with_commit(crate::VERSION, option_env!("GITHUB_SHA"))
+}
+
+fn version_with_commit(version: &str, sha: Option<&str>) -> String {
+    match sha.map(str::trim).and_then(|s| s.get(..7)).filter(|s| s.chars().all(|c| c.is_ascii_hexdigit())) {
+        Some(short) => format!("{version} ({short})"),
+        None => version.to_string(),
     }
 }
 
@@ -81,8 +98,8 @@ impl App {
         format!(
             "BlockForge {}\nInstalled as: {}\nSystem: {} ({}), {} MB memory, {} MB free\nData folder: {}",
             version_text(),
-            install_label(update::install_kind()),
-            os_text(),
+            install_label(install_kind()),
+            os_text_cached(),
             std::env::consts::ARCH,
             total,
             free,
@@ -99,9 +116,13 @@ impl App {
         let status_text = self.update_status().text();
         let available = self.update_status().available().map(str::to_string);
         let is_error = self.update_status().is_error();
-        let kind = update::install_kind();
+        let kind = install_kind();
+        let can_install = kind.can_install();
+        let (total_mb, _) = super::settings::memory_now();
+        let mut link: Option<String> = None;
         ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
-            ui.set_max_width(780.0);
+            // at most 780 wide, but never wider than the window (set_max_width alone would widen a narrow page)
+            ui.set_max_width(ui.available_width().min(780.0));
             ui.horizontal(|ui| {
                 ui.add(egui::Image::from_texture(&self.logo).fit_to_exact_size(vec2(84.0, 84.0)));
                 ui.vertical(|ui| {
@@ -123,15 +144,19 @@ impl App {
                         ui.spinner();
                     }
                     let color = if is_error { c_danger() } else { c_text() };
-                    ui.label(RichText::new(&status_text).color(color));
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if available.is_some() {
-                            if primary(ui, "Update now").clicked() {
+                            // the banner's words: a copy that can't update itself gets the download page
+                            if primary(ui, if can_install { "Update now" } else { "Get the update" }).clicked() {
                                 show_offer = true;
                             }
                         } else if primary_enabled(ui, "Check for updates", !busy).clicked() {
                             check = true;
                         }
+                        // a failed check can say a lot: it wraps beside the button instead of pushing it away
+                        ui.with_layout(Layout::left_to_right(Align::Center).with_main_wrap(true), |ui| {
+                            ui.add(egui::Label::new(RichText::new(&status_text).color(color)).wrap());
+                        });
                     });
                 });
                 if !self.settings.check_for_launcher_updates {
@@ -151,13 +176,13 @@ impl App {
                 small_muted(ui, "BlockForge is free software under the GNU General Public License v3.");
                 ui.horizontal(|ui| {
                     if secondary(ui, "ATLauncher on GitHub").clicked() {
-                        let _ = open::that("https://github.com/ATLauncher/ATLauncher");
+                        link = Some("https://github.com/ATLauncher/ATLauncher".to_string());
                     }
                     if secondary(ui, "License").clicked() {
-                        let _ = open::that(format!("{REPO}/blob/main/LICENSE"));
+                        link = Some(format!("{REPO}/blob/main/LICENSE"));
                     }
                     if secondary(ui, "Notices").clicked() {
-                        let _ = open::that(format!("{REPO}/blob/main/NOTICE.md"));
+                        link = Some(format!("{REPO}/blob/main/NOTICE.md"));
                     }
                 });
             });
@@ -172,7 +197,7 @@ impl App {
                     "Mods, resource packs and shaders with updates, dependencies and a safety scan.",
                     "Brings in instances from Prism, MultiMC, CurseForge and more, and exports them again.",
                     "Fast to open, with memory picked for your PC and light mode for older computers.",
-                    "Private: no statistics and no crash reports are ever sent.",
+                    "Private: no statistics and no crash reports are sent unless you turn that on in Settings.",
                 ] {
                     ui.horizontal_top(|ui| {
                         ui.label(RichText::new("\u{2022}").color(c_accent()));
@@ -184,12 +209,11 @@ impl App {
 
             card(ui, |ui| {
                 ui.label(RichText::new("THIS COPY").size(11.0).strong().color(c_accent()));
-                let (total, _) = crate::platform::memory_mb();
                 egui::Grid::new("about-grid").num_columns(2).spacing([24.0, 8.0]).show(ui, |ui| {
                     for (k, v) in [
                         ("Installed as", install_label(kind).to_string()),
-                        ("System", format!("{} ({})", os_text(), std::env::consts::ARCH)),
-                        ("Memory", format!("{total} MB")),
+                        ("System", format!("{} ({})", os_text_cached(), std::env::consts::ARCH)),
+                        ("Memory", format!("{total_mb} MB")),
                     ] {
                         muted(ui, k);
                         ui.label(v);
@@ -213,16 +237,16 @@ impl App {
                 ui.label(RichText::new("HELP").size(11.0).strong().color(c_accent()));
                 ui.horizontal(|ui| {
                     if secondary(ui, "GitHub").clicked() {
-                        let _ = open::that(REPO);
+                        link = Some(REPO.to_string());
                     }
                     if secondary(ui, "Report a problem").clicked() {
-                        let _ = open::that(format!("{REPO}/issues/new/choose"));
+                        link = Some(format!("{REPO}/issues/new/choose"));
                     }
                     if secondary(ui, "Releases").clicked() {
-                        let _ = open::that(format!("{REPO}/releases"));
+                        link = Some(format!("{REPO}/releases"));
                     }
                     if secondary(ui, "Privacy").clicked() {
-                        let _ = open::that(format!("{REPO}/blob/main/PRIVACY.md"));
+                        link = Some(format!("{REPO}/blob/main/PRIVACY.md"));
                     }
                 });
                 ui.horizontal(|ui| {
@@ -245,7 +269,10 @@ impl App {
             self.toast("Copied the details");
         }
         if open_data {
-            let _ = open::that(&self.dirs.base);
+            self.open_folder(&self.dirs.base.clone());
+        }
+        if let Some(url) = link {
+            self.open_link(&url);
         }
         if check {
             self.check_for_updates_now();
@@ -254,5 +281,19 @@ impl App {
             self.show_update_offer();
             self.page = Page::Home;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_commit_is_shown_only_when_it_looks_like_one() {
+        assert_eq!(version_with_commit("4.1.0", Some("a1b2c3d4e5f6")), "4.1.0 (a1b2c3d)");
+        assert_eq!(version_with_commit("4.1.0", None), "4.1.0");
+        assert_eq!(version_with_commit("4.1.0", Some("abc")), "4.1.0", "too short");
+        // a byte-offset slice would have cut this one inside a letter
+        assert_eq!(version_with_commit("4.1.0", Some("\u{00e9}\u{00e9}\u{00e9}\u{00e9}x")), "4.1.0");
     }
 }
