@@ -22,6 +22,8 @@ pub(super) enum Act {
     AddAccount,
     /// Switch Fast start on or off for an instance (folder, new state).
     FastStart(String, bool),
+    /// Change another of an instance's helper switches (see `performance`).
+    Helper(String, super::performance::HelperChange),
     Stop(String),
     /// Stop one running session (its key in `games`).
     StopSession(String),
@@ -68,6 +70,7 @@ impl App {
             }
             Act::AddAccount => self.start_sign_in(),
             Act::FastStart(f, on) => self.set_fast_start(&f, on),
+            Act::Helper(f, change) => self.apply_helper_change(&f, change),
             Act::Stop(f) => self.stop(&f),
             Act::StopSession(key) => self.stop_session(&key),
             Act::Folder(f) => {
@@ -217,6 +220,9 @@ impl App {
                 act = Some(a);
             }
         });
+        if let Some(a) = self.helpers_menu(ui, inst) {
+            act = Some(a);
+        }
         ui.separator();
         let mut item = |ui: &mut Ui, label: &str, make: fn(String) -> Act| {
             if ui.button(label).clicked() {
@@ -429,37 +435,8 @@ impl App {
             self.offline_play = if close { None } else { Some((folder, name, bad)) };
         }
 
-        // the game closed soon after it started with the fast-start helper on
-        if let Some(folder) = self.boost_blame.clone() {
-            let (mut off, mut keep) = (false, false);
-            egui::Modal::new(egui::Id::unique("boost-blame")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
-                ui.set_width(440.0);
-                ui.label(RichText::new("Minecraft closed early").size(19.0).strong());
-                muted(
-                    ui,
-                    "The game stopped soon after it started while Fast start was on. Fast start is a small helper \
-                     that makes the game open sooner; on some setups it can get in the way. Try the game again \
-                     with it turned off. The Logs tab shows what happened.",
-                );
-                ui.add_space(8.0);
-                ui.horizontal(|ui| {
-                    if primary(ui, "Turn off Fast start").clicked() {
-                        off = true;
-                    }
-                    if secondary(ui, "Keep it on").clicked() {
-                        keep = true;
-                    }
-                });
-                // Esc keeps it as it is
-                keep |= ui.input(|i| i.key_pressed(egui::Key::Escape));
-            });
-            if off {
-                self.set_fast_start(&folder, false);
-                self.boost_blame = None;
-            } else if keep {
-                self.boost_blame = None;
-            }
-        }
+        // the game closed soon after it started with a helper on
+        self.helpers_blame_ui(ctx);
 
         // mod loader
         if self.loader_dialog.is_some() {

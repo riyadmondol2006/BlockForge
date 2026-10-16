@@ -45,6 +45,15 @@ pub struct Settings {
     pub startup_mode: String,
     /// Start games with BlockForge's fast-start helper (a Java agent, see `launch::boost`). On unless switched off.
     pub fast_start: bool,
+    /// Start games with the smoothness helper (a second Java agent, see `launch::lite`). On unless switched off.
+    pub lite: bool,
+    /// Changes of the smoothness helper to leave out, by id (`ID;ID`).
+    pub lite_off: String,
+    /// Lower the graphics settings for a slow computer: `auto` (when the computer looks slow), `on` or `off` (see
+    /// `launch::lowend`).
+    pub low_end_mode: String,
+    /// The player closed the hint that suggests Low-end mode.
+    pub low_end_hint_dismissed: bool,
     pub auto_game_options: bool,
     pub check_for_launcher_updates: bool,
     pub enable_console: bool,
@@ -109,6 +118,10 @@ impl Default for Settings {
             class_data_cache: true,
             startup_mode: "auto".to_string(),
             fast_start: true,
+            lite: true,
+            lite_off: String::new(),
+            low_end_mode: "auto".to_string(),
+            low_end_hint_dismissed: false,
             auto_game_options: true,
             check_for_launcher_updates: true,
             enable_console: false,

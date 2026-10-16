@@ -523,9 +523,12 @@ mod tests {
         let a = run(&i, |_| {});
         assert_eq!(&a.options[5..7], ["-Xss1M", "-Dname=two words"]);
         assert!(!a.options.iter().any(|o| o.contains("G1")));
-        // one core: no collector flags at all
+        // one core: G1 as well (Java's own choice there froze the game while worlds loaded)
         let d = instance(Path::new("/data/instances/Pack"), MODERN, r#"{"name":"Pack"}"#);
-        assert!(!run(&d, |i| i.cores = 1).options.iter().any(|o| o.contains("G1")));
+        assert!(run(&d, |i| i.cores = 1).options.contains(&"-XX:+UseG1GC".to_string()));
+        assert!(run(&d, |_| {}).options.contains(&"-XX:+ExplicitGCInvokesConcurrent".to_string()));
+        // the player's own arguments get nothing added
+        assert!(!run(&i, |_| {}).options.iter().any(|o| o.contains("ExplicitGC")));
     }
 
     #[test]

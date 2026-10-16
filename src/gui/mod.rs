@@ -17,6 +17,7 @@ mod instance_settings;
 mod library;
 mod mods;
 mod packs;
+mod performance;
 mod pictures;
 mod settings;
 mod startup;
@@ -156,6 +157,8 @@ pub struct Game {
     player: String,
     /// Whether this start used the fast-start helper (to say so if the game fails early).
     fast_start: bool,
+    /// Whether this start used the smoothness helper, the same way.
+    lite: bool,
     /// The "Starting ..." progress card of this session, taken away once the game is up.
     task: u64,
     lines: Vec<LogLine>,
@@ -212,7 +215,7 @@ pub struct App {
     console_uploading: bool,
     console_confirm_kill: bool,
     who: Option<whoplays::WhoState>,
-    /// The instance whose game closed early with the fast-start helper on: the player is offered to turn it off.
+    /// The instance whose game closed early with a helper on: the player is offered to turn the helpers off.
     boost_blame: Option<String>,
     /// Which of an instance's running games the Logs tab shows, when there are several.
     log_session: Option<String>,
@@ -621,6 +624,7 @@ impl App {
                 folder: folder.to_string(),
                 player: account.name().to_string(),
                 fast_start: launch::fast_start_enabled(&self.settings, &instance),
+                lite: launch::lite_enabled(&self.settings, &instance),
                 task: self.next_task,
                 lines: Vec::new(),
                 phase: Phase::Preparing,
@@ -816,11 +820,8 @@ impl App {
                 if let Some(g) = self.games.get_mut(&f) {
                     g.phase = Phase::Exited(code);
                     g.kill = None;
-                    let log: Vec<String> = g.lines.iter().map(|l| l.text.clone()).collect();
-                    if launch::boost::may_be_the_cause(g.fast_start, code, g.started.elapsed(), &log) {
-                        self.boost_blame = Some(g.folder.clone());
-                    }
                 }
+                self.helpers_after_exit(&f, code);
                 self.ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
                 let folder = self.folder_of_session(&f);
                 self.svc_after_game_exit(&folder);
@@ -1481,6 +1482,7 @@ impl App {
                                     folder: f,
                                     player: "Player".into(),
                                     fast_start: false,
+                                    lite: false,
                                     task: 0,
                                     lines: sample_log(),
                                     phase: Phase::Exited(Some(0)),

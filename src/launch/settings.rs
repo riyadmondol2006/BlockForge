@@ -213,6 +213,12 @@ pub struct LaunchSettings {
     pub startup_mode: String,
     /// The fast-start helper: the instance's own `fastStart` over the launcher-wide setting.
     pub fast_start: bool,
+    /// The smoothness helper: the instance's own `lite` over the launcher-wide setting.
+    pub lite: bool,
+    /// The smoothness helper's changes to leave out (`liteOff`, launcher-wide).
+    pub lite_off: String,
+    /// `auto`, `on` or `off` (`lowend::Mode`): the instance's own `lowEndMode` over the launcher's.
+    pub low_end_mode: String,
     pub warm_up_game_files: bool,
     pub auto_game_options: bool,
     pub ignore_java_on_instance_launch: bool,
@@ -259,6 +265,9 @@ impl LaunchSettings {
             class_data_cache: global_bool("classDataCache", true),
             startup_mode: nonblank(pick_text("startupMode")).unwrap_or_else(|| "auto".to_string()),
             fast_start: pick_bool("fastStart", true),
+            lite: pick_bool("lite", true),
+            lite_off: text_of(&g, "liteOff").unwrap_or_default(),
+            low_end_mode: nonblank(pick_text("lowEndMode")).unwrap_or_else(|| "auto".to_string()),
             warm_up_game_files: global_bool("warmUpGameFiles", true),
             auto_game_options: global_bool("autoGameOptions", true),
             ignore_java_on_instance_launch: global_bool("ignoreJavaOnInstanceLaunch", false),
@@ -393,6 +402,21 @@ mod tests {
             plain.class_data_cache && plain.warm_up_game_files && plain.auto_game_options && plain.scan_mods_on_launch
         );
         assert!(!plain.disable_legacy_launching && !plain.ignore_java_on_instance_launch);
+        assert!(plain.lite && plain.low_end_mode == "auto" && plain.lite_off.is_empty());
+    }
+
+    #[test]
+    fn the_helpers_follow_the_instance_then_the_launcher() {
+        let mut s = Settings::default();
+        s.lite = false;
+        s.low_end_mode = "on".into();
+        s.lite_off = "fog;sky".into();
+        let plain = LaunchSettings::resolve(&s, &instance(r#"{"name":"A"}"#));
+        assert!(!plain.lite);
+        assert_eq!((plain.low_end_mode.as_str(), plain.lite_off.as_str()), ("on", "fog;sky"));
+        let own = LaunchSettings::resolve(&s, &instance(r#"{"name":"A","lite":true,"lowEndMode":"off"}"#));
+        assert!(own.lite);
+        assert_eq!(own.low_end_mode, "off");
     }
 
     #[test]

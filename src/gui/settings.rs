@@ -199,6 +199,7 @@ impl App {
         let max_mb = memory_slider_max(total_mb);
         let example = self.automatic_memory_example(total_mb, free_mb);
         let self_gpus = self.gpus.clone();
+        let perf = super::performance::SettingsView::new(self, ui.ctx());
         ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
             // at most 780 wide, but never wider than the window (set_max_width alone would widen a narrow page)
             ui.set_max_width(ui.available_width().min(780.0));
@@ -264,14 +265,6 @@ impl App {
                             s.extras.insert("warmUpGameFiles".into(), warm.into());
                             dirty = true;
                         }
-                    },
-                );
-                setting_row(
-                    ui,
-                    "Fast start",
-                    "A tiny helper that loads Minecraft's classes ahead of time so games open sooner. Works with every version and mod loader; each instance has its own switch too",
-                    |ui| {
-                        dirty |= toggle(ui, &mut s.fast_start).changed();
                     },
                 );
                 wide_row(
@@ -345,6 +338,7 @@ impl App {
                 setting_row(ui, "Show the console", "Open the log window next to the launcher", |ui| {
                     dirty |= toggle(ui, &mut s.enable_console).changed();
                 });
+                dirty |= perf.rows(ui, s);
             });
             section(ui, "Privacy", |ui| {
                 setting_row(

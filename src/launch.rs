@@ -6,7 +6,8 @@
 //!
 //! The pieces live in `launch/`: `memory` (how much memory and what kind of computer), `javapick` (which Java),
 //! `command` (the command line), `jvmargs`, `classcache`, `gameoptions`, `lwjgl`, `legacy`, `commands`, `prompts`
-//! (questions and warnings as data), `warmer` (reading files ahead) and `fractureiser` (the mod scan).
+//! (questions and warnings as data), `warmer` (reading files ahead), `fractureiser` (the mod scan), and the helpers:
+//! `boost` (fast start), `lite` (the smoothness helper) and `lowend` (Low-end mode).
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -37,11 +38,14 @@ pub mod gameoptions;
 pub mod javapick;
 pub mod jvmargs;
 pub mod legacy;
+pub mod lite;
+pub mod lowend;
 pub mod lwjgl;
 pub mod memory;
 pub mod prompts;
 pub mod settings;
 pub mod warmer;
+pub mod workers;
 
 use prompts::{LaunchProblem, Prompt};
 use settings::{LaunchSettings, QuickPlay};
@@ -90,6 +94,10 @@ pub struct Prepared {
     pub legacy: bool,
     /// The game was started with the fast-start helper (see `boost`), so a quick failure may be its doing.
     pub fast_start: bool,
+    /// The game was started with the smoothness helper (see `lite`), the same way.
+    pub lite: bool,
+    /// The game's world-generation threads get a lower priority while it runs (see `workers`).
+    pub lower_workers: bool,
     /// The commands to run before and after, if commands are switched on.
     pub pre_launch: Option<String>,
     pub post_exit: Option<String>,
@@ -101,6 +109,8 @@ pub struct Prepared {
     cleaned: AtomicBool,
     /// While the game is being started and runs, the file warmer keeps off the disk.
     _busy: warmer::BusyGuard,
+    /// While the game is being started and runs, another game of the instance leaves its settings file alone.
+    _in_use: lowend::InUse,
 }
 
 impl Prepared {
@@ -238,6 +248,18 @@ pub fn fast_start_enabled(settings: &Settings, instance: &Instance) -> bool {
     boost::enabled(settings, instance)
 }
 
+/// Whether games of this instance start with the smoothness helper: the instance's own switch if it has one,
+/// otherwise the launcher-wide setting (see `lite`).
+pub fn lite_enabled(settings: &Settings, instance: &Instance) -> bool {
+    lite::enabled(settings, instance)
+}
+
+/// The Low-end mode of this instance: its own choice if it has one, otherwise the launcher-wide setting (see
+/// `lowend`).
+pub fn low_end_mode(settings: &Settings, instance: &Instance) -> lowend::Mode {
+    lowend::mode(settings, instance)
+}
+
 /// The account chosen in the launcher.
 pub fn selected_account<'a>(settings: &Settings, all: &'a [Account]) -> Option<&'a Account> {
     settings.last_account.as_ref().and_then(|id| all.iter().find(|a| &a.uuid == id)).or(all.first())
@@ -349,8 +371,10 @@ pub async fn prepare_ext(
         }
     };
     let files_fut = install::ensure_game_files(dirs, &version, progress, false);
+    let low_end = lowend::Mode::parse(&ls.low_end_mode);
     let profile_fut = async {
-        if ls.auto_game_options && !gameoptions::has_own_options(&instance.root) {
+        // the computer's profile also tells Low-end mode on automatic whether this computer is a slow one
+        if (ls.auto_game_options && !gameoptions::has_own_options(&instance.root)) || low_end == lowend::Mode::Auto {
             let d = dirs.clone();
             tokio::task::spawn_blocking(move || Some(memory::PcProfile::get(&d))).await.ok().flatten()
         } else {
@@ -476,6 +500,33 @@ pub async fn prepare_ext(
             }
         }
     }
+    // Low-end mode: after the first-start choice, so a file written just now is lowered too
+    let slow = match &profile {
+        Some(p) if low_end == lowend::Mode::Auto => lowend::looks_weak(&lowend::Computer {
+            cores: p.cores,
+            total_mb: p.total_mb.max(0),
+            gpu: p.gpu,
+            spinning_disk: crate::disk::is_spinning(settings, &dirs.base),
+        }),
+        _ => None,
+    };
+    let low_end_on = low_end.active(slow.is_some());
+    let (in_use, others_running) = lowend::InUse::claim(&instance.root);
+    let outcome = if others_running {
+        if low_end_on || !lowend::Backup::load(&instance.root).is_empty() {
+            lowend::Outcome::Skipped(
+                "another game of this instance is running, so its settings file is left as it is".to_string(),
+            )
+        } else {
+            lowend::Outcome::Nothing
+        }
+    } else {
+        let minor = memory::minor_version(Some(instance.mc_version()));
+        let presets =
+            minor >= 21 && gameoptions::has_graphics_presets(&install::client_jar(dirs, version.game_version()));
+        lowend::apply(&instance.root, minor, presets, low_end_on)
+    };
+    notes.extend(outcome.note());
     timings.push(("memory and options", t.elapsed()));
 
     // ---- notes the Java edition writes to its log around a start
@@ -571,23 +622,6 @@ pub async fn prepare_ext(
     notes.extend(assembled.notes.iter().cloned());
     let mut jvm = assembled.options;
 
-    // a saved class-data archive makes the second start of the same game noticeably faster
-    let user_args = jvmargs::split(&ls.java_arguments);
-    let java_binary = java_pick.binary.to_string_lossy().to_string();
-    let applied = classcache::apply(
-        dirs,
-        &mut jvm,
-        &java_binary,
-        java_pick.home.as_deref(),
-        ls.class_data_cache,
-        java_pick.major,
-        &user_args,
-        &warmer::safe_name(instance),
-    );
-    if let Some(m) = &applied.message {
-        notes.push(m.clone());
-    }
-
     // the fast-start helper (a Java agent), unless it is switched off for this instance or for all of them
     let mut fast_start = false;
     if ls.fast_start {
@@ -603,6 +637,56 @@ pub async fn prepare_ext(
                 notes.push(format!("Warning: Fast start is off for this start, its file couldn't be written: {e:#}"))
             }
         }
+    }
+
+    // the smoothness helper (a second Java agent) goes after it, with the same switches
+    let mut lite_on = false;
+    if ls.lite {
+        match lite::prepare(dirs, instance, &ls.lite_off, &jvm) {
+            Ok((lite::Added::Argument(at, argument), more)) => {
+                notes.extend(more);
+                jvm.insert(at.min(jvm.len()), argument);
+                lite_on = true;
+            }
+            Ok((lite::Added::PlayersOwn, _)) => notes.push(
+                "Smoothness helper: your own Java arguments start it already, so it isn't added a second time".into(),
+            ),
+            Ok((lite::Added::UnusablePath(path), _)) => notes.push(format!(
+                "Warning: The smoothness helper is off for this start: Java can't load it from a folder whose path \
+                 has a = or , in it ({})",
+                path.display()
+            )),
+            // not worth stopping the game for
+            Err(e) => notes.push(format!(
+                "Warning: The smoothness helper is off for this start, its file couldn't be written: {e:#}"
+            )),
+        }
+    }
+    notes.push(helpers_note(fast_start, lite_on, low_end, low_end_on, slow.as_deref()));
+    let lower_workers = workers::wanted(lite_on, memory::cores());
+    if lower_workers {
+        notes.push(format!(
+            "Smoothness helper: Minecraft's world-generation threads run at a lower priority ({} processor threads)",
+            memory::cores()
+        ));
+    }
+
+    // a saved class-data archive makes the second start of the same game noticeably faster (after the helpers: on
+    // Java 25 the archive has to be made for a game started with agents)
+    let user_args = jvmargs::split(&ls.java_arguments);
+    let java_binary = java_pick.binary.to_string_lossy().to_string();
+    let applied = classcache::apply(
+        dirs,
+        &mut jvm,
+        &java_binary,
+        java_pick.home.as_deref(),
+        ls.class_data_cache,
+        java_pick.major,
+        &user_args,
+        &warmer::safe_name(instance),
+    );
+    if let Some(m) = &applied.message {
+        notes.push(m.clone());
     }
 
     // ---- put the command together
@@ -708,6 +792,8 @@ pub async fn prepare_ext(
         java: java_pick,
         legacy,
         fast_start,
+        lite: lite_on,
+        lower_workers,
         pre_launch,
         post_exit,
         instance: instance.clone(),
@@ -717,7 +803,25 @@ pub async fn prepare_ext(
         post_done: AtomicBool::new(false),
         cleaned: AtomicBool::new(false),
         _busy: busy,
+        _in_use: in_use,
     })
+}
+
+/// The log line that says which helpers this start uses.
+pub fn helpers_note(
+    fast_start: bool,
+    lite: bool,
+    low_end: lowend::Mode,
+    low_end_on: bool,
+    slow: Option<&str>,
+) -> String {
+    let on_off = |b: bool| if b { "on" } else { "off" };
+    let low = match (low_end, slow) {
+        (lowend::Mode::Auto, Some(why)) => format!("automatic, on (this computer looks slow: {why})"),
+        (lowend::Mode::Auto, None) => "automatic, off (this computer doesn't look slow)".to_string(),
+        _ => on_off(low_end_on).to_string(),
+    };
+    format!("Helpers: Fast start {}, Smoothness helper {}, Low-end mode {low}", on_off(fast_start), on_off(lite))
 }
 
 /// Joins Mojang's game jar and a modpack's into one: the modpack's files win, and `META-INF` is left out (it carries
@@ -755,6 +859,8 @@ pub struct Running {
     pub child: tokio::process::Child,
     /// Game output, one line at a time, ending when the game closes both its output streams.
     pub lines: UnboundedReceiver<String>,
+    /// Keeps the game's world-generation threads at a lower priority while it runs (see `workers`).
+    _workers: Option<workers::Watcher>,
 }
 
 impl Running {
@@ -821,7 +927,8 @@ pub fn spawn(prepared: &Prepared) -> Result<Running> {
             }
         });
     }
-    Ok(Running { child, lines: rx })
+    let workers = if prepared.lower_workers { child.id().and_then(workers::Watcher::start) } else { None };
+    Ok(Running { child, lines: rx, _workers: workers })
 }
 
 /// Sweep natives folders that an earlier run left behind (a crash, a killed launcher).
@@ -974,6 +1081,23 @@ mod tests {
         assert_eq!(done.level, Level::Warn);
         assert!(done.text.contains("[Client thread/WARN] (ave): first\nsecond"));
         assert_eq!(a.push("plain line").unwrap().text, "plain line");
+    }
+
+    #[test]
+    fn the_log_says_which_helpers_are_on() {
+        use lowend::Mode;
+        assert_eq!(
+            helpers_note(true, true, Mode::Auto, true, Some("4 processor threads")),
+            "Helpers: Fast start on, Smoothness helper on, Low-end mode automatic, on (this computer looks slow: 4 processor threads)"
+        );
+        assert!(
+            helpers_note(false, true, Mode::Auto, false, None)
+                .ends_with("Low-end mode automatic, off (this computer doesn't look slow)")
+        );
+        assert_eq!(
+            helpers_note(false, false, Mode::Off, false, None),
+            "Helpers: Fast start off, Smoothness helper off, Low-end mode off"
+        );
     }
 
     #[test]
