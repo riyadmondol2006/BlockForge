@@ -173,10 +173,20 @@ pub fn off_list(setting: &str) -> String {
     setting.split([';', ',', ' ']).map(str::trim).filter(|s| !s.is_empty()).collect::<Vec<_>>().join(";")
 }
 
+/// The change that is never switched on by the launcher, even at the balanced level: it can lag a frame behind a fast
+/// camera turn and its gain was only measured with software rendering.
+const NEVER_BY_DEFAULT: &str = "hidden-entities";
+
 /// The agent's options: `quiet`, where to write the report, the file with the mod names and the switched-off
-/// changes. The agent splits them at commas, so a path with one is left out (the agent then does without it).
-pub fn options(report: &Path, mods: Option<&Path>, off: &str) -> String {
+/// changes. With `balanced` (Low-end mode is on) it also asks for level 2: the changes that may alter something small
+/// a player could notice (a frame limiter that waits less, sounds that start without waiting for the sound thread,
+/// muted music that isn't decoded). The agent splits the options at commas, so a path with one is left out (the
+/// agent then does without it).
+pub fn options(report: &Path, mods: Option<&Path>, off: &str, balanced: bool) -> String {
     let mut parts = vec!["quiet".to_string()];
+    if balanced {
+        parts.push("level=2".to_string());
+    }
     let usable = |p: &Path| !p.to_string_lossy().contains(',');
     if usable(report) {
         parts.push(format!("report={}", report.display()));
@@ -184,7 +194,13 @@ pub fn options(report: &Path, mods: Option<&Path>, off: &str) -> String {
     if let Some(m) = mods.filter(|m| usable(m)) {
         parts.push(format!("mods={}", m.display()));
     }
-    let off = off_list(off);
+    let mut off = off_list(off);
+    if balanced && !off.split(';').any(|id| id == NEVER_BY_DEFAULT) {
+        if !off.is_empty() {
+            off.push(';');
+        }
+        off.push_str(NEVER_BY_DEFAULT);
+    }
     if !off.is_empty() {
         parts.push(format!("off={off}"));
     }
@@ -241,6 +257,7 @@ pub fn prepare(
     dirs: &Dirs,
     instance: &Instance,
     off_setting: &str,
+    balanced: bool,
     java_options: &[String],
 ) -> Result<(Added, Vec<String>)> {
     let mut notes = Vec::new();
@@ -263,7 +280,7 @@ pub fn prepare(
     if let Err(e) = &written {
         notes.push(format!("Warning: Smoothness helper: couldn't write the list of mods ({e}); it goes without"));
     }
-    let options = options(&report, written.is_ok().then_some(mods_file.as_path()), off_setting);
+    let options = options(&report, written.is_ok().then_some(mods_file.as_path()), off_setting, balanced);
     Ok((Added::Argument(insert_position(java_options), java_argument(&jar, &options)), notes))
 }
 
@@ -539,16 +556,30 @@ mod tests {
 
     #[test]
     fn options_carry_the_report_mods_and_switched_off_changes() {
-        let o = options(Path::new("/c/lite/A.report"), Some(Path::new("/c/lite/A.mods")), " fog ; leaves,");
+        let o = options(Path::new("/c/lite/A.report"), Some(Path::new("/c/lite/A.mods")), " fog ; leaves,", false);
         assert_eq!(o, "quiet,report=/c/lite/A.report,mods=/c/lite/A.mods,off=fog;leaves");
-        assert_eq!(options(Path::new("/c/lite/A.report"), None, ""), "quiet,report=/c/lite/A.report");
+        assert_eq!(options(Path::new("/c/lite/A.report"), None, "", false), "quiet,report=/c/lite/A.report");
         // the agent splits at commas, so paths with one are left out
-        assert_eq!(options(Path::new("/a,b/A.report"), Some(Path::new("/a,b/A.mods")), ""), "quiet");
+        assert_eq!(options(Path::new("/a,b/A.report"), Some(Path::new("/a,b/A.mods")), "", false), "quiet");
         assert_eq!(
             java_argument(Path::new("/c/blockforge-lite.jar"), "quiet"),
             "-javaagent:/c/blockforge-lite.jar=quiet"
         );
         assert_eq!(off_list(""), "");
+    }
+
+    #[test]
+    fn the_balanced_level_is_asked_for_only_while_low_end_mode_is_on() {
+        let r = Path::new("/c/lite/A.report");
+        let normal = options(r, None, "", false);
+        assert!(!normal.contains("level="), "{normal}");
+        let balanced = options(r, None, "fog", true);
+        assert_eq!(balanced, "quiet,level=2,report=/c/lite/A.report,off=fog;hidden-entities");
+        // the one change kept off is not listed twice
+        assert_eq!(
+            options(r, None, "hidden-entities", true),
+            "quiet,level=2,report=/c/lite/A.report,off=hidden-entities"
+        );
     }
 
     #[test]
@@ -573,7 +604,7 @@ mod tests {
         }
         let dirs = Dirs::at(base.join("data"));
         let inst = instance("Pack", &game, "");
-        let (added, notes) = prepare(&dirs, &inst, "a;b", &["-Xmx2G".into()]).unwrap();
+        let (added, notes) = prepare(&dirs, &inst, "a;b", false, &["-Xmx2G".into()]).unwrap();
         assert!(notes.is_empty());
         let Added::Argument(at, arg) = added else { panic!("not added") };
         assert_eq!(at, 0);
@@ -614,7 +645,7 @@ mod tests {
         );
         // the player starts it already
         let own = vec!["-javaagent:/elsewhere/blockforge-lite.jar".to_string()];
-        assert_eq!(prepare(&dirs, &inst, "", &own).unwrap().0, Added::PlayersOwn);
+        assert_eq!(prepare(&dirs, &inst, "", false, &own).unwrap().0, Added::PlayersOwn);
         let _ = std::fs::remove_dir_all(&base);
     }
 
@@ -626,7 +657,7 @@ mod tests {
         let base = std::env::temp_dir().join(format!("bf-lite-eq={}", std::process::id()));
         let dirs = Dirs::at(&base);
         let inst = instance("Pack", &base, "");
-        assert!(matches!(prepare(&dirs, &inst, "", &[]).unwrap().0, Added::UnusablePath(_)));
+        assert!(matches!(prepare(&dirs, &inst, "", false, &[]).unwrap().0, Added::UnusablePath(_)));
         assert!(!jar_path(&dirs).exists(), "nothing is written for it");
         let _ = std::fs::remove_dir_all(&base);
     }

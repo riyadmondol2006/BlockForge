@@ -644,7 +644,7 @@ pub async fn prepare_ext(
     // the smoothness helper (a second Java agent) goes after it, with the same switches
     let mut lite_on = false;
     if ls.lite {
-        match lite::prepare(dirs, instance, &ls.lite_off, &jvm) {
+        match lite::prepare(dirs, instance, &ls.lite_off, low_end_on, &jvm) {
             Ok((lite::Added::Argument(at, argument), more)) => {
                 notes.extend(more);
                 jvm.insert(at.min(jvm.len()), argument);
