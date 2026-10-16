@@ -2,7 +2,7 @@
 
 use egui::{Context, CornerRadius, RichText, ScrollArea, Sense, Stroke, Ui};
 
-use super::services::SvcMsg;
+use super::services::{SvcMsg, modal_scroll_height, modal_width};
 use super::theme::*;
 use super::widgets::*;
 use super::{App, Msg};
@@ -20,9 +20,23 @@ pub enum Status {
     Failed(String),
 }
 
+/// One article as the page shows it, its text worked out once when the news arrives (not on every frame).
+struct Shown {
+    title: String,
+    date: String,
+    preview: String,
+    spans: Vec<Span>,
+}
+
+impl Shown {
+    fn of(item: &NewsItem) -> Shown {
+        Shown { title: item.title.clone(), date: item.date(), preview: preview(item), spans: item.spans() }
+    }
+}
+
 #[derive(Default)]
 pub struct NewsState {
-    items: Vec<NewsItem>,
+    items: Vec<Shown>,
     status: Status,
     /// The article open in its own window.
     open: Option<usize>,
@@ -32,7 +46,9 @@ impl NewsState {
     pub fn arrived(&mut self, result: Result<Vec<NewsItem>, String>) {
         match result {
             Ok(items) => {
-                self.items = items;
+                self.items = items.iter().take(SHOWN).map(Shown::of).collect();
+                // the list changed under an open article: close it rather than show another one
+                self.open = None;
                 self.status = Status::Loaded;
             }
             Err(e) => self.status = Status::Failed(e),
@@ -42,18 +58,14 @@ impl NewsState {
 
 /// Draw spans as wrapped lines: bold, italic and links keep their style, and `\n` starts a new line.
 pub fn render_spans(ui: &mut Ui, spans: &[Span]) {
-    let mut lines: Vec<Vec<(String, &Span)>> = vec![Vec::new()];
+    let mut lines: Vec<Vec<(&str, &Span)>> = vec![Vec::new()];
     for s in spans {
-        let mut parts = s.text.split('\n');
-        if let Some(first) = parts.next() {
-            if !first.is_empty() {
-                lines.last_mut().expect("one line").push((first.to_string(), s));
+        for (n, part) in s.text.split('\n').enumerate() {
+            if n > 0 {
+                lines.push(Vec::new());
             }
-        }
-        for part in parts {
-            lines.push(Vec::new());
-            if !part.is_empty() {
-                lines.last_mut().expect("one line").push((part.to_string(), s));
+            if let (false, Some(line)) = (part.is_empty(), lines.last_mut()) {
+                line.push((part, s));
             }
         }
     }
@@ -118,7 +130,7 @@ impl App {
             Status::Loaded if self.svc.news.items.is_empty() => muted(ui, "No news right now."),
             Status::Loaded => {
                 let mut open = None;
-                for (i, item) in self.svc.news.items.iter().take(SHOWN).enumerate() {
+                for (i, item) in self.svc.news.items.iter().enumerate() {
                     let resp = egui::Frame::new()
                         .fill(c_card())
                         .stroke(Stroke::new(1.0, c_border()))
@@ -126,14 +138,13 @@ impl App {
                         .inner_margin(egui::Margin::same(14))
                         .show(ui, |ui| {
                             ui.set_width(ui.available_width());
-                            ui.horizontal(|ui| {
+                            ui.horizontal_wrapped(|ui| {
                                 ui.label(RichText::new(&item.title).strong().size(15.0));
-                                let date = item.date();
-                                if !date.is_empty() {
-                                    small_muted(ui, date);
+                                if !item.date.is_empty() {
+                                    small_muted(ui, &item.date);
                                 }
                             });
-                            ui.add(egui::Label::new(RichText::new(preview(item)).color(c_muted()).size(13.0)).wrap());
+                            ui.add(egui::Label::new(RichText::new(&item.preview).color(c_muted()).size(13.0)).wrap());
                         })
                         .response
                         .interact(Sense::click())
@@ -153,22 +164,22 @@ impl App {
     /// One article in a window of its own.
     pub(super) fn news_overlay(&mut self, ctx: &Context) {
         let Some(i) = self.svc.news.open else { return };
-        let Some(item) = self.svc.news.items.get(i).cloned() else {
+        let Some(item) = self.svc.news.items.get(i) else {
             self.svc.news.open = None;
             return;
         };
         let mut close = false;
-        egui::Modal::new(egui::Id::unique("news-article")).show(ctx, |ui| {
-            ui.set_width(620.0);
-            ui.label(RichText::new(&item.title).size(21.0).strong());
-            if !item.date().is_empty() {
-                small_muted(ui, item.date());
+        egui::Modal::new(egui::Id::unique("news-article")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
+            ui.set_width(modal_width(ctx, 620.0));
+            ui.add(egui::Label::new(RichText::new(&item.title).size(21.0).strong()).wrap());
+            if !item.date.is_empty() {
+                small_muted(ui, &item.date);
             }
             ui.add_space(8.0);
             ScrollArea::vertical()
-                .max_height(420.0)
+                .max_height(modal_scroll_height(ctx, 420.0, 140.0))
                 .auto_shrink([false, true])
-                .show(ui, |ui| render_spans(ui, &item.spans()));
+                .show(ui, |ui| render_spans(ui, &item.spans));
             ui.add_space(10.0);
             if secondary(ui, "Close").clicked() {
                 close = true;

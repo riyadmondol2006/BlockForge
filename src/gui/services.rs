@@ -36,6 +36,8 @@ pub enum SvcMsg {
     /// A skin was downloaded for this id; its picture should be read again.
     SkinFetched(String),
     ProxyTest(Result<(), String>),
+    /// A server was deleted (or deleting it stopped half way): read the servers folder again.
+    ServersChanged,
 }
 
 #[derive(Default)]
@@ -53,6 +55,8 @@ pub struct SvcState {
     pub skin_dialog: Option<SkinDialog>,
     // Servers
     pub servers: Vec<Server>,
+    /// What the cards show about each of `servers`, worked out when the list is read rather than on every frame.
+    pub server_rows: Vec<super::servers::ServerRow>,
     pub servers_loaded: bool,
     pub server_confirm_remove: Option<String>,
     pub server_confirm_launch: Option<String>,
@@ -65,11 +69,28 @@ pub struct SvcState {
     pub busy: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
+/// The width for a window drawn over the page: `wanted`, or less when the launcher window is narrow (small window or
+/// a large zoom), so the window never runs off the screen.
+pub fn modal_width(ctx: &Context, wanted: f32) -> f32 {
+    fit_width(wanted, ctx.content_rect().width())
+}
+
+fn fit_width(wanted: f32, screen: f32) -> f32 {
+    // the modal's own frame and a margin to the window's edge
+    wanted.min(screen - 96.0).max(200.0)
+}
+
+/// The height a scrolling part of such a window may take: `wanted`, or less on a short window. `rest` is the height
+/// of everything else in the window (title, buttons).
+pub fn modal_scroll_height(ctx: &Context, wanted: f32, rest: f32) -> f32 {
+    wanted.min(ctx.content_rect().height() - rest - 96.0).max(120.0)
+}
+
 /// A yes/no window. `Some(true)` when confirmed, `Some(false)` when cancelled, `None` while it is open.
 pub fn confirm_modal(ctx: &Context, id: &str, title: &str, body: &str, confirm: &str, dangerous: bool) -> Option<bool> {
     let mut answer = None;
-    egui::Modal::new(egui::Id::unique(id)).show(ctx, |ui| {
-        ui.set_width(420.0);
+    egui::Modal::new(egui::Id::unique(id)).frame(super::modal_frame(ctx)).show(ctx, |ui| {
+        ui.set_width(modal_width(ctx, 420.0));
         ui.label(RichText::new(title).size(19.0).strong());
         ui.add_space(4.0);
         muted(ui, body);
@@ -91,6 +112,24 @@ pub fn confirm_modal(ctx: &Context, id: &str, title: &str, body: &str, confirm: 
 }
 
 impl App {
+    /// Opens a folder in the system's file manager (Explorer, Finder, or what the desktop uses on Linux), making it
+    /// first if it isn't there yet. Doesn't wait for the file manager.
+    pub(super) fn open_folder(&mut self, path: &std::path::Path) {
+        let _ = std::fs::create_dir_all(path);
+        if let Err(e) = open::that_detached(path) {
+            crate::logs::warn(format!("Couldn't open {}: {e}", path.display()));
+            self.toast_err(format!("Couldn't open the folder {}", path.display()));
+        }
+    }
+
+    /// Opens a web page in the browser without waiting for it.
+    pub(super) fn open_link(&mut self, url: &str) {
+        if let Err(e) = open::that_detached(url) {
+            crate::logs::warn(format!("Couldn't open {url}: {e}"));
+            self.toast_err(format!("Couldn't open the browser. The address is {url}"));
+        }
+    }
+
     /// Results from the background reach the window here (called from `App::handle`).
     pub(super) fn svc_msg(&mut self, msg: SvcMsg) {
         match msg {
@@ -135,6 +174,7 @@ impl App {
                     Err(e) => self.toast_err(e),
                 }
             }
+            SvcMsg::ServersChanged => self.reload_servers(),
         }
     }
 
@@ -200,65 +240,32 @@ impl App {
         }
     }
 
-    /// Read the settings of this area into the working copy the first time it is needed.
+    /// Read the settings of this area into the working copy the first time it is needed. The switches the rest of the
+    /// Settings page shows (class cache, reading ahead, the two privacy ones) are taken from the settings every time,
+    /// so the working copy never writes back an old value of theirs.
     fn svc_edit(&mut self) -> ServiceSettings {
-        if self.svc.edit.is_none() {
-            let (s, warnings) = ServiceSettings::read(&self.settings);
-            for w in warnings {
-                crate::logs::warn(w);
+        let mut s = match self.svc.edit.take() {
+            Some(s) => s,
+            None => {
+                let (s, warnings) = ServiceSettings::read(&self.settings);
+                for w in warnings {
+                    crate::logs::warn(w);
+                }
+                s
             }
-            self.svc.edit = Some(s);
-        }
-        self.svc.edit.clone().unwrap_or_default()
+        };
+        sync_shared(&mut s, &self.settings);
+        self.svc.edit = Some(s.clone());
+        s
     }
 
-    /// Cards for the Settings page: the game start cache and privacy rows from the Java edition's settings page,
-    /// and a folded section for the network, folder and backup settings that only exist in the settings file there.
-    /// Changes are saved as they are made. Returns nothing; it saves by itself.
+    /// A folded section for the Settings page with the network, folder and backup settings that only exist in the
+    /// Java edition's settings file. Changes are saved as they are made.
     pub(super) fn services_settings_ui(&mut self, ui: &mut Ui) {
         let mut s = self.svc_edit();
         let before = s.clone();
-        ui.add_space(6.0);
-        card(ui, |ui| {
-            ui.label(RichText::new("Speed").strong().size(16.0));
-            setting_row(
-                ui,
-                "Speed up game start (class cache)",
-                "Makes the next start of a game quicker (Minecraft 1.18 and newer)",
-                |ui| {
-                    toggle(ui, &mut s.class_data_cache);
-                },
-            );
-            setting_row(
-                ui,
-                "Read game files ahead of Play",
-                "Loads a game's files into memory while the launcher is idle so Play starts quicker",
-                |ui| {
-                    toggle(ui, &mut s.warm_up_game_files);
-                },
-            );
-        });
-        ui.add_space(6.0);
-        card(ui, |ui| {
-            ui.label(RichText::new("Privacy").strong().size(16.0));
-            setting_row(
-                ui,
-                "Share anonymous usage statistics",
-                "Which screens are used and how often. Off unless you turn it on",
-                |ui| {
-                    toggle(ui, &mut s.enable_analytics);
-                },
-            );
-            setting_row(
-                ui,
-                "Report pack installs and play time",
-                "Counts for public modpacks, so authors can see how they are used. Off unless you turn it on. The network checker needs this on",
-                |ui| {
-                    toggle(ui, &mut s.enable_logs);
-                },
-            );
-        });
-        ui.add_space(6.0);
+        let mut folder_error: Option<String> = None;
+        ui.add_space(8.0);
         card(ui, |ui| {
             egui::CollapsingHeader::new(RichText::new("Network, folders and backups").strong().size(16.0))
                 .default_open(false)
@@ -277,10 +284,11 @@ impl App {
                         ui.add(egui::DragValue::new(&mut s.connection_timeout).range(1..=600).suffix(" s"));
                     });
                     let mut key = s.modrinth_api_key.clone().unwrap_or_default();
-                    setting_row(
+                    super::settings::wide_row(
                         ui,
                         "Modrinth API key",
                         "Optional. Raises the limits Modrinth puts on requests",
+                        270.0,
                         |ui| {
                             ui.add_sized(
                                 [260.0, 30.0],
@@ -296,7 +304,7 @@ impl App {
                         toggle(ui, &mut s.enable_proxy);
                     });
                     if s.enable_proxy {
-                        ui.horizontal(|ui| {
+                        ui.horizontal_wrapped(|ui| {
                             egui::ComboBox::from_id_salt("proxy-type")
                                 .selected_text(s.proxy_type.key())
                                 .width(100.0)
@@ -308,7 +316,7 @@ impl App {
                             ui.add_sized(
                                 [220.0, 30.0],
                                 egui::TextEdit::singleline(&mut s.proxy_host)
-                                    .hint_text("host")
+                                    .hint_text("Proxy address")
                                     .margin(egui::Margin::symmetric(10, 6))
                                     .background_color(c_field()),
                             );
@@ -334,42 +342,37 @@ impl App {
                         });
                     }
                     ui.add_space(4.0);
-                    let mut downloads = s.custom_downloads_path.clone().unwrap_or_default();
-                    let mut backups = s.backups_path.clone().unwrap_or_default();
+                    let width = ui.available_width().min(420.0);
+                    let margin = egui::Margin::symmetric(10, 6);
                     ui.label("Downloads folder");
                     small_muted(ui, "Where support bundles are saved. Empty uses your Downloads folder.");
-                    let d = ui.add_sized(
-                        [420.0, 30.0],
-                        egui::TextEdit::singleline(&mut downloads)
-                            .hint_text("Default")
-                            .margin(egui::Margin::symmetric(10, 6))
-                            .background_color(c_field()),
+                    let downloads = s.custom_downloads_path.clone().unwrap_or_default();
+                    let typed_downloads = super::settings::draft_text(
+                        ui,
+                        "downloads-folder",
+                        &downloads,
+                        "Default",
+                        [width, 30.0],
+                        margin,
                     );
                     ui.label("Backups folder");
                     small_muted(
                         ui,
                         "Where instance backups are saved. Empty uses the backups folder in the data folder.",
                     );
-                    let b = ui.add_sized(
-                        [420.0, 30.0],
-                        egui::TextEdit::singleline(&mut backups)
-                            .hint_text("Default")
-                            .margin(egui::Margin::symmetric(10, 6))
-                            .background_color(c_field()),
-                    );
+                    let backups = s.backups_path.clone().unwrap_or_default();
+                    let typed_backups =
+                        super::settings::draft_text(ui, "backups-folder", &backups, "Default", [width, 30.0], margin);
                     // a typed path is only taken once it names a folder that exists, as the Java edition does
-                    for (resp, text, slot, what) in [
-                        (&d, &downloads, &mut s.custom_downloads_path, "downloads"),
-                        (&b, &backups, &mut s.backups_path, "backups"),
+                    for (typed, slot, what) in [
+                        (typed_downloads, &mut s.custom_downloads_path, "downloads"),
+                        (typed_backups, &mut s.backups_path, "backups"),
                     ] {
-                        if resp.lost_focus() {
-                            let trimmed = text.trim();
-                            if trimmed.is_empty() {
-                                *slot = None;
-                            } else if std::path::Path::new(trimmed).is_dir() {
-                                *slot = Some(trimmed.to_string());
-                            } else {
-                                self.toast_err(format!("That {what} folder doesn't exist"));
+                        let Some(text) = typed else { continue };
+                        match folder_setting(&text) {
+                            Ok(value) => *slot = value,
+                            Err(()) => {
+                                folder_error = Some(format!("The {what} folder \"{}\" doesn't exist", text.trim()))
                             }
                         }
                     }
@@ -389,10 +392,72 @@ impl App {
                     });
                 });
         });
+        if let Some(e) = folder_error {
+            self.toast_err(e);
+        }
         if s != before {
             s.write_to(&mut self.settings);
             self.save_settings();
             self.svc.edit = Some(s);
         }
+    }
+}
+
+/// The switches the main part of the Settings page owns, copied into the working copy of this area's settings.
+fn sync_shared(s: &mut ServiceSettings, settings: &crate::config::Settings) {
+    s.class_data_cache = settings.class_data_cache;
+    s.enable_logs = settings.enable_logs;
+    s.enable_analytics = settings.enable_analytics;
+    s.warm_up_game_files = settings.extras.get("warmUpGameFiles").and_then(|v| v.as_bool()).unwrap_or(true);
+}
+
+/// A typed folder setting: `Ok(None)` for empty (the default folder), `Ok(Some(path))` for a folder that exists,
+/// `Err` otherwise.
+fn folder_setting(text: &str) -> Result<Option<String>, ()> {
+    let trimmed = text.trim().trim_matches('"');
+    if trimmed.is_empty() {
+        Ok(None)
+    } else if std::path::Path::new(trimmed).is_dir() {
+        Ok(Some(trimmed.to_string()))
+    } else {
+        Err(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn windows_fit_a_narrow_launcher() {
+        assert_eq!(fit_width(420.0, 1280.0), 420.0);
+        assert_eq!(fit_width(620.0, 500.0), 404.0);
+        assert_eq!(fit_width(620.0, 100.0), 200.0, "never narrower than a button row");
+    }
+
+    #[test]
+    fn the_main_page_switches_win_over_an_old_working_copy() {
+        let mut settings = crate::config::Settings::default();
+        let mut copy = ServiceSettings::from_settings(&settings);
+        // the main Settings page turns these over after the working copy was read
+        settings.class_data_cache = false;
+        settings.enable_logs = true;
+        settings.enable_analytics = true;
+        settings.extras.insert("warmUpGameFiles".into(), false.into());
+        sync_shared(&mut copy, &settings);
+        // a change in the folded section then writes them back unchanged
+        copy.connection_timeout = 30;
+        copy.write_to(&mut settings);
+        assert!(!settings.class_data_cache && settings.enable_logs && settings.enable_analytics);
+        assert_eq!(settings.extras["warmUpGameFiles"], false);
+        assert_eq!(settings.extras["connectionTimeout"], 30);
+    }
+
+    #[test]
+    fn typed_folders_must_exist() {
+        let dir = std::env::temp_dir();
+        assert_eq!(folder_setting("  "), Ok(None));
+        assert_eq!(folder_setting(&format!("\"{}\"", dir.display())), Ok(Some(dir.display().to_string())));
+        assert_eq!(folder_setting("/no/such/folder/for/blockforge"), Err(()));
     }
 }

@@ -1,12 +1,12 @@
 //! Players' faces for the account list and sidebar, and the "Change skin" window with its preview.
 
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::time::{Duration, Instant, SystemTime};
 
 use egui::{ColorImage, Context, CornerRadius, RichText, Sense, TextureHandle, TextureOptions, Ui, vec2};
 use image::RgbaImage;
 
-use super::services::SvcMsg;
+use super::services::{SvcMsg, modal_scroll_height, modal_width};
 use super::theme::*;
 use super::widgets::*;
 use super::{App, Msg, Page};
@@ -15,8 +15,13 @@ use crate::skins;
 /// A face drawn from a saved skin, remembered until the skin file changes.
 pub struct HeadTexture {
     stamp: Option<SystemTime>,
+    /// When the skin file's date was last looked at; it is looked at again only now and then, not on every frame.
+    checked: Instant,
     tex: TextureHandle,
 }
+
+/// How often a drawn face checks whether its skin file changed (a fetched or uploaded skin replaces the face at once).
+const HEAD_RECHECK: Duration = Duration::from_secs(5);
 
 /// The "Change skin" window.
 pub struct SkinDialog {
@@ -52,23 +57,34 @@ impl SkinDialog {
                 self.chosen_image = Some(img);
                 self.path_text = file.to_string_lossy().to_string();
                 self.message = None;
+                // the same file name may hold a different picture now (downloaded again), so draw it afresh
+                self.preview = None;
             }
             Err(e) => self.message = Some((format!("{e}"), true)),
         }
     }
 }
 
-/// PNG files in `dir` that are the size of a skin, newest first (at most `limit`).
+/// How many of the newest pictures in the downloads folder are opened to see if they are skins. A downloads folder
+/// can hold thousands of pictures, and this runs while the skin window opens.
+const MAX_LOOKED_AT: usize = 60;
+
+/// PNG files in `dir` that are the size of a skin, newest first (at most `limit`). Only the newest pictures are
+/// opened to read their size.
 fn skin_candidates(dir: &Path, limit: usize) -> Vec<PathBuf> {
     let Ok(rd) = std::fs::read_dir(dir) else { return Vec::new() };
-    let mut found: Vec<(SystemTime, PathBuf)> = rd
+    let mut pngs: Vec<(SystemTime, PathBuf)> = rd
         .flatten()
         .filter(|e| e.path().extension().is_some_and(|x| x.eq_ignore_ascii_case("png")))
-        .filter(|e| image::image_dimensions(e.path()).is_ok_and(|(w, h)| skins::is_valid_skin(w, h)))
         .filter_map(|e| Some((e.metadata().ok()?.modified().ok()?, e.path())))
         .collect();
-    found.sort_by(|a, b| b.0.cmp(&a.0));
-    found.into_iter().take(limit).map(|(_, p)| p).collect()
+    pngs.sort_by(|a, b| b.0.cmp(&a.0));
+    pngs.into_iter()
+        .take(MAX_LOOKED_AT)
+        .map(|(_, p)| p)
+        .filter(|p| image::image_dimensions(p).is_ok_and(|(w, h)| skins::is_valid_skin(w, h)))
+        .take(limit)
+        .collect()
 }
 
 fn color_image(img: &RgbaImage) -> ColorImage {
@@ -80,8 +96,16 @@ impl App {
     /// the skin is read from the saved copy, and fetched once if there is none yet.
     pub(super) fn account_avatar(&mut self, ui: &mut Ui, uuid: &str, name: &str, offline: bool, size: f32) {
         let path = skins::skin_path(&self.dirs, uuid);
-        let stamp = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
-        if self.svc.heads.get(uuid).is_none_or(|h| h.stamp != stamp) {
+        let up_to_date = match self.svc.heads.get_mut(uuid) {
+            Some(h) if h.checked.elapsed() < HEAD_RECHECK => true,
+            Some(h) => {
+                h.checked = Instant::now();
+                h.stamp == std::fs::metadata(&path).and_then(|m| m.modified()).ok()
+            }
+            None => false,
+        };
+        if !up_to_date {
+            let stamp = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
             let skin = std::fs::read(&path)
                 .ok()
                 .and_then(|b| skins::decode_png(&b).ok())
@@ -90,7 +114,7 @@ impl App {
                 Some(head) => {
                     let tex =
                         self.ctx.load_texture(format!("head-{uuid}"), color_image(&head), TextureOptions::NEAREST);
-                    self.svc.heads.insert(uuid.to_string(), HeadTexture { stamp, tex });
+                    self.svc.heads.insert(uuid.to_string(), HeadTexture { stamp, checked: Instant::now(), tex });
                 }
                 None => {
                     avatar(ui, name, size);
@@ -174,8 +198,8 @@ impl App {
             d.preview = Some((key, tex));
         }
 
-        egui::Modal::new(egui::Id::unique("skin-dialog")).show(ctx, |ui| {
-            ui.set_width(if d.offline { 460.0 } else { 600.0 });
+        egui::Modal::new(egui::Id::unique("skin-dialog")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
+            ui.set_width(modal_width(ctx, if d.offline { 460.0 } else { 600.0 }));
             ui.label(RichText::new("Change skin").size(22.0).strong());
             if d.offline {
                 muted(ui, format!("{} is an offline player", d.name));
@@ -196,9 +220,12 @@ impl App {
             }
             muted(ui, format!("For {}. Your skin shows in every game and on every server.", d.name));
             ui.add_space(10.0);
+            // a short window (or a big zoom) scrolls the middle part instead of pushing the buttons off the screen
+            egui::ScrollArea::vertical().max_height(modal_scroll_height(ctx, 560.0, 170.0)).auto_shrink([false, true]).show(ui, |ui| {
             ui.horizontal_top(|ui| {
-                // the figure, 8 times its size
-                let size = vec2(16.0 * 8.0, 32.0 * 8.0);
+                // the figure, 8 times its size, or 5 times in a narrow window
+                let scale = if ui.available_width() >= 480.0 { 8.0 } else { 5.0 };
+                let size = vec2(16.0 * scale, 32.0 * scale);
                 let (rect, _) = ui.allocate_exact_size(size + vec2(24.0, 24.0), Sense::hover());
                 ui.painter().rect_filled(rect, CornerRadius::same(14), c_field());
                 if let Some((_, tex)) = &d.preview {
@@ -206,12 +233,13 @@ impl App {
                 }
                 ui.add_space(14.0);
                 ui.vertical(|ui| {
-                    ui.set_width(330.0);
+                    ui.set_width(ui.available_width().clamp(160.0, 330.0));
                     ui.label(RichText::new("1. Choose a skin").strong());
                     small_muted(ui, "Pick a 64x64 PNG skin file, or drag one onto this window. Need one? Browse a skin site and download a PNG.");
                     ui.add_space(4.0);
                     ui.horizontal(|ui| {
-                        let r = ui.add_sized([250.0, 32.0], egui::TextEdit::singleline(&mut d.path_text).hint_text("Path to a skin file").margin(egui::Margin::symmetric(10, 6)).background_color(c_field()));
+                        let field = (ui.available_width() - 64.0).clamp(100.0, 250.0);
+                        let r = ui.add_sized([field, 32.0], egui::TextEdit::singleline(&mut d.path_text).hint_text("Path to a skin file").margin(egui::Margin::symmetric(10, 6)).background_color(c_field()));
                         let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                         if secondary(ui, "Use").clicked() || enter {
                             typed = true;
@@ -259,6 +287,7 @@ impl App {
                     }
                 });
             });
+            });
             ui.add_space(12.0);
             ui.horizontal(|ui| {
                 if primary_enabled(ui, "Use this skin", d.chosen.is_some() && !d.uploading).clicked() {
@@ -274,14 +303,18 @@ impl App {
         }
 
         if open_site {
-            let _ = open::that(skins::SKIN_SITE);
+            self.open_link(skins::SKIN_SITE);
         }
         if let Some(p) = pick {
             d.use_file(&p);
         }
         if typed {
-            let p = PathBuf::from(d.path_text.trim().trim_matches('"'));
-            d.use_file(&p);
+            let text = d.path_text.trim().trim_matches('"').to_string();
+            if text.is_empty() {
+                d.message = Some(("Enter where the skin file is first, or pick one below".to_string(), true));
+            } else {
+                d.use_file(&PathBuf::from(text));
+            }
         }
         if sign_in {
             self.page = Page::Accounts;
