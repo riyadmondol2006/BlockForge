@@ -1,0 +1,51 @@
+name: Minecraft update watch
+
+# Every Monday (and by hand) the smoother-play helper (packaging/lite) is run over the newest Minecraft release and
+# snapshot, without starting the game: it prints which of its changes would apply and which would skip themselves.
+# Skipping is always safe (the game then runs as it is); this job is the early warning that a Minecraft update moved
+# code a change relies on, weeks before the release reaches players. It fails only when a change would fail outright,
+# which must never reach a game.
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  watch:
+    name: Check the helper against the newest Minecraft
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: 25
+      - name: Download the newest release and snapshot
+        run: |
+          manifest="$(curl -fsSL https://piston-meta.mojang.com/mc/game/version_manifest_v2.json)"
+          mkdir -p jars
+          for kind in release snapshot; do
+            id="$(echo "$manifest" | jq -r ".latest.$kind")"
+            url="$(echo "$manifest" | jq -r --arg id "$id" '.versions[] | select(.id == $id) | .url')"
+            client="$(curl -fsSL "$url" | jq -r '.downloads.client.url')"
+            curl -fsSL -o "jars/$kind-$id.jar" "$client"
+            echo "$kind: $id"
+          done
+      - name: Which changes would apply
+        run: |
+          status=0
+          echo "## BlockForge Lite on the newest Minecraft" > summary.md
+          for jar in jars/*.jar; do
+            printf '\n### %s\n\n```\n' "$(basename "$jar" .jar)" >> summary.md
+            java -cp packaging/lite/blockforge-lite.jar com.blockforge.lite.Check "$jar" >> summary.md 2>&1 || status=1
+            printf '```\n' >> summary.md
+          done
+          cat summary.md | tee -a "$GITHUB_STEP_SUMMARY"
+          if [ "$status" -ne 0 ]; then
+            echo "::error::a change failed on a new Minecraft version; it must skip itself instead"
+            exit 1
+          fi
