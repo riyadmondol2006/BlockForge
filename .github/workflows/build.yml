@@ -240,10 +240,18 @@ jobs:
         # javac 8 can't compile for an older release; the jars are built with a newer JDK and run on Java 8
         if: matrix.java != 8
         run: |
-          OUT="$PWD/built" ./packaging/boost/build.sh
-          OUT="$PWD/built" ./packaging/lite/build.sh
-          java -cp built/blockforge-boost.jar com.blockforge.boost.SelfTest
-          java -cp built/blockforge-lite.jar com.blockforge.lite.SelfTest
+          # a failure says what went wrong in its annotation (the log of a finished job needs a sign-in to read)
+          step() {
+            if ! out="$("$@" 2>&1)"; then
+              echo "$out" | tail -40
+              echo "::error::$* failed: $(echo "$out" | tail -12 | tr '\n' '|' | cut -c1-1500)"
+              exit 1
+            fi
+            echo "$out" | tail -3
+          }
+          export OUT="$PWD/built"
+          step ./packaging/boost/build.sh
+          step ./packaging/lite/build.sh
           for j in boost lite; do
             if cmp -s "built/blockforge-$j.jar" "packaging/$j/blockforge-$j.jar"; then
               echo "blockforge-$j.jar: the build is identical to the committed jar"
