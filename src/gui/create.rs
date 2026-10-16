@@ -7,6 +7,7 @@ use super::widgets::*;
 use super::{App, Msg, Page};
 use crate::instances;
 use crate::loaders::{self, Loader};
+use crate::mods::performance;
 
 pub struct CreateState {
     pub name: String,
@@ -20,6 +21,28 @@ pub struct CreateState {
     pub loading: bool,
     requested: Option<(Loader, String)>,
     pub error: Option<String>,
+    /// Add Sodium and the other performance mods once the instance is made.
+    pub performance: bool,
+}
+
+/// What the finished task says when performance mods were asked for.
+fn performance_note(ready: String, installed: &[String], skipped: &[String]) -> String {
+    let mut text = ready;
+    if !installed.is_empty() {
+        text.push_str(&format!(", with {}", installed.join(", ")));
+    }
+    if !skipped.is_empty() {
+        text.push_str(&format!(". Not made for this version yet: {}", skipped.join(", ")));
+    }
+    text
+}
+
+/// The name an instance gets when the name field is left empty.
+fn default_name(mc: &str, loader: Loader) -> String {
+    match loader {
+        Loader::Vanilla => format!("Minecraft {mc}"),
+        l => format!("Minecraft {mc} with {}", l.label()),
+    }
 }
 
 impl Default for CreateState {
@@ -35,6 +58,7 @@ impl Default for CreateState {
             loading: false,
             requested: None,
             error: None,
+            performance: false,
         }
     }
 }
@@ -92,10 +116,12 @@ impl App {
             card(ui, |ui| {
                 ui.label(RichText::new("Name").strong());
                 let c = &mut self.create;
+                // the hint is the name the instance gets when the field is left empty
+                let hint = if c.mc.is_empty() { "My instance".to_string() } else { default_name(&c.mc, c.loader) };
                 ui.add_sized(
-                    [360.0, 36.0],
+                    [360.0f32.min(ui.available_width()), 36.0],
                     egui::TextEdit::singleline(&mut c.name)
-                        .hint_text("My new world")
+                        .hint_text(hint)
                         .margin(egui::Margin::symmetric(12, 8))
                         .background_color(c_field()),
                 );
@@ -175,8 +201,14 @@ impl App {
                         muted(ui, "Version");
                         if self.create.loading {
                             ui.spinner();
-                        } else if let Some(e) = &self.create.error {
-                            ui.label(RichText::new(e).color(c_danger()));
+                        } else if let Some(e) = self.create.error.clone() {
+                            ui.label(RichText::new(format!("Couldn't get the versions: {e}")).color(c_danger()));
+                            if secondary(ui, "Try again").clicked() {
+                                // forget the failed request so it is made again
+                                self.create.requested = None;
+                                self.create.error = None;
+                                changed_version = true;
+                            }
                         } else if self.create.loader_versions.is_empty() {
                             ui.label(
                                 RichText::new(format!(
@@ -220,6 +252,18 @@ impl App {
                             "Forge and NeoForge run their own installer, so this takes a little longer the first time.",
                         );
                     }
+                    let key = self.create.loader.modrinth_name();
+                    if performance::offered_for(key) {
+                        ui.add_space(4.0);
+                        ui.checkbox(&mut self.create.performance, "Add performance mods");
+                        small_muted(
+                            ui,
+                            format!(
+                                "{} from Modrinth, for a smoother game. Anything not made for this Minecraft version yet is left out.",
+                                performance::describe(key)
+                            ),
+                        );
+                    }
                 }
             });
             ui.add_space(8.0);
@@ -243,23 +287,43 @@ impl App {
             let c = &self.create;
             let loader = c.loader;
             let mc = c.mc.clone();
-            let name = if c.name.trim().is_empty() {
-                match loader {
-                    Loader::Vanilla => format!("Minecraft {mc}"),
-                    l => format!("Minecraft {mc} with {}", l.label()),
-                }
-            } else {
-                c.name.trim().to_string()
-            };
+            let name = if c.name.trim().is_empty() { default_name(&mc, loader) } else { c.name.trim().to_string() };
             let version = Some(c.loader_version.clone()).filter(|v| !v.is_empty());
-            let dirs = self.dirs.clone();
+            let performance = c.performance && performance::offered_for(loader.modrinth_name());
+            let (dirs, settings) = (self.dirs.clone(), self.settings.clone());
             let label = format!("Creating {name}");
             self.start_task(label, move |p, _| async move {
-                let inst = instances::create(&dirs, &name, &mc, loader, version.as_deref(), &p).await?;
-                Ok(format!("\"{}\" is ready", inst.name()))
+                let mut inst = instances::create(&dirs, &name, &mc, loader, version.as_deref(), &p).await?;
+                let ready = format!("\"{}\" is ready", inst.name());
+                if !performance {
+                    return Ok(ready);
+                }
+                let ctx = crate::mods::ModContext::build(&dirs, &inst, &settings).await;
+                let r = crate::mods::install::install_performance_pack(&mut inst, &ctx, &p).await;
+                Ok(performance_note(ready, &r.installed, &r.skipped))
             });
             self.create.name.clear();
             self.page = Page::Library;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_empty_name_and_the_finished_message_read_well() {
+        assert_eq!(default_name("1.21.1", Loader::Vanilla), "Minecraft 1.21.1");
+        assert_eq!(default_name("1.21.1", Loader::Fabric), "Minecraft 1.21.1 with Fabric");
+        let ready = "\"A\" is ready".to_string();
+        assert_eq!(performance_note(ready.clone(), &[], &[]), ready);
+        assert_eq!(
+            performance_note(ready, &["Sodium".into(), "Lithium".into()], &["ModernFix".into()]),
+            "\"A\" is ready, with Sodium, Lithium. Not made for this version yet: ModernFix"
+        );
+        // performance mods are offered where they exist, not for plain Minecraft
+        assert!(performance::offered_for(Loader::Fabric.modrinth_name()));
+        assert!(!performance::offered_for(Loader::Vanilla.modrinth_name()));
     }
 }

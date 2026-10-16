@@ -13,9 +13,11 @@ use super::widgets::*;
 use crate::cf_seam::MinimalCurseForge;
 use crate::export::{self, ExportFormat, ExportOptions, ExportOutcome, Selection, TreeEntry};
 
+/// Answers from background work, with the folder of the instance whose window asked: the window may have been
+/// closed and opened for another instance since.
 enum Event {
-    Done(Result<ExportOutcome, String>),
-    Picked(Option<PathBuf>),
+    Done(String, Result<ExportOutcome, String>),
+    Picked(String, Option<PathBuf>),
 }
 
 /// The state of one open export window.
@@ -63,6 +65,8 @@ impl App {
         }
         let account = self.current_account().map(|a| a.name().to_string());
         let o = export::default_options(&inst, account.as_deref(), &self.settings);
+        // the window was closed during an export of this instance: that export still runs
+        let running = self.tasks.iter().any(|t| t.label == format!("Exporting {}", inst.name()));
         self.export.dialog = Some(Dialog {
             folder: folder.to_string(),
             title: format!("Export {}", inst.name()),
@@ -74,7 +78,7 @@ impl App {
             selection: Selection::new(o.overrides),
             expanded: HashSet::new(),
             children: HashMap::new(),
-            running: false,
+            running,
             error: None,
             note: None,
             written: Vec::new(),
@@ -84,15 +88,21 @@ impl App {
 
     fn poll_export(&mut self) {
         while let Ok(ev) = self.export.rx.try_recv() {
-            let Some(d) = self.export.dialog.as_mut() else { continue };
+            let folder = match &ev {
+                Event::Done(f, _) | Event::Picked(f, _) => f.clone(),
+            };
+            let Some(d) = self.export.dialog.as_mut().filter(|d| d.folder == folder) else {
+                // the window is gone or shows another instance; the sidebar task already told how it went
+                continue;
+            };
             match ev {
-                Event::Picked(p) => {
+                Event::Picked(_, p) => {
                     d.picking = false;
                     if let Some(p) = p {
                         d.save_to = p.to_string_lossy().to_string();
                     }
                 }
-                Event::Done(Ok(outcome)) => {
+                Event::Done(_, Ok(outcome)) => {
                     d.running = false;
                     d.error = None;
                     d.written = outcome.paths.clone();
@@ -106,7 +116,7 @@ impl App {
                         let _ = open::that(dir);
                     }
                 }
-                Event::Done(Err(e)) => {
+                Event::Done(_, Err(e)) => {
                     d.running = false;
                     d.error = Some(e);
                 }
@@ -128,11 +138,14 @@ impl App {
             save_to: PathBuf::from(d.save_to.trim()),
             overrides: d.selection.to_overrides(),
         };
-        let (dirs, settings, tx, ctx) =
-            (self.dirs.clone(), self.settings.clone(), self.export.tx.clone(), self.ctx.clone());
+        let (dirs, settings, tx, ctx, folder) =
+            (self.dirs.clone(), self.settings.clone(), self.export.tx.clone(), self.ctx.clone(), d.folder.clone());
         let check_modrinth = !settings.extras.get("dontCheckModsOnModrinth").and_then(|v| v.as_bool()).unwrap_or(false);
+        let lock = super::mods::instance_lock(&inst.root);
         self.start_task(format!("Exporting {}", inst.name()), move |progress, _| async move {
-            let mut inst = inst;
+            // looking up unknown mods saves what it learns into the instance, so it waits for other changes
+            let _turn = lock.lock().await;
+            let mut inst = crate::instances::load_one(&inst.root).unwrap_or(inst);
             let cf = MinimalCurseForge;
             progress.stage("Checking the mod list");
             let result: anyhow::Result<ExportOutcome> = async {
@@ -141,7 +154,7 @@ impl App {
             }
             .await;
             let reply = result.as_ref().map(|o| o.clone()).map_err(|e| format!("{e:#}"));
-            let _ = tx.send(Event::Done(reply));
+            let _ = tx.send(Event::Done(folder, reply));
             ctx.request_repaint();
             result.map(|o| format!("Exported to {}", o.path.display()))
         });
@@ -211,8 +224,9 @@ impl App {
         let mut copy_note: Option<String> = None;
         let mut reset_dir = false;
 
+        let (width, room) = super::curseforge::modal_size(ctx, 600.0, 430.0);
         let modal = egui::Modal::new(egui::Id::new("export-modal")).show(ctx, |ui| {
-            ui.set_width(600.0);
+            ui.set_width(width);
             let Some(d) = self.export.dialog.as_mut() else { return };
             ui.horizontal(|ui| {
                 ui.label(RichText::new(&d.title).size(21.0).strong());
@@ -251,9 +265,10 @@ impl App {
             }
 
             egui::Grid::new("export-fields").num_columns(2).spacing([14.0, 10.0]).show(ui, |ui| {
+                let field_width = (width - 90.0).clamp(160.0, 420.0);
                 let field = |ui: &mut Ui, label: &str, text: &mut String, hint: &str| {
                     muted(ui, label);
-                    ui.add_sized([420.0, 32.0], egui::TextEdit::singleline(text).hint_text(hint).margin(egui::Margin::symmetric(10, 6)).background_color(c_field()));
+                    ui.add_sized([field_width, 32.0], egui::TextEdit::singleline(text).hint_text(hint).margin(egui::Margin::symmetric(10, 6)).background_color(c_field()));
                     ui.end_row();
                 };
                 field(ui, "Name", &mut d.name, "The name of the pack");
@@ -270,7 +285,7 @@ impl App {
                 ui.end_row();
                 muted(ui, "Save to");
                 ui.horizontal(|ui| {
-                    ui.add_sized([250.0, 32.0], egui::TextEdit::singleline(&mut d.save_to).margin(egui::Margin::symmetric(10, 6)).background_color(c_field()));
+                    ui.add_sized([(field_width - 170.0).max(120.0), 32.0], egui::TextEdit::singleline(&mut d.save_to).margin(egui::Margin::symmetric(10, 6)).background_color(c_field()));
                     if secondary(ui, "Browse").clicked() {
                         pick = true;
                     }
@@ -289,8 +304,11 @@ impl App {
             small_muted(ui, "Mods that Modrinth or CurseForge know are listed by id, so they don't make the file bigger.");
             egui::Frame::new().fill(c_field()).stroke(Stroke::new(1.0, c_border())).corner_radius(CornerRadius::same(10)).inner_margin(egui::Margin::same(8)).show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                ScrollArea::vertical().id_salt("export-tree").max_height(230.0).auto_shrink([false, true]).show(ui, |ui| {
+                ScrollArea::vertical().id_salt("export-tree").max_height(room.min(230.0)).auto_shrink([false, true]).show(ui, |ui| {
                     self.tree_rows(ui, &root, "", 0);
+                    if self.export.dialog.as_ref().is_some_and(|d| d.children.get("").is_some_and(Vec::is_empty)) {
+                        small_muted(ui, "This instance has no files of its own to add yet, only its mod list.");
+                    }
                 });
             });
 
@@ -327,9 +345,9 @@ impl App {
             if let Some(d) = self.export.dialog.as_mut() {
                 if !d.picking {
                     d.picking = true;
-                    let (tx, c) = (self.export.tx.clone(), self.ctx.clone());
+                    let (tx, c, folder) = (self.export.tx.clone(), self.ctx.clone(), d.folder.clone());
                     self.rt.spawn_blocking(move || {
-                        let _ = tx.send(Event::Picked(super::import::pick_path_blocking(true)));
+                        let _ = tx.send(Event::Picked(folder, super::import::pick_path_blocking(true)));
                         c.request_repaint();
                     });
                 }
