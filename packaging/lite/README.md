@@ -52,7 +52,8 @@ What it prints (every line starts with `[BlockForge Lite]`):
 
 ## Patches
 
-All are level 1 (on by default). Each one keeps the game's behaviour; what changes is listed.
+All but `hidden-entities` are level 1 (on by default); `hidden-entities` is level 2 (`level=2`, "balanced"). Each one
+keeps the game's behaviour; what changes is listed.
 
 | Id | What it does | Where it applies | Stays off when |
 |---|---|---|---|
@@ -62,6 +63,10 @@ All are level 1 (on by default). Each one keeps the game's behaviour; what chang
 | `short-fade` | The Mojang loading screen fades out in 0.5 s instead of 2 s after loading (and fades in for 0.25 s instead of 1 s after an in-game reload). Loading itself is unchanged. | 1.20 - 26.x | a mod changed the loading screen |
 | `outline-skip` | Skips the full-screen pass that draws the glowing-entity outline layer when nothing glows (the layer is empty then, so the picture is identical), as Minecraft 26.3 does. | 1.20 - 1.21.1, without a mod loader hooking the renderer (vanilla, Fabric/Quilt without their APIs) | OptiFine, VulkanMod, a mod or loader hook in that code |
 | `worker-priority` | Not a class patch (a "tweak"): on 4 or fewer logical processors, the game's `Worker-Main-N` threads (world generation, light, chunk meshing, loading) run one step below normal priority, so the render and server threads get the processor first. Takes effect on Windows (BELOW_NORMAL); HotSpot ignores Java priorities on Linux and macOS. | every version with `Worker-Main` threads (1.14+) | - |
+| `tint-memo` | The colour of grass, leaves and water averages the biomes of the 5 x 5 columns around a block (biome blend 2), and neighbouring blocks look up 20 of their 25 biomes again (a fuzzy, costly lookup). Each thread remembers the biomes it looked up last (32 x 8 x 16 positions) and forgets them where the game clears its own colour cache (near a chunk that arrives or changes its biomes; everything on a resource reload; another level). The colours are exactly the same. | 1.20 - 26.x | OptiFine, VulkanMod |
+| `block-entity-view` | Chests, signs, banners, shulker boxes, decorated pots, campfires, lecterns, bells, enchanting tables, vaults, brushable blocks, shelves and copper golem statues are tested against the field of view one by one (a box one block around, two above), not only by chunk section (whose test the game moves 8 blocks back). Only the game's own renderers whose drawing stays in that box; not beacons or end gateways (beams), structure or test blocks, heads (they load skins when first drawn), spawners, conduits, pistons, or any mod's renderer. The picture is the same. | 26.2 - 26.x | EntityCulling, MoreCulling, Sodium, Embeddium, Iris/Oculus (their shadow pass draws block entities too), OptiFine, VulkanMod |
+| `sign-lines` | Every sign within 64 blocks hands all 4 lines of both sides to the text renderer each frame (8 submissions with a matrix copy and a text layout each), also the empty ones; an empty line without a background draws nothing, so it is dropped before. The picture is the same. | 26.1 - 26.x | ImmediatelyFast, MoreCulling, OptiFine, VulkanMod |
+| `hidden-entities` (level 2) | A mob or item whose box (half a block wider) lies only in chunk sections the game's own visibility search did not reach from the camera (behind hills, under the ground) is not drawn, as Sodium does; the same test the game uses for terrain. Always drawn: players, the camera entity, riders and what they ride, named and glowing entities (name tags and outlines show through walls), entities on a lead, large boxes, boxes outside the world, and entities touching a section without blocks (the game leaves those out of its list). Only the main view, only after the game's own frustum test said yes; renderers that draw more than the box (guardian and end crystal beams) test that part themselves. Not level 1: the search runs in the background after the camera moves, so for a frame or two an entity coming into view at a hill's edge can show up one frame late, like the terrain around it. | 26.2 - 26.x | Sodium, Embeddium, Rubidium, Nvidium, Iris/Oculus, OptiFine, VulkanMod, EntityCulling |
 
 Where a target looks different (another version, a mod changed it), the patch does nothing and the report says why.
 
@@ -70,6 +75,13 @@ Quilt 1.21.1 get idle-fps, slim-sections, short-fade and outline-skip; NeoForge 
 short-fade (its LevelRenderer has the loader's hooks); Forge 1.20.1 idle-fps and short-fade (slim-sections when a world
 loads); 26.3 vanilla and Fabric slim-sections and short-fade; Forge 1.12.2 and vanilla 1.8.9 idle-fps and no-world-gc.
 `Check` on the jars: 1.20.1 and 1.21.1 as 1.21.1; 1.21.11, 26.3, 26.4-snapshot-4: slim-sections and short-fade.
+Wave 1 W1 (real starts with `level=2` and full verification, 60 s in a world): tint-memo on vanilla, Fabric, Quilt
+and NeoForge 1.21.1, vanilla and Fabric 26.3 and Forge 1.20.1 (title screen only, no world there; ClientLevel loads
+early under Forge); block-entity-view, sign-lines and hidden-entities on vanilla and Fabric 26.3; on NeoForge 1.21.1
+hidden-entities is skipped ("this game has no method ...mainCamera()", the member check) and block-entity-view too
+(different code). The agent's time over a whole start stayed at 0.08 - 0.19 s.
+`Check`: tint-memo on all seven jars (1.20.1 - 26.4-snapshot-4); sign-lines on 26.1 - 26.4; block-entity-view and
+hidden-entities on 26.2 - 26.4 (26.1 lacks the members they use).
 
 ## Measured
 
@@ -85,6 +97,10 @@ macOS.
 | short-fade | 1.21.1 start, time the red Mojang screen is visible (one pixel sampled every 25 ms), 3 + 3 runs | 4.35 - 4.89 s | 6.82 - 7.10 s (the constants account for 1.5 s; the rest of the difference is not explained) |
 | outline-skip | 1.21.1 in a world, median frame rate over 20 s (Mesa's HUD), 3 + 3 runs | 10.0, 9.8, 8.6 fps | 6.2, 7.3, 4.3 fps (software rendering makes the full-screen pass expensive; on a real GPU it is one blended full-screen pass per frame, not measured) |
 | worker-priority | 1.21.1 in a world on 4 cores (`jcmd Thread.print`) | Worker-Main threads priority 4 | 5. The effect on frame and tick times needs Windows and was not measured here |
+| tint-memo | 1.21.1, first 65 s after joining (the world's sections are built then), render distance 10, CPU of the `Worker-Main` threads, 3 + 3 runs | 0.106, 0.106, 0.098 cores | 0.139, 0.140, 0.138 cores (−24 %). 26.3 (ocean spawn, render distance 10; an earlier version of the memo): 0.078, 0.076, 0.073 vs 0.084, 0.078, 0.087 cores, small and overlapping; there the blend was only 2.7 % of the worker threads' samples (JFR) |
+| block-entity-view | 26.3, a floor of 2,401 chests, standing on it looking ahead, frame rate (Mesa's HUD) and render-thread CPU over 30 s, 3 + 3 runs | 27.6, 25.5, 24.5 fps; 18.4 ms render-thread CPU per frame (median) | 24.4, 22.7, 22.6 fps; 23.5 ms. JFR (one run each, 90 s): chest renderer samples on the render thread 42 vs 115 |
+| sign-lines | 26.3, a floor of 2,401 signs with one word on the front, frame rate and render-thread CPU over 30 s, 3 + 3 runs | 32.8, 28.4, 23.8 fps | 26.8, 29.7, 25.7 fps: within the noise. JFR (one run each, 90 s): text submission 0.5 % of the render thread's Java samples vs 6.6 %, text layout and drawing 8.2 % vs 11.7 %, sign rendering in all 7.5 % vs 11.4 % |
+| hidden-entities | 26.3, 768 NoAI cows in a closed stone cavity below the camera (the camera was in the cavity first, so its section was built, as after walking past; in a section the game never built it does not draw entities anyway), frame rate and render-thread CPU over 30 s, 3 + 3 runs | 7.81, 8.00, 7.86 fps; 99 ms render-thread CPU per frame (median) | 8.27, 5.81, 7.09 fps; 118 ms (noisy). JFR (one run each, 90 s): model building (`ModelPart$Cube.compile`) 1.4 % of the render thread's Java samples vs 18.6 %; feature rendering 5.4 % vs 25.9 %; the added test 1.3 % |
 
 The agent's own cost, from the report's time line (real starts without bytecode verification, one run each): 0.10 -
 0.33 s in total over a whole start (1.21.1 vanilla 0.33 s, Fabric 0.15 s, NeoForge 0.10 s, Forge 1.20.1 0.19 s, 26.3
@@ -101,7 +117,9 @@ on an obfuscated vanilla game; `targets=` or `strict` avoid the latter.
 - **Loader-neutral changes.** Changed game code calls only the JDK, LWJGL and the game, plus private static methods and
   fields the patch adds to the same class (named `blockforge$lite$...`, easy to spot in a crash report). Nothing is
   shared through the system class loader, so it works the same under Fabric's Knot, Forge/NeoForge's module layers and
-  LaunchWrapper.
+  LaunchWrapper. Where added code uses a game class or member by name (template patches, 26.x names), each one is
+  looked up first in the class files the game's class loader has (nothing is loaded): it must exist, be public and
+  have the same descriptor, static-ness and class/interface kind, or the patch is skipped ("this game has no ...").
 - **Found by what the code does, not by its name.** Names differ between vanilla (obfuscated before 26.1),
   Fabric/Quilt (intermediary), Forge (SRG methods) and NeoForge (Mojang names). Each patch knows the stable class names
   (Mojang and intermediary) and otherwise looks at classes in no package (obfuscated vanilla); it first checks the
@@ -114,9 +132,9 @@ on an obfuscated vanilla game; `targets=` or `strict` avoid the latter.
   (merged handlers, callback calls, MixinExtras) is not patched. The agent sees classes after the mod loader's own
   changes on every loader, because those loaders define the classes they changed.
 - **Checked before use.** Only the methods a patch changes are rewritten; every other method is copied byte for byte.
-  Frames are never recomputed (that would need to load game classes): patches only insert instructions with no net
-  stack effect, swap constants, or add small methods with hand-written frames. The result is read again and the
-  changed methods are run through ASM's verifier. A patch that throws or fails the check is dropped and the class
+  Frames are never computed (that would need to load game classes): patches only insert instructions with no net
+  stack effect, swap constants, or add methods whose frames are hand-written or were written by javac (templates).
+  The result is read again and the changed methods are run through ASM's verifier. A patch that throws or fails the check is dropped and the class
   loads as it was (or with the other patches only). Errors never reach the game.
 - **Cheap.** Classes outside `net/minecraft/`, `com/mojang/blaze3d/` and the default package are passed by on their
   name; named Minecraft classes other than the known targets are passed by too; the rest are filtered on their
@@ -135,7 +153,14 @@ files and two one-line additions; nothing else needs to change.
    string constant, a JDK/LWJGL call). Prefer changes that need no new stack map frames: insert a call to a static
    method with the same stack effect (`x -> x`), swap a constant, remove a call with no stack effect, or replace an
    instruction window with one of the same stack effect. A new method with branches needs hand-written frames (see
-   `IdleFps.glfwHelper`, `OutlineSkip.helper`); never ask ASM to compute frames.
+   `IdleFps.glfwHelper`, `OutlineSkip.helper`, `TintMemo.helper`); never ask ASM to compute frames.
+   Larger added code can be written in Java as a **template**: a class in `core/.../tpl/` with only static members
+   named `blockforge$lite$...`, compiled against stand-ins of the game's classes in `src/stubs` (Mojang names, only
+   the members needed, with the game's exact signatures, class or interface). `Template.copy(t, ctx, "MyCode")`
+   copies its fields and methods into the target and first checks every game member it uses against the running
+   game. The template is never loaded; no lambdas, no string `+`, no class literals. JDK-only templates fit every
+   version (`TintMemoCode`); templates that use game names fit the versions with those names (26.x:
+   `HiddenEntitiesCode`, `BlockEntityViewCode`). The stand-ins also serve the self-test (`HiddenEntitiesTest`).
 2. **Write `MyPatch extends Patch`**:
    ```java
    MyPatch() {

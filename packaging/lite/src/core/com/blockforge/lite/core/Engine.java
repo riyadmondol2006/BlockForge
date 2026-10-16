@@ -31,7 +31,9 @@ public final class Engine implements ClassFileTransformer {
     /** All patches, in the order they are applied to a class. */
     static List<Patch> all() {
         return Arrays.<Patch>asList(new IdleFps(), new NoWorldGc(), new SlimSections(), new ShortFade(),
-                new OutlineSkip(), new WorkerPriority());
+                new OutlineSkip(), new WorkerPriority(),
+                // wave 1 W1
+                new TintMemo(), new HiddenEntities(), new BlockEntityView(), new SignLines());
     }
 
     final Options options;
