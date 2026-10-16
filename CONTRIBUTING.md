@@ -60,3 +60,10 @@ unknown fields are carried along untouched, and every new field is optional.
 Text goes through `i18n::tr`. Translation files are standard gettext `.po` files named like `de-DE.po`; drop one in
 `assets/lang/` and it is built in, or put it in `<data folder>/lang/` to try it without rebuilding.
 `cargo run -- pot --output blockforge.pot` writes the template of every text that can be translated.
+
+## Releases
+
+Every new release gets a new version: raise `version` in `Cargo.toml` (and the matching entry in `Cargo.lock`), add a
+section for it at the top of `CHANGELOG.md`, and add a `<release>` line to the AppStream file in
+`packaging/linux/`. Pushing to `main` then builds, checks and publishes `v<version>` on the Releases page. A push
+that keeps the same version only refreshes the `nightly` build.

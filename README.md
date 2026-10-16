@@ -196,7 +196,7 @@ import screen, which is what double-clicking a `.mrpack` does.
 
 - **Rewritten in Rust** with a new window written from scratch: sidebar navigation, Material-style dark and light looks,
   18 themes, and vector icons.
-- **Offline players** are built in, and any account can be picked for a game from the arrow next to Play.
+- **Offline players** are built in, and any account can be picked for a game with the Play as button next to Play, and several games can run at once.
 - **Graphics card choice** for laptops with two cards (Settings > Game > Graphics card): power saving, high
   performance, or a card by name on Linux.
 - **One mods manager** per instance, with updates, dependencies, switch on and off, and a scan for known malicious mods
