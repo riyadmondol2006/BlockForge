@@ -51,9 +51,14 @@ pub fn jar_path(dirs: &Dirs) -> PathBuf {
     dirs.cache.join("blockforge-boost.jar")
 }
 
-/// Writes the agent file if it isn't there or is another version, and returns where it is.
+/// Writes the agent file if it isn't there or is another version, and returns where it is. An error when its path has
+/// an `=` or a `,`: `-javaagent:` ends the path at the first `=`, and the JVM then doesn't start at all; a `,` would also
+/// be in the class list's path, which the agent can't be given (see [`options`]), so it would only cost time.
 pub fn ensure_jar(dirs: &Dirs) -> Result<PathBuf> {
     let path = jar_path(dirs);
+    if path.to_string_lossy().contains(['=', ',']) {
+        anyhow::bail!("its folder's path has an '=' or ',' in it, which Java can't take ({})", path.display());
+    }
     if std::fs::read(&path).ok().as_deref() != Some(AGENT_JAR) {
         std::fs::create_dir_all(&dirs.cache).with_context(|| format!("making {}", dirs.cache.display()))?;
         // write beside it and rename, so a game that is starting never sees half a file
@@ -69,12 +74,53 @@ pub fn class_list(dirs: &Dirs, instance_key: &str) -> PathBuf {
     dirs.cache.join("boost").join(format!("{instance_key}.classes"))
 }
 
-/// The agent's options. The agent splits them at commas, so a path with one means no class list is used.
-pub fn options(class_list: &Path) -> String {
+/// The agent's options. The agent splits them at commas, so a path with one means no class list is used. `key`
+/// describes what the agent can't see itself (see [`setup_key`]); a list made with another key isn't used.
+/// `spinning_disk`: the game's files are on a hard disk (see `disk`). Otherwise the agent is told so, and doesn't time
+/// reads to find out (a busy SSD can look slow for a moment); on a hard disk the launcher reads the files once before
+/// the start, and the agent checks for itself.
+pub fn options(class_list: &Path, key: &str, spinning_disk: bool) -> String {
     if class_list.to_string_lossy().contains(',') {
         return "quiet".to_string();
     }
-    format!("preload={}", class_list.display())
+    let mut out = format!("preload={}", class_list.display());
+    let key: String = key.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
+    if !key.is_empty() {
+        out.push_str(&format!(",key={key}"));
+    }
+    if !spinning_disk {
+        out.push_str(",disk=ssd");
+    }
+    out
+}
+
+/// A short description of the instance's mods (names, sizes and dates of the files in `mods`). The agent checks the
+/// Java and the class path itself; mods change which library classes a game loads without changing either, so a new
+/// key makes the next start write a fresh class list.
+pub fn setup_key(game_dir: &Path) -> String {
+    let mut entries: Vec<String> = std::fs::read_dir(game_dir.join("mods"))
+        .map(|rd| {
+            rd.flatten()
+                .filter_map(|e| {
+                    let meta = e.metadata().ok()?;
+                    let modified = meta
+                        .modified()
+                        .ok()
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map_or(0, |d| d.as_secs());
+                    Some(format!("{}:{}:{modified}", e.file_name().to_string_lossy(), meta.len()))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    entries.sort();
+    // FNV-1a: stable across runs and versions of Rust, unlike the standard hasher
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in entries.join("\n").bytes() {
+        h ^= u64::from(b);
+        h = h.wrapping_mul(0x0100_0000_01b3);
+    }
+    format!("m{h:016x}")
 }
 
 /// The Java option that loads the agent.
@@ -120,9 +166,40 @@ mod tests {
 
     #[test]
     fn options_skip_paths_with_commas() {
-        assert_eq!(options(Path::new("/x/a.classes")), "preload=/x/a.classes");
-        assert!(!options(Path::new("/x,y/a.classes")).contains("preload"));
+        assert_eq!(options(Path::new("/x/a.classes"), "", true), "preload=/x/a.classes");
+        assert_eq!(options(Path::new("/x/a.classes"), "m12ab", true), "preload=/x/a.classes,key=m12ab");
+        assert_eq!(options(Path::new("/x/a.classes"), "m12ab", false), "preload=/x/a.classes,key=m12ab,disk=ssd");
+        // nothing in the key can break the agent's option list
+        assert_eq!(options(Path::new("/x/a.classes"), "a,b=c d", true), "preload=/x/a.classes,key=abcd");
+        assert!(!options(Path::new("/x,y/a.classes"), "m1", false).contains("preload"));
         assert_eq!(java_argument(Path::new("/a/b.jar"), "preload=/x"), "-javaagent:/a/b.jar=preload=/x");
+        // Windows paths go through as they are: the agent doesn't treat backslashes, spaces or colons specially
+        assert_eq!(
+            options(Path::new(r"C:\Users\Jo Ann\AppData\Roaming\BlockForge\cache\boost\a.classes"), "m1", true),
+            r"preload=C:\Users\Jo Ann\AppData\Roaming\BlockForge\cache\boost\a.classes,key=m1"
+        );
+    }
+
+    #[test]
+    fn the_setup_key_follows_the_mods() {
+        let base = std::env::temp_dir().join(format!("bf-boost-key-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        // no mods folder at all
+        let none = setup_key(&base);
+        assert_eq!(none, setup_key(&base));
+        std::fs::create_dir_all(base.join("mods")).unwrap();
+        std::fs::write(base.join("mods").join("a.jar"), b"one").unwrap();
+        let one = setup_key(&base);
+        assert_ne!(one, none);
+        assert_eq!(one, setup_key(&base));
+        assert!(one.chars().all(|c| c.is_ascii_alphanumeric()));
+        std::fs::write(base.join("mods").join("b.jar"), b"two").unwrap();
+        assert_ne!(setup_key(&base), one);
+        std::fs::remove_file(base.join("mods").join("b.jar")).unwrap();
+        assert_eq!(setup_key(&base), one);
+        std::fs::write(base.join("mods").join("a.jar"), b"other").unwrap();
+        assert_ne!(setup_key(&base), one);
+        let _ = std::fs::remove_dir_all(base);
     }
 
     #[test]
@@ -134,6 +211,23 @@ mod tests {
         std::fs::write(&path, b"old").unwrap();
         ensure_jar(&dirs).unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), AGENT_JAR);
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn a_path_java_cant_take_is_refused() {
+        // the JVM reads "-javaagent:/a=b/x.jar" as the jar "/a" with options "b/x.jar", and doesn't start
+        for name in ["bf-boost-a=b", "bf-boost-a,b"] {
+            let base = std::env::temp_dir().join(format!("{name}-{}", std::process::id()));
+            let dirs = Dirs::at(&base);
+            let e = ensure_jar(&dirs).unwrap_err();
+            assert!(e.to_string().contains("'='"));
+            assert!(!jar_path(&dirs).exists());
+            let _ = std::fs::remove_dir_all(base);
+        }
+        // spaces and other characters are fine
+        let base = std::env::temp_dir().join(format!("bf boost ä-{}", std::process::id()));
+        assert!(ensure_jar(&Dirs::at(&base)).is_ok());
         let _ = std::fs::remove_dir_all(base);
     }
 

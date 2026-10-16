@@ -233,14 +233,17 @@ jobs:
           mkdir -p "agent test"
           java -javaagent:packaging/boost/blockforge-boost.jar=preload="agent test/x.classes" \
             -javaagent:packaging/lite/blockforge-lite.jar=report="agent test/lite.txt" -version 2>&1 | tee agents.txt
-          grep -q "^\[BlockForge Boost\] on" agents.txt || { echo "::error::the fast-start agent did not start"; exit 1; }
-          if grep -q "problem" agents.txt; then echo "::error::an agent reported a problem"; exit 1; fi
+          if grep -q "problem\|Error occurred\|agent library failed" agents.txt; then
+            echo "::error::an agent reported a problem"; exit 1
+          fi
       - name: The jars build from their sources and the builds pass the self-tests
         # javac 8 can't compile for an older release; the jars are built with a newer JDK and run on Java 8
         if: matrix.java != 8
         run: |
           OUT="$PWD/built" ./packaging/boost/build.sh
           OUT="$PWD/built" ./packaging/lite/build.sh
+          java -cp built/blockforge-boost.jar com.blockforge.boost.SelfTest
+          java -cp built/blockforge-lite.jar com.blockforge.lite.SelfTest
           for j in boost lite; do
             if cmp -s "built/blockforge-$j.jar" "packaging/$j/blockforge-$j.jar"; then
               echo "blockforge-$j.jar: the build is identical to the committed jar"

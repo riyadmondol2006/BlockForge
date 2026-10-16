@@ -628,13 +628,15 @@ pub async fn prepare_ext(
         match boost::ensure_jar(dirs) {
             Ok(jar) => {
                 let key = warmer::safe_name(instance);
-                let options = boost::options(&boost::class_list(dirs, &key));
+                let spinning = crate::disk::is_spinning(settings, &dirs.base);
+                let options =
+                    boost::options(&boost::class_list(dirs, &key), &boost::setup_key(&instance.root), spinning);
                 jvm.insert(0, boost::java_argument(&jar, &options));
                 fast_start = true;
             }
             // not worth stopping the game for
             Err(e) => {
-                notes.push(format!("Warning: Fast start is off for this start, its file couldn't be written: {e:#}"))
+                notes.push(format!("Warning: Fast start is off for this start, its file couldn't be used: {e:#}"))
             }
         }
     }
