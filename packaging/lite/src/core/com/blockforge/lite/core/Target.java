@@ -35,6 +35,8 @@ final class Target {
     private final Set<String> changed = new HashSet<String>();
     private final List<MethodNode> added = new ArrayList<MethodNode>();
     private final List<FieldNode> addedFields = new ArrayList<FieldNode>();
+    /** Fields ("name desc") that lose their final flag, so an added method may set them later. */
+    private final Set<String> unfinal = new HashSet<String>();
 
     Target(byte[] bytes) {
         this.bytes = bytes;
@@ -127,6 +129,19 @@ final class Target {
         return access[0];
     }
 
+    /** How many fields of this type (descriptor) the class has. */
+    int fieldsOfType(final String desc) {
+        final int[] n = {0};
+        reader.accept(new ClassVisitor(Opcodes.ASM9) {
+            @Override
+            public org.objectweb.asm.FieldVisitor visitField(int a, String fn, String d, String s, Object v) {
+                n[0] += d.equals(desc) ? 1 : 0;
+                return null;
+            }
+        }, ClassReader.SKIP_CODE);
+        return n[0];
+    }
+
     /** One method, read with ASM, or null when the class has none of that name and descriptor. */
     MethodNode method(String methodName, String desc) {
         String key = methodName + desc;
@@ -180,6 +195,17 @@ final class Target {
         addedFields.add(f);
     }
 
+    /**
+     * Drops the final flag of a field of this class (an instance field that a patch fills later, on first use). A
+     * final field may only be set in a constructor; the JVM refuses the class otherwise.
+     */
+    void unfinal(String fieldName, String desc) throws Patch.Skip {
+        if (fieldAccess(fieldName, desc) < 0) {
+            throw Patch.Skip.because("no field " + fieldName);
+        }
+        unfinal.add(fieldName + " " + desc);
+    }
+
     /** The changed and the added methods (for the check). */
     List<MethodNode> touched() {
         List<MethodNode> l = new ArrayList<MethodNode>();
@@ -231,6 +257,11 @@ final class Target {
             }
         };
         reader.accept(new ClassVisitor(Opcodes.ASM9, w) {
+            @Override
+            public org.objectweb.asm.FieldVisitor visitField(int a, String n, String d, String s, Object v) {
+                return super.visitField(unfinal.contains(n + " " + d) ? a & ~Opcodes.ACC_FINAL : a, n, d, s, v);
+            }
+
             @Override
             public MethodVisitor visitMethod(int a, String n, String d, String s, String[] e) {
                 String key = n + d;

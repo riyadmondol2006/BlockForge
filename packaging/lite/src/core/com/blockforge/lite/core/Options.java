@@ -33,6 +33,8 @@ final class Options {
     final String report;
     final String mods;
     final Set<String> modIds;
+    /** Whether modids= was given at all (also when empty: the launcher says there are no mods). */
+    final boolean modIdsGiven;
     final String targets;
     final boolean strict;
 
@@ -46,6 +48,7 @@ final class Options {
         String md = null;
         String tg = null;
         boolean st = false;
+        boolean midsGiven = false;
         Set<String> mids = new HashSet<String>();
         for (String part : (args == null ? "" : args).split(",")) {
             String p = part.trim();
@@ -70,6 +73,7 @@ final class Options {
             } else if (key.equals("mods") && !value.isEmpty()) {
                 md = value;
             } else if (key.equals("modids")) {
+                midsGiven = true;
                 mids.addAll(ids(value));
             } else if (key.equals("targets") && !value.isEmpty()) {
                 tg = value;
@@ -78,6 +82,7 @@ final class Options {
             }
         }
         modIds = Collections.unmodifiableSet(mids);
+        modIdsGiven = midsGiven;
         targets = tg;
         strict = st;
         quiet = q;
