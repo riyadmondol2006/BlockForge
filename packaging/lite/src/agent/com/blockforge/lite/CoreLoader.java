@@ -117,4 +117,19 @@ final class CoreLoader extends ClassLoader {
         }
         return defineClass(name, b, 0, b.length);
     }
+
+    /** The class files of the zip, as data (the patch templates and the self-test's stand-ins are read this way). */
+    @Override
+    public InputStream getResourceAsStream(String name) {
+        if (name.endsWith(".class")) {
+            byte[] b;
+            synchronized (classes) {
+                b = classes.get(name.substring(0, name.length() - 6).replace('/', '.'));
+            }
+            if (b != null) {
+                return new java.io.ByteArrayInputStream(b);
+            }
+        }
+        return super.getResourceAsStream(name);
+    }
 }

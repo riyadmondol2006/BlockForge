@@ -24,7 +24,8 @@ asm_cp="$(IFS="$cp_sep"; echo "${asm_jars[*]}")"
 
 javac_opts=(--release 8 -Xlint:-options -encoding UTF-8 -nowarn)
 javac "${javac_opts[@]}" -d "$work/agent" $(find "$here/src/agent" -name '*.java')
-javac "${javac_opts[@]}" -cp "$asm_cp" -d "$work/core" $(find "$here/src/core" -name '*.java')
+# src/stubs: stand-ins of game classes that the patch templates compile against and the self-test runs on
+javac "${javac_opts[@]}" -cp "$asm_cp" -d "$work/core" $(find "$here/src/core" "$here/src/stubs" -name '*.java')
 
 # ASM's classes next to ours, without its manifest and module descriptor (our loader is not a module)
 for j in "${asm_jars[@]}"; do

@@ -33,7 +33,9 @@ public final class Engine implements ClassFileTransformer {
         return Arrays.<Patch>asList(new IdleFps(), new NoWorldGc(), new SlimSections(), new ShortFade(),
                 new OutlineSkip(), new WorkerPriority(),
                 new LazyCollisionShape(), new EmptyEffectLists(), new SharedStateTables(), new ShortSpin(),
-                new SoundNoWait(), new QuietMusic());
+                new SoundNoWait(), new QuietMusic(),
+                // wave 1 W1
+                new TintMemo(), new HiddenEntities(), new BlockEntityView(), new SignLines());
     }
 
     final Options options;

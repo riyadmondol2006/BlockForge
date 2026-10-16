@@ -18,8 +18,49 @@ public final class Matcher {
     /** Returns 0 when nothing failed, 1 when a patch failed (wrote code that did not pass the check, or threw). */
     public static int run(String args, String[] jars) throws Exception {
         Engine e = new Engine(args == null || args.isEmpty() ? "quiet" : "quiet," + args, null);
-        int classes = 0;
         long t0 = System.nanoTime();
+        // stands in for the game's class loader where a patch looks up other classes' files (it loads nothing; plain
+        // zip reads, as a URLClassLoader would first check the jar's signature)
+        final java.util.List<ZipFile> zips = new java.util.ArrayList<ZipFile>();
+        for (String jar : jars) {
+            zips.add(new ZipFile(jar));
+        }
+        ClassLoader files = new ClassLoader(null) {
+            @Override
+            public InputStream getResourceAsStream(String name) {
+                for (ZipFile z : zips) {
+                    ZipEntry entry = z.getEntry(name);
+                    if (entry != null) {
+                        try {
+                            return z.getInputStream(entry);
+                        } catch (java.io.IOException ex) {
+                            return null;
+                        }
+                    }
+                }
+                return null;
+            }
+        };
+        try {
+            scan(e, files, jars);
+        } finally {
+            for (ZipFile z : zips) {
+                z.close();
+            }
+        }
+        System.out.println("# " + scanned + " classes in " + (System.nanoTime() - t0) / 1000000 + " ms");
+        int failed = 0;
+        for (Engine.State s : e.states()) {
+            System.out.println(s.patch.id + "\t" + s.statusName() + "\t" + s.cls + "\t" + (s.reason == null ? "" : s.reason));
+            failed += s.status == Engine.State.FAILED ? 1 : 0;
+        }
+        return failed == 0 ? 0 : 1;
+    }
+
+    private static int scanned;
+
+    private static void scan(Engine e, ClassLoader files, String[] jars) throws Exception {
+        int classes = 0;
         for (String jar : jars) {
             ZipFile z = new ZipFile(jar);
             try {
@@ -41,19 +82,13 @@ public final class Matcher {
                         out.write(buf, 0, r);
                     }
                     in.close();
-                    e.transform(null, name, null, null, out.toByteArray());
+                    e.transform(files, name, null, null, out.toByteArray());
                     classes++;
                 }
             } finally {
                 z.close();
             }
         }
-        System.out.println("# " + classes + " classes in " + (System.nanoTime() - t0) / 1000000 + " ms");
-        int failed = 0;
-        for (Engine.State s : e.states()) {
-            System.out.println(s.patch.id + "\t" + s.statusName() + "\t" + s.cls + "\t" + (s.reason == null ? "" : s.reason));
-            failed += s.status == Engine.State.FAILED ? 1 : 0;
-        }
-        return failed == 0 ? 0 : 1;
+        scanned = classes;
     }
 }

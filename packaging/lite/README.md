@@ -52,8 +52,9 @@ What it prints (every line starts with `[BlockForge Lite]`):
 
 ## Patches
 
-Level 1 patches are on by default and keep the game's behaviour exactly; level 2 ("balanced", only with `level=2`)
-ones change something small that a player could notice, said in the table.
+Level 1 patches are on by default and keep the game's behaviour exactly. Level 2 ones ("balanced", only with
+`level=2`: `short-spin`, `sound-no-wait`, `quiet-music`, `hidden-entities`, and `slim-sections` when mods are
+installed) change something small that a player could notice, said in the table.
 
 | Id | What it does | Where it applies | Stays off when |
 |---|---|---|---|
@@ -69,6 +70,10 @@ ones change something small that a player could notice, said in the table.
 | `short-spin` (level 2) | The frame limiter of 26.x sleeps until shortly before the frame is due and busy-waits the rest (0.5 ms plus the average oversleep, up to 2.5 ms per frame, a core spinning). Now 0.1 ms plus at most 1 ms. A frame can come up to about 0.5 ms later when the system oversleeps more than usual. Only matters when the frame rate is limited (menus, or a limit below "unlimited"). | 26.1 - 26.x (`FramerateLimiter`) | a mod changed the limiter |
 | `sound-no-wait` (level 2) | Starting a sound no longer makes the game wait for the sound thread (which may be decoding music): the channel handle is handed out at once and gets its channel on the sound thread before any of its other tasks run. When all sound channels are busy, a sound that can't play counts as playing for a second (it stays silent, as before) instead of "not started"; for music that can mean a "now playing" notice for a song that is not heard. | 1.20.1 - 26.x (`ChannelAccess`; needs Java 11+ class files; older versions not checked) | Sound Physics Remastered, AmbientSounds, Presence Footsteps |
 | `quiet-music` (level 2) | Since 1.21.2 music starts "silently" when its volume is zero, and the sound thread keeps decoding it; now muted music is skipped like every other muted sound. Turned up again, music starts with the next song instead of in the middle of the silent one. | 1.21.2 - 26.x (`SoundEngine.play`) | Sound Physics Remastered, AmbientSounds |
+| `tint-memo` | The colour of grass, leaves and water averages the biomes of the 5 x 5 columns around a block (biome blend 2), and neighbouring blocks look up 20 of their 25 biomes again (a fuzzy, costly lookup). Each thread remembers the biomes it looked up last (32 x 8 x 16 positions) and forgets them where the game clears its own colour cache (near a chunk that arrives or changes its biomes; everything on a resource reload; another level). The colours are exactly the same. | 1.20 - 26.x | OptiFine, VulkanMod |
+| `block-entity-view` | Chests, signs, banners, shulker boxes, decorated pots, campfires, lecterns, bells, enchanting tables, vaults, brushable blocks, shelves and copper golem statues are tested against the field of view one by one (a box one block around, two above), not only by chunk section (whose test the game moves 8 blocks back). Only the game's own renderers whose drawing stays in that box; not beacons or end gateways (beams), structure or test blocks, heads (they load skins when first drawn), spawners, conduits, pistons, or any mod's renderer. The picture is the same. | 26.2 - 26.x | EntityCulling, MoreCulling, Sodium, Embeddium, Iris/Oculus (their shadow pass draws block entities too), OptiFine, VulkanMod |
+| `sign-lines` | Every sign within 64 blocks hands all 4 lines of both sides to the text renderer each frame (8 submissions with a matrix copy and a text layout each), also the empty ones; an empty line without a background draws nothing, so it is dropped before. The picture is the same. | 26.1 - 26.x | ImmediatelyFast, MoreCulling, OptiFine, VulkanMod |
+| `hidden-entities` (level 2) | A mob or item whose box (half a block wider) lies only in chunk sections the game's own visibility search did not reach from the camera (behind hills, under the ground) is not drawn, as Sodium does; the same test the game uses for terrain. Always drawn: players, the camera entity, riders and what they ride, named and glowing entities (name tags and outlines show through walls), entities on a lead, large boxes, boxes outside the world, and entities touching a section without blocks (the game leaves those out of its list). Only the main view, only after the game's own frustum test said yes; renderers that draw more than the box (guardian and end crystal beams) test that part themselves. Not level 1: the search runs in the background after the camera moves, so for a frame or two an entity coming into view at a hill's edge can show up one frame late, like the terrain around it. | 26.2 - 26.x | Sodium, Embeddium, Rubidium, Nvidium, Iris/Oculus, OptiFine, VulkanMod, EntityCulling |
 
 Where a target looks different (another version, a mod changed it), the patch does nothing and the report says why.
 
@@ -88,6 +93,13 @@ screen only, the instance has no world) shared-state-tables and sound-no-wait. N
 the jars: lazy-collision-shape and sound-no-wait 1.20.1 - 26.4-snapshot-4, shared-state-tables 1.20.1 and 1.21.1,
 empty-effect-lists and quiet-music 1.21.11 - 26.4-snapshot-4, short-spin 26.1 - 26.4-snapshot-4. Fabric 1.21.11 has no
 intermediary name for empty-effect-lists' class in the agent (the launcher can pass it with `targets=`).
+Wave 1 W1 (real starts with `level=2` and full verification, 60 s in a world): tint-memo on vanilla, Fabric, Quilt
+and NeoForge 1.21.1, vanilla and Fabric 26.3 and Forge 1.20.1 (title screen only, no world there; ClientLevel loads
+early under Forge); block-entity-view, sign-lines and hidden-entities on vanilla and Fabric 26.3; on NeoForge 1.21.1
+hidden-entities is skipped ("this game has no method ...mainCamera()", the member check) and block-entity-view too
+(different code). The agent's time over a whole start stayed at 0.08 - 0.19 s.
+`Check`: tint-memo on all seven jars (1.20.1 - 26.4-snapshot-4); sign-lines on 26.1 - 26.4; block-entity-view and
+hidden-entities on 26.2 - 26.4 (26.1 lacks the members they use).
 
 ## Measured
 
@@ -109,6 +121,10 @@ macOS.
 | short-spin | 26.3 title screen (menu limit 60 fps, 427x240 window), Render thread CPU over 70 s, 3 + 3 runs | 0.124 - 0.134 cores | 0.142 - 0.150 cores (on Windows the oversleep, and so the spin, is usually longer; not measured) |
 | sound-no-wait | 26.3 in a world, same runs as lazy-collision-shape: Render thread waits of 1 ms or more inside `SoundEngine.play` (JFR) | none | 7 - 9 waits per 56 s, 20 - 34 ms in total, longest 3 - 14 ms (the analysis saw up to 0.5 s on busy cores). Real audio output was not tested (the lab has no sound device; OpenAL ran on its null device) |
 | quiet-music | 26.3 title screen with music volume 0, sound thread CPU over 70 s, same runs as short-spin | 0.000 cores | 0.005 - 0.006 cores (decoding music nobody hears; more on a slow processor) |
+| tint-memo | 1.21.1, first 65 s after joining (the world's sections are built then), render distance 10, CPU of the `Worker-Main` threads, 3 + 3 runs | 0.106, 0.106, 0.098 cores | 0.139, 0.140, 0.138 cores (−24 %). 26.3 (ocean spawn, render distance 10; an earlier version of the memo): 0.078, 0.076, 0.073 vs 0.084, 0.078, 0.087 cores, small and overlapping; there the blend was only 2.7 % of the worker threads' samples (JFR) |
+| block-entity-view | 26.3, a floor of 2,401 chests, standing on it looking ahead, frame rate (Mesa's HUD) and render-thread CPU over 30 s, 3 + 3 runs | 27.6, 25.5, 24.5 fps; 18.4 ms render-thread CPU per frame (median) | 24.4, 22.7, 22.6 fps; 23.5 ms. JFR (one run each, 90 s): chest renderer samples on the render thread 42 vs 115 |
+| sign-lines | 26.3, a floor of 2,401 signs with one word on the front, frame rate and render-thread CPU over 30 s, 3 + 3 runs | 32.8, 28.4, 23.8 fps | 26.8, 29.7, 25.7 fps: within the noise. JFR (one run each, 90 s): text submission 0.5 % of the render thread's Java samples vs 6.6 %, text layout and drawing 8.2 % vs 11.7 %, sign rendering in all 7.5 % vs 11.4 % |
+| hidden-entities | 26.3, 768 NoAI cows in a closed stone cavity below the camera (the camera was in the cavity first, so its section was built, as after walking past; in a section the game never built it does not draw entities anyway), frame rate and render-thread CPU over 30 s, 3 + 3 runs | 7.81, 8.00, 7.86 fps; 99 ms render-thread CPU per frame (median) | 8.27, 5.81, 7.09 fps; 118 ms (noisy). JFR (one run each, 90 s): model building (`ModelPart$Cube.compile`) 1.4 % of the render thread's Java samples vs 18.6 %; feature rendering 5.4 % vs 25.9 %; the added test 1.3 % |
 
 The agent's own cost, from the report's time line (real starts without bytecode verification, one run each): 0.10 -
 0.33 s in total over a whole start (1.21.1 vanilla 0.33 s, Fabric 0.15 s, NeoForge 0.10 s, Forge 1.20.1 0.19 s, 26.3
@@ -125,7 +141,9 @@ on an obfuscated vanilla game; `targets=` or `strict` avoid the latter.
 - **Loader-neutral changes.** Changed game code calls only the JDK, LWJGL and the game, plus private static methods and
   fields the patch adds to the same class (named `blockforge$lite$...`, easy to spot in a crash report). Nothing is
   shared through the system class loader, so it works the same under Fabric's Knot, Forge/NeoForge's module layers and
-  LaunchWrapper.
+  LaunchWrapper. Where added code uses a game class or member by name (template patches, 26.x names), each one is
+  looked up first in the class files the game's class loader has (nothing is loaded): it must exist, be public and
+  have the same descriptor, static-ness and class/interface kind, or the patch is skipped ("this game has no ...").
 - **Found by what the code does, not by its name.** Names differ between vanilla (obfuscated before 26.1),
   Fabric/Quilt (intermediary), Forge (SRG methods) and NeoForge (Mojang names). Each patch knows the stable class names
   (Mojang and intermediary) and otherwise looks at classes in no package (obfuscated vanilla); it first checks the
@@ -138,9 +156,9 @@ on an obfuscated vanilla game; `targets=` or `strict` avoid the latter.
   (merged handlers, callback calls, MixinExtras) is not patched. The agent sees classes after the mod loader's own
   changes on every loader, because those loaders define the classes they changed.
 - **Checked before use.** Only the methods a patch changes are rewritten; every other method is copied byte for byte.
-  Frames are never recomputed (that would need to load game classes): patches only insert instructions with no net
-  stack effect, swap constants, or add small methods with hand-written frames. The result is read again and the
-  changed methods are run through ASM's verifier. A patch that throws or fails the check is dropped and the class
+  Frames are never computed (that would need to load game classes): patches only insert instructions with no net
+  stack effect, swap constants, or add methods whose frames are hand-written or were written by javac (templates).
+  The result is read again and the changed methods are run through ASM's verifier. A patch that throws or fails the check is dropped and the class
   loads as it was (or with the other patches only). Errors never reach the game.
 - **Cheap.** Classes outside `net/minecraft/`, `com/mojang/blaze3d/` and the default package are passed by on their
   name; named Minecraft classes other than the known targets are passed by too; the rest are filtered on their
@@ -159,7 +177,14 @@ files and two one-line additions; nothing else needs to change.
    string constant, a JDK/LWJGL call). Prefer changes that need no new stack map frames: insert a call to a static
    method with the same stack effect (`x -> x`), swap a constant, remove a call with no stack effect, or replace an
    instruction window with one of the same stack effect. A new method with branches needs hand-written frames (see
-   `IdleFps.glfwHelper`, `OutlineSkip.helper`); never ask ASM to compute frames.
+   `IdleFps.glfwHelper`, `OutlineSkip.helper`, `TintMemo.helper`); never ask ASM to compute frames.
+   Larger added code can be written in Java as a **template**: a class in `core/.../tpl/` with only static members
+   named `blockforge$lite$...`, compiled against stand-ins of the game's classes in `src/stubs` (Mojang names, only
+   the members needed, with the game's exact signatures, class or interface). `Template.copy(t, ctx, "MyCode")`
+   copies its fields and methods into the target and first checks every game member it uses against the running
+   game. The template is never loaded; no lambdas, no string `+`, no class literals. JDK-only templates fit every
+   version (`TintMemoCode`); templates that use game names fit the versions with those names (26.x:
+   `HiddenEntitiesCode`, `BlockEntityViewCode`). The stand-ins also serve the self-test (`HiddenEntitiesTest`).
 2. **Write `MyPatch extends Patch`**:
    ```java
    MyPatch() {

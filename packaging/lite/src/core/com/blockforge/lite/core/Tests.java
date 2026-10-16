@@ -95,7 +95,9 @@ public final class Tests implements Opcodes {
             NoWorldGcTest.class, SlimSectionsTest.class, ShortFadeTest.class, OutlineSkipTest.class,
             WorkerPriorityTest.class,
             LazyCollisionShapeTest.class, EmptyEffectListsTest.class, SharedStateTablesTest.class, ShortSpinTest.class,
-            SoundNoWaitTest.class, QuietMusicTest.class);
+            SoundNoWaitTest.class, QuietMusicTest.class,
+            // wave 1 W1
+            TintMemoTest.class, HiddenEntitiesTest.class, BlockEntityViewTest.class, SignLinesTest.class);
 
     private void one(String name, Object on, java.lang.reflect.Method m) {
         int before = failures;
@@ -634,6 +636,13 @@ public final class Tests implements Opcodes {
                 }
             }
             return defineClass(name, b, 0, b.length);
+        }
+
+        /** The stand-ins' class files, as a mod loader's class loader has them (for patches that look up members). */
+        @Override
+        public java.io.InputStream getResourceAsStream(String name) {
+            byte[] b = name.endsWith(".class") ? classes.get(name.substring(0, name.length() - 6)) : null;
+            return b != null ? new java.io.ByteArrayInputStream(b) : super.getResourceAsStream(name);
         }
 
         @Override
