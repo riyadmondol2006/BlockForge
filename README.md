@@ -50,6 +50,11 @@
 - **Set up for your PC automatically.** Game memory is picked from your RAM, free memory and cores and from the game
   (version, loader, number of mods, shaders, what the pack asks for), or you set your own amount, for everything or per
   instance. Light mode switches on by itself on older computers.
+- **Smoother games on any loader.** Two small helpers start with the game: Fast start (opens it sooner) and the
+  smoothness helper (small fixes inside the game). They are not mods, so they work the same with vanilla, Fabric, Quilt,
+  Forge and NeoForge. **Low-end mode** lowers the graphics settings of games on a slow computer (on by itself when the
+  computer looks slow) and puts your own settings back when you switch it off. Each can be switched off in
+  Settings > Game and for each instance on its own.
 - **Real desktop citizen.** Menu entries, icons and shortcuts on every system, a tray icon, a console window, light and
   dark themes, skins with a preview, backups, and drag and drop of mods, packs and instances.
 - **Private by default.** No usage statistics and no crash reports exist in BlockForge. See [PRIVACY.md](PRIVACY.md).
@@ -197,6 +202,9 @@ import screen, which is what double-clicking a `.mrpack` does.
 - **Rewritten in Rust** with a new window written from scratch: sidebar navigation, Material-style dark and light looks,
   18 themes, and vector icons.
 - **Offline players** are built in, and any account can be picked for a game with the Play as button next to Play, and several games can run at once.
+- **Performance helpers**: Fast start, the smoothness helper and Low-end mode (Settings > Game > Performance, and a
+  switch on every instance), for every mod loader. If a game closes early with a helper on, BlockForge offers to turn
+  them off, and switches the smoothness helper off by itself after two early closes in a row.
 - **Graphics card choice** for laptops with two cards (Settings > Game > Graphics card): power saving, high
   performance, or a card by name on Linux.
 - **One mods manager** per instance, with updates, dependencies, switch on and off, and a scan for known malicious mods

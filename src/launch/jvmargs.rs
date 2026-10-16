@@ -54,8 +54,11 @@ pub fn is_custom(arguments: Option<&str>) -> bool {
 
 /// The garbage collector settings to start the game with when the person hasn't set their own Java arguments:
 /// the flags Mojang's own launcher uses, which work on every Java from 8 to the newest, with the region size fitted
-/// to the amount of memory instead of always 32 MB. Nothing here costs anything on a small computer: no fixed
-/// starting heap, no thread counts, and smaller regions for small heaps.
+/// to the amount of memory instead of always 32 MB, the same on any number of processors. Nothing here costs anything
+/// on a small computer: no fixed starting heap (`-Xms` as big as `-Xmx` took 700 MB more memory for no gain), no
+/// pre-touched memory, no thread counts, and smaller regions for small heaps. Measured against Parallel, Serial, ZGC
+/// and Shenandoah on 2 and 4 processors (26.3, 2 GB): G1 with these flags had the fewest long frames; ZGC and
+/// Shenandoah used 1 GB more memory for the same heap and loaded worlds slower.
 pub fn performance_flags(maximum_heap_mb: u32, processors: usize) -> Vec<String> {
     performance_flags_for(maximum_heap_mb, processors, None)
 }
@@ -67,17 +70,14 @@ pub fn performance_flags(maximum_heap_mb: u32, processors: usize) -> Vec<String>
 /// (Minecraft 26.x) it made no difference, so it is left out there. Java accepts it as a diagnostic option;
 /// the check only ever guards against broken classes, which then fail with a different error instead of a verify
 /// error.
-pub fn performance_flags_for(maximum_heap_mb: u32, processors: usize, java_major: Option<u32>) -> Vec<String> {
+pub fn performance_flags_for(maximum_heap_mb: u32, _processors: usize, java_major: Option<u32>) -> Vec<String> {
     let mut flags = Vec::new();
     if java_major.is_some_and(|m| (17..=21).contains(&m)) {
         flags.push("-XX:+UnlockDiagnosticVMOptions".to_string());
         flags.push("-XX:-BytecodeVerificationRemote".to_string());
     }
-    // with a single processor G1's background work competes with the game itself; Java then picks the Serial
-    // collector on its own, which is the better choice there
-    if processors <= 1 {
-        return flags;
-    }
+    // G1 on every computer, also one with a single processor: Java would pick the Serial collector there by itself,
+    // which froze the game for 0.3-1.3 s while a world loaded; G1's longest pause was about 0.2 s (measured, 26.3)
     flags.push("-XX:+UnlockExperimentalVMOptions".to_string());
     flags.push("-XX:+UseG1GC".to_string());
     flags.push("-XX:G1NewSizePercent=20".to_string());
@@ -87,6 +87,10 @@ pub fn performance_flags_for(maximum_heap_mb: u32, processors: usize, java_major
     if region > 0 {
         flags.push(format!("-XX:G1HeapRegionSize={region}M"));
     }
+    // Minecraft 1.8.9 and 1.12.2 ask for a full collection (System.gc()) every time a world is opened or left; with
+    // this G1 does it alongside the game, and the stop went from 264-436 ms to 36-67 ms. Newer versions only ask when
+    // memory runs out. Every Java from 8 to 25 knows the option.
+    flags.push("-XX:+ExplicitGCInvokesConcurrent".to_string());
     flags
 }
 
@@ -280,9 +284,9 @@ mod tests {
         assert!(!performance_flags_for(4096, 8, Some(8)).iter().any(|f| f.contains("BytecodeVerification")));
         assert!(!performance_flags_for(4096, 8, Some(25)).iter().any(|f| f.contains("BytecodeVerification")));
         assert!(!performance_flags_for(4096, 8, None).iter().any(|f| f.contains("BytecodeVerification")));
-        // a single-core computer still gets the faster start, just not the G1 settings
+        // a single-core computer gets the faster start and the G1 settings too
         let one = performance_flags_for(4096, 1, Some(21));
-        assert!(one.iter().any(|f| f.contains("BytecodeVerificationRemote")) && !one.iter().any(|f| f.contains("G1")));
+        assert!(one.iter().any(|f| f.contains("BytecodeVerificationRemote")) && one.iter().any(|f| f.contains("G1")));
     }
 
     #[test]
@@ -322,11 +326,20 @@ mod tests {
     }
 
     #[test]
-    fn performance_flags_skip_single_core() {
-        assert!(performance_flags(4096, 1).is_empty());
+    fn g1_on_every_computer_and_the_games_own_collections_alongside() {
+        // one processor too: Java's own choice there (Serial) froze the game while worlds loaded
+        assert_eq!(performance_flags(4096, 1), performance_flags(4096, 8));
         let flags = performance_flags(4096, 8);
         assert!(flags.contains(&"-XX:+UseG1GC".to_string()));
         assert!(flags.contains(&"-XX:G1HeapRegionSize=32M".to_string()));
+        // 1.8.9 and 1.12.2 call System.gc() at every world change: concurrent instead of a full stop
+        assert!(flags.contains(&"-XX:+ExplicitGCInvokesConcurrent".to_string()));
+        // the experimental unlock comes before the experimental option
+        let unlock = flags.iter().position(|f| f == "-XX:+UnlockExperimentalVMOptions").unwrap();
+        let new_size = flags.iter().position(|f| f.starts_with("-XX:G1NewSizePercent")).unwrap();
+        assert!(unlock < new_size);
+        // nothing that costs memory on a small computer
+        assert!(!flags.iter().any(|f| f.starts_with("-Xms") || f.contains("AlwaysPreTouch") || f.contains("AOTCache")));
     }
 
     #[test]

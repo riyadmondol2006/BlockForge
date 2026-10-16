@@ -3,6 +3,39 @@
 The section for a version is used as the text of its release on GitHub. Older releases (the Java versions, up to
 3.4.42.x) are on the [releases page](https://github.com/riyadmondol2006/BlockForge/releases).
 
+## 4.2.0
+
+Smoother games, on every computer and every mod loader.
+
+### What is new
+
+- **Smoothness helper.** A second small helper (a Java agent, like Fast start) makes small fixes inside the running
+  game that make it smoother. It is not a mod, so it works the same with vanilla, Fabric, Quilt, Forge and NeoForge, and
+  it leaves alone what an installed performance mod already does (BlockForge tells it which mods are installed). On
+  Linux computers with 4 processor threads or fewer it also gives Minecraft's world-generation threads a lower
+  priority, so the game's own server thread waits less. It is on by default, with a switch in
+  Settings > Game > Performance and on each instance (on its page and in its menu); Settings shows what it did in the
+  last game ("Details").
+- **Low-end mode.** Lowers the graphics settings of a game on a slow computer: view and simulation distance, particles,
+  clouds, shadows, smooth lighting, mipmaps, biome blend, entity distance, menu blur and a 60 FPS cap (on Minecraft
+  1.21.11 and newer the graphics preset becomes Custom with the same lowered values). It only ever lowers a setting,
+  never raises one, and switching it off puts your own settings back, except the ones you changed yourself in the
+  meantime. Automatic (the default) turns it on when the computer looks slow (4 processor threads or fewer, 6 GB of
+  memory or less, built-in graphics with 8 GB or less, or a hard disk with 8 GB or less); On and Off force it, for all
+  games or for one instance.
+- **Which helpers are on** is written at the top of every game's log and printed by `blockforge launch --dry-run`.
+
+### Changes you may notice
+
+- If a game closes early with a helper on, BlockForge now offers to turn off the helpers for that game. After two
+  early closes in a row, the smoothness helper switches itself off for that instance and says so in the log.
+- On a slow computer with Low-end mode switched off, the home page suggests it once.
+- Computers with a single processor now also get the G1 garbage collector (Java's own choice there froze the game for
+  up to a second while a world loaded), and every game asks Java to run Minecraft's own full collections alongside the
+  game: Minecraft 1.8.9 and 1.12.2 ask for one at every world change, which stopped the game for 0.3-0.4 s and now
+  for well under 0.1 s.
+- On Java 25 the class cache is made to match games started with the helpers.
+
 ## 4.1.0
 
 Faster starts, several games at once, and a few things that were missing.

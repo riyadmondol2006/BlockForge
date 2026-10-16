@@ -85,6 +85,7 @@ impl App {
             }
             muted(ui, "Pick up where you left off, or start something new.");
             ui.add_space(14.0);
+            self.low_end_hint(ui);
             if self.accounts.is_empty() {
                 card(ui, |ui| {
                     ui.horizontal(|ui| {
@@ -313,6 +314,9 @@ impl App {
             });
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if let Some(a) = self.play_as_menu(ui, &folder) {
+                    action = Some(a);
+                }
+                if let Some(a) = self.helper_switches(ui, &inst) {
                     action = Some(a);
                 }
                 if let Some(a) = self.fast_start_switch(ui, &inst) {

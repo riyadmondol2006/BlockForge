@@ -270,6 +270,7 @@ impl App {
         let mut reset = false;
         let mut delete = false;
         let mut rename = false;
+        let mut helper_change = None;
 
         ui.horizontal(|ui| {
             for (i, label) in ["General", "Java and Minecraft", "Commands"].iter().enumerate() {
@@ -347,6 +348,7 @@ impl App {
                             QuickKind::Disabled => {}
                         }
                     });
+                    helper_change = self.instance_performance_card(ui, inst);
                     ui.add_space(8.0);
                     card(ui, |ui| {
                         ui.label(RichText::new("INSTANCE").size(11.0).strong().color(c_accent()));
@@ -504,6 +506,9 @@ impl App {
             d.saved = false;
         }
         self.inst_draft = Some(d);
+        if let Some(change) = helper_change {
+            self.apply_helper_change(&inst.folder, change);
+        }
         if rename {
             self.rename_target = Some((inst.folder.clone(), inst.name().to_string()));
         }

@@ -153,6 +153,23 @@ pub fn archive_options(java_options: &[String]) -> Vec<String> {
     options
 }
 
+/// The first Java whose archive has to know about the agents' module (measured on 25; 17 and 21 don't mind).
+pub const AGENT_MODULE_JAVA: u32 = 25;
+
+/// A game started with a Java agent (`-javaagent`) runs with the `java.instrument` module added. From Java 25 an
+/// archive made without it logs an error and leaves out its saved module graph, so the archive of such a game is made
+/// with `--add-modules java.instrument`. Being part of the archive's options, it is also part of its fingerprint: a
+/// game started with and without agents gets its own archive.
+pub fn add_agent_module(archive_options: &mut Vec<String>, java_options: &[String], java_major: u32) {
+    let agents = java_options.iter().any(|a| a.starts_with("-javaagent:"));
+    let there = archive_options.windows(2).any(|w| w[0] == "--add-modules" && w[1] == "java.instrument")
+        || archive_options.iter().any(|a| a == "--add-modules=java.instrument");
+    if agents && java_major >= AGENT_MODULE_JAVA && !there {
+        archive_options.push("--add-modules".to_string());
+        archive_options.push("java.instrument".to_string());
+    }
+}
+
 /// A fingerprint of everything the archive depends on: the first 16 bytes of a SHA-256, in hex.
 pub fn fingerprint(java_executable: &str, java_version: &str, archive_options: &[String]) -> String {
     let mut text = format!("{java_executable}\n{java_version}\n");
@@ -234,7 +251,8 @@ pub fn apply(
 ) -> Applied {
     let none = Applied { action: Action::None, message: None, pending: None };
     let Some(major) = java_major.filter(|m| enabled && *m >= MINIMUM_JAVA) else { return none };
-    let options = archive_options(java_options);
+    let mut options = archive_options(java_options);
+    add_agent_module(&mut options, java_options, major);
     // Java checks each jar's size and time too, so a re-downloaded library makes the archive stale
     let print =
         fingerprint(java_executable, &format!("{}{}", java_version(java_home), class_path_stamp(&options)), &options);
@@ -636,6 +654,27 @@ mod tests {
             assert!(user_controls_sharing(&[a.to_string()]), "{a}");
         }
         assert!(!user_controls_sharing(&["-XX:+UseG1GC".to_string(), "-Xmx2G".to_string()]));
+    }
+
+    #[test]
+    fn java_25_archives_know_about_the_agents() {
+        let game = vec!["-javaagent:/c/blockforge-boost.jar=quiet".to_string(), "-cp".into(), "a.jar".into()];
+        let mut options = archive_options(&game);
+        add_agent_module(&mut options, &game, 25);
+        assert_eq!(options, ["-cp", "a.jar", "--add-modules", "java.instrument"]);
+        // once is enough
+        add_agent_module(&mut options, &game, 25);
+        assert_eq!(options.len(), 4);
+        // older Javas, and games without agents, are left as they were
+        let mut old = archive_options(&game);
+        add_agent_module(&mut old, &game, 21);
+        assert_eq!(old, ["-cp", "a.jar"]);
+        let plain = vec!["-cp".to_string(), "a.jar".into()];
+        let mut none = archive_options(&plain);
+        add_agent_module(&mut none, &plain, 25);
+        assert_eq!(none, ["-cp", "a.jar"]);
+        // with and without agents are two archives
+        assert_ne!(fingerprint("java", "25", &options), fingerprint("java", "25", &none));
     }
 
     #[test]
