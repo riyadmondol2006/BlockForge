@@ -136,6 +136,7 @@ impl App {
         if modal.should_close() {
             close = true;
         }
+        let offline_or_pick = offline.is_some() || pick.is_some();
         if let Some(name) = offline {
             let acc = Account::offline(&name);
             self.accounts.retain(|a| !(a.offline && a.name() == acc.name()));
@@ -151,16 +152,29 @@ impl App {
             close = true;
         }
         if sign_in {
-            self.page = Page::Accounts;
-            self.acct.signing_in = true;
-            let n = self.notifier();
-            self.rt.spawn(async move {
-                n.send(Msg::Device(crate::msauth::start_device_login().await.map_err(|e| format!("{e:#}"))));
-            });
+            self.start_sign_in();
             close = true;
         }
         if !close {
             self.who = Some(st);
+        } else if self.accounts.is_empty() || sign_in {
+            // nobody was chosen (or the sign-in is still going on): the game waits for another press of Play
+            self.who_then_play = None;
+        } else if let Some(folder) = self.who_then_play.take() {
+            // the question came up because Play was pressed without an account: carry on with the game
+            if offline_or_pick {
+                self.play(&folder, crate::launch::LaunchOptions::default());
+            }
         }
+    }
+
+    /// Open the Microsoft sign-in: the Accounts page shows the code to enter.
+    pub(super) fn start_sign_in(&mut self) {
+        self.page = Page::Accounts;
+        self.acct.signing_in = true;
+        let n = self.notifier();
+        self.rt.spawn(async move {
+            n.send(Msg::Device(crate::msauth::start_device_login().await.map_err(|e| format!("{e:#}"))));
+        });
     }
 }

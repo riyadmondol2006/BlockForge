@@ -11,11 +11,13 @@ mod export;
 mod ftb;
 mod icons;
 mod import;
+mod instance_icon;
 mod instance_menu;
 mod instance_settings;
 mod library;
 mod mods;
 mod packs;
+mod pictures;
 mod settings;
 mod startup;
 mod theme;
@@ -97,6 +99,7 @@ pub enum Msg {
     Device(Result<DeviceCode, String>),
     SignedIn(Result<Account, String>),
     Java(Vec<JavaInstall>),
+    Gpus(Vec<crate::gpu::Gpu>),
     Runtimes(Vec<(String, String)>),
     LogUploaded(Result<String, String>),
     Picked(instance_menu::PickPurpose, Option<std::path::PathBuf>),
@@ -138,6 +141,13 @@ pub enum Phase {
 }
 
 pub struct Game {
+    /// The instance's folder (the key in `games` is this for the first session and carries a number after it for
+    /// more sessions of the same instance playing at the same time).
+    folder: String,
+    /// Who is playing in this session.
+    player: String,
+    /// Whether this start used the fast-start helper (to say so if the game fails early).
+    fast_start: bool,
     lines: Vec<LogLine>,
     phase: Phase,
     kill: Option<tokio::sync::oneshot::Sender<()>>,
@@ -175,8 +185,11 @@ pub struct App {
     games: HashMap<String, Game>,
     manifest: Option<Arc<Manifest>>,
     manifest_error: Option<String>,
-    icons: HashMap<String, bool>,
+    icons: HashMap<String, IconState>,
+    local_pictures: instance_icon::LocalPictures,
     java_list: Vec<JavaInstall>,
+    /// The graphics cards of this computer, once looked for.
+    gpus: Option<Vec<crate::gpu::Gpu>>,
     logo: egui::TextureHandle,
     confirm_delete: Option<String>,
     quick_server: String,
@@ -187,6 +200,12 @@ pub struct App {
     console_uploading: bool,
     console_confirm_kill: bool,
     who: Option<whoplays::WhoState>,
+    /// The instance whose game closed early with the fast-start helper on: the player is offered to turn it off.
+    boost_blame: Option<String>,
+    /// Which of an instance's running games the Logs tab shows, when there are several.
+    log_session: Option<String>,
+    /// The instance whose Play was pressed with no account: it starts once the player has chosen one.
+    who_then_play: Option<String>,
     startup_warnings: Vec<startup::Warning>,
     desc_edit: Option<(String, String)>,
     offline_play: Option<(String, String, bool)>,
@@ -269,6 +288,10 @@ impl App {
         let accounts = crate::accounts::load(&dirs);
         let instances = instances::load_all(&dirs);
         launch::clean_stale_temp(&dirs);
+        {
+            let dirs = dirs.clone();
+            std::thread::spawn(move || pictures::prune(&dirs));
+        }
         let mut app = App {
             dirs,
             rt,
@@ -289,7 +312,9 @@ impl App {
             manifest: None,
             manifest_error: None,
             icons: HashMap::new(),
+            local_pictures: Default::default(),
             java_list: Vec::new(),
+            gpus: None,
             logo,
             confirm_delete: None,
             quick_server: String::new(),
@@ -300,6 +325,9 @@ impl App {
             console_uploading: false,
             console_confirm_kill: false,
             who: None,
+            boost_blame: None,
+            log_session: None,
+            who_then_play: None,
             startup_warnings: Vec::new(),
             desc_edit: None,
             offline_play: None,
@@ -340,9 +368,6 @@ impl App {
             crate::desktop_integration::setup(&app.settings);
             app.startup_warnings = startup::collect(&app);
         }
-        if interactive && app.settings.ask_player_on_startup {
-            app.who = Some(whoplays::WhoState::default());
-        }
         if interactive {
             app.sync_tray();
         }
@@ -351,6 +376,10 @@ impl App {
         }
         let n = app.notifier();
         app.rt.spawn_blocking(move || n.send(Msg::Java(crate::java::detect_installed())));
+        if crate::gpu::supported() {
+            let n = app.notifier();
+            app.rt.spawn_blocking(move || n.send(Msg::Gpus(crate::gpu::detect())));
+        }
         if app.shot.is_none() {
             let n = app.notifier();
             app.rt.spawn(async move {
@@ -464,7 +493,33 @@ impl App {
     }
 
     pub fn is_playing(&self, folder: &str) -> bool {
-        self.games.get(folder).is_some_and(Game::active)
+        self.games.values().any(|g| g.folder == folder && g.active())
+    }
+
+    /// The keys of the sessions of one instance (the first one, then those started while it was running).
+    pub fn sessions_of(&self, folder: &str) -> Vec<String> {
+        let mut keys: Vec<String> =
+            self.games.iter().filter(|(_, g)| g.folder == folder).map(|(k, _)| k.clone()).collect();
+        keys.sort_by_key(|k| (k != folder, k.clone()));
+        keys
+    }
+
+    /// The key for a new session: the instance's folder, or when that session is still running, the folder with a
+    /// number after it.
+    fn new_session_key(&self, folder: &str) -> String {
+        let free = |k: &str| !self.games.get(k).is_some_and(Game::active);
+        if free(folder) {
+            return folder.to_string();
+        }
+        (2..).map(|n| format!("{folder}\u{1f}{n}")).find(|k| free(k)).expect("there is always a free number")
+    }
+
+    /// The instance folder a session key belongs to.
+    pub fn folder_of_session(&self, key: &str) -> String {
+        self.games
+            .get(key)
+            .map(|g| g.folder.clone())
+            .unwrap_or_else(|| key.split('\u{1f}').next().unwrap_or(key).to_string())
     }
 
     pub fn play(&mut self, folder: &str, options: launch::LaunchOptions) {
@@ -473,13 +528,6 @@ impl App {
 
     /// Start an instance. `account` overrides the account to play as (for "play offline with another name").
     pub fn play_as(&mut self, folder: &str, options: launch::LaunchOptions, account: Option<Account>) {
-        if self.is_playing(folder) {
-            return;
-        }
-        if self.games.values().any(Game::active) {
-            self.toast_err("Minecraft is already running");
-            return;
-        }
         crate::warmer::stop_for_launch();
         let Some(instance) = self.instance(folder).cloned() else { return };
         if instance.file.launcher.extras.get("isPlayable").and_then(|v| v.as_bool()) == Some(false) {
@@ -496,17 +544,27 @@ impl App {
             .and_then(|u| self.accounts.iter().find(|a| a.username.eq_ignore_ascii_case(u)))
             .cloned();
         let Some(account) = account.or(own).or_else(|| self.current_account().cloned()) else {
-            self.toast_err("Add an account first");
-            self.page = Page::Accounts;
+            // nobody to play as yet: ask once, then the game starts by itself
+            self.who_then_play = Some(folder.to_string());
+            self.who = Some(whoplays::WhoState::default());
             return;
         };
         let (kill_tx, kill_rx) = tokio::sync::oneshot::channel();
+        let key = self.new_session_key(folder);
         self.games.insert(
-            folder.to_string(),
-            Game { lines: Vec::new(), phase: Phase::Preparing, kill: Some(kill_tx), started: Instant::now() },
+            key.clone(),
+            Game {
+                folder: folder.to_string(),
+                player: account.name().to_string(),
+                fast_start: launch::fast_start_enabled(&self.settings, &instance),
+                lines: Vec::new(),
+                phase: Phase::Preparing,
+                kill: Some(kill_tx),
+                started: Instant::now(),
+            },
         );
-        let (dirs, settings, folder_s) = (self.dirs.clone(), self.settings.clone(), folder.to_string());
-        let label = format!("Starting {}", instance.name());
+        let (dirs, settings, folder_s) = (self.dirs.clone(), self.settings.clone(), key);
+        let label = format!("Starting {} as {}", instance.name(), account.name());
         if !self.settings.keep_launcher_open {
             self.ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
         }
@@ -558,34 +616,61 @@ impl App {
         });
     }
 
+    /// Stop every session of this instance.
     pub fn stop(&mut self, folder: &str) {
-        if let Some(g) = self.games.get_mut(folder) {
+        for g in self.games.values_mut().filter(|g| g.folder == folder) {
             if let Some(k) = g.kill.take() {
                 let _ = k.send(());
             }
         }
     }
 
-    /// Show a picture from the web, fetching it in the background the first time it is asked for.
+    /// Stop one session, by its key in `games`.
+    /// Switch the fast-start helper on or off for one instance (kept in the instance's own file).
+    pub fn set_fast_start(&mut self, folder: &str, on: bool) {
+        let Some(inst) = self.instances.iter_mut().find(|i| i.folder == folder) else { return };
+        inst.file.launcher.extras.insert("fastStart".into(), serde_json::json!(on));
+        if let Err(e) = inst.save() {
+            self.toast_err(format!("Couldn't save the setting: {e}"));
+        }
+    }
+
+    pub fn stop_session(&mut self, key: &str) {
+        if let Some(k) = self.games.get_mut(key).and_then(|g| g.kill.take()) {
+            let _ = k.send(());
+        }
+    }
+
+    /// Show a picture from the web, fetching it in the background the first time it is asked for. A picture that
+    /// couldn't be fetched (no connection yet, a busy server) is tried again a few times, a little later each time;
+    /// until it arrives, and when it never does, a coloured letter stands in.
     pub fn remote_image(&mut self, ui: &mut Ui, url: &str, size: f32, fallback: &str) {
         let radius = CornerRadius::same((size * 0.22) as u8);
-        match self.icons.get(url) {
-            Some(true) => {
+        match self.icons.get(url).copied() {
+            Some(IconState::Ready) => {
                 ui.add(egui::Image::new(icon_uri(url)).fit_to_exact_size(vec2(size, size)).corner_radius(radius));
+                return;
             }
-            Some(false) => {
-                avatar(ui, fallback, size);
+            Some(IconState::Failed { at, tries }) if tries < ICON_TRIES => {
+                let wait = Duration::from_secs(10 * u64::from(tries) * u64::from(tries));
+                match wait.checked_sub(at.elapsed()) {
+                    Some(left) => ui.ctx().request_repaint_after(left),
+                    None => self.fetch_icon(url, tries),
+                }
             }
-            None => {
-                self.icons.insert(url.to_string(), false);
-                let (u, n) = (url.to_string(), self.notifier());
-                self.rt.spawn(async move {
-                    let bytes = crate::http::get_bytes(&u).await.ok();
-                    n.send(Msg::Icon { url: u, bytes });
-                });
-                avatar(ui, fallback, size);
-            }
+            Some(_) => {}
+            None => self.fetch_icon(url, 0),
         }
+        avatar(ui, fallback, size);
+    }
+
+    fn fetch_icon(&mut self, url: &str, tries: u8) {
+        self.icons.insert(url.to_string(), IconState::Loading { tries });
+        let (u, n, dirs) = (url.to_string(), self.notifier(), self.dirs.clone());
+        self.rt.spawn(async move {
+            let bytes = pictures::fetch(&dirs, &u).await;
+            n.send(Msg::Icon { url: u, bytes });
+        });
     }
 
     fn handle(&mut self, msg: Msg) {
@@ -607,10 +692,15 @@ impl App {
             Msg::Icon { url, bytes } => match bytes {
                 Some(b) => {
                     self.ctx.include_bytes(icon_uri(&url), b);
-                    self.icons.insert(url, true);
+                    self.icons.insert(url, IconState::Ready);
+                    self.ctx.request_repaint();
                 }
                 None => {
-                    self.icons.insert(url, false);
+                    let tries = match self.icons.get(&url) {
+                        Some(IconState::Loading { tries }) => tries + 1,
+                        _ => 1,
+                    };
+                    self.icons.insert(url, IconState::Failed { at: Instant::now(), tries });
                 }
             },
             Msg::TaskDone { id, result } => {
@@ -630,8 +720,12 @@ impl App {
                     }
                 }
                 // the "Starting ..." progress card is done once the game is up
-                if let Some(name) = self.instance(&f).map(|i| format!("Starting {}", i.name())) {
-                    self.tasks.retain(|t| t.label != name);
+                if let Some(g) = self.games.get(&f) {
+                    if let Some(name) =
+                        self.instance(&g.folder).map(|i| format!("Starting {} as {}", i.name(), g.player))
+                    {
+                        self.tasks.retain(|t| t.label != name);
+                    }
                 }
                 if let Some(g) = self.games.get_mut(&f) {
                     g.phase = Phase::Running;
@@ -656,9 +750,14 @@ impl App {
                 if let Some(g) = self.games.get_mut(&f) {
                     g.phase = Phase::Exited(code);
                     g.kill = None;
+                    let log: Vec<String> = g.lines.iter().map(|l| l.text.clone()).collect();
+                    if launch::boost::may_be_the_cause(g.fast_start, code, g.started.elapsed(), &log) {
+                        self.boost_blame = Some(g.folder.clone());
+                    }
                 }
                 self.ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
-                self.svc_after_game_exit(&f);
+                let folder = self.folder_of_session(&f);
+                self.svc_after_game_exit(&folder);
                 if matches!(code, Some(c) if c != 0) {
                     self.toast_err(format!(
                         "Minecraft closed with an error (code {}). The Logs tab has details.",
@@ -710,6 +809,7 @@ impl App {
                 }
             }
             Msg::Java(list) => self.java_list = list,
+            Msg::Gpus(list) => self.gpus = Some(list),
             Msg::Runtimes(list) => self.runtimes = list,
             Msg::AccountRefreshed(result) => match result {
                 Ok(fresh) => {
@@ -738,7 +838,7 @@ impl App {
                     let folders: Vec<String> =
                         self.games.iter().filter(|(_, g)| g.active()).map(|(f, _)| f.clone()).collect();
                     for f in folders {
-                        self.stop(&f);
+                        self.stop_session(&f);
                     }
                 }
                 tray::TrayCmd::ToggleConsole => {
@@ -992,6 +1092,17 @@ pub fn modal_frame(ctx: &egui::Context) -> egui::Frame {
     egui::Frame::window(&ctx.global_style()).inner_margin(egui::Margin::same(24))
 }
 
+/// How far a picture from the web has got.
+#[derive(Clone, Copy)]
+enum IconState {
+    Loading { tries: u8 },
+    Ready,
+    Failed { at: Instant, tries: u8 },
+}
+
+/// How often a picture that doesn't arrive is asked for before giving up until the next start.
+const ICON_TRIES: u8 = 4;
+
 pub fn icon_uri(url: &str) -> String {
     format!("bytes://remote/{}", crate::http::sha1_hex(url.as_bytes()))
 }
@@ -1200,8 +1311,11 @@ impl App {
                         }
                         if name == "instance-logs" {
                             self.games.insert(
-                                f,
+                                f.clone(),
                                 Game {
+                                    folder: f,
+                                    player: "Player".into(),
+                                    fast_start: false,
                                     lines: sample_log(),
                                     phase: Phase::Exited(Some(0)),
                                     kill: None,
@@ -1340,7 +1454,15 @@ impl App {
         if frame == 3 {
             self.open_instance(&folder);
             self.tab = InstTab::Logs;
-            self.play(&folder, launch::LaunchOptions::default());
+            // `BLOCKFORGE_AUTOPLAY_PLAYERS=Alpha,Beta` starts the instance once for each offline name, all together
+            match std::env::var("BLOCKFORGE_AUTOPLAY_PLAYERS") {
+                Ok(names) => {
+                    for name in names.split(',').filter(|n| !n.is_empty()) {
+                        self.play_as(&folder, launch::LaunchOptions::default(), Some(Account::offline(name)));
+                    }
+                }
+                Err(_) => self.play(&folder, launch::LaunchOptions::default()),
+            }
         }
         let (lines, phase) = match self.games.get(&folder) {
             Some(g) => (g.lines.len(), g.phase),
@@ -1350,7 +1472,9 @@ impl App {
         let dir = std::env::var_os("BLOCKFORGE_SHOT").map(std::path::PathBuf::from);
         // enough output (or a long wait): picture, then stop the game
         if !a.asked_stop
-            && ((lines >= 50 && phase == Phase::Running)
+            && ((lines >= 50
+                && phase == Phase::Running
+                && (frame > 450 || std::env::var_os("BLOCKFORGE_AUTOPLAY_PLAYERS").is_none()))
                 || frame > 900
                 || matches!(phase, Phase::Exited(_) | Phase::Failed))
         {

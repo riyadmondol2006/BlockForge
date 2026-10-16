@@ -27,6 +27,7 @@ use crate::msauth;
 use crate::paths::Dirs;
 use crate::platform;
 
+pub mod boost;
 pub mod classcache;
 pub mod command;
 pub mod commands;
@@ -87,6 +88,8 @@ pub struct Prepared {
     pub java: javapick::JavaPick,
     /// The game is started through the legacy wrapper (Minecraft 1.5.2 and older).
     pub legacy: bool,
+    /// The game was started with the fast-start helper (see `boost`), so a quick failure may be its doing.
+    pub fast_start: bool,
     /// The commands to run before and after, if commands are switched on.
     pub pre_launch: Option<String>,
     pub post_exit: Option<String>,
@@ -227,15 +230,15 @@ pub fn account_for(dirs: &Dirs, settings: &Settings, instance: &Instance) -> Opt
     selected_account(settings, &all).cloned()
 }
 
+/// Whether games of this instance start with the fast-start helper: the instance's own switch if it has one,
+/// otherwise the launcher-wide setting (see `boost`).
+pub fn fast_start_enabled(settings: &Settings, instance: &Instance) -> bool {
+    boost::enabled(settings, instance)
+}
+
 /// The account chosen in the launcher.
 pub fn selected_account<'a>(settings: &Settings, all: &'a [Account]) -> Option<&'a Account> {
     settings.last_account.as_ref().and_then(|id| all.iter().find(|a| &a.uuid == id)).or(all.first())
-}
-
-/// Whether the "Who's playing?" question should be shown when the launcher starts: the player asked to be asked each
-/// time, or no account is chosen yet (the Java edition's `WhoIsPlayingDialog.askIfNeeded`).
-pub fn should_ask_who_is_playing(settings: &Settings, accounts: &[Account]) -> bool {
-    settings.ask_player_on_startup || selected_account(settings, accounts).is_none()
 }
 
 /// Split a line of Java options the way a shell would, so `-Dname="a b"` stays one argument.
@@ -545,6 +548,7 @@ pub async fn prepare_ext(
         legacy,
         os: platform::os(),
         cores: memory::cores(),
+        available_ram_mb: memory::available_mb().max(0),
         total_ram_mb: memory::total_ram_mb().max(0),
         logging_config_exists: logging_ok,
     };
@@ -567,6 +571,23 @@ pub async fn prepare_ext(
     );
     if let Some(m) = &applied.message {
         notes.push(m.clone());
+    }
+
+    // the fast-start helper (a Java agent), unless it is switched off for this instance or for all of them
+    let mut fast_start = false;
+    if ls.fast_start {
+        match boost::ensure_jar(dirs) {
+            Ok(jar) => {
+                let key = warmer::safe_name(instance);
+                let options = boost::options(&boost::class_list(dirs, &key));
+                jvm.insert(0, boost::java_argument(&jar, &options));
+                fast_start = true;
+            }
+            // not worth stopping the game for
+            Err(e) => {
+                notes.push(format!("Warning: Fast start is off for this start, its file couldn't be written: {e:#}"))
+            }
+        }
     }
 
     // ---- put the command together
@@ -614,10 +635,45 @@ pub async fn prepare_ext(
     let (program, args) = full.split_first().map(|(p, a)| (PathBuf::from(p), a.to_vec())).context("empty command")?;
     timings.push(("command", t.elapsed()));
 
+    // on a hard disk the game's own scattered reads are the slow part of a start; one sweep over its files first
+    // is far quicker (nothing on a fast disk, or when the game was played a moment ago)
+    let t = Instant::now();
+    let swept = {
+        let (d, st, inst) = (dirs.clone(), settings.clone(), instance.clone());
+        let spinning = crate::disk::is_spinning(settings, &dirs.base);
+        if spinning {
+            progress.stage("Reading the game's files from the disk");
+        }
+        tokio::task::spawn_blocking(move || crate::warmer::prefetch_for_launch(&d, &st, &inst)).await.unwrap_or(0)
+    };
+    if swept > 0 {
+        timings.push(("disk sweep", t.elapsed()));
+    }
+
     if !ls.environment_variables.is_empty() {
         notes.push(format!("Injecting environment variables: {:?}", ls.environment_variables));
     }
     let mut env: Vec<(String, String)> = ls.environment_variables.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    // the graphics card the player chose, for computers with two (the player's own variables still win)
+    let gpu_choice = crate::gpu::Choice::parse(&ls.gpu);
+    if gpu_choice != crate::gpu::Choice::Auto && crate::gpu::supported() {
+        let chosen = gpu_choice.clone();
+        let gpus = tokio::task::spawn_blocking(crate::gpu::detect).await.unwrap_or_default();
+        let effect = crate::gpu::effect(&chosen, &gpus);
+        if let Some(name) = &effect.gpu {
+            notes.push(format!("Graphics card: {name}"));
+        }
+        if let Some(note) = effect.note {
+            notes.push(note);
+        }
+        for (k, v) in effect.env {
+            if !env.iter().any(|(have, _)| *have == k) {
+                env.push((k, v));
+            }
+        }
+    }
+    #[cfg(windows)]
+    crate::gpu::apply_windows_preference(dirs, &java_pick.binary, &gpu_choice);
     env.sort();
 
     let dashed_uuid = account.uuid.clone();
@@ -636,6 +692,7 @@ pub async fn prepare_ext(
         memory: decision,
         java: java_pick,
         legacy,
+        fast_start,
         pre_launch,
         post_exit,
         instance: instance.clone(),

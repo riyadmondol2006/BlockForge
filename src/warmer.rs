@@ -126,23 +126,30 @@ pub fn files_for(dirs: &Dirs, settings: &Settings, instance: &Instance) -> Vec<P
     }
 
     let features = Features::default();
+    let mut libraries: Vec<PathBuf> = Vec::new();
     for lib in instance.file.version.active_libraries(&features) {
         if let Some(native) = lib.native() {
             if let Some(path) = native.path {
-                add(dirs.libraries.join(path));
+                libraries.push(dirs.libraries.join(path));
                 continue;
             }
         }
         if let Some(path) = lib.artifact().and_then(|a| a.path) {
-            add(dirs.libraries.join(path));
+            libraries.push(dirs.libraries.join(path));
         }
     }
-    add(crate::install::client_jar(dirs, instance.file.version.game_version()));
+    libraries.push(crate::install::client_jar(dirs, instance.file.version.game_version()));
+    // a hard disk reads fastest in the order the files lie on it, and the order they are read in doesn't matter here
+    by_disk_order(&mut libraries);
+    for l in libraries {
+        add(l);
+    }
 
     if let Ok(rd) = std::fs::read_dir(instance.mods_dir()) {
         let mut mods: Vec<PathBuf> =
             rd.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|e| e == "jar")).collect();
         mods.sort();
+        by_disk_order(&mut mods);
         for m in mods {
             add(m);
         }
@@ -151,6 +158,68 @@ pub fn files_for(dirs: &Dirs, settings: &Settings, instance: &Instance) -> Vec<P
         add(a);
     }
     files
+}
+
+/// Put files in the order they lie on a disk, as far as that can be told cheaply: file systems hand out inode numbers
+/// by place on the disk, so the files of one folder end up next to each other and one sweep reads them all.
+/// Elsewhere (and for files that can't be looked at) the order stays as it is.
+pub fn by_disk_order(files: &mut [PathBuf]) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let mut keyed: Vec<(u64, PathBuf)> =
+            files.iter().map(|p| (std::fs::metadata(p).map(|m| m.ino()).unwrap_or(u64::MAX), p.clone())).collect();
+        keyed.sort_by_key(|(inode, _)| *inode);
+        for (slot, (_, p)) in files.iter_mut().zip(keyed) {
+            *slot = p;
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = files;
+}
+
+/// How much to read before the game starts on a hard disk: what the start needs, within what the memory can hold.
+/// Past this the files would only push each other out of the cache.
+pub fn prefetch_budget_bytes(available_mb: u64) -> u64 {
+    if available_mb == 0 {
+        return 256 * 1024 * 1024;
+    }
+    (available_mb / 3).clamp(0, 768) * 1024 * 1024
+}
+
+/// Whether the files of a game that was played `minutes_ago` minutes ago are probably still in the system's file
+/// cache, so that reading them again first would be wasted. `None` when it was never played.
+pub fn probably_cached(minutes_ago: Option<u64>) -> bool {
+    minutes_ago.is_some_and(|m| m < 20)
+}
+
+/// Pressing Play on a hard disk: read the game's files in one sweep first, because the game would ask for them in
+/// thousands of scattered reads, each costing the disk head a trip (a start that took 40 s that way takes a fraction
+/// of it from a warm cache). Does nothing on a fast disk, or when the game was played a moment ago. Returns the bytes
+/// read.
+pub fn prefetch_for_launch(dirs: &Dirs, settings: &Settings, instance: &Instance) -> u64 {
+    if !crate::disk::is_spinning(settings, &dirs.base) {
+        return 0;
+    }
+    let now = chrono::Utc::now().timestamp_millis();
+    let last = instance.last_played();
+    let minutes_ago = (last > 0).then(|| ((now - last).max(0) / 60_000) as u64);
+    if probably_cached(minutes_ago) {
+        return 0;
+    }
+    let (_, available) = crate::platform::memory_mb();
+    let budget = prefetch_budget_bytes(available);
+    // no assets: they are read lazily and mostly by name, the sweep is for what every start reads
+    let files: Vec<PathBuf> =
+        files_for(dirs, settings, instance).into_iter().filter(|f| !f.starts_with(&dirs.assets)).collect();
+    let started = Instant::now();
+    let read = read_all(&files, budget, &|| false);
+    crate::logs::debug(format!(
+        "Read {} MB of the game's files in {} ms before starting (hard disk)",
+        read / (1024 * 1024),
+        started.elapsed().as_millis()
+    ));
+    read
 }
 
 /// Read the files one after another, up to `budget` bytes, stopping as soon as `stop` says so. Returns the bytes read.
@@ -301,6 +370,30 @@ mod tests {
     }
 
     #[test]
+    fn files_are_put_in_disk_order() {
+        let dir = scratch("order");
+        let a = dir.join("a");
+        let b = dir.join("b");
+        std::fs::write(&a, "x").unwrap();
+        std::fs::write(&b, "x").unwrap();
+        let missing = dir.join("missing");
+        let mut files = vec![missing.clone(), b.clone(), a.clone()];
+        by_disk_order(&mut files);
+        assert_eq!(files.len(), 3);
+        assert_eq!(files.last(), Some(&missing), "files that can't be looked at go last");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_prefetch_budget_and_the_recently_played_rule() {
+        assert_eq!(prefetch_budget_bytes(0), 256 * 1024 * 1024);
+        assert_eq!(prefetch_budget_bytes(1500), 500 * 1024 * 1024);
+        assert_eq!(prefetch_budget_bytes(16000), 768 * 1024 * 1024);
+        assert_eq!(prefetch_budget_bytes(600), 200 * 1024 * 1024);
+        assert!(probably_cached(Some(5)) && !probably_cached(Some(20)) && !probably_cached(None));
+    }
+
+    #[test]
     fn language_comes_from_options() {
         let dir = scratch("lang");
         assert_eq!(language_of(&dir), "en_us");
@@ -348,7 +441,8 @@ mod tests {
             names.iter().position(|n| n.ends_with(needle)).unwrap_or_else(|| panic!("{needle} missing from {names:?}"))
         };
         assert!(pos("asm-9.11.jar") < pos("a.jar"), "libraries come before mods");
-        assert!(pos("a.jar") < pos("b.jar") && pos("b.jar") < pos("indexes/17.json"));
+        // the mods come in the order they lie on the disk, before the assets
+        assert!(pos("a.jar") < pos("indexes/17.json") && pos("b.jar") < pos("indexes/17.json"));
         assert!(names.iter().any(|n| n.contains("client-1.21.jar")));
         assert!(!names.iter().any(|n| n.ends_with("readme.txt")));
         assert!(

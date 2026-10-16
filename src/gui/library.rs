@@ -64,6 +64,9 @@ impl App {
                     act = Some(a);
                 }
             });
+            if let Some(a) = self.fast_start_switch(ui, inst) {
+                act = Some(a);
+            }
         });
         if act.is_none() && resp.clicked() {
             act = Some(Act::Open(inst.folder.clone()));
@@ -82,6 +85,25 @@ impl App {
             }
             muted(ui, "Pick up where you left off, or start something new.");
             ui.add_space(14.0);
+            if self.accounts.is_empty() {
+                card(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.vertical(|ui| {
+                            ui.label(RichText::new("Choose who plays").strong());
+                            small_muted(
+                                ui,
+                                "Sign in with Microsoft, or play offline with any name. You only do this once.",
+                            );
+                        });
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            if primary(ui, "Choose").clicked() {
+                                self.who = Some(Default::default());
+                            }
+                        });
+                    });
+                });
+                ui.add_space(8.0);
+            }
 
             match &hero {
                 Some(h) => {
@@ -114,6 +136,9 @@ impl App {
                                     );
                                 });
                                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                    if let Some(a) = self.play_as_menu(ui, &h.folder) {
+                                        action = Some(a);
+                                    }
                                     if self.is_playing(&h.folder) {
                                         if danger_big(ui, Icon::Stop, "Stop").clicked() {
                                             action = Some(Act::Stop(h.folder.clone()));
@@ -287,6 +312,12 @@ impl App {
                 });
             });
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if let Some(a) = self.play_as_menu(ui, &folder) {
+                    action = Some(a);
+                }
+                if let Some(a) = self.fast_start_switch(ui, &inst) {
+                    action = Some(a);
+                }
                 if self.is_playing(&folder) {
                     if danger_big(ui, Icon::Stop, "Stop").clicked() {
                         action = Some(Act::Stop(folder.clone()));
@@ -416,13 +447,34 @@ impl App {
     }
 
     fn tab_logs(&mut self, ui: &mut Ui, inst: &Instance) {
-        let folder = inst.folder.clone();
-        let Some(game) = self.games.get(&folder) else {
+        let sessions = self.sessions_of(&inst.folder);
+        if sessions.is_empty() {
             card(ui, |ui| {
                 muted(ui, "The game's output shows up here while it runs. Press Play to start it.");
             });
             return;
+        }
+        // with several games of this instance going at once, each has its own log
+        let folder = match self.log_session.clone().filter(|k| sessions.contains(k)) {
+            Some(k) => k,
+            None => sessions
+                .iter()
+                .rev()
+                .find(|k| self.games.get(*k).is_some_and(|g| g.active()))
+                .unwrap_or(&sessions[0])
+                .clone(),
         };
+        if sessions.len() > 1 {
+            ui.horizontal(|ui| {
+                for k in &sessions {
+                    let label = self.games.get(k).map(|g| g.player.clone()).unwrap_or_default();
+                    if chip(ui, &label, *k == folder).clicked() {
+                        self.log_session = Some(k.clone());
+                    }
+                }
+            });
+        }
+        let Some(game) = self.games.get(&folder) else { return };
         let lines: Vec<(Level, String)> = game.lines.iter().map(|l| (l.level, l.text.clone())).collect();
         let phase = game.phase;
         ui.horizontal(|ui| {

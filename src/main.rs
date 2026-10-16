@@ -398,6 +398,9 @@ async fn run(cmd: Cmd, dirs: Dirs) -> Result<()> {
             );
             if dry_run {
                 println!("{}", prepared.display());
+                for (k, v) in &prepared.env {
+                    eprintln!("  environment: {k}={v}");
+                }
                 if let Some(c) = &prepared.pre_launch {
                     eprintln!("  would run before the game: {c}");
                 }

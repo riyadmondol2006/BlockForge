@@ -195,6 +195,15 @@ jobs:
           distribution: temurin
           java-version: 21
       - run: OUT="$PWD/dist" ./packaging/bridge/build.sh "$VERSION"
+      - name: Check the fast-start agent
+        run: |
+          # the committed jar (the one the launcher embeds) and a fresh build must both load into a JVM
+          OUT="$PWD/boost-check" ./packaging/boost/build.sh
+          for jar in packaging/boost/blockforge-boost.jar boost-check/blockforge-boost.jar; do
+            java -javaagent:"$jar"=preload=boost-check.classes -version 2>&1 | tee boost.txt
+            grep -q "^\[BlockForge Boost\] on" boost.txt || { echo "::error::$jar did not start as an agent"; exit 1; }
+            ! grep -q "problem" boost.txt || { echo "::error::$jar reported a problem"; exit 1; }
+          done
       - uses: actions/upload-artifact@v7
         with:
           name: BlockForge-bridge

@@ -9,10 +9,11 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use futures::StreamExt;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
 use tokio::io::AsyncWriteExt;
 
+use crate::config::Settings;
 use crate::http::{self, client};
 use crate::model::{Features, VersionJson};
 use crate::paths::Dirs;
@@ -355,7 +356,20 @@ pub async fn ensure_game_files(
             );
         }
     }
-    if let Some(index) = &version.asset_index {
+    // on a hard disk, looking at the thousands of asset files takes minutes of head movement once the system has
+    // forgotten them, so a pass that found everything in place is trusted for a few days (see `AssetStamp`)
+    let spinning =
+        !verify && version.asset_index.is_some() && crate::disk::is_spinning(&Settings::load(dirs), &dirs.base);
+    let stamp_file =
+        version.asset_index.as_ref().map(|i| dirs.cache.join("asset-checks").join(format!("{}.json", i.id)));
+    let trust_assets = spinning
+        && match (&version.asset_index, &stamp_file) {
+            (Some(index), Some(stamp)) => AssetStamp::of(&asset_index_file(dirs, &index.id))
+                .zip(std::fs::read_to_string(stamp).ok().and_then(|t| serde_json::from_str::<AssetStamp>(&t).ok()))
+                .is_some_and(|(now, saved)| saved.still_good(&now, chrono::Utc::now().timestamp_millis())),
+            _ => false,
+        };
+    if let Some(index) = version.asset_index.as_ref().filter(|_| !trust_assets) {
         let parsed = read_asset_index(dirs, &index.id)?;
         for obj in parsed.objects.values() {
             let prefix = &obj.hash[..2];
@@ -373,7 +387,50 @@ pub async fn ensure_game_files(
     // files with no address that are already on disk are fine (Forge builds some libraries itself)
     jobs.retain(|j| !j.url.is_empty() || !is_good(j, false));
     download_all(jobs, progress, verify).await?;
+    // everything was in place: remember it, so the next starts on a hard disk needn't look at every asset again
+    if let (true, false, Some(index), Some(stamp)) = (spinning, trust_assets, &version.asset_index, &stamp_file) {
+        if let Some(now) = AssetStamp::of(&asset_index_file(dirs, &index.id)) {
+            let saved = AssetStamp { checked_ms: chrono::Utc::now().timestamp_millis(), ..now };
+            if let Some(dir) = stamp.parent() {
+                let _ = std::fs::create_dir_all(dir);
+            }
+            let _ = std::fs::write(stamp, serde_json::to_vec(&saved).unwrap_or_default());
+        }
+    }
     Ok(())
+}
+
+/// What is kept about a pass that found every asset of a version in place: the asset index it was for, and when.
+/// On a hard disk the next starts skip looking at the thousands of asset files for a few days; the asset index (the
+/// list of them) is still compared, so a different version or a new index is always checked. Missing or damaged
+/// assets found by the pass before that, and a game that can't find one, are fixed by the next full pass.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct AssetStamp {
+    index_size: u64,
+    index_modified_ms: i64,
+    checked_ms: i64,
+}
+
+/// How long a pass is trusted on a hard disk.
+const ASSET_TRUST_MS: i64 = 3 * 24 * 3600 * 1000;
+
+impl AssetStamp {
+    /// The asset index file as it is now (`checked_ms` 0).
+    fn of(index_file: &Path) -> Option<AssetStamp> {
+        let meta = std::fs::metadata(index_file).ok()?;
+        let modified = meta.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?.as_millis() as i64;
+        Some(AssetStamp { index_size: meta.len(), index_modified_ms: modified, checked_ms: 0 })
+    }
+
+    /// If the pass saved in `self` still stands for the index `now`, at time `now_ms`.
+    fn still_good(&self, now: &AssetStamp, now_ms: i64) -> bool {
+        self.checked_ms > 0
+            && self.index_size == now.index_size
+            && self.index_modified_ms == now.index_modified_ms
+            && now_ms - self.checked_ms < ASSET_TRUST_MS
+            && now_ms >= self.checked_ms
+    }
 }
 
 /// Old versions keep their assets under real file names instead of hashes. Copy them out once.
@@ -433,4 +490,23 @@ pub fn extract_natives(dirs: &Dirs, version: &VersionJson, dest: &Path) -> Resul
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod stamp_tests {
+    use super::*;
+
+    #[test]
+    fn a_pass_is_trusted_only_for_the_same_index_and_a_few_days() {
+        let day = 24 * 3600 * 1000;
+        let index = AssetStamp { index_size: 400_000, index_modified_ms: 1_000, checked_ms: 0 };
+        let saved = AssetStamp { checked_ms: 10 * day, ..index.clone() };
+        assert!(saved.still_good(&index, 10 * day + 1));
+        assert!(saved.still_good(&index, 12 * day));
+        assert!(!saved.still_good(&index, 13 * day + 1), "too old");
+        assert!(!saved.still_good(&index, 9 * day), "a clock that went back");
+        assert!(!saved.still_good(&AssetStamp { index_size: 1, ..index.clone() }, 10 * day + 1), "other index");
+        assert!(!saved.still_good(&AssetStamp { index_modified_ms: 2, ..index.clone() }, 10 * day + 1));
+        assert!(!index.still_good(&index, 10 * day), "a stamp that never recorded a pass");
+    }
 }

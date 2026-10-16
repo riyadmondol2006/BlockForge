@@ -12,6 +12,11 @@ and writes into `dist/`.
 | `windows/` | `BlockForge-<v>-windows-x64-setup.exe` and `-portable.zip` | `packaging\windows\build.ps1 -Version <v>` | Inno Setup 6 |
 | `macos/` | `BlockForge-<v>-macos-arm64.dmg` | `packaging/macos/build.sh <v>` | macOS on Apple Silicon (`hdiutil`, `codesign`) |
 | `bridge/` | `BlockForge-<v>.jar`, the bridge that moves old 3.x jar installs to the native program | `packaging/bridge/build.sh <v>` | a JDK |
+| `boost/` | `blockforge-boost.jar`, the fast-start Java agent every game is started with (`-javaagent`); not a release file | `packaging/boost/build.sh` | a JDK |
+
+The boost jar is built from `boost/Boost.java` and the built file is checked in next to it, because the launcher embeds it
+(`src/launch/boost.rs`) and `cargo build` must work without a JDK. After changing `Boost.java`, run `boost/build.sh` and
+commit the new jar. The bridge job in CI builds it again and starts a JVM with it as a smoke test.
 
 Each system also has a smoke test that CI runs on the result: `windows/smoke.ps1`, `macos/smoke.sh`, and for Linux the
 workflow installs the deb, the rpm (in a clean Fedora container) and starts the AppImage.

@@ -9,7 +9,7 @@ use super::theme::*;
 use super::widgets::*;
 use super::{App, InstTab, Msg, Page};
 use crate::instances::{self, Instance};
-use crate::launch::LaunchOptions;
+use crate::launch::{self, LaunchOptions};
 use crate::loaders::{self, Loader};
 
 /// What the player asked an instance to do.
@@ -17,7 +17,14 @@ pub(super) enum Act {
     Open(String),
     Play(String),
     PlayOffline(String),
+    /// Play this instance as the account with this id (instance folder, account id).
+    PlayAs(String, String),
+    AddAccount,
+    /// Switch Fast start on or off for an instance (folder, new state).
+    FastStart(String, bool),
     Stop(String),
+    /// Stop one running session (its key in `games`).
+    StopSession(String),
     Folder(String),
     Mods(String),
     AddMods(String),
@@ -55,7 +62,14 @@ impl App {
             Act::Open(f) => self.open_instance(&f),
             Act::Play(f) => self.play(&f, LaunchOptions::default()),
             Act::PlayOffline(f) => self.offline_play = Some((f, String::new(), false)),
+            Act::PlayAs(f, id) => {
+                let account = self.accounts.iter().find(|a| a.uuid == id).cloned();
+                self.play_as(&f, LaunchOptions::default(), account);
+            }
+            Act::AddAccount => self.start_sign_in(),
+            Act::FastStart(f, on) => self.set_fast_start(&f, on),
             Act::Stop(f) => self.stop(&f),
+            Act::StopSession(key) => self.stop_session(&key),
             Act::Folder(f) => {
                 if let Some(i) = self.instance(&f) {
                     let _ = open::that(&i.root);
@@ -117,21 +131,99 @@ impl App {
         }
     }
 
+    /// The "Fast start" switch of an instance: on by default, and the player's choice is kept for this instance.
+    pub(super) fn fast_start_switch(&self, ui: &mut Ui, inst: &Instance) -> Option<Act> {
+        let mut on = launch::fast_start_enabled(&self.settings, inst);
+        let before = on;
+        ui.horizontal(|ui| {
+            toggle(ui, &mut on).on_hover_text(
+                "Fast start: a tiny helper that loads Minecraft's classes ahead of time so the game opens sooner. \
+                 Works with every version and mod loader. Turn it off if the game fails to start.",
+            );
+            small_muted(ui, "Fast start");
+        });
+        (on != before).then(|| Act::FastStart(inst.folder.clone(), on))
+    }
+
+    /// The small arrow next to the big Play button, opening the "play as" menu. Under a right-to-left layout it is
+    /// added before the button so it ends up on its right.
+    pub(super) fn play_as_menu(&self, ui: &mut Ui, folder: &str) -> Option<Act> {
+        let mut act = None;
+        let running =
+            self.sessions_of(folder).iter().filter(|k| self.games.get(*k).is_some_and(|g| g.active())).count();
+        ui.menu_button(
+            if running > 0 { format!("Play as ({running} running)") } else { "Play as".to_string() },
+            |ui| {
+                act = self.account_menu(ui, folder);
+            },
+        )
+        .response
+        .on_hover_text("Play as another account, or start another game at the same time");
+        act
+    }
+
+    /// The menu for playing as somebody else: every account, a new offline name, a new Microsoft account, and a way to
+    /// stop each game of this instance that is running. Playing several at once is just playing again.
+    pub(super) fn account_menu(&self, ui: &mut Ui, folder: &str) -> Option<Act> {
+        let mut act = None;
+        ui.set_min_width(240.0);
+        let current = self.current_account().map(|a| a.uuid.clone());
+        if self.accounts.is_empty() {
+            small_muted(ui, "No accounts yet");
+        } else {
+            small_muted(ui, "Play as");
+        }
+        for a in &self.accounts {
+            let mark = if current.as_deref() == Some(a.uuid.as_str()) { "  \u{2713}" } else { "" };
+            if ui.button(format!("{}  \u{00B7}  {}{mark}", a.name(), a.kind())).clicked() {
+                act = Some(Act::PlayAs(folder.to_string(), a.uuid.clone()));
+                ui.close();
+            }
+        }
+        ui.separator();
+        if ui.button("Play offline with a new name\u{2026}").clicked() {
+            act = Some(Act::PlayOffline(folder.to_string()));
+            ui.close();
+        }
+        if ui.button("Add a Microsoft account\u{2026}").clicked() {
+            act = Some(Act::AddAccount);
+            ui.close();
+        }
+        let running: Vec<(String, String)> = self
+            .sessions_of(folder)
+            .into_iter()
+            .filter_map(|k| self.games.get(&k).filter(|g| g.active()).map(|g| (k, g.player.clone())))
+            .collect();
+        if !running.is_empty() {
+            ui.separator();
+            small_muted(ui, "Running now");
+            for (key, player) in running {
+                if ui.button(RichText::new(format!("Stop {player}")).color(c_danger())).clicked() {
+                    act = Some(Act::StopSession(key));
+                    ui.close();
+                }
+            }
+        }
+        act
+    }
+
     /// The items of the "more" menu, in the Java edition's order. Returns what was clicked.
     pub(super) fn instance_menu(&self, ui: &mut Ui, inst: &Instance) -> Option<Act> {
         let f = inst.folder.clone();
         let mut act = None;
         ui.set_min_width(220.0);
+        ui.menu_button("Play as\u{2026}", |ui| {
+            if let Some(a) = self.account_menu(ui, &f) {
+                act = Some(a);
+            }
+        });
+        ui.separator();
         let mut item = |ui: &mut Ui, label: &str, make: fn(String) -> Act| {
             if ui.button(label).clicked() {
                 act = Some(make(f.clone()));
                 ui.close();
             }
         };
-        if !self.accounts.is_empty() {
-            item(ui, "Play offline with another name", Act::PlayOffline);
-            ui.separator();
-        }
         item(ui, "Settings", Act::Settings);
         item(ui, "Rename", Act::Rename);
         item(ui, "Clone", Act::Duplicate);
@@ -150,21 +242,6 @@ impl App {
             ui.close();
         }
         act
-    }
-
-    /// The instance's picture: its own `instance.png` if it has one, otherwise a coloured letter.
-    pub(super) fn instance_icon(&self, ui: &mut Ui, inst: &Instance, size: f32) {
-        let custom = inst.root.join("instance.png");
-        if custom.is_file() {
-            let uri = format!("file://{}", custom.to_string_lossy().replace('\\', "/"));
-            ui.add(
-                egui::Image::new(uri)
-                    .fit_to_exact_size(egui::vec2(size, size))
-                    .corner_radius(egui::CornerRadius::same((size * 0.22) as u8)),
-            );
-        } else {
-            avatar(ui, inst.name(), size);
-        }
     }
 
     /// Open a file (or folder) chooser without freezing the window.
@@ -323,6 +400,11 @@ impl App {
             if go {
                 if super::whoplays::valid_player_name(name.trim()) {
                     let acc = crate::accounts::Account::offline(name.trim());
+                    // keep the name, so it is in the list of accounts next time
+                    if !self.accounts.iter().any(|a| a.uuid == acc.uuid) {
+                        self.accounts.push(acc.clone());
+                        self.save_accounts();
+                    }
                     self.play_as(&folder, LaunchOptions::default(), Some(acc));
                     close = true;
                 } else {
@@ -330,6 +412,36 @@ impl App {
                 }
             }
             self.offline_play = if close { None } else { Some((folder, name, bad)) };
+        }
+
+        // the game closed soon after it started with the fast-start helper on
+        if let Some(folder) = self.boost_blame.clone() {
+            let (mut off, mut keep) = (false, false);
+            egui::Modal::new(egui::Id::unique("boost-blame")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
+                ui.set_width(440.0);
+                ui.label(RichText::new("Minecraft closed early").size(19.0).strong());
+                muted(
+                    ui,
+                    "The game stopped soon after it started while Fast start was on. Fast start is a small helper \
+                     that makes the game open sooner; on some setups it can get in the way. Try the game again \
+                     with it turned off. The Logs tab shows what happened.",
+                );
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if primary(ui, "Turn off Fast start").clicked() {
+                        off = true;
+                    }
+                    if secondary(ui, "Keep it on").clicked() {
+                        keep = true;
+                    }
+                });
+            });
+            if off {
+                self.set_fast_start(&folder, false);
+                self.boost_blame = None;
+            } else if keep {
+                self.boost_blame = None;
+            }
         }
 
         // mod loader

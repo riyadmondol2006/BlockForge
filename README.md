@@ -196,7 +196,9 @@ import screen, which is what double-clicking a `.mrpack` does.
 
 - **Rewritten in Rust** with a new window written from scratch: sidebar navigation, Material-style dark and light looks,
   18 themes, and vector icons.
-- **Offline players** are built in, and the launcher asks who is playing on start (can be turned off).
+- **Offline players** are built in, and any account can be picked for a game from the arrow next to Play.
+- **Graphics card choice** for laptops with two cards (Settings > Game > Graphics card): power saving, high
+  performance, or a card by name on Linux.
 - **One mods manager** per instance, with updates, dependencies, switch on and off, and a scan for known malicious mods
   before the game starts.
 - **Memory and Java chosen for you**: automatic game memory sized to your PC and the game, the right Java downloaded

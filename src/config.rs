@@ -29,13 +29,22 @@ pub struct Settings {
     pub maximise_minecraft: bool,
     pub keep_launcher_open: bool,
     pub enable_feral_gamemode: bool,
+    /// Which graphics card the game uses on computers with two: `auto`, `integrated`, `dedicated`, or a card's id
+    /// (see `gpu`).
+    pub gpu: String,
     pub wrapper_command: Option<String>,
     pub environment_variables: BTreeMap<String, String>,
     pub default_mod_platform: String,
+    /// No longer used: BlockForge doesn't ask who is playing when it opens. Kept so old settings files load unchanged.
     pub ask_player_on_startup: bool,
     pub language: String,
     pub theme: String,
     pub class_data_cache: bool,
+    /// How Java is told to start the game: `auto` picks the quickest start for the number of processors,
+    /// `fast` always uses the quick compiler, `full` never changes the compiler (see `launch::jvmargs`).
+    pub startup_mode: String,
+    /// Start games with BlockForge's fast-start helper (a Java agent, see `launch::boost`). On unless switched off.
+    pub fast_start: bool,
     pub auto_game_options: bool,
     pub check_for_launcher_updates: bool,
     pub enable_console: bool,
@@ -90,6 +99,7 @@ impl Default for Settings {
             maximise_minecraft: false,
             keep_launcher_open: true,
             enable_feral_gamemode: false,
+            gpu: "auto".to_string(),
             wrapper_command: None,
             environment_variables: BTreeMap::new(),
             default_mod_platform: "Modrinth".to_string(),
@@ -97,6 +107,8 @@ impl Default for Settings {
             language: "English".to_string(),
             theme: DEFAULT_THEME.to_string(),
             class_data_cache: true,
+            startup_mode: "auto".to_string(),
+            fast_start: true,
             auto_game_options: true,
             check_for_launcher_updates: true,
             enable_console: false,

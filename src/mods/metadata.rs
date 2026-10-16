@@ -857,7 +857,17 @@ pub fn read_info(file: &Path) -> ModInfo {
     info
 }
 
-/// A mod's picture: the logo named in its metadata, or the usual file names when it doesn't name one.
+/// Whether these bytes are a picture BlockForge can show (PNG, JPEG, WebP or GIF).
+fn is_picture(bytes: &[u8]) -> bool {
+    bytes.len() > 8
+        && matches!(
+            image::guess_format(bytes),
+            Ok(image::ImageFormat::Png | image::ImageFormat::Jpeg | image::ImageFormat::WebP | image::ImageFormat::Gif)
+        )
+}
+
+/// A mod's picture: the logo named in its metadata, or the usual file names when it doesn't name one (or names one
+/// that isn't in the file, which happens more often than it should). Mods ship their logo as PNG, JPEG or WebP.
 pub fn read_icon(file: &Path, info: &ModInfo) -> Option<Vec<u8>> {
     let f = std::fs::File::open(file).ok()?;
     let mut zip = zip::ZipArchive::new(f).ok()?;
@@ -872,9 +882,31 @@ pub fn read_icon(file: &Path, info: &ModInfo) -> Option<Vec<u8>> {
         candidates.push(format!("assets/{id}/icon.png"));
         candidates.push(format!("assets/{id}/logo.png"));
     }
-    candidates
-        .into_iter()
-        .find_map(|c| read_bytes(&mut zip, &c).filter(|b| b.len() > 8 && b.starts_with(&[0x89, b'P', b'N', b'G'])))
+    if let Some(found) = candidates.into_iter().find_map(|c| read_bytes(&mut zip, &c).filter(|b| is_picture(b))) {
+        return Some(found);
+    }
+    // not where it should be: look for a file that is named like a logo, at the top or in the mod's own assets
+    let mut named: Vec<(u8, String)> = zip
+        .file_names()
+        .filter_map(|n| n.ok().map(|c| c.replace('\\', "/")))
+        .filter_map(|n| {
+            let lower = n.to_lowercase();
+            let (folder, file) = lower.rsplit_once('/').unwrap_or(("", &lower));
+            let (stem, ext) = file.rsplit_once('.')?;
+            if !matches!(ext, "png" | "jpg" | "jpeg" | "webp")
+                || !(stem.contains("logo") || stem.contains("icon") || stem == "pack")
+            {
+                return None;
+            }
+            let in_assets = folder.split('/').count() == 2 && folder.starts_with("assets/");
+            if !(folder.is_empty() || in_assets) {
+                return None;
+            }
+            Some((if folder.is_empty() { 0 } else { 1 } + u8::from(!(stem == "logo" || stem == "icon")) * 2, n))
+        })
+        .collect();
+    named.sort();
+    named.into_iter().take(4).find_map(|(_, n)| read_bytes(&mut zip, &n).filter(|b| is_picture(b)))
 }
 
 /// Which folder a file in a Minecraft folder goes in, from its name and contents (the routing used when a file is
@@ -1265,5 +1297,29 @@ mod tests {
         assert_eq!(lenient_json("{\"a\":1, // note\n \"b\":[1,2,],}").unwrap()["b"][1], 2);
         assert_eq!(lenient_json("/* c */ {\"a\":\"x\ty\"}").unwrap()["a"], "x\ty");
         assert!(lenient_json("{ nope").is_none());
+    }
+
+    #[test]
+    fn a_logo_is_found_even_when_the_metadata_names_a_missing_one_or_it_is_a_jpeg() {
+        let dir = temp("icon-search");
+        let jpeg = {
+            let mut out = std::io::Cursor::new(Vec::new());
+            image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(8, 8, image::Rgb([9, 99, 199])))
+                .write_to(&mut out, image::ImageFormat::Jpeg)
+                .unwrap();
+            out.into_inner()
+        };
+        let path = dir.join("m.jar");
+        let mut z = zip::ZipWriter::new(std::fs::File::create(&path).unwrap());
+        let opts = zip::write::SimpleFileOptions::default();
+        z.start_file("assets/xray/logo-small.jpg", opts).unwrap();
+        z.write_all(&jpeg).unwrap();
+        z.start_file("assets/xray/textures/gui/bg.png", opts).unwrap();
+        z.write_all(b"not a picture").unwrap();
+        z.finish().unwrap();
+        let info =
+            ModInfo { id: Some("xray".into()), icon_path: Some("assets/xray/icon.png".into()), ..ModInfo::default() };
+        assert_eq!(read_icon(&path, &info), Some(jpeg));
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

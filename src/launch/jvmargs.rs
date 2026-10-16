@@ -159,6 +159,81 @@ pub fn to_argument_file(arguments: &[String]) -> String {
     out
 }
 
+/// How the game's start-up is tuned (the `startupMode` setting).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum StartupMode {
+    /// Pick from what this computer has.
+    Auto,
+    /// Always the quick compiler only.
+    Fast,
+    /// Never touch the compiler: full speed once the game is warm.
+    Full,
+}
+
+impl StartupMode {
+    /// From the setting's text; anything unknown (or an old settings file without it) is automatic.
+    pub fn parse(text: &str) -> StartupMode {
+        match text.trim().to_ascii_lowercase().as_str() {
+            "fast" => StartupMode::Fast,
+            "full" => StartupMode::Full,
+            _ => StartupMode::Auto,
+        }
+    }
+}
+
+/// With this many logical processors or fewer, Java's optimizing compiler (C2) takes the processors the game's own
+/// start needs, and only the quick compiler (C1) is used. Measured (Minecraft 1.21.1 Fabric, Java 21, seconds to the
+/// title screen, tiered / quick compiler only): 1 core 30 / 12.7, 2 cores 16-20 / 9.5-10, 3 cores 10.2 / 8.0,
+/// 4 cores 11.4 / 7.5, 6 cores 11.9 / 8.6, 8 cores 8.4 / 8.6 (no difference). Limiting the compiler's threads
+/// (`-XX:CICompilerCount=2`) gave nothing at any size, so it is not used.
+pub const QUICK_COMPILER_MAX_PROCESSORS: usize = 6;
+/// Up to this many, a computer with little free memory still takes the quick compiler: compiled code and the
+/// compiler's own work compete with the game for it.
+pub const SHORT_OF_MEMORY_MAX_PROCESSORS: usize = 8;
+/// "Little free memory" for the rule above (MB).
+pub const LOW_FREE_MEMORY_MB: i64 = 3072;
+
+/// What start-up flags were chosen, and the line that says so in the game's log.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Startup {
+    pub flags: Vec<String>,
+    pub note: String,
+}
+
+/// Chooses the compiler settings for the start from what the computer has. With few processors the optimizing
+/// compiler's threads compete with the game's own start and the quick compiler alone gets to the title screen up to
+/// three times sooner (see the constants). The price is speed in long sessions: a CPU-bound test ran at half the speed
+/// with only the quick compiler (about 71,000 against 36,000 operations a second on two cores), so computers with
+/// processors to spare keep the optimizing compiler, and `Full performance` is there for slow computers whose players
+/// care more about frame rates in long sessions.
+///
+/// `available_mb` is the free memory, 0 when unknown.
+pub fn startup_flags(mode: StartupMode, processors: usize, available_mb: i64) -> Startup {
+    let quick = || vec!["-XX:TieredStopAtLevel=1".to_string()];
+    match mode {
+        StartupMode::Full => {
+            Startup { flags: Vec::new(), note: "Start-up: full performance (the compiler is left alone)".to_string() }
+        }
+        StartupMode::Fast => Startup {
+            flags: quick(),
+            note: format!("Start-up: quick compiler (chosen in the settings; {processors} processor cores)"),
+        },
+        StartupMode::Auto => {
+            let short_of_memory = available_mb > 0 && available_mb < LOW_FREE_MEMORY_MB;
+            if processors <= QUICK_COMPILER_MAX_PROCESSORS {
+                Startup { flags: quick(), note: format!("Start-up: quick compiler ({processors} cores)") }
+            } else if processors <= SHORT_OF_MEMORY_MAX_PROCESSORS && short_of_memory {
+                Startup {
+                    flags: quick(),
+                    note: format!("Start-up: quick compiler ({processors} cores, {available_mb} MB of memory free)"),
+                }
+            } else {
+                Startup { flags: Vec::new(), note: format!("Start-up: full performance ({processors} cores)") }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -208,6 +283,42 @@ mod tests {
         // a single-core computer still gets the faster start, just not the G1 settings
         let one = performance_flags_for(4096, 1, Some(21));
         assert!(one.iter().any(|f| f.contains("BytecodeVerificationRemote")) && !one.iter().any(|f| f.contains("G1")));
+    }
+
+    #[test]
+    fn startup_follows_the_processors_in_automatic_mode() {
+        let quick = vec!["-XX:TieredStopAtLevel=1".to_string()];
+        for processors in 1..=QUICK_COMPILER_MAX_PROCESSORS {
+            assert_eq!(startup_flags(StartupMode::Auto, processors, 16000).flags, quick, "{processors} cores");
+        }
+        let above = startup_flags(StartupMode::Auto, QUICK_COMPILER_MAX_PROCESSORS + 1, 16000);
+        assert!(above.flags.is_empty());
+        assert!(above.note.contains("full performance"));
+        // a computer a little larger that is short of memory takes the quick compiler too
+        assert_eq!(startup_flags(StartupMode::Auto, SHORT_OF_MEMORY_MAX_PROCESSORS, 2000).flags, quick);
+        assert!(startup_flags(StartupMode::Auto, SHORT_OF_MEMORY_MAX_PROCESSORS + 1, 2000).flags.is_empty());
+        // unknown memory is not "short"
+        assert!(startup_flags(StartupMode::Auto, 8, 0).flags.is_empty());
+        assert!(startup_flags(StartupMode::Auto, 16, 16000).flags.is_empty());
+        assert!(startup_flags(StartupMode::Auto, 2, 16000).note.contains("quick compiler (2 cores)"));
+    }
+
+    #[test]
+    fn the_setting_forces_or_forbids_the_quick_compiler() {
+        assert_eq!(startup_flags(StartupMode::Fast, 32, 64000).flags, vec!["-XX:TieredStopAtLevel=1".to_string()]);
+        assert!(startup_flags(StartupMode::Full, 1, 500).flags.is_empty());
+        assert_eq!(StartupMode::parse("FAST"), StartupMode::Fast);
+        assert_eq!(StartupMode::parse(" full "), StartupMode::Full);
+        assert_eq!(StartupMode::parse(""), StartupMode::Auto);
+        assert_eq!(StartupMode::parse("something else"), StartupMode::Auto);
+    }
+
+    #[test]
+    fn the_players_own_compiler_arguments_win() {
+        // an argument that says the opposite of the quick compiler is left as it is
+        let mut args = vec!["-XX:TieredStopAtLevel=4".to_string()];
+        add_missing(&mut args, &startup_flags(StartupMode::Fast, 2, 16000).flags);
+        assert_eq!(args, vec!["-XX:TieredStopAtLevel=4".to_string()]);
     }
 
     #[test]

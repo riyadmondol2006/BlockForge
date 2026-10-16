@@ -206,7 +206,13 @@ pub struct LaunchSettings {
     pub window_height: u32,
     pub maximise_minecraft: bool,
     pub enable_feral_gamemode: bool,
+    /// The graphics card choice (`gpu::Choice::parse`): the instance's own `gpu` over the launcher-wide setting.
+    pub gpu: String,
     pub class_data_cache: bool,
+    /// `auto`, `fast` or `full` (`jvmargs::StartupMode`): the instance's own `startupMode` over the launcher's.
+    pub startup_mode: String,
+    /// The fast-start helper: the instance's own `fastStart` over the launcher-wide setting.
+    pub fast_start: bool,
     pub warm_up_game_files: bool,
     pub auto_game_options: bool,
     pub ignore_java_on_instance_launch: bool,
@@ -249,7 +255,10 @@ impl LaunchSettings {
             window_height: g.get("windowHeight").and_then(Value::as_u64).unwrap_or(480) as u32,
             maximise_minecraft: global_bool("maximiseMinecraft", false),
             enable_feral_gamemode: global_bool("enableFeralGamemode", false),
+            gpu: nonblank(pick_text("gpu")).unwrap_or_else(|| "auto".to_string()),
             class_data_cache: global_bool("classDataCache", true),
+            startup_mode: nonblank(pick_text("startupMode")).unwrap_or_else(|| "auto".to_string()),
+            fast_start: pick_bool("fastStart", true),
             warm_up_game_files: global_bool("warmUpGameFiles", true),
             auto_game_options: global_bool("autoGameOptions", true),
             ignore_java_on_instance_launch: global_bool("ignoreJavaOnInstanceLaunch", false),

@@ -162,7 +162,7 @@ impl App {
                 let folders: Vec<String> =
                     self.games.iter().filter(|(_, g)| g.active()).map(|(f, _)| f.clone()).collect();
                 for f in folders {
-                    self.stop(&f);
+                    self.stop_session(&f);
                 }
             }
         }

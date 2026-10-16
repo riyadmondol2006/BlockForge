@@ -36,6 +36,60 @@ fn text_row(ui: &mut Ui, title: &str, hint: &str, placeholder: &str, value: &mut
     committed
 }
 
+/// The "Graphics card" row for computers with two cards. `gpus` is `None` while they are being looked for. Returns
+/// true when the choice changed.
+fn graphics_card_row(ui: &mut Ui, setting: &mut String, gpus: Option<&[crate::gpu::Gpu]>) -> bool {
+    use crate::gpu::{self, Choice};
+    let list = gpus.unwrap_or(&[]);
+    let choice = Choice::parse(setting);
+    let two = list.len() >= 2;
+    let name_of = |kind: &Choice| match gpu::resolve(kind, list) {
+        Some(g) => format!(" ({})", g.name),
+        None => String::new(),
+    };
+    // the drop-down's own text stays short; the list shows which card each choice means
+    let short = |c: &Choice| match c {
+        Choice::Auto => "Automatic".to_string(),
+        Choice::Integrated => "Power saving".to_string(),
+        Choice::Dedicated => "High performance".to_string(),
+        Choice::Specific(id) => match list.iter().find(|g| &g.id == id) {
+            Some(g) => g.name.clone(),
+            None => "A card that isn't here".to_string(),
+        },
+    };
+    let long = |c: &Choice| match c {
+        Choice::Integrated | Choice::Dedicated => format!("{}{}", short(c), name_of(c)),
+        _ => short(c),
+    };
+    let hint = match (gpus, list.len()) {
+        (None, _) => "Looking for graphics cards\u{2026}".to_string(),
+        (Some(_), 0) => "Couldn't find out which graphics cards this computer has".to_string(),
+        (Some(_), 1) => format!("Only one graphics card was found ({}), so there is nothing to choose", list[0].name),
+        _ => match gpu::resolve(&choice, list) {
+            Some(g) => format!("The game uses {}. Applies the next time it starts.", g.name),
+            None => "For laptops with two graphics cards. Applies the next time the game starts.".to_string(),
+        },
+    };
+    let mut changed = false;
+    setting_row(ui, "Graphics card", &hint, |ui| {
+        ui.add_enabled_ui(two, |ui| {
+            egui::ComboBox::from_id_salt("gpu").selected_text(short(&choice)).width(300.0).show_ui(ui, |ui| {
+                let mut options = vec![Choice::Auto, Choice::Integrated, Choice::Dedicated];
+                if gpu::can_pick_by_name() {
+                    options.extend(list.iter().map(|g| Choice::Specific(g.id.clone())));
+                }
+                for o in options {
+                    if ui.selectable_label(choice == o, long(&o)).clicked() && choice != o {
+                        *setting = o.as_setting();
+                        changed = true;
+                    }
+                }
+            });
+        });
+    });
+    changed
+}
+
 impl App {
     /// The language names offered in the Language drop-down.
     pub fn language_names(&self) -> Vec<String> {
@@ -52,6 +106,7 @@ impl App {
         let max_mb = ((if total_mb > 0 { total_mb / 2 / 256 * 256 } else { 8192 }) as u32).max(2048);
         let example = self.automatic_memory_example(total_mb, free_mb);
         let languages = self.language_names();
+        let self_gpus = self.gpus.clone();
         ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
             ui.set_max_width(780.0);
             let s = &mut self.settings;
@@ -119,12 +174,38 @@ impl App {
                 );
                 setting_row(
                     ui,
+                    "Fast start",
+                    "A tiny helper that loads Minecraft's classes ahead of time so games open sooner. Works with every version and mod loader; each instance has its own switch too",
+                    |ui| {
+                        dirty |= toggle(ui, &mut s.fast_start).changed();
+                    },
+                );
+                setting_row(
+                    ui,
+                    "Java compiler",
+                    "Automatic uses the light one on computers with few cores, for much quicker starts. Full performance can give higher frame rates in long sessions.",
+                    |ui| {
+                        for (mode, label) in
+                            [("auto", "Automatic"), ("fast", "Light"), ("full", "Full performance")]
+                        {
+                            if chip(ui, label, s.startup_mode == mode).clicked() && s.startup_mode != mode {
+                                s.startup_mode = mode.to_string();
+                                dirty = true;
+                            }
+                        }
+                    },
+                );
+                setting_row(
+                    ui,
                     "Pick game settings for this PC on first launch",
                     "New games start with graphics that suit this computer",
                     |ui| {
                         dirty |= toggle(ui, &mut s.auto_game_options).changed();
                     },
                 );
+                if crate::gpu::supported() {
+                    dirty |= graphics_card_row(ui, &mut s.gpu, self_gpus.as_deref());
+                }
                 // an empty path means "use the Java that comes with Minecraft"
                 let mut path = if s.using_custom_java_path { s.java_path.clone() } else { String::new() };
                 if text_row(
@@ -148,14 +229,6 @@ impl App {
                     s.java_parameters = args.trim().to_string();
                     dirty = true;
                 }
-                setting_row(
-                    ui,
-                    "Ask who's playing on start",
-                    "Choose an offline name or sign in each time BlockForge opens",
-                    |ui| {
-                        dirty |= toggle(ui, &mut s.ask_player_on_startup).changed();
-                    },
-                );
                 setting_row(
                     ui,
                     "Check for BlockForge updates",

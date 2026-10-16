@@ -46,6 +46,8 @@ pub struct Input<'a> {
     pub os: Os,
     pub cores: usize,
     pub total_ram_mb: i64,
+    /// The memory free right now (0 when unknown), for choosing how to start Java.
+    pub available_ram_mb: i64,
     pub logging_config_exists: bool,
 }
 
@@ -313,6 +315,11 @@ pub fn assemble(i: &Input) -> Assembled {
         // nothing set, or BlockForge's defaults: the well known garbage collector settings, sized for the memory
         // this game gets
         jvmargs::add_missing(&mut options, &jvmargs::performance_flags_for(i.heap_mb, i.cores, i.java_major));
+        // how Java's compiler is set up for the start, from what this computer has (never over the person's own)
+        let startup =
+            jvmargs::startup_flags(jvmargs::StartupMode::parse(&i.ls.startup_mode), i.cores, i.available_ram_mb);
+        jvmargs::add_missing(&mut options, &startup.flags);
+        notes.push(startup.note);
     }
 
     // the version's own Java options (the legacy string form has none)
@@ -467,6 +474,7 @@ mod tests {
             os: Os::Linux,
             cores: 8,
             total_ram_mb: 16000,
+            available_ram_mb: 8000,
             logging_config_exists: true,
         };
         tweak(&mut input);

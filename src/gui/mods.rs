@@ -187,7 +187,16 @@ pub fn read_details(
 /// A picture shrunk to what a list row shows, so hundreds of mods don't hold hundreds of big textures.
 fn thumbnail(bytes: &[u8]) -> Option<egui::ColorImage> {
     let img = image::load_from_memory(bytes).ok()?.thumbnail(72, 72).to_rgba8();
-    Some(egui::ColorImage::from_rgba_unmultiplied([img.width() as usize, img.height() as usize], img.as_raw()))
+    // a wide or tall logo is centred on a square, so the row shows it undistorted
+    let side = img.width().max(img.height());
+    let mut square = image::RgbaImage::new(side, side);
+    image::imageops::overlay(
+        &mut square,
+        &img,
+        i64::from((side - img.width()) / 2),
+        i64::from((side - img.height()) / 2),
+    );
+    Some(egui::ColorImage::from_rgba_unmultiplied([side as usize, side as usize], square.as_raw()))
 }
 
 fn modified(path: &Path) -> Option<SystemTime> {

@@ -252,6 +252,11 @@ pub fn apply(
     if std::fs::create_dir_all(&folder).is_err() {
         return none;
     }
+    // Two games of the same instance can run at once. Only the first writes down the classes: a second one would
+    // overwrite the list the first is still writing.
+    if action == Action::Record && !claim_recording(&base) {
+        return none;
+    }
     let mut pending = None;
     let message = if action == Action::Record {
         // anything there belongs to an older Java or other libraries
@@ -327,11 +332,31 @@ fn java_version(java_home: Option<&Path>) -> String {
 /// The game has closed: if its classes were written down, build its archive in the background, at low priority.
 pub fn game_exited(pending: Option<Pending>) {
     let Some(pending) = pending else { return };
+    release_recording(&base_name(&pending.instance_safe_name, pending.state.java_major));
     if let Ok(handle) = std::thread::Builder::new().name("class-cache-builder".into()).spawn(move || {
         build(&pending);
     }) {
         BUILDERS.lock().unwrap_or_else(|e| e.into_inner()).push(handle);
     }
+}
+
+/// The archives whose class list a running game is writing, and since when (an entry that old is from a game that
+/// never got to report back).
+static RECORDING: std::sync::Mutex<Vec<(String, std::time::Instant)>> = std::sync::Mutex::new(Vec::new());
+
+/// Take the right to write the class list of this archive; false if a game is doing that already.
+fn claim_recording(base: &str) -> bool {
+    let mut list = RECORDING.lock().unwrap_or_else(|e| e.into_inner());
+    list.retain(|(_, since)| since.elapsed() < std::time::Duration::from_secs(6 * 3600));
+    if list.iter().any(|(b, _)| b == base) {
+        return false;
+    }
+    list.push((base.to_string(), std::time::Instant::now()));
+    true
+}
+
+fn release_recording(base: &str) {
+    RECORDING.lock().unwrap_or_else(|e| e.into_inner()).retain(|(b, _)| b != base);
 }
 
 /// Archives being built in the background. A program that is about to exit (the command line) waits for them with
@@ -551,6 +576,17 @@ fn sha256(data: &[u8]) -> [u8; 32] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_one_game_records_the_class_list() {
+        assert!(claim_recording("test-instance-17"));
+        assert!(!claim_recording("test-instance-17"));
+        assert!(claim_recording("test-other-17"));
+        release_recording("test-instance-17");
+        assert!(claim_recording("test-instance-17"));
+        release_recording("test-instance-17");
+        release_recording("test-other-17");
+    }
 
     fn hex(b: &[u8]) -> String {
         b.iter().map(|x| format!("{x:02x}")).collect()
