@@ -245,15 +245,17 @@ fn files_from_arguments() -> Vec<PathBuf> {
 
 /// `%20` and friends in a `file://` address.
 fn decode_percent(text: &str) -> String {
+    // works on bytes: a `%` followed by a letter like `é` must not cut that letter in half
+    let hex = |b: u8| (b as char).to_digit(16).map(|d| d as u8);
     let bytes = text.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'%'
             && i + 2 < bytes.len()
-            && let Ok(v) = u8::from_str_radix(&text[i + 1..i + 3], 16)
+            && let (Some(hi), Some(lo)) = (hex(bytes[i + 1]), hex(bytes[i + 2]))
         {
-            out.push(v);
+            out.push(hi * 16 + lo);
             i += 3;
             continue;
         }
@@ -338,7 +340,8 @@ async fn run(cmd: Cmd, dirs: Dirs) -> Result<()> {
         }
         Cmd::Versions { snapshots, count } => {
             let m = install::manifest(&dirs).await?;
-            println!("latest release: {}   latest snapshot: {}", m.latest["release"], m.latest["snapshot"]);
+            let latest = |kind: &str| m.latest.get(kind).map(String::as_str).unwrap_or("?");
+            println!("latest release: {}   latest snapshot: {}", latest("release"), latest("snapshot"));
             for v in m.versions.iter().filter(|v| snapshots || v.kind == "release").take(count) {
                 println!("{:<14} {}", v.id, v.kind);
             }
@@ -347,7 +350,12 @@ async fn run(cmd: Cmd, dirs: Dirs) -> Result<()> {
             let loader = Loader::parse(&loader).with_context(|| format!("unknown loader \"{loader}\""))?;
             let mc = match mc {
                 Some(m) => m,
-                None => install::manifest(&dirs).await?.latest["release"].clone(),
+                None => install::manifest(&dirs)
+                    .await?
+                    .latest
+                    .get("release")
+                    .cloned()
+                    .context("Mojang's version list names no latest release; pass --mc <version>")?,
             };
             let progress = Progress::new();
             let printer = show_progress(progress.clone());
@@ -538,5 +546,9 @@ mod tests {
         assert_eq!(decode_percent("/odd%"), "/odd%");
         assert_eq!(decode_percent("/odd%2"), "/odd%2");
         assert_eq!(decode_percent("/caf%C3%A9"), "/caf\u{e9}");
+        // a letter of several bytes right after `%` used to be cut in half (a crash)
+        assert_eq!(decode_percent("/a%a\u{e9}b"), "/a%a\u{e9}b");
+        assert_eq!(decode_percent("/%\u{e9}\u{e9}"), "/%\u{e9}\u{e9}");
+        assert_eq!(decode_percent("/%+1"), "/%+1");
     }
 }

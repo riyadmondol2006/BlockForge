@@ -60,6 +60,8 @@ use widgets::*;
 
 const LOGO: &[u8] = include_bytes!("../../assets/icon.png");
 const MAX_LOG_LINES: usize = 6000;
+/// The smallest window, in points: every page is laid out to work at this size.
+const MIN_WINDOW: egui::Vec2 = egui::vec2(860.0, 560.0);
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Page {
@@ -85,8 +87,14 @@ pub enum InstTab {
     Settings,
 }
 
+/// What the background work tells the window. `Deleted` ends the background delete of an instance folder (whether
+/// it worked is told by its task); `InstanceImage` says whether a picture chosen for an instance was saved as its
+/// `instance.png`; `Device` and `SignedIn` carry the number of the Microsoft sign-in they belong to, so the answer of
+/// one that was cancelled is not taken for a newer one's.
 pub enum Msg {
     Reload,
+    Deleted(String),
+    InstanceImage(String, Result<(), String>),
     Manifest(Result<Manifest, String>),
     LoaderVersions { loader: Loader, mc: String, result: Result<Vec<String>, String> },
     Search { seq: u64, result: Result<(Vec<Hit>, u64), String> },
@@ -96,8 +104,8 @@ pub enum Msg {
     GameLog(String, LogLine),
     GameExit(String, Option<i32>),
     GameFailed(String, String),
-    Device(Result<DeviceCode, String>),
-    SignedIn(Result<Account, String>),
+    Device(u64, Result<DeviceCode, String>),
+    SignedIn(u64, Result<Account, String>),
     Java(Vec<JavaInstall>),
     Gpus(Vec<crate::gpu::Gpu>),
     Runtimes(Vec<(String, String)>),
@@ -148,6 +156,8 @@ pub struct Game {
     player: String,
     /// Whether this start used the fast-start helper (to say so if the game fails early).
     fast_start: bool,
+    /// The "Starting ..." progress card of this session, taken away once the game is up.
+    task: u64,
     lines: Vec<LogLine>,
     phase: Phase,
     kill: Option<tokio::sync::oneshot::Sender<()>>,
@@ -192,6 +202,8 @@ pub struct App {
     gpus: Option<Vec<crate::gpu::Gpu>>,
     logo: egui::TextureHandle,
     confirm_delete: Option<String>,
+    /// Instances whose folders are being deleted in the background; they are left out of the lists meanwhile.
+    deleting: Vec<String>,
     quick_server: String,
     rename_target: Option<(String, String)>,
     inst_draft: Option<instance_settings::InstDraft>,
@@ -215,6 +227,10 @@ pub struct App {
     upd: updates::UpdateUi,
     last_window: Option<(crate::config::Size, crate::config::Pos)>,
     last_window_save: Instant,
+    /// When settings changed by [`App::save_settings_soon`] are to be written.
+    settings_save_due: Option<Instant>,
+    /// The zoom the smallest window size was last set for.
+    zoom_seen: f32,
     mods_cache: Option<(String, Vec<crate::instances::ModFile>)>,
     log_filter: String,
     create: create::CreateState,
@@ -248,8 +264,8 @@ pub fn run(dirs: Dirs, open_files: Vec<std::path::PathBuf>) -> anyhow::Result<()
     let mut viewport = egui::ViewportBuilder::default()
         .with_title(crate::NAME)
         .with_app_id("blockforge")
-        .with_inner_size([size.width.max(860) as f32, size.height.max(560) as f32])
-        .with_min_inner_size([860.0, 560.0]);
+        .with_inner_size([(size.width as f32).max(MIN_WINDOW.x), (size.height as f32).max(MIN_WINDOW.y)])
+        .with_min_inner_size(MIN_WINDOW);
     if let Some(p) = saved.launcher_position.filter(|_| saved.remember_window_size_position) {
         viewport = viewport.with_position([p.x as f32, p.y as f32]);
     }
@@ -317,6 +333,7 @@ impl App {
             gpus: None,
             logo,
             confirm_delete: None,
+            deleting: Vec::new(),
             quick_server: String::new(),
             rename_target: None,
             inst_draft: None,
@@ -337,6 +354,8 @@ impl App {
             upd: updates::UpdateUi::default(),
             last_window: None,
             last_window_save: Instant::now(),
+            settings_save_due: None,
+            zoom_seen: 1.0,
             mods_cache: None,
             log_filter: String::new(),
             create: create::CreateState::default(),
@@ -407,6 +426,9 @@ impl App {
 
     pub fn reload_instances(&mut self) {
         self.instances = instances::load_all(&self.dirs);
+        if !self.deleting.is_empty() {
+            self.instances.retain(|i| !self.deleting.contains(&i.folder));
+        }
     }
 
     pub fn refresh_manifest(&mut self) {
@@ -452,8 +474,50 @@ impl App {
     }
 
     pub fn save_settings(&mut self) {
+        self.settings_save_due = None;
         if let Err(e) = self.settings.save(&self.dirs) {
             self.toast_err(format!("Couldn't save settings: {e:#}"));
+        }
+    }
+
+    /// Save the settings a moment from now: for values that change on every frame while a window is dragged, so the
+    /// file is written once the move is over instead of sixty times a second.
+    pub fn save_settings_soon(&mut self) {
+        self.settings_save_due.get_or_insert_with(|| Instant::now() + Duration::from_secs(1));
+    }
+
+    fn flush_settings(&mut self, ctx: &egui::Context) {
+        let Some(due) = self.settings_save_due else { return };
+        match due.checked_duration_since(Instant::now()) {
+            Some(left) if !left.is_zero() => ctx.request_repaint_after(left),
+            _ => self.save_settings(),
+        }
+    }
+
+    /// Ctrl and + (or -) changes the size of everything. The smallest window grows with it, so the pages keep the room
+    /// they are laid out for, and zooming in stops where such a window would no longer fit on the screen.
+    fn follow_zoom(&mut self, ctx: &egui::Context) {
+        let zoom = ctx.zoom_factor();
+        if zoom == self.zoom_seen {
+            return;
+        }
+        // both in points at the current zoom
+        let (monitor, inner) = ctx.input(|i| (i.viewport().monitor_size, i.viewport().inner_rect));
+        if let Some(smaller) = monitor.and_then(|m| zoom_that_fits(zoom, m)) {
+            ctx.set_zoom_factor(smaller);
+            return; // looked at again with the new zoom on the next frame
+        }
+        self.zoom_seen = zoom;
+        ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(MIN_WINDOW));
+        if let Some(r) = inner.filter(|r| r.width() < MIN_WINDOW.x || r.height() < MIN_WINDOW.y) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(r.size().max(MIN_WINDOW)));
+        }
+    }
+
+    /// Open a folder or file with the system's own program, and say so when that doesn't work.
+    pub fn open_path(&mut self, path: &std::path::Path) {
+        if let Err(e) = open::that(path) {
+            self.toast_err(format!("Couldn't open {}: {e}", path.display()));
         }
     }
 
@@ -557,6 +621,7 @@ impl App {
                 folder: folder.to_string(),
                 player: account.name().to_string(),
                 fast_start: launch::fast_start_enabled(&self.settings, &instance),
+                task: self.next_task,
                 lines: Vec::new(),
                 phase: Phase::Preparing,
                 kill: Some(kill_tx),
@@ -676,6 +741,8 @@ impl App {
     fn handle(&mut self, msg: Msg) {
         match msg {
             Msg::Reload => self.reload_instances(),
+            Msg::Deleted(folder) => self.deleting.retain(|f| *f != folder),
+            Msg::InstanceImage(folder, result) => self.instance_image_saved(&folder, result),
             Msg::Manifest(r) => match r {
                 Ok(m) => {
                     if self.create.mc.is_empty() {
@@ -719,15 +786,11 @@ impl App {
                         eprintln!("play pressed -> game process started: {} ms", g.started.elapsed().as_millis());
                     }
                 }
-                // the "Starting ..." progress card is done once the game is up
-                if let Some(g) = self.games.get(&f) {
-                    if let Some(name) =
-                        self.instance(&g.folder).map(|i| format!("Starting {} as {}", i.name(), g.player))
-                    {
-                        self.tasks.retain(|t| t.label != name);
-                    }
-                }
                 if let Some(g) = self.games.get_mut(&f) {
+                    // the "Starting ..." progress card is done once the game is up (the task itself goes on until
+                    // the game closes)
+                    let task = g.task;
+                    self.tasks.retain(|t| t.id != task);
                     g.phase = Phase::Running;
                     g.started = Instant::now();
                 }
@@ -758,11 +821,8 @@ impl App {
                 self.ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
                 let folder = self.folder_of_session(&f);
                 self.svc_after_game_exit(&folder);
-                if matches!(code, Some(c) if c != 0) {
-                    self.toast_err(format!(
-                        "Minecraft closed with an error (code {}). The Logs tab has details.",
-                        code.unwrap()
-                    ));
+                if let Some(c) = code.filter(|c| *c != 0) {
+                    self.toast_err(format!("Minecraft closed with an error (code {c}). The Logs tab has details."));
                 }
                 self.reload_instances();
             }
@@ -775,12 +835,15 @@ impl App {
                 self.ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
                 self.toast_err(e);
             }
-            Msg::Device(r) => match r {
+            // a sign-in that was cancelled, or replaced by a newer one, is left alone
+            Msg::Device(attempt, _) | Msg::SignedIn(attempt, _)
+                if !self.acct.signing_in || attempt != self.acct.attempt => {}
+            Msg::Device(attempt, r) => match r {
                 Ok(code) => {
                     let (c2, n) = (code.clone(), self.notifier());
                     self.rt.spawn(async move {
                         let r = crate::msauth::finish_device_login(&c2).await.map_err(|e| format!("{e:#}"));
-                        n.send(Msg::SignedIn(r));
+                        n.send(Msg::SignedIn(attempt, r));
                     });
                     let _ = open::that(&code.verification_uri);
                     self.acct.device = Some(code);
@@ -790,10 +853,7 @@ impl App {
                     self.toast_err(e);
                 }
             },
-            Msg::SignedIn(r) => {
-                if !self.acct.signing_in {
-                    return; // cancelled while waiting
-                }
+            Msg::SignedIn(_, r) => {
                 self.acct.signing_in = false;
                 self.acct.device = None;
                 match r {
@@ -1000,6 +1060,8 @@ impl App {
             egui::FontId::proportional(15.0),
             color,
         );
+        focus_ring(ui, &resp, rect, 11);
+        resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Tab, true, active, label));
         resp.on_hover_cursor(egui::CursorIcon::PointingHand)
     }
 
@@ -1042,16 +1104,24 @@ impl App {
             self.confirm_delete = None;
             return;
         };
+        let playing = self.is_playing(&folder);
         let mut close = false;
         let mut delete = false;
-        egui::Modal::new(egui::Id::unique("confirm-delete")).frame(modal_frame(ctx)).show(ctx, |ui| {
+        let modal = egui::Modal::new(egui::Id::unique("confirm-delete")).frame(modal_frame(ctx)).show(ctx, |ui| {
             ui.set_width(380.0);
             ui.label(RichText::new(format!("Delete \"{name}\"?")).size(19.0).strong());
             ui.add_space(4.0);
-            muted(ui, "Its worlds, mods and settings will be removed from this computer. This can't be undone.");
+            if playing {
+                ui.label(
+                    RichText::new("This instance is being played. Close the game first, then delete it.")
+                        .color(c_warn()),
+                );
+            } else {
+                muted(ui, "Its worlds, mods and settings will be removed from this computer. This can't be undone.");
+            }
             ui.add_space(12.0);
             ui.horizontal(|ui| {
-                if danger(ui, "Delete").clicked() {
+                if danger_enabled(ui, "Delete", !playing).clicked() {
                     delete = true;
                 }
                 if secondary(ui, "Cancel").clicked() {
@@ -1059,25 +1129,57 @@ impl App {
                 }
             });
         });
-        if delete {
+        if modal.should_close() {
+            close = true;
+        }
+        if delete && !playing {
             if let Some(inst) = self.instance(&folder).cloned() {
-                match instances::delete(&inst) {
-                    Ok(()) => {
-                        self.toast(format!("Deleted {name}"));
-                        if self.selected.as_deref() == Some(&folder) {
-                            self.page = Page::Library;
-                            self.selected = None;
-                        }
-                    }
-                    Err(e) => self.toast_err(format!("{e:#}")),
+                if self.selected.as_deref() == Some(&folder) {
+                    self.page = Page::Library;
+                    self.selected = None;
                 }
-                self.reload_instances();
+                // a big instance takes a while to remove: it disappears from the lists now, and the folder goes in
+                // the background (a failure brings it back with the next reload and says why)
+                self.deleting.push(folder.clone());
+                self.instances.retain(|i| i.folder != folder);
+                self.start_task(format!("Deleting {name}"), move |_, n| async move {
+                    let result = tokio::task::spawn_blocking(move || instances::delete(&inst)).await;
+                    n.send(Msg::Deleted(folder));
+                    result??;
+                    Ok(format!("Deleted {name}"))
+                });
             }
             close = true;
         }
         if close {
             self.confirm_delete = None;
         }
+    }
+}
+
+/// The zoom to go back to when the smallest window at `zoom` would not fit on a screen of `monitor` points (measured at
+/// that zoom), or `None` when it fits. Zooming out (below 1) is always allowed.
+fn zoom_that_fits(zoom: f32, monitor: egui::Vec2) -> Option<f32> {
+    let fits = zoom * (0.95 * monitor.x / MIN_WINDOW.x).min(0.95 * monitor.y / MIN_WINDOW.y);
+    (zoom > 1.0 && zoom > fits + 0.01).then(|| fits.max(1.0))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn zooming_in_stops_where_the_smallest_window_still_fits() {
+        // a 1920 x 1080 screen at zoom 1: 2x needs a 1720 x 1120 window, too tall
+        let at = |zoom: f32| vec2(1920.0, 1080.0) / zoom;
+        let back = zoom_that_fits(2.0, at(2.0)).unwrap();
+        assert!((back - 1.832).abs() < 0.01, "{back}");
+        // once there, it stays (no small steps frame after frame)
+        assert_eq!(zoom_that_fits(back, at(back)), None);
+        assert_eq!(zoom_that_fits(1.5, at(1.5)), None);
+        // smaller is always fine, and a tiny screen never forces the zoom below 1
+        assert_eq!(zoom_that_fits(0.75, at(0.75)), None);
+        assert_eq!(zoom_that_fits(1.3, vec2(800.0, 500.0) / 1.3), Some(1.0));
     }
 }
 
@@ -1122,9 +1224,13 @@ impl eframe::App for App {
             self.handle_dropped_files(dropped);
         }
         self.svc_frame();
-        if !self.tasks.is_empty() || self.games.values().any(Game::active) {
+        self.follow_zoom(ctx);
+        // progress bars read counters that send no message, so they are looked at a few times a second. A running
+        // game needs nothing of the sort: its log lines wake the window themselves, so a long session costs no CPU.
+        if !self.tasks.is_empty() {
             ctx.request_repaint_after(Duration::from_millis(120));
         }
+        self.flush_settings(ctx);
         self.frames += 1;
         if self.last_account_check.elapsed() > Duration::from_secs(600)
             && self.shot.is_none()
@@ -1218,6 +1324,13 @@ impl eframe::App for App {
         }
         self.console_ui(&ctx);
     }
+
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        // a window moved just before closing still has its new place written
+        if self.settings_save_due.is_some() {
+            let _ = self.settings.save(&self.dirs);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -1226,6 +1339,13 @@ impl eframe::App for App {
 
 struct Shot {
     dir: std::path::PathBuf,
+    /// The pages to picture: `BLOCKFORGE_SHOT_PAGES=home,library-light` picks some (a `-light` ending shows the
+    /// page in the light look), otherwise all of [`SHOT_PAGES`].
+    pages: Vec<String>,
+    /// `BLOCKFORGE_SHOT_ZOOM=1.5`: the size of everything, like Ctrl and + does.
+    zoom: Option<f32>,
+    /// `BLOCKFORGE_SHOT_SIZE=860x560`: the window's size.
+    size: Option<egui::Vec2>,
     step: usize,
     frames: u32,
     waiting: Arc<std::sync::atomic::AtomicBool>,
@@ -1261,7 +1381,24 @@ impl Shot {
         let dir = std::env::var_os("BLOCKFORGE_SHOT")?;
         let dir = std::path::PathBuf::from(dir);
         let _ = std::fs::create_dir_all(&dir);
-        Some(Shot { dir, step: 0, frames: 0, waiting: Arc::new(std::sync::atomic::AtomicBool::new(false)) })
+        let pages = match std::env::var("BLOCKFORGE_SHOT_PAGES") {
+            Ok(list) => list.split(',').map(str::trim).filter(|p| !p.is_empty()).map(String::from).collect(),
+            Err(_) => SHOT_PAGES.iter().map(|p| p.to_string()).collect(),
+        };
+        let zoom = std::env::var("BLOCKFORGE_SHOT_ZOOM").ok().and_then(|z| z.parse().ok());
+        let size = std::env::var("BLOCKFORGE_SHOT_SIZE").ok().and_then(|s| {
+            let (w, h) = s.split_once('x')?;
+            Some(vec2(w.parse().ok()?, h.parse().ok()?))
+        });
+        Some(Shot {
+            dir,
+            pages,
+            zoom,
+            size,
+            step: 0,
+            frames: 0,
+            waiting: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        })
     }
 }
 
@@ -1274,17 +1411,37 @@ impl App {
         }
         shot.frames += 1;
         let step = shot.step;
-        if step >= SHOT_PAGES.len() {
+        let Some(full_name) = shot.pages.get(step).cloned() else {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             return;
+        };
+        if step == 0 && shot.frames == 1 {
+            if let Some(z) = shot.zoom {
+                ctx.set_zoom_factor(z);
+            }
+            if let Some(size) = shot.size {
+                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
+            }
         }
-        let name = SHOT_PAGES[step];
+        let name = full_name.as_str();
         if shot.frames == 1 {
             let first = self.instances.first().map(|i| i.folder.clone());
             if name != "who" {
                 self.who = None;
             }
-            match name {
+            self.confirm_delete = None;
+            self.rename_target = None;
+            self.desc_edit = None;
+            self.offline_play = None;
+            self.loader_dialog = None;
+            self.acct.confirm_remove = None;
+            // a page name ending in "-light" is pictured in the light look, any other in the dark one
+            let light = name.ends_with("-light");
+            if light != !theme::is_dark() {
+                theme::set_dark(!light);
+                theme::apply(ctx, false);
+            }
+            match name.trim_end_matches("-light") {
                 "home" => self.page = Page::Home,
                 "library" => self.page = Page::Library,
                 "instance"
@@ -1316,6 +1473,7 @@ impl App {
                                     folder: f,
                                     player: "Player".into(),
                                     fast_start: false,
+                                    task: 0,
                                     lines: sample_log(),
                                     phase: Phase::Exited(Some(0)),
                                     kill: None,
@@ -1351,25 +1509,84 @@ impl App {
                 "packs" => self.page = Page::Packs,
                 "ftb" => self.page = Page::Ftb,
                 "about" => self.page = Page::About,
-                "home-light" => self.page = Page::Home,
-                "mods-light" => {
+                "mods" => {
                     if let Some(f) = first {
                         self.open_instance(&f);
                         self.tab = InstTab::Mods;
                     }
                 }
-                "settings-light" => {
-                    self.page = Page::Settings;
-                    self.settings.theme = "com.blockforge.launcher.themes.Material3Light".into();
-                    theme::set_dark(false);
-                    theme::apply(ctx, false);
+                // the dialogs
+                "delete" => {
+                    self.page = Page::Library;
+                    self.confirm_delete = first;
+                }
+                "rename" => {
+                    self.page = Page::Library;
+                    self.rename_target = first.map(|f| (f, "A new name".into()));
+                }
+                "description" => {
+                    self.page = Page::Library;
+                    self.desc_edit = first.map(|f| (f, "A few words about this instance.".into()));
+                }
+                "offline" => {
+                    self.page = Page::Library;
+                    self.offline_play = first.map(|f| (f, "ab".into(), true));
+                }
+                "loader" => {
+                    self.page = Page::Library;
+                    if let Some(f) = first {
+                        self.apply(instance_menu::Act::ChangeLoader(f));
+                    }
+                }
+                "who-offline" => {
+                    self.page = Page::Home;
+                    self.who = Some(whoplays::WhoState::offline_step());
+                }
+                "accounts-remove" => {
+                    self.page = Page::Accounts;
+                    self.acct.confirm_remove = self.accounts.first().map(|a| a.uuid.clone());
+                }
+                "library-empty" => {
+                    self.page = Page::Library;
+                    self.library_search = "no instance is called this".into();
+                }
+                // keys pressed by the tour itself (below): the picture shows what they did
+                "tab-focus" => self.page = Page::Home,
+                "rename-esc" => {
+                    self.page = Page::Library;
+                    self.rename_target = first.map(|f| (f, "A new name".into()));
+                }
+                "delete-esc" => {
+                    self.page = Page::Library;
+                    self.confirm_delete = first;
+                }
+                "offline-enter" => {
+                    self.page = Page::Library;
+                    self.offline_play = first.map(|f| (f, "ab".into(), false));
                 }
                 _ => {}
             }
         }
+        let frame = self.shot.as_ref().map_or(0, |s| s.frames);
+        let press = |key: egui::Key| {
+            let event = egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: Default::default(),
+            };
+            ctx.input_mut(|i| i.events.push(event));
+        };
+        match name.trim_end_matches("-light") {
+            "tab-focus" if matches!(frame, 5 | 8 | 11) => ctx.memory_mut(|m| m.move_focus(egui::FocusDirection::Next)),
+            "rename-esc" | "delete-esc" if frame == 10 => press(egui::Key::Escape),
+            "offline-enter" if frame == 10 => press(egui::Key::Enter),
+            _ => {}
+        }
         let wait = if matches!(
-            name,
-            "discover" | "create-fabric" | "instance-mods" | "mods-light" | "packs" | "ftb" | "about"
+            name.trim_end_matches("-light"),
+            "discover" | "create-fabric" | "instance-mods" | "mods" | "packs" | "ftb" | "about" | "loader"
         ) {
             180
         } else {

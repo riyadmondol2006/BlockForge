@@ -49,7 +49,10 @@ pub struct InstDraft {
     post: String,
     wrapper: String,
     error: Option<String>,
-    saved: bool,
+    /// When Save last worked: "Saved" shows for a moment after it (not for ever, while more is changed).
+    saved: Option<std::time::Instant>,
+    /// The single player worlds of the instance, read once when the settings are opened (not on every frame).
+    worlds: Vec<String>,
 }
 
 fn ex_str(l: &LauncherBlock, key: &str) -> Option<String> {
@@ -115,7 +118,8 @@ impl InstDraft {
             post: ex_str(l, "postExitCommand").unwrap_or_default(),
             wrapper: l.wrapper_command.clone().unwrap_or_default(),
             error: None,
-            saved: false,
+            saved: None,
+            worlds: world_names(&inst.root.join("saves")),
         }
     }
 
@@ -229,6 +233,26 @@ fn stacked(ui: &mut Ui, title: &str, hint: &str, value: &mut String, placeholder
     );
 }
 
+/// The folders in `saves`, sorted by name.
+fn world_names(saves: &std::path::Path) -> Vec<String> {
+    let mut worlds: Vec<String> = std::fs::read_dir(saves)
+        .map(|rd| {
+            rd.flatten()
+                .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+                .map(|e| e.file_name().to_string_lossy().to_string())
+                .collect()
+        })
+        .unwrap_or_default();
+    worlds.sort_by_cached_key(|w| w.to_lowercase());
+    worlds
+}
+
+/// This computer's memory in MB (0 when unknown). It doesn't change while the launcher runs, so it is asked for once.
+fn total_memory_mb() -> u64 {
+    static TOTAL: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *TOTAL.get_or_init(|| crate::platform::memory_mb().0)
+}
+
 fn gigabytes(mb: u64) -> String {
     format!("{:.1} GB", mb as f64 / 1024.0)
 }
@@ -248,21 +272,14 @@ impl App {
             self.inst_draft = Some(InstDraft::from(inst, &self.settings));
         }
         let mut d = self.inst_draft.take().unwrap();
-        let total_mb = crate::platform::memory_mb().0;
+        let total_mb = total_memory_mb();
         let launcher_auto = self.settings.automatic_memory != Some(false);
         let launcher_mem = self.settings.maximum_memory;
         let metaspace = self.settings.metaspace;
         let uses_mc_java = d.use_mc_java.unwrap_or(true) && inst.file.version.java_version.is_some();
         let accounts: Vec<(String, String)> =
             self.accounts.iter().map(|a| (a.username.clone(), a.name().to_string())).collect();
-        let worlds: Vec<String> = std::fs::read_dir(inst.root.join("saves"))
-            .map(|rd| {
-                rd.flatten()
-                    .filter(|e| e.path().is_dir())
-                    .map(|e| e.file_name().to_string_lossy().to_string())
-                    .collect()
-            })
-            .unwrap_or_default();
+        let worlds = std::mem::take(&mut d.worlds);
         let runtimes = self.runtimes.clone();
         let default_args = self.settings.java_parameters.clone();
         let default_path = self.settings.java_path.clone();
@@ -284,16 +301,19 @@ impl App {
                 if secondary(ui, "Reset").clicked() {
                     reset = true;
                 }
-                if d.saved {
+                const SHOWN: std::time::Duration = std::time::Duration::from_secs(3);
+                if let Some(left) = d.saved.and_then(|t| SHOWN.checked_sub(t.elapsed())) {
                     small_muted(ui, "Saved");
+                    ui.ctx().request_repaint_after(left);
                 }
             });
         });
         if let Some(e) = &d.error {
             ui.label(RichText::new(e).color(c_danger()));
         }
-        ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
-            ui.set_max_width(780.0);
+        ScrollArea::vertical().id_salt("instance-settings").auto_shrink(false).show(ui, |ui| {
+            // at most 780 wide, and never wider than the window
+            ui.set_max_width(ui.available_width().min(780.0));
             match d.tab {
                 0 => {
                     card(ui, |ui| {
@@ -484,6 +504,7 @@ impl App {
             ui.add_space(12.0);
         });
 
+        d.worlds = worlds;
         if reset {
             d = InstDraft::from(inst, &self.settings);
         }
@@ -495,13 +516,11 @@ impl App {
                     let has_java = inst.file.version.java_version.is_some();
                     d.write_to(&mut self.instances[idx].file.launcher, &settings, uses_mc_java, has_java);
                     match self.instances[idx].save() {
-                        Ok(()) => d.saved = true,
+                        Ok(()) => d.saved = Some(std::time::Instant::now()),
                         Err(e) => d.error = Some(format!("Couldn't save: {e:#}")),
                     }
                 }
             }
-        } else if d.saved && (reset) {
-            d.saved = false;
         }
         self.inst_draft = Some(d);
         if rename {
@@ -517,7 +536,7 @@ impl App {
         let Some((folder, mut name)) = self.rename_target.clone() else { return };
         let mut close = false;
         let mut apply = false;
-        egui::Modal::new(egui::Id::unique("rename")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
+        let modal = egui::Modal::new(egui::Id::unique("rename")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
             ui.set_width(380.0);
             ui.label(RichText::new("Rename instance").size(19.0).strong());
             ui.add_space(6.0);
@@ -527,7 +546,8 @@ impl App {
                     .margin(egui::Margin::symmetric(12, 9))
                     .background_color(c_field()),
             );
-            r.request_focus();
+            // typing can start at once
+            focus_when_shown(ui, &r);
             ui.add_space(8.0);
             ui.horizontal(|ui| {
                 let ok = !name.trim().is_empty();
@@ -542,6 +562,9 @@ impl App {
             });
         });
         self.rename_target = Some((folder.clone(), name.clone()));
+        if modal.should_close() {
+            close = true;
+        }
         if apply {
             if let Some(idx) = self.instances.iter().position(|i| i.folder == folder) {
                 self.instances[idx].file.launcher.name = name.trim().to_string();
@@ -563,5 +586,23 @@ impl App {
                 n.send(Msg::Runtimes(list));
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::world_names;
+
+    #[test]
+    fn worlds_are_the_folders_in_saves_sorted_by_name() {
+        let saves = std::env::temp_dir().join(format!("bf-worlds-{}", std::process::id()));
+        for w in ["beta", "Alpha", "gamma"] {
+            std::fs::create_dir_all(saves.join(w)).unwrap();
+        }
+        std::fs::write(saves.join("notes.txt"), b"not a world").unwrap();
+        assert_eq!(world_names(&saves), ["Alpha", "beta", "gamma"]);
+        std::fs::remove_dir_all(&saves).unwrap();
+        // no saves folder yet: no worlds, and no error
+        assert!(world_names(&saves).is_empty());
     }
 }

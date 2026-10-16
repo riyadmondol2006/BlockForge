@@ -2,16 +2,20 @@
 
 use egui::{Align, Layout, RichText, ScrollArea, Ui};
 
+use super::App;
 use super::theme::*;
 use super::widgets::*;
-use super::{App, Msg};
-use crate::msauth::{self, DeviceCode};
+use crate::msauth::DeviceCode;
 
 #[derive(Default)]
 pub struct AcctState {
     pub offline_name: String,
     pub device: Option<DeviceCode>,
     pub signing_in: bool,
+    /// Counts the sign-ins started, so the answer of one that was cancelled is told apart from the current one.
+    pub attempt: u64,
+    /// The account whose Remove was pressed, waiting for "Remove" to be pressed again.
+    pub confirm_remove: Option<String>,
 }
 
 impl App {
@@ -23,13 +27,18 @@ impl App {
         let mut remove: Option<String> = None;
         let mut change_skin: Option<String> = None;
         let current = self.current_account().map(|a| a.uuid.clone());
-        ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
+        ScrollArea::vertical().id_salt("accounts").auto_shrink(false).show(ui, |ui| {
             let accounts = self.accounts.clone();
             for acc in &accounts {
                 card(ui, |ui| {
+                    // the buttons keep their room on the right (as wide as on the last frame)
+                    let buttons_id = ui.scope_id().with(("account-buttons", &acc.uuid));
+                    let buttons_w = remembered_width(ui, buttons_id, 300.0);
+                    let mut used = buttons_w;
                     ui.horizontal(|ui| {
                         self.account_avatar(ui, &acc.uuid, acc.name(), acc.offline, 44.0);
                         ui.vertical(|ui| {
+                            ui.set_max_width((ui.available_width() - buttons_w - 12.0).max(120.0));
                             ui.horizontal(|ui| {
                                 ui.label(RichText::new(acc.name()).strong().size(16.0));
                                 tag(ui, acc.kind(), if acc.offline { c_warn() } else { c_accent() });
@@ -40,8 +49,19 @@ impl App {
                             small_muted(ui, &acc.uuid);
                         });
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            // removing asks once more: a Microsoft account has to be signed in again afterwards
+                            if self.acct.confirm_remove.as_deref() == Some(acc.uuid.as_str()) {
+                                if secondary(ui, "Cancel").clicked() {
+                                    self.acct.confirm_remove = None;
+                                }
+                                if danger(ui, "Yes, remove").clicked() {
+                                    remove = Some(acc.uuid.clone());
+                                }
+                                used = ui.min_rect().width();
+                                return;
+                            }
                             if secondary(ui, "Remove").clicked() {
-                                remove = Some(acc.uuid.clone());
+                                self.acct.confirm_remove = Some(acc.uuid.clone());
                             }
                             if secondary(ui, "Change skin").clicked() {
                                 change_skin = Some(acc.uuid.clone());
@@ -51,8 +71,10 @@ impl App {
                             } else if primary(ui, "Use").clicked() {
                                 select = Some(acc.uuid.clone());
                             }
+                            used = ui.min_rect().width();
                         });
                     });
+                    remember_width(ui, buttons_id, used);
                 });
                 ui.add_space(2.0);
             }
@@ -90,15 +112,14 @@ impl App {
                         ui.horizontal(|ui| {
                             ui.spinner();
                             muted(ui, "Asking Microsoft for a code");
+                            if secondary(ui, "Cancel").clicked() {
+                                self.acct.signing_in = false;
+                            }
                         });
                     }
                     None => {
                         if primary(ui, "Sign in with Microsoft").clicked() {
-                            self.acct.signing_in = true;
-                            let n = self.notifier();
-                            self.rt.spawn(async move {
-                                n.send(Msg::Device(msauth::start_device_login().await.map_err(|e| format!("{e:#}"))));
-                            });
+                            self.start_sign_in();
                         }
                     }
                 }
@@ -110,9 +131,8 @@ impl App {
                 ui.horizontal(|ui| {
                     let mut name = std::mem::take(&mut self.acct.offline_name);
                     let r = search_field(ui, &mut name, "Player name", 240.0);
-                    let valid = !name.trim().is_empty()
-                        && name.trim().len() <= 16
-                        && name.trim().chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+                    // the same rule as everywhere else a name is typed (Minecraft's own: 3 to 16 characters)
+                    let valid = super::whoplays::valid_player_name(name.trim());
                     let add = primary_enabled(ui, "Add", valid).clicked()
                         || (valid && r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)));
                     if add {
@@ -127,7 +147,7 @@ impl App {
                     }
                     self.acct.offline_name = name;
                 });
-                small_muted(ui, "1\u{2013}16 letters, digits or underscores.");
+                small_muted(ui, "3\u{2013}16 letters, numbers or underscores.");
             });
         });
         if let Some(id) = change_skin {
@@ -138,6 +158,7 @@ impl App {
             self.save_settings();
         }
         if let Some(id) = remove {
+            self.acct.confirm_remove = None;
             self.accounts.retain(|a| a.uuid != id);
             if self.settings.last_account.as_deref() == Some(&id) {
                 self.settings.last_account = None;

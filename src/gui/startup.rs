@@ -54,6 +54,9 @@ pub fn collect(app: &App) -> Vec<Warning> {
     let test = app.dirs.base.join(".test");
     if std::fs::write(&test, b"").is_err() {
         out.push(Warning::NotWritable);
+    } else {
+        // only a test: it isn't left lying in the data folder
+        let _ = std::fs::remove_file(&test);
     }
     out
 }

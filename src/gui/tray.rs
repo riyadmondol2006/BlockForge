@@ -1,4 +1,5 @@
-//! The tray icon and its menu (Kill Minecraft, Toggle Console, Open Launcher Folder, Quit), like the Java edition.
+//! The tray icon and its menu (stop Minecraft, show or hide the console, open the launcher folder, quit), like the
+//! Java edition.
 //! Linux uses the StatusNotifier protocol (no GTK needed); Windows and macOS use the system tray.
 
 use super::{Msg, Notifier};
@@ -13,9 +14,9 @@ pub enum TrayCmd {
 }
 
 const ITEMS: [(&str, TrayCmd); 4] = [
-    ("Kill Minecraft", TrayCmd::KillMinecraft),
-    ("Toggle Console", TrayCmd::ToggleConsole),
-    ("Open Launcher Folder", TrayCmd::OpenFolder),
+    ("Stop Minecraft", TrayCmd::KillMinecraft),
+    ("Show or hide the console", TrayCmd::ToggleConsole),
+    ("Open the launcher folder", TrayCmd::OpenFolder),
     ("Quit", TrayCmd::Quit),
 ];
 
@@ -29,7 +30,8 @@ fn icon_rgba(size: u32) -> Option<(Vec<u8>, u32, u32)> {
 
 #[cfg(target_os = "linux")]
 pub struct Tray {
-    handle: Option<ksni::Handle<LinuxTray>>,
+    /// The icon's handle, which arrives once the desktop has answered (never, on a desktop without a tray).
+    handle: Option<tokio::sync::oneshot::Receiver<ksni::Handle<LinuxTray>>>,
     rt: tokio::runtime::Handle,
 }
 
@@ -86,7 +88,7 @@ impl Tray {
     /// desktops that have no tray (the answer arrives later through `Msg::Toast`).
     pub fn start(rt: &tokio::runtime::Runtime, n: Notifier) -> Tray {
         use ksni::TrayMethods;
-        let (tx, rx) = std::sync::mpsc::channel();
+        let (tx, rx) = tokio::sync::oneshot::channel();
         let tray = LinuxTray { n: n.clone() };
         rt.spawn(async move {
             match tray.spawn().await {
@@ -96,15 +98,16 @@ impl Tray {
                 Err(e) => n.send(Msg::Toast(format!("No tray available on this desktop ({e})"), false)),
             }
         });
-        // the handle arrives a moment later; `stop` waits briefly for it if it has to
-        let handle = rx.recv_timeout(std::time::Duration::from_millis(300)).ok();
-        Tray { handle, rt: rt.handle().clone() }
+        // the window doesn't wait for the desktop: `stop` takes the handle whenever it arrives
+        Tray { handle: Some(rx), rt: rt.handle().clone() }
     }
 
     pub fn stop(mut self) {
-        if let Some(h) = self.handle.take() {
+        if let Some(rx) = self.handle.take() {
             self.rt.spawn(async move {
-                h.shutdown().await;
+                if let Ok(h) = rx.await {
+                    h.shutdown().await;
+                }
             });
         }
     }
@@ -112,7 +115,7 @@ impl Tray {
 
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 pub struct Tray {
-    _icon: tray_icon::TrayIcon,
+    _icon: Option<tray_icon::TrayIcon>,
 }
 
 #[cfg(any(target_os = "windows", target_os = "macos"))]
@@ -127,7 +130,7 @@ impl Tray {
             ids.push((item.id().clone(), cmd));
             let _ = menu.append(&item);
         }
-        let n1 = n.clone();
+        let (n1, n2) = (n.clone(), n.clone());
         MenuEvent::set_event_handler(Some(move |e: MenuEvent| {
             if let Some((_, cmd)) = ids.iter().find(|(id, _)| *id == e.id) {
                 n1.send(Msg::Tray(*cmd));
@@ -144,7 +147,15 @@ impl Tray {
                 builder = builder.with_icon(icon);
             }
         }
-        Tray { _icon: builder.build().expect("tray icon") }
+        // a system without a tray area (or one that refuses the icon) gets a message instead of a crash
+        let icon = match builder.build() {
+            Ok(icon) => Some(icon),
+            Err(e) => {
+                n2.send(Msg::Toast(format!("No tray available on this system ({e})"), false));
+                None
+            }
+        };
+        Tray { _icon: icon }
     }
 
     pub fn stop(self) {}

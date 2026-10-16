@@ -27,6 +27,9 @@ impl App {
             Stroke::new(1.0, if hovered { c_accent().gamma_multiply(0.7) } else { c_border() }),
             egui::StrokeKind::Inside,
         );
+        // Tab reaches the card too (Enter opens it)
+        focus_ring(ui, &resp, rect, 16);
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, inst.name()));
         let mut child = ui.new_child(UiBuilder::new().max_rect(rect.shrink(14.0)).layout(Layout::top_down(Align::Min)));
         child.spacing_mut().item_spacing = vec2(8.0, 6.0);
         child.horizontal(|ui| {
@@ -63,7 +66,9 @@ impl App {
                 if let Some(a) = self.instance_menu(ui, inst) {
                     act = Some(a);
                 }
-            });
+            })
+            .response
+            .on_hover_text("More");
             if let Some(a) = self.fast_start_switch(ui, inst) {
                 act = Some(a);
             }
@@ -74,11 +79,63 @@ impl App {
         act
     }
 
+    /// The picture, name and details of the instance on Home. With `beside` (the width of the buttons on its right)
+    /// it leaves them their room, cutting a long name short.
+    fn hero_title(&self, ui: &mut Ui, h: &Instance, beside: Option<f32>) {
+        ui.horizontal(|ui| {
+            self.instance_icon(ui, h, 76.0);
+            ui.vertical(|ui| {
+                if let Some(w) = beside {
+                    ui.set_max_width(ui.available_width() - w - 16.0);
+                }
+                ui.add_space(4.0);
+                small_muted(ui, if h.last_played() > 0 { "CONTINUE PLAYING" } else { "READY TO PLAY" });
+                ui.add(egui::Label::new(RichText::new(h.name()).size(24.0).strong()).truncate());
+                let loader = h.loader().map(|(k, v)| format!("{k} {v}")).unwrap_or_else(|| "Vanilla".into());
+                muted(
+                    ui,
+                    format!(
+                        "Minecraft {}  \u{00B7}  {}  \u{00B7}  {}",
+                        h.mc_version(),
+                        loader,
+                        time_ago(h.last_played())
+                    ),
+                );
+            });
+        });
+    }
+
+    /// The picture, name and tags at the top of an instance's page; `beside` as for [`App::hero_title`].
+    fn instance_title(&self, ui: &mut Ui, inst: &Instance, beside: Option<f32>) {
+        ui.horizontal(|ui| {
+            self.instance_icon(ui, inst, 68.0);
+            ui.vertical(|ui| {
+                if let Some(w) = beside {
+                    ui.set_max_width(ui.available_width() - w - 16.0);
+                }
+                ui.add_space(2.0);
+                ui.add(egui::Label::new(RichText::new(inst.name()).size(26.0).strong()).truncate());
+                ui.horizontal(|ui| {
+                    match inst.loader() {
+                        Some((kind, ver)) => tag(ui, &format!("{kind} {ver}"), loader_color(kind)),
+                        None => tag(ui, "Vanilla", c_muted()),
+                    }
+                    tag(ui, &format!("Minecraft {}", inst.mc_version()), c_muted());
+                    if inst.mod_count > 0 {
+                        tag(ui, &format!("{} mods", inst.mod_count), c_muted());
+                    }
+                });
+            });
+        });
+    }
+
     pub(super) fn home_ui(&mut self, ui: &mut Ui) {
         let name = self.current_account().map(|a| a.name().to_string());
-        let hero = self.instances.iter().find(|i| i.last_played() > 0).or(self.instances.first()).cloned();
+        // the instances are looked up by position, not copied: an instance carries its whole version file
+        let hero =
+            self.instances.iter().position(|i| i.last_played() > 0).or((!self.instances.is_empty()).then_some(0));
         let mut action = None;
-        ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
+        ScrollArea::vertical().id_salt("home").auto_shrink(false).show(ui, |ui| {
             match &name {
                 Some(n) => heading(ui, &format!("Welcome back, {n}")),
                 None => heading(ui, "Welcome to BlockForge"),
@@ -105,8 +162,9 @@ impl App {
                 ui.add_space(8.0);
             }
 
-            match &hero {
+            match hero {
                 Some(h) => {
+                    let h = &self.instances[h];
                     egui::Frame::new()
                         .fill(c_accent_soft())
                         .stroke(Stroke::new(1.0, c_accent().gamma_multiply(0.35)))
@@ -114,27 +172,19 @@ impl App {
                         .inner_margin(egui::Margin::same(20))
                         .show(ui, |ui| {
                             ui.set_width(ui.available_width());
+                            // the buttons keep their room on the right; when the window is too narrow for both they
+                            // go on a row of their own, and a long name is cut short (all of it shows on hover)
+                            let buttons_id = egui::Id::unique("home-hero-buttons");
+                            let buttons_w = remembered_width(ui, buttons_id, 330.0);
+                            let narrow = ui.available_width() - 76.0 - buttons_w < 240.0;
+                            let mut used = buttons_w;
+                            if narrow {
+                                self.hero_title(ui, h, None);
+                            }
                             ui.horizontal(|ui| {
-                                self.instance_icon(ui, h, 76.0);
-                                ui.vertical(|ui| {
-                                    ui.add_space(4.0);
-                                    small_muted(
-                                        ui,
-                                        if h.last_played() > 0 { "CONTINUE PLAYING" } else { "READY TO PLAY" },
-                                    );
-                                    ui.label(RichText::new(h.name()).size(24.0).strong());
-                                    let loader =
-                                        h.loader().map(|(k, v)| format!("{k} {v}")).unwrap_or_else(|| "Vanilla".into());
-                                    muted(
-                                        ui,
-                                        format!(
-                                            "Minecraft {}  \u{00B7}  {}  \u{00B7}  {}",
-                                            h.mc_version(),
-                                            loader,
-                                            time_ago(h.last_played())
-                                        ),
-                                    );
-                                });
+                                if !narrow {
+                                    self.hero_title(ui, h, Some(buttons_w));
+                                }
                                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                     if let Some(a) = self.play_as_menu(ui, &h.folder) {
                                         action = Some(a);
@@ -149,8 +199,10 @@ impl App {
                                     if secondary(ui, "Details").clicked() {
                                         action = Some(Act::Open(h.folder.clone()));
                                     }
+                                    used = ui.min_rect().width();
                                 });
                             });
+                            remember_width(ui, buttons_id, used);
                         });
                 }
                 None => {
@@ -177,11 +229,11 @@ impl App {
                 section(ui, "Your instances");
                 let width = 262.0;
                 let per_row = ((ui.available_width() + 12.0) / (width + 12.0)).floor().max(1.0) as usize;
-                let list: Vec<Instance> = self.instances.iter().take(per_row * 2).cloned().collect();
-                for row in list.chunks(per_row) {
+                let shown = self.instances.len().min(per_row * 2);
+                for row in (0..shown).collect::<Vec<_>>().chunks(per_row) {
                     ui.horizontal(|ui| {
-                        for inst in row {
-                            if let Some(a) = self.instance_card(ui, inst, width) {
+                        for &i in row {
+                            if let Some(a) = self.instance_card(ui, &self.instances[i], width) {
                                 action = Some(a);
                             }
                         }
@@ -206,7 +258,8 @@ impl App {
     }
 
     pub(super) fn library_ui(&mut self, ui: &mut Ui) {
-        let mut action = None;
+        // in a narrow window the search and the sorting go under the title instead of beside it
+        let narrow = ui.available_width() < 780.0;
         ui.horizontal(|ui| {
             heading(ui, "Library");
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -216,39 +269,55 @@ impl App {
                 if secondary(ui, "Import").clicked() {
                     self.open_import(None);
                 }
-                let sorting = self.settings.default_instance_sorting.clone();
-                let label = match sorting.as_str() {
-                    "BY_LAST_PLAYED" => "By Last Played",
-                    "BY_NUMBER_OF_PLAYS" => "By Number of Plays",
-                    _ => "By Name",
-                };
-                egui::ComboBox::from_id_salt("library-sort").selected_text(label).width(170.0).show_ui(ui, |ui| {
-                    for (id, text) in [
-                        ("BY_NAME", "By Name"),
-                        ("BY_LAST_PLAYED", "By Last Played"),
-                        ("BY_NUMBER_OF_PLAYS", "By Number of Plays"),
-                    ] {
-                        if ui.selectable_label(sorting == id, text).clicked() && sorting != id {
-                            self.settings.default_instance_sorting = id.to_string();
-                            self.save_settings();
-                        }
-                    }
-                });
-                let mut s = std::mem::take(&mut self.library_search);
-                search_field(ui, &mut s, "Search instances", 240.0);
-                self.library_search = s;
+                if !narrow {
+                    self.library_filters(ui);
+                }
             });
         });
+        if narrow {
+            ui.horizontal(|ui| self.library_filters(ui));
+        }
         ui.add_space(8.0);
-        let q = self.library_search.to_lowercase();
-        let mut list: Vec<Instance> =
-            self.instances.iter().filter(|i| q.is_empty() || i.name().to_lowercase().contains(&q)).cloned().collect();
-        match self.settings.default_instance_sorting.as_str() {
-            "BY_LAST_PLAYED" => list.sort_by(|a, b| b.last_played().cmp(&a.last_played())),
-            "BY_NUMBER_OF_PLAYS" => {
-                list.sort_by(|a, b| b.file.launcher.num_plays.unwrap_or(0).cmp(&a.file.launcher.num_plays.unwrap_or(0)))
+        if let Some(a) = self.library_list(ui) {
+            self.apply(a);
+        }
+    }
+
+    /// The sorting and the search of the Library.
+    fn library_filters(&mut self, ui: &mut Ui) {
+        let sorting = self.settings.default_instance_sorting.clone();
+        let label = match sorting.as_str() {
+            "BY_LAST_PLAYED" => "Last played first",
+            "BY_NUMBER_OF_PLAYS" => "Most played first",
+            _ => "By name",
+        };
+        egui::ComboBox::from_id_salt("library-sort").selected_text(label).width(170.0).show_ui(ui, |ui| {
+            for (id, text) in [
+                ("BY_NAME", "By name"),
+                ("BY_LAST_PLAYED", "Last played first"),
+                ("BY_NUMBER_OF_PLAYS", "Most played first"),
+            ] {
+                if ui.selectable_label(sorting == id, text).clicked() && sorting != id {
+                    self.settings.default_instance_sorting = id.to_string();
+                    self.save_settings();
+                }
             }
-            _ => list.sort_by_key(|i| i.name().to_lowercase()),
+        });
+        let mut s = std::mem::take(&mut self.library_search);
+        search_field(ui, &mut s, "Search instances", 240.0);
+        self.library_search = s;
+    }
+
+    /// The instances matching the search, as cards. Returns what was asked of one of them.
+    fn library_list(&self, ui: &mut Ui) -> Option<Act> {
+        let mut action = None;
+        let q = self.library_search.trim().to_lowercase();
+        let mut list: Vec<&Instance> =
+            self.instances.iter().filter(|i| q.is_empty() || i.name().to_lowercase().contains(&q)).collect();
+        match self.settings.default_instance_sorting.as_str() {
+            "BY_LAST_PLAYED" => list.sort_by_key(|i| std::cmp::Reverse(i.last_played())),
+            "BY_NUMBER_OF_PLAYS" => list.sort_by_key(|i| std::cmp::Reverse(i.file.launcher.num_plays.unwrap_or(0))),
+            _ => list.sort_by_cached_key(|i| i.name().to_lowercase()),
         }
         if list.is_empty() {
             card(ui, |ui| {
@@ -259,9 +328,9 @@ impl App {
                     muted(ui, "No instance matches your search.");
                 }
             });
-            return;
+            return None;
         }
-        ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
+        ScrollArea::vertical().id_salt("library").auto_shrink(false).show(ui, |ui| {
             let width = 262.0;
             let per_row = ((ui.available_width() + 12.0) / (width + 12.0)).floor().max(1.0) as usize;
             for row in list.chunks(per_row) {
@@ -274,9 +343,7 @@ impl App {
                 });
             }
         });
-        if let Some(a) = action {
-            self.apply(a);
-        }
+        action
     }
 
     pub(super) fn instance_ui(&mut self, ui: &mut Ui) {
@@ -295,22 +362,18 @@ impl App {
             }
         });
         ui.add_space(4.0);
+        // as on Home: the buttons keep their room, or get a row of their own in a narrow window
+        let buttons_id = egui::Id::unique("instance-header-buttons");
+        let buttons_w = remembered_width(ui, buttons_id, 420.0);
+        let narrow = ui.available_width() - 68.0 - buttons_w < 260.0;
+        let mut used = buttons_w;
+        if narrow {
+            self.instance_title(ui, &inst, None);
+        }
         ui.horizontal(|ui| {
-            self.instance_icon(ui, &inst, 68.0);
-            ui.vertical(|ui| {
-                ui.add_space(2.0);
-                ui.label(RichText::new(inst.name()).size(26.0).strong());
-                ui.horizontal(|ui| {
-                    match inst.loader() {
-                        Some((kind, ver)) => tag(ui, &format!("{kind} {ver}"), loader_color(kind)),
-                        None => tag(ui, "Vanilla", c_muted()),
-                    }
-                    tag(ui, &format!("Minecraft {}", inst.mc_version()), c_muted());
-                    if inst.mod_count > 0 {
-                        tag(ui, &format!("{} mods", inst.mod_count), c_muted());
-                    }
-                });
-            });
+            if !narrow {
+                self.instance_title(ui, &inst, Some(buttons_w));
+            }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if let Some(a) = self.play_as_menu(ui, &folder) {
                     action = Some(a);
@@ -329,7 +392,9 @@ impl App {
                     if let Some(a) = self.instance_menu(ui, &inst) {
                         action = Some(a);
                     }
-                });
+                })
+                .response
+                .on_hover_text("More");
                 match self.games.get(&folder).map(|g| g.phase) {
                     Some(Phase::Preparing) => {
                         ui.spinner();
@@ -340,8 +405,10 @@ impl App {
                     }
                     _ => {}
                 }
+                used = ui.min_rect().width();
             });
         });
+        remember_width(ui, buttons_id, used);
         ui.add_space(8.0);
         ui.horizontal(|ui| {
             for (t, label) in [
@@ -371,7 +438,7 @@ impl App {
     }
 
     fn tab_overview(&mut self, ui: &mut Ui, inst: &Instance) {
-        ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
+        ScrollArea::vertical().id_salt("instance-overview").auto_shrink(false).show(ui, |ui| {
             card(ui, |ui| {
                 let java = inst
                     .file
@@ -402,13 +469,16 @@ impl App {
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
                     if secondary_icon(ui, Icon::Folder, "Open folder").clicked() {
-                        let _ = open::that(&inst.root);
+                        self.open_path(&inst.root);
                     }
                     if secondary(ui, "Rename").clicked() {
                         self.rename_target = Some((inst.folder.clone(), inst.name().to_string()));
                     }
                     if secondary(ui, "Open saves").clicked() {
-                        let _ = open::that(inst.root.join("saves"));
+                        // a new instance has no saves folder until its first world
+                        let saves = inst.root.join("saves");
+                        let _ = std::fs::create_dir_all(&saves);
+                        self.open_path(&saves);
                     }
                     if secondary(ui, "Export").clicked() {
                         self.open_export(&inst.folder);
@@ -474,9 +544,8 @@ impl App {
                 }
             });
         }
-        let Some(game) = self.games.get(&folder) else { return };
-        let lines: Vec<(Level, String)> = game.lines.iter().map(|l| (l.level, l.text.clone())).collect();
-        let phase = game.phase;
+        let Some(phase) = self.games.get(&folder).map(|g| g.phase) else { return };
+        let (mut copy, mut clear) = (false, false);
         ui.horizontal(|ui| {
             let status = match phase {
                 Phase::Preparing => "Getting ready".to_string(),
@@ -488,24 +557,32 @@ impl App {
             };
             muted(ui, status);
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if secondary(ui, "Copy all").clicked() {
-                    let text: Vec<&str> = lines.iter().map(|(_, t)| t.as_str()).collect();
-                    ui.ctx().copy_text(text.join("\n"));
-                    self.toast("Log copied");
-                }
-                if secondary(ui, "Clear").clicked() {
-                    if let Some(g) = self.games.get_mut(&folder) {
-                        g.lines.clear();
-                    }
-                }
+                copy = secondary(ui, "Copy all").clicked();
+                clear = secondary(ui, "Clear").clicked();
                 let mut f = std::mem::take(&mut self.log_filter);
                 search_field(ui, &mut f, "Filter", 200.0);
                 self.log_filter = f;
             });
         });
-        let filter = self.log_filter.to_lowercase();
-        let shown: Vec<&(Level, String)> =
-            lines.iter().filter(|(_, t)| filter.is_empty() || t.to_lowercase().contains(&filter)).collect();
+        if clear {
+            if let Some(g) = self.games.get_mut(&folder) {
+                g.lines.clear();
+            }
+        }
+        let Some(game) = self.games.get(&folder) else { return };
+        if copy {
+            let text: Vec<&str> = game.lines.iter().map(|l| l.text.as_str()).collect();
+            ui.ctx().copy_text(text.join("\n"));
+        }
+        // the log is read where it is (thousands of lines, redrawn with every new one); only the lines that match
+        // the filter are listed, by position
+        let filter = self.log_filter.trim().to_lowercase();
+        let shown: Vec<usize> = if filter.is_empty() {
+            Vec::new()
+        } else {
+            (0..game.lines.len()).filter(|&i| contains_ignoring_case(&game.lines[i].text, &filter)).collect()
+        };
+        let count = if filter.is_empty() { game.lines.len() } else { shown.len() };
         egui::Frame::new()
             .fill(c_field())
             .stroke(Stroke::new(1.0, c_border()))
@@ -514,27 +591,65 @@ impl App {
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 let height = ui.available_height().max(120.0);
-                let row_h = 17.0;
-                ScrollArea::both().auto_shrink(false).max_height(height).stick_to_bottom(true).show_rows(
-                    ui,
-                    row_h,
-                    shown.len(),
-                    |ui, range| {
-                        for (level, text) in &shown[range] {
-                            let color = match level {
-                                Level::Error => c_danger(),
-                                Level::Warn => c_warn(),
-                                Level::Debug => c_muted(),
-                                Level::Info => c_text(),
-                            };
-                            ui.add(egui::Label::new(RichText::new(text.as_str()).monospace().color(color)).extend());
+                ui.spacing_mut().item_spacing.y = 2.0;
+                let row_h = ui.text_style_height(&egui::TextStyle::Monospace);
+                ScrollArea::both()
+                    .id_salt("instance-log")
+                    .auto_shrink(false)
+                    .max_height(height)
+                    .stick_to_bottom(true)
+                    .show_rows(ui, row_h, count, |ui, range| {
+                        for i in range {
+                            let line = &game.lines[if filter.is_empty() { i } else { shown[i] }];
+                            ui.add(egui::Label::new(log_text(line)).extend());
                         }
-                    },
-                );
+                    });
             });
+        if copy {
+            self.toast("Log copied");
+        }
     }
 
     fn tab_settings(&mut self, ui: &mut Ui, inst: &Instance) {
         self.instance_settings_ui(ui, inst);
+    }
+}
+
+/// One log line in its colour.
+pub(super) fn log_text(line: &crate::launch::LogLine) -> RichText {
+    let color = match line.level {
+        Level::Error => c_danger(),
+        Level::Warn => c_warn(),
+        Level::Debug => c_muted(),
+        Level::Info => c_text(),
+    };
+    RichText::new(line.text.as_str()).monospace().color(color)
+}
+
+/// Whether `text` contains `lower` (already in lower case), ignoring case, without making a lower-case copy of
+/// every line on every frame.
+pub(super) fn contains_ignoring_case(text: &str, lower: &str) -> bool {
+    if lower.is_empty() {
+        return true;
+    }
+    if text.is_ascii() && lower.is_ascii() {
+        let (t, l) = (text.as_bytes(), lower.as_bytes());
+        return t.len() >= l.len() && t.windows(l.len()).any(|w| w.eq_ignore_ascii_case(l));
+    }
+    text.to_lowercase().contains(lower)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::contains_ignoring_case;
+
+    #[test]
+    fn the_log_filter_ignores_case() {
+        assert!(contains_ignoring_case("[Render thread/ERROR] Failed", "error"));
+        assert!(contains_ignoring_case("anything", ""));
+        assert!(!contains_ignoring_case("short", "much longer text"));
+        assert!(!contains_ignoring_case("[main/INFO] Loading", "warn"));
+        assert!(contains_ignoring_case("Caf\u{c9} OK", "caf\u{e9}"));
+        assert!(contains_ignoring_case("x", "x"));
     }
 }

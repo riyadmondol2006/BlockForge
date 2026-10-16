@@ -15,6 +15,13 @@ pub struct WhoState {
     error: bool,
 }
 
+impl WhoState {
+    /// Straight at the "Play offline" step (for the screenshot tour).
+    pub fn offline_step() -> WhoState {
+        WhoState { name_step: true, ..Default::default() }
+    }
+}
+
 /// 3-16 letters, numbers or underscores.
 pub fn valid_player_name(n: &str) -> bool {
     (3..=16).contains(&n.len()) && n.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
@@ -45,6 +52,8 @@ fn choice(ui: &mut Ui, width: f32, icon: Icon, title: &str, sub: &str) -> bool {
         egui::FontId::proportional(13.0),
         c_muted(),
     );
+    focus_ring(ui, &resp, rect, 16);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, title));
     resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked()
 }
 
@@ -55,8 +64,13 @@ impl App {
         let mut sign_in = false;
         let mut pick: Option<String> = None;
         let mut offline: Option<String> = None;
-        let accounts: Vec<(String, String, &'static str)> =
-            self.accounts.iter().rev().take(3).map(|a| (a.uuid.clone(), a.name().to_string(), a.kind())).collect();
+        let accounts: Vec<(String, String, &'static str, bool)> = self
+            .accounts
+            .iter()
+            .rev()
+            .take(3)
+            .map(|a| (a.uuid.clone(), a.name().to_string(), a.kind(), a.offline))
+            .collect();
         let modal = egui::Modal::new(egui::Id::unique("who")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
             ui.set_width(500.0);
             if !st.name_step {
@@ -75,7 +89,7 @@ impl App {
                 if !accounts.is_empty() {
                     ui.add_space(10.0);
                     ui.label(RichText::new("CONTINUE AS").size(11.0).strong().color(c_muted()));
-                    for (uuid, name, kind) in &accounts {
+                    for (uuid, name, kind, offline) in &accounts {
                         let row = egui::Frame::new()
                             .fill(c_card())
                             .stroke(egui::Stroke::new(1.0, c_border()))
@@ -84,7 +98,8 @@ impl App {
                             .show(ui, |ui| {
                                 ui.set_width(ui.available_width());
                                 ui.horizontal(|ui| {
-                                    avatar(ui, name, 34.0);
+                                    // the player's face, like on the sidebar and the Accounts page
+                                    self.account_avatar(ui, uuid, name, *offline, 34.0);
                                     ui.vertical(|ui| {
                                         ui.label(RichText::new(name).strong());
                                         small_muted(ui, *kind);
@@ -112,6 +127,8 @@ impl App {
                         .margin(egui::Margin::symmetric(12, 10))
                         .background_color(c_field()),
                 );
+                // typing can start at once
+                focus_when_shown(ui, &r);
                 if st.error {
                     ui.label(RichText::new("Use 3-16 letters, numbers or underscores.").color(c_danger()));
                 }
@@ -171,10 +188,32 @@ impl App {
     /// Open the Microsoft sign-in: the Accounts page shows the code to enter.
     pub(super) fn start_sign_in(&mut self) {
         self.page = Page::Accounts;
+        if self.acct.signing_in {
+            return; // one is going on already: its code is on the Accounts page
+        }
         self.acct.signing_in = true;
-        let n = self.notifier();
+        self.acct.device = None;
+        self.acct.attempt += 1;
+        let (attempt, n) = (self.acct.attempt, self.notifier());
         self.rt.spawn(async move {
-            n.send(Msg::Device(crate::msauth::start_device_login().await.map_err(|e| format!("{e:#}"))));
+            n.send(Msg::Device(attempt, crate::msauth::start_device_login().await.map_err(|e| format!("{e:#}"))));
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::valid_player_name;
+
+    #[test]
+    fn player_names_follow_minecraft_rules() {
+        assert!(valid_player_name("Steve"));
+        assert!(valid_player_name("abc"));
+        assert!(valid_player_name("Bob_the_Builder1"));
+        assert!(!valid_player_name("ab"));
+        assert!(!valid_player_name("seventeen_letters"));
+        assert!(!valid_player_name("with space"));
+        assert!(!valid_player_name("caf\u{e9}"));
+        assert!(!valid_player_name(""));
     }
 }

@@ -17,6 +17,13 @@ use crate::instances::Instance;
 #[derive(Default)]
 pub struct LocalPictures(RefCell<HashMap<PathBuf, Entry>>);
 
+impl LocalPictures {
+    /// Read this picture again the next time it is shown (it was just replaced).
+    pub fn forget(&self, path: &std::path::Path) {
+        self.0.borrow_mut().remove(path);
+    }
+}
+
 struct Entry {
     looked: Instant,
     modified: Option<SystemTime>,
