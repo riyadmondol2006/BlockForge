@@ -18,7 +18,7 @@ impl App {
     /// One instance as a card. Returns what the player asked for, if anything.
     fn instance_card(&self, ui: &mut Ui, inst: &Instance, width: f32) -> Option<Act> {
         let mut act = None;
-        let (rect, resp) = ui.allocate_exact_size(vec2(width, 150.0), Sense::click());
+        let (rect, resp) = ui.allocate_exact_size(vec2(width, 178.0), Sense::click());
         let hovered = resp.hovered();
         ui.painter().rect(
             rect,
@@ -69,7 +69,10 @@ impl App {
             })
             .response
             .on_hover_text("More");
-            if let Some(a) = self.fast_start_switch(ui, inst) {
+        });
+        // the helper switches get a row of their own: the card is too narrow for them beside the buttons
+        child.horizontal(|ui| {
+            if let Some(a) = self.card_switches(ui, inst) {
                 act = Some(a);
             }
         });
