@@ -16,7 +16,9 @@ and writes into `dist/`.
 
 The boost jar is built from `boost/Boost.java` and the built file is checked in next to it, because the launcher embeds it
 (`src/launch/boost.rs`) and `cargo build` must work without a JDK. After changing `Boost.java`, run `boost/build.sh` and
-commit the new jar. The bridge job in CI builds it again and starts a JVM with it as a smoke test.
+commit the new jar. The jar carries its own check, `java -cp blockforge-boost.jar com.blockforge.boost.SelfTest` (from
+`boost/SelfTest.java`; any Java 8 or newer, any system); `build.sh` runs it, and the bridge job in CI builds the jar again
+and runs it on both jars.
 
 Each system also has a smoke test that CI runs on the result: `windows/smoke.ps1`, `macos/smoke.sh`, and for Linux the
 workflow installs the deb, the rpm (in a clean Fedora container) and starts the AppImage.

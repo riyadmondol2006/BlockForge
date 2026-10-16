@@ -197,11 +197,12 @@ jobs:
       - run: OUT="$PWD/dist" ./packaging/bridge/build.sh "$VERSION"
       - name: Check the fast-start agent
         run: |
-          # the committed jar (the one the launcher embeds) and a fresh build must both load into a JVM
+          # the committed jar (the one the launcher embeds) and a fresh build must both pass the self-test (which
+          # starts Javas with the agent attached to a made-up game) and load into a JVM
           OUT="$PWD/boost-check" ./packaging/boost/build.sh
           for jar in packaging/boost/blockforge-boost.jar boost-check/blockforge-boost.jar; do
+            java -cp "$jar" com.blockforge.boost.SelfTest || { echo "::error::$jar failed its self-test"; exit 1; }
             java -javaagent:"$jar"=preload=boost-check.classes -version 2>&1 | tee boost.txt
-            grep -q "^\[BlockForge Boost\] on" boost.txt || { echo "::error::$jar did not start as an agent"; exit 1; }
             ! grep -q "problem" boost.txt || { echo "::error::$jar reported a problem"; exit 1; }
           done
       - uses: actions/upload-artifact@v7
