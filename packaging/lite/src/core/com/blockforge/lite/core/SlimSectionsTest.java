@@ -13,13 +13,20 @@ final class SlimSectionsTest extends PatchTest {
     private static final String PC = "net/minecraft/world/level/chunk/PalettedContainer";
     private static final String TD = "net/minecraft/util/ThreadingDetector";
 
+    /** An empty mods= list: the launcher says this game has no mods. */
+    private String noMods() throws Exception {
+        File none = new File(tmp, "no-mods.txt");
+        write(none, "\n");
+        return "mods=" + none;
+    }
+
     void slimSections() throws Exception {
         for (int version : new int[] {V1_8, V21}) {
             if (version == V21 && !runs(V21)) {
                 continue;
             }
             String report = reportPath("slim");
-            Game g = load(factory.apply("quiet,report=" + report), containers(version, "vanilla"));
+            Game g = load(factory.apply("quiet," + noMods() + ",report=" + report), containers(version, "vanilla"));
             expect(g.transformed.contains(PC), "PalettedContainer stand-in patched (class version " + version + ")");
             expect(line(report, "slim-sections").contains("applied"), "reported as applied");
             Class<?> pc = g.loader.loadClass(PC.replace('/', '.'));
@@ -40,18 +47,72 @@ final class SlimSectionsTest extends PatchTest {
                 "without the patch the stand-in makes and locks a guard (the test is real)");
 
         String report = reportPath("slim2");
-        g = load(factory.apply("quiet,report=" + report), containers(V1_8, "other-use"));
+        g = load(factory.apply("quiet," + noMods() + ",report=" + report), containers(V1_8, "other-use"));
         expect(!g.transformed.contains(PC), "a third method using the guard: left alone");
         expect(line(report, "slim-sections").contains("skipped"), "reported as skipped");
-        g = load(factory.apply("quiet"), containers(V1_8, "no-locking"));
+        g = load(factory.apply("quiet,level=2"), containers(V1_8, "no-locking"));
         expect(g.transformed.contains(PC), "acquire/release already empty (Lithium): the guard is still dropped");
         pc = g.loader.loadClass(PC.replace('/', '.'));
         pc.getMethod("work").invoke(pc.getConstructor().newInstance());
         expect(g.loader.loadClass(TD.replace('/', '.')).getField("made").getInt(null) == 0, "and not made");
         File list = new File(tmp, "mods2.txt");
         write(list, "ferritecore-7.0.0-fabric.jar\n");
-        g = load(factory.apply("quiet,mods=" + list), containers(V1_8, "vanilla"));
+        g = load(factory.apply("quiet,level=2,mods=" + list), containers(V1_8, "vanilla"));
         expect(!g.transformed.contains(PC), "FerriteCore installed: left alone");
+    }
+
+    /** With mods the guard stays on level 1 (a buggy mod gets the guard's crash, not a broken chunk). */
+    void slimSectionsOnlyWithoutMods() throws Exception {
+        File list = new File(tmp, "mods3.txt");
+        write(list, "fabric-api-0.100.jar\nsome-mod-1.0.jar\n");
+        String report = reportPath("slim3");
+        Game g = load(factory.apply("quiet,mods=" + list + ",report=" + report), containers(V1_8, "vanilla"));
+        expect(!g.transformed.contains(PC), "mods installed, level 1: the guard stays");
+        expect(line(report, "slim-sections").contains("skipped") && line(report, "slim-sections")
+                .contains(SlimSections.KEPT), "reported with the reason: " + line(report, "slim-sections"));
+        Class<?> pc = g.loader.loadClass(PC.replace('/', '.'));
+        pc.getMethod("work").invoke(pc.getConstructor().newInstance());
+        expect(g.loader.loadClass(TD.replace('/', '.')).getField("made").getInt(null) == 1, "and the guard is made");
+
+        g = load(factory.apply("quiet"), containers(V1_8, "vanilla"));
+        expect(!g.transformed.contains(PC), "no mod list and not Minecraft's own main class: the guard stays");
+        g = load(factory.apply("quiet,mods=" + new File(tmp, "missing-list.txt")), containers(V1_8, "vanilla"));
+        expect(!g.transformed.contains(PC), "a mod list that can't be read: the guard stays");
+        g = load(factory.apply("quiet,modids=sodium"), containers(V1_8, "vanilla"));
+        expect(!g.transformed.contains(PC), "modids= with a mod: the guard stays");
+
+        g = load(factory.apply("quiet,modids="), containers(V1_8, "vanilla"));
+        expect(g.transformed.contains(PC), "an empty modids=: no mods, the guard goes");
+        report = reportPath("slim4");
+        g = load(factory.apply("quiet,level=2,mods=" + list + ",report=" + report), containers(V1_8, "vanilla"));
+        expect(g.transformed.contains(PC), "mods installed, level 2: the guard goes");
+        expect(line(report, "slim-sections").contains("applied"), "reported as applied");
+        pc = g.loader.loadClass(PC.replace('/', '.'));
+        pc.getMethod("work").invoke(pc.getConstructor().newInstance());
+        expect(g.loader.loadClass(TD.replace('/', '.')).getField("made").getInt(null) == 0, "and is not made");
+    }
+
+    /** Minecraft's own main class and the application class loader: a vanilla game, no mod list needed. */
+    void slimSectionsVanillaStart() throws Exception {
+        byte[] b = containers(V1_8, "vanilla").get(PC);
+        ClassLoader app = ClassLoader.getSystemClassLoader();
+        String saved = System.getProperty("sun.java.command");
+        try {
+            System.setProperty("sun.java.command", "net.minecraft.client.main.Main --version 1.21.1");
+            expect(factory.apply("quiet").transform(app, PC, null, null, b) != null,
+                    "vanilla main class, application class loader: patched");
+            expect(factory.apply("quiet").transform(new ClassLoader(null) {}, PC, null, null, b) == null,
+                    "vanilla main class but another class loader: left alone");
+            System.setProperty("sun.java.command", "net.fabricmc.loader.impl.launch.knot.KnotClient --version x");
+            expect(factory.apply("quiet").transform(new ClassLoader(null) {}, PC, null, null, b) == null,
+                    "a mod loader's main class: left alone");
+        } finally {
+            if (saved == null) {
+                System.clearProperty("sun.java.command");
+            } else {
+                System.setProperty("sun.java.command", saved);
+            }
+        }
     }
 
     /**

@@ -31,7 +31,9 @@ public final class Engine implements ClassFileTransformer {
     /** All patches, in the order they are applied to a class. */
     static List<Patch> all() {
         return Arrays.<Patch>asList(new IdleFps(), new NoWorldGc(), new SlimSections(), new ShortFade(),
-                new OutlineSkip(), new WorkerPriority());
+                new OutlineSkip(), new WorkerPriority(),
+                new LazyCollisionShape(), new EmptyEffectLists(), new SharedStateTables(), new ShortSpin(),
+                new SoundNoWait(), new QuietMusic());
     }
 
     final Options options;
@@ -45,18 +47,23 @@ public final class Engine implements ClassFileTransformer {
     private boolean summaryDone;
     /** Whether the game was started through a mod loader (Fabric/Quilt Knot, ModLauncher, LaunchWrapper). */
     private final boolean modLoaderMain = modLoaderMain();
+    /** Whether the game was started by Minecraft's own main class (no mod loader, so no mods). */
+    private final boolean vanillaMain = "net.minecraft.client.main.Main".equals(mainClass());
     private final ClassLoader appLoader = ClassLoader.getSystemClassLoader();
 
-    private static boolean modLoaderMain() {
+    private static String mainClass() {
         try {
-            String cmd = System.getProperty("sun.java.command", "");
-            String main = cmd.split(" ")[0];
-            return main.contains("knot.Knot") || main.startsWith("cpw.mods.") || main.startsWith("net.neoforged.")
-                    || main.startsWith("net.minecraftforge.") || main.equals("net.minecraft.launchwrapper.Launch")
-                    || main.startsWith("org.quiltmc.");
+            return System.getProperty("sun.java.command", "").trim().split(" ")[0];
         } catch (Throwable e) {
-            return false;
+            return "";
         }
+    }
+
+    private static boolean modLoaderMain() {
+        String main = mainClass();
+        return main.contains("knot.Knot") || main.startsWith("cpw.mods.") || main.startsWith("net.neoforged.")
+                || main.startsWith("net.minecraftforge.") || main.equals("net.minecraft.launchwrapper.Launch")
+                || main.startsWith("org.quiltmc.");
     }
 
     /** From targets=FILE: patch id -> the runtime names of its target class, as the launcher worked them out. */
@@ -106,7 +113,7 @@ public final class Engine implements ClassFileTransformer {
 
     Engine(String args, AtomicLongArray entryStats, List<Patch> patches) {
         this.options = new Options(args);
-        this.mods = new Mods(options.mods, options.modIds);
+        this.mods = new Mods(options.mods, options.modIds, options.modIdsGiven);
         this.entryStats = entryStats;
         this.targets = readTargets(options.targets);
         List<Patch> on = new ArrayList<Patch>();
@@ -273,7 +280,9 @@ public final class Engine implements ClassFileTransformer {
         synchronized (this) {
             parsed++;
         }
-        Patch.Ctx ctx = new Patch.Ctx(loader, mods, options.level);
+        // no mods can be there: Minecraft's own main class loaded this class, or the launcher's mod list is empty
+        boolean noMods = (vanillaMain && loader == appLoader) || mods.noneListed();
+        Patch.Ctx ctx = new Patch.Ctx(loader, mods, options.level, noMods);
         byte[] current = original;
         boolean changed = false;
         for (Patch p : candidates) {

@@ -50,16 +50,54 @@ final class Mods {
         {"scalablelux", "ScalableLux", "scalablelux"},
         {"bobby", "Bobby", "bobby"},
         {"krypton", "Krypton", "krypton"},
+        {"soundphysics", "Sound Physics Remastered", "soundphysics"},
+        {"ambientsounds", "AmbientSounds", "ambientsounds"},
+        {"presencefootsteps", "Presence Footsteps", "presencefootsteps"},
     };
 
     private final String listFile;
     private final java.util.Set<String> ids;
+    private final boolean idsGiven;
     private List<String> names;
+    private Boolean noneListed;
     private final Map<ClassLoader, Map<String, Boolean>> probed = new WeakHashMap<ClassLoader, Map<String, Boolean>>();
 
     Mods(String listFile, java.util.Set<String> ids) {
+        this(listFile, ids, false);
+    }
+
+    /** idsGiven: modids= was passed (an empty one means the launcher says there are no mods). */
+    Mods(String listFile, java.util.Set<String> ids, boolean idsGiven) {
         this.listFile = listFile;
         this.ids = ids;
+        this.idsGiven = idsGiven;
+    }
+
+    /**
+     * Whether the launcher said there are no mods: a mods= list (or modids=) was given and it is empty. Any entry
+     * counts as a mod, also a loader's own API library. Without a list, or when it can't be read, the answer is no.
+     */
+    synchronized boolean noneListed() {
+        if (noneListed == null) {
+            boolean none = (listFile != null || idsGiven) && ids.isEmpty();
+            if (none && listFile != null) {
+                try {
+                    BufferedReader r = new BufferedReader(new InputStreamReader(new FileInputStream(listFile),
+                            "UTF-8"));
+                    try {
+                        for (String line; (line = r.readLine()) != null && none; ) {
+                            none = line.trim().isEmpty();
+                        }
+                    } finally {
+                        r.close();
+                    }
+                } catch (Throwable e) {
+                    none = false;
+                }
+            }
+            noneListed = none;
+        }
+        return noneListed;
     }
 
     /** The name of the first of these mods that is installed, or null. */

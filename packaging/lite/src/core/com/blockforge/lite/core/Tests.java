@@ -93,7 +93,9 @@ public final class Tests implements Opcodes {
     /** The tests of the patches, one class each (see {@link PatchTest}). Add a new patch's test here. */
     static final List<Class<? extends PatchTest>> PATCH_TESTS = Arrays.<Class<? extends PatchTest>>asList(
             NoWorldGcTest.class, SlimSectionsTest.class, ShortFadeTest.class, OutlineSkipTest.class,
-            WorkerPriorityTest.class);
+            WorkerPriorityTest.class,
+            LazyCollisionShapeTest.class, EmptyEffectListsTest.class, SharedStateTablesTest.class, ShortSpinTest.class,
+            SoundNoWaitTest.class, QuietMusicTest.class);
 
     private void one(String name, Object on, java.lang.reflect.Method m) {
         int before = failures;

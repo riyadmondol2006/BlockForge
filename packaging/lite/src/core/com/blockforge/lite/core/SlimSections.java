@@ -31,12 +31,18 @@ import org.objectweb.asm.tree.TypeInsnNode;
  * </pre>
  * If anything else in the class reads the field (another mod's code merged into it, for example), or the guard is
  * already gone (FerriteCore), the class is left alone.
+ *
+ * Vanilla never changes a section from two threads, but a buggy mod could, and then the guard's crash is better than
+ * a silently broken chunk. So on level 1 the guard only goes when no mod can be there (Minecraft's own main class
+ * started the game, or the launcher's mod list is empty); with mods it needs level 2.
  */
 final class SlimSections extends Patch {
     static final String NAME = "PalettedContainer";
+    static final String KEPT = "mods installed: kept the guard (only removed at level 2)";
 
     SlimSections() {
-        super("slim-sections", 1, "no debug thread guard in each chunk section container (10-40 MB less memory)",
+        super("slim-sections", 1, "no debug thread guard in each chunk section container (10-40 MB less memory); "
+                + "with mods installed only at level 2",
                 new String[][] {{NAME, "(Ljava/lang/String;)V"}}, new String[] {"ferritecore"},
                 "net/minecraft/world/level/chunk/PalettedContainer", "net/minecraft/class_2841");
     }
@@ -81,6 +87,9 @@ final class SlimSections extends Patch {
         }
         if (sites.isEmpty()) {
             throw Skip.notTarget("no guard created here");
+        }
+        if (ctx.level < 2 && !ctx.noMods) {
+            throw Skip.because(KEPT);
         }
         if (sites.size() > 8) {
             throw Skip.because("more places than expected");

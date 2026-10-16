@@ -110,11 +110,17 @@ abstract class Patch {
         final Mods mods;
         /** The level the player chose (1 or 2), for a patch that does more on level 2. */
         final int level;
+        /**
+         * True when no mod can be in the game: Minecraft's own main class started it (no mod loader) and the class
+         * comes from the application class loader, or the launcher's mod list (mods=, modids=) is there and empty.
+         */
+        final boolean noMods;
 
-        Ctx(ClassLoader loader, Mods mods, int level) {
+        Ctx(ClassLoader loader, Mods mods, int level, boolean noMods) {
             this.loader = loader;
             this.mods = mods;
             this.level = level;
+            this.noMods = noMods;
         }
     }
 }
