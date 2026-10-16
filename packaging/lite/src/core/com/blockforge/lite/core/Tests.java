@@ -360,7 +360,9 @@ public final class Tests implements Opcodes {
         load(factory.apply("quiet,report=" + report), minecraft(V1_8, Shape.NORMAL));
         String l = line(report, "idle-fps");
         expect(l.startsWith("idle-fps\tapplied\t" + MC + "\t"), "applied line: " + l);
-        expect(l.split("\t", -1).length == 4, "four columns");
+        String[] columns = l.split("\t", -1);
+        expect(columns.length == 5, "five columns");
+        expect(columns[4].contains("minimised"), "says what it does: " + columns[4]);
     }
 
     // ---- stand-ins for the game ----

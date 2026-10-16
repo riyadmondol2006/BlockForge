@@ -412,14 +412,17 @@ public final class Engine implements ClassFileTransformer {
         return b.toString();
     }
 
-    /** The report file: one line per patch, tab separated: id, applied/skipped/failed, class, reason. */
+    /**
+     * The report file: one line per patch, tab separated: id, applied/skipped/failed, class, reason, and what the patch
+     * does in plain words (the launcher shows that column; older launchers read only the first four).
+     */
     void writeReport() {
         if (options.report == null) {
             return;
         }
         StringBuilder b = new StringBuilder();
         synchronized (this) {
-            b.append("# BlockForge Lite report. Columns: id, applied/skipped/failed, class, reason\n");
+            b.append("# BlockForge Lite report. Columns: id, applied/skipped/failed, class, reason, what it does\n");
             long entryMs = entryStats == null ? 0 : entryStats.get(0) / 1000000L;
             long seen = entryStats == null ? 0 : entryStats.get(1);
             long handed = entryStats == null ? 0 : entryStats.get(2);
@@ -428,7 +431,9 @@ public final class Engine implements ClassFileTransformer {
                     .append(nanos / 1000000L).append(" ms of it in the patch code)\n");
             for (State s : states.values()) {
                 b.append(s.patch.id).append('\t').append(s.statusName()).append('\t').append(s.cls).append('\t')
-                        .append(s.reason == null ? "" : s.reason.replace('\t', ' ').replace('\n', ' ')).append('\n');
+                        .append(s.reason == null ? "" : s.reason.replace('\t', ' ').replace('\n', ' ')).append('\t')
+                        .append(s.patch.what == null ? "" : s.patch.what.replace('\t', ' ').replace('\n', ' '))
+                        .append('\n');
             }
         }
         try {
