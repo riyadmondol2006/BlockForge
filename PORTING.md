@@ -61,7 +61,7 @@ surveys: core, model, java, bedrock).
 | NBT | `nbt/**`, `util/**` (IO, tags, LZ4Block for MCA type 4, SNBT if used) | `src/convert/nbt/**`, `src/convert/util/**` | [x] |
 | Model | `conversion/intermediate/column/**`, `mapping/identifier/**` | `src/convert/model/**` (+ generated enums via `tools/convert/gen_model.py`) | [x] |
 | Table dumper | `conversion/encoding/{java,bedrock}/**/resolver/**`, `mapping/**` (engine semantics) | `tools/convert/dump/**`, `data/convert/*.bin.z`, loader `src/convert/mapping/data.rs` | [ ] |
-| Bedrock low level | `encoding/bedrock/util/**`, `base/reader` db/palette parts | `src/convert/bedrock/{db,keys,palette}.rs` | [ ] |
+| Bedrock low level | `encoding/bedrock/util/**`, `base/reader` db/palette parts | `src/convert/bedrock/{db,keys,palette,level_dat,data_version,detect}.rs` (+ `tests.rs`: real-world tests) | [x] |
 | Java low level | `encoding/java/util/**`, `base/reader|writer` region parts, `level` I/O | `src/convert/java/{region,palette,dirs,version,format}.rs` | [ ] |
 
 ### Phase 2 - the Bedrock -> Java path (M1)
