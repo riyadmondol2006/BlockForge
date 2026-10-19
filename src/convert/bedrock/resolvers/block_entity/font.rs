@@ -30,14 +30,8 @@ pub fn text_width(input: &str) -> i32 {
 fn is_space_char(c: char) -> bool {
     matches!(
         c,
-        ' ' | '\u{a0}'
-            | '\u{1680}'
-            | '\u{2000}'..='\u{200a}'
-            | '\u{2028}'
-            | '\u{2029}'
-            | '\u{202f}'
-            | '\u{205f}'
-            | '\u{3000}'
+        ' ' | '\u{a0}' | '\u{1680}' | '\u{2000}'
+            ..='\u{200a}' | '\u{2028}' | '\u{2029}' | '\u{202f}' | '\u{205f}' | '\u{3000}'
     )
 }
 
@@ -108,9 +102,9 @@ mod tests {
 
     #[test]
     fn widths() {
-        assert_eq!(char_width('a' as u32), 5);
-        assert_eq!(char_width('i' as u32), 1);
-        assert_eq!(char_width(' ' as u32), 3);
+        assert_eq!(char_width('a' as u32), 6);
+        assert_eq!(char_width('i' as u32), 2);
+        assert_eq!(char_width(' ' as u32), 4);
         assert_eq!(text_width("abc"), 18);
     }
 

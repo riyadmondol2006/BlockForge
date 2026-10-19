@@ -37,10 +37,9 @@ impl BedrockItems {
         let (items, blocks) = self.resolvers();
         let mut out = Compound::new();
         let pivot = match &stack.id {
-            ItemId::Item(item) => Some(PivotItem {
-                kind: ItemKind::Item(Arc::from(item.name())),
-                props: item_row_props(&stack.props),
-            }),
+            ItemId::Item(item) => {
+                Some(PivotItem { kind: ItemKind::Item(Arc::from(item.name())), props: item_row_props(&stack.props) })
+            }
             ItemId::Block(block) => block.block_type().map(|ty| {
                 let mut props = item_row_props(&stack.props);
                 if let Some(pivot) = block_to_pivot(block) {
@@ -72,7 +71,8 @@ impl BedrockItems {
         block_tag.put("name", name.to_string());
         block_tag.put("version", self.version().state_version());
         block_tag.put("states", Tag::Compound(state_tag));
-        let name = FIXED_LEGACY_NAMES.iter().find(|(from, _)| *from == &*name).map_or(&*name, |(_, to)| *to).to_string();
+        let name =
+            FIXED_LEGACY_NAMES.iter().find(|(from, _)| *from == &*name).map_or(&*name, |(_, to)| *to).to_string();
         out.put("Block", Tag::Compound(block_tag));
         out.put("Name", name);
         out.put("Damage", Tag::Short(0));
@@ -150,7 +150,9 @@ impl BedrockItems {
                         self.missing(Missing::Enchantment, kind.name());
                         return None;
                     };
-                    Some(Tag::Compound(Compound::new().with("id", Tag::Short(id as i16)).with("lvl", Tag::Short(*level as i16))))
+                    Some(Tag::Compound(
+                        Compound::new().with("id", Tag::Short(id as i16)).with("lvl", Tag::Short(*level as i16)),
+                    ))
                 })
                 .collect();
             tag.insert("ench", Tag::List(list));

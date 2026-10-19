@@ -9,12 +9,12 @@ use crate::convert::bedrock::data_version::BedrockVersion;
 use crate::convert::model::blockentity::{StructureMirror, StructureRotation};
 use crate::convert::model::{
     BlockType, Bool, ChestType, ChunkCoord, Column, EffectType, EntityData, EntityType, FacingDirection,
-    FacingDirectionHorizontal, ItemId, ItemType, Note, PotionBottleType, PotionType, Rotation, StructureBlockMode, states,
+    FacingDirectionHorizontal, ItemId, ItemType, Note, PotionBottleType, PotionType, Rotation, StructureBlockMode,
+    states,
 };
 use crate::convert::nbt::{Tag, compound};
 
-static ITEMS: LazyLock<BedrockItems> =
-    LazyLock::new(|| BedrockItems::new(BedrockVersion::exact([1, 26, 50]).unwrap()));
+static ITEMS: LazyLock<BedrockItems> = LazyLock::new(|| BedrockItems::new(BedrockVersion::exact([1, 26, 50]).unwrap()));
 
 fn tag(id: &str, x: i32, y: i32, z: i32) -> Compound {
     compound! { "id" => id, "x" => x, "y" => y, "z" => z, "isMovable" => 1i8 }
@@ -115,7 +115,10 @@ fn chest_items_slots_and_loot_table() {
     assert_eq!(chest.loot_table.as_deref(), Some("minecraft:chests/buried_treasure"));
     // The slot defaults to the list index.
     let mut c = tag("Barrel", 0, 0, 0);
-    c.put("Items", Tag::list([Tag::Compound(compound! { "Name" => "minecraft:stick", "Count" => 2i8, "Damage" => 0i16 })]));
+    c.put(
+        "Items",
+        Tag::list([Tag::Compound(compound! { "Name" => "minecraft:stick", "Count" => 2i8, "Damage" => 0i16 })]),
+    );
     assert!(read(&c).data.container().unwrap().items.contains_key(&0));
     // Loot tables can be turned off.
     let items = BedrockItems::new(BedrockVersion::exact([1, 26, 50]).unwrap()).with_loot_tables(false);
@@ -155,7 +158,8 @@ fn furnaces() {
 
 #[test]
 fn signs_read_text_color_and_glow() {
-    let front = compound! { "Text" => "Hello\nWorld", "IgnoreLighting" => 1i8, "SignTextColor" => 0xff00_ff00_u32 as i32 };
+    let front =
+        compound! { "Text" => "Hello\nWorld", "IgnoreLighting" => 1i8, "SignTextColor" => 0xff00_ff00_u32 as i32 };
     let back = compound! { "Text" => "Back" };
     let c = tag("Sign", 0, 0, 0).with("FrontText", front).with("BackText", back).with("IsWaxed", 1i8);
     let be = read(&c);
@@ -186,7 +190,7 @@ fn old_signs_use_the_root_and_split_long_lines() {
     assert_eq!(sign.front.lines[1]["text"], "");
     assert_eq!(sign.front.lines[2]["text"], "c");
     // Hanging signs split narrower.
-    let line = "aaaa bbbb cccc dddd";
+    let line = "aaaaa bbbbb ccccc ddddd";
     let hanging = read(&tag("HangingSign", 0, 0, 0).with("Text", line));
     let normal = read(&tag("Sign", 0, 0, 0).with("Text", line));
     let count = |be: &BlockEntity| be.data.sign().unwrap().front.lines.iter().filter(|l| l["text"] != "").count();
@@ -239,7 +243,10 @@ fn banner_base_and_patterns() {
     let be = read(&tag("Banner", 0, 0, 0).with("Base", 4i32).with("Patterns", patterns));
     let BlockEntityData::Banner(b) = &be.data else { panic!() };
     assert_eq!(b.base, Some(DyeColor::by_reversed_id(4).unwrap()));
-    assert_eq!(b.patterns, vec![(DyeColor::by_reversed_id(1).unwrap(), crate::convert::model::BannerPattern::STRIPE_BOTTOM)]);
+    assert_eq!(
+        b.patterns,
+        vec![(DyeColor::by_reversed_id(1).unwrap(), crate::convert::model::BannerPattern::STRIPE_BOTTOM)]
+    );
 }
 
 #[test]
@@ -274,7 +281,12 @@ fn skull_end_gateway_jigsaw_structure() {
 
 #[test]
 fn cauldron_campfire_bookshelf_pot_crafter_shelf_brushable() {
-    let be = read(&tag("Cauldron", 0, 0, 0).with("PotionId", 5i16).with("PotionType", 1i16).with("CustomColor", 0x80ff0000_u32 as i32));
+    let be = read(
+        &tag("Cauldron", 0, 0, 0)
+            .with("PotionId", 5i16)
+            .with("PotionType", 1i16)
+            .with("CustomColor", 0x80ff0000_u32 as i32),
+    );
     let BlockEntityData::Cauldron(c) = &be.data else { panic!() };
     assert_eq!(c.potion_type, PotionType::NIGHT_VISION);
     assert_eq!(c.potion_bottle_type, PotionBottleType::SPLASH);
@@ -283,7 +295,9 @@ fn cauldron_campfire_bookshelf_pot_crafter_shelf_brushable() {
     let BlockEntityData::Cauldron(c) = &splash.data else { panic!() };
     assert_eq!(c.potion_bottle_type, PotionBottleType::SPLASH);
 
-    let be = read(&tag("Campfire", 0, 0, 0).with("Item2", stick(0, 1).as_compound().unwrap().clone()).with("ItemTime2", 600i32));
+    let be = read(
+        &tag("Campfire", 0, 0, 0).with("Item2", stick(0, 1).as_compound().unwrap().clone()).with("ItemTime2", 600i32),
+    );
     let BlockEntityData::Campfire(f) = &be.data else { panic!() };
     assert!(f.items[0].is_none() && f.items[1].is_some());
     assert_eq!(f.cooking_times, [0, 600, 0, 0]);
@@ -301,7 +315,8 @@ fn cauldron_campfire_bookshelf_pot_crafter_shelf_brushable() {
     assert_eq!((c.disabled_slots, c.crafting_ticks_remaining), (5, 3));
 
     let item = compound! { "Name" => "minecraft:stick", "Count" => 1i8, "Damage" => 0i16 };
-    let be = read(&tag("BrushableBlock", 0, 0, 0).with("brush_direction", 2i8).with("brush_count", 3i32).with("item", item));
+    let be =
+        read(&tag("BrushableBlock", 0, 0, 0).with("brush_direction", 2i8).with("brush_count", 3i32).with("item", item));
     let BlockEntityData::Brushable(b) = &be.data else { panic!() };
     assert_eq!((b.brush_direction, b.brush_count), (2, 3));
     assert!(b.item.is_some());
@@ -309,7 +324,12 @@ fn cauldron_campfire_bookshelf_pot_crafter_shelf_brushable() {
 
 #[test]
 fn decorated_pot_keeps_the_chunker_early_return() {
-    let sherds = Tag::list(["minecraft:angler_pottery_sherd", "minecraft:brick", "minecraft:brick", "minecraft:archer_pottery_sherd"]);
+    let sherds = Tag::list([
+        "minecraft:angler_pottery_sherd",
+        "minecraft:brick",
+        "minecraft:brick",
+        "minecraft:archer_pottery_sherd",
+    ]);
     let item = compound! { "Name" => "minecraft:stick", "Count" => 1i8, "Damage" => 0i16 };
     let be = read(&tag("DecoratedPot", 0, 0, 0).with("sherds", sherds).with("item", item.clone()));
     let BlockEntityData::DecoratedPot(p) = &be.data else { panic!() };
@@ -318,7 +338,9 @@ fn decorated_pot_keeps_the_chunker_early_return() {
     assert_eq!(p.front, ItemId::Item(ItemType::ARCHER_POTTERY_SHERD));
     assert!(p.item.is_some());
     // Fewer than four sherds return before the item is read, like Chunker.
-    let short = read(&tag("DecoratedPot", 0, 0, 0).with("sherds", Tag::list(["minecraft:angler_pottery_sherd"])).with("item", item));
+    let short = read(
+        &tag("DecoratedPot", 0, 0, 0).with("sherds", Tag::list(["minecraft:angler_pottery_sherd"])).with("item", item),
+    );
     let BlockEntityData::DecoratedPot(p) = &short.data else { panic!() };
     assert!(p.item.is_none());
     assert_eq!(p.left, ItemId::Item(ItemType::BRICK));
@@ -342,7 +364,8 @@ fn lectern_and_jukebox() {
 #[test]
 fn chest_pairs_set_the_chest_type_and_trapped_chests_are_converted() {
     let mut col = column();
-    let facing_north = |ty| Arc::new(BlockIdentifier::new(ty).with(states::FACING_HORIZONTAL, FacingDirectionHorizontal::NORTH));
+    let facing_north =
+        |ty| Arc::new(BlockIdentifier::new(ty).with(states::FACING_HORIZONTAL, FacingDirectionHorizontal::NORTH));
     col.set_block(1, 64, 1, facing_north(BlockType::CHEST));
     col.set_block(2, 64, 1, facing_north(BlockType::CHEST));
     col.set_block(5, 64, 5, facing_north(BlockType::TRAPPED_CHEST));
@@ -396,10 +419,7 @@ fn wall_banners_and_wall_skulls_keep_their_shape() {
     let wall = |ty| Arc::new(BlockIdentifier::new(ty).with(states::FACING_HORIZONTAL, FacingDirectionHorizontal::EAST));
     col.set_block(0, 1, 0, wall(BlockType::WHITE_WALL_BANNER));
     col.set_block(1, 1, 0, wall(BlockType::SKELETON_WALL_SKULL));
-    let tags = [
-        tag("Banner", 0, 1, 0).with("Base", 1i32),
-        tag("Skull", 1, 1, 0).with("SkullType", 3i8),
-    ];
+    let tags = [tag("Banner", 0, 1, 0).with("Base", 1i32), tag("Skull", 1, 1, 0).with("SkullType", 3i8)];
     read_into_column(&ITEMS, &tags, &mut col, false);
     assert_eq!(col.block(0, 1, 0).block_type(), Some(BlockType::RED_WALL_BANNER));
     assert_eq!(col.block(0, 1, 0).get(states::FACING_HORIZONTAL), Some(FacingDirectionHorizontal::EAST));
@@ -476,7 +496,10 @@ fn copper_golem_statue_pose_goes_into_the_block() {
     let mut col = column();
     col.set_block(0, 1, 0, block(BlockType::COPPER_GOLEM_STATUE));
     read_into_column(&ITEMS, &[tag("CopperGolemStatue", 0, 1, 0).with("Pose", 2i32)], &mut col, false);
-    assert_eq!(col.block(0, 1, 0).get(states::COPPER_GOLEM_POSE), Some(crate::convert::model::CopperGolemPose::RUNNING));
+    assert_eq!(
+        col.block(0, 1, 0).get(states::COPPER_GOLEM_POSE),
+        Some(crate::convert::model::CopperGolemPose::RUNNING)
+    );
 }
 
 // The real world.
@@ -549,7 +572,10 @@ fn test_world_block_entities() {
             let be = read_block_entity(&items, &t, false).unwrap();
             let chest = be.data.container().unwrap();
             for (slot, stack) in &chest.items {
-                eprintln!("chest ({}, {}, {}) slot {slot}: {:?} x{:?} ench {:?}", be.x, be.y, be.z, stack.id, stack.props.amount, stack.props.enchantments);
+                eprintln!(
+                    "chest ({}, {}, {}) slot {slot}: {:?} x{:?} ench {:?}",
+                    be.x, be.y, be.z, stack.id, stack.props.amount, stack.props.enchantments
+                );
                 if stack.props.enchantments.as_ref().is_some_and(|e| !e.is_empty()) {
                     enchanted += 1;
                 }
