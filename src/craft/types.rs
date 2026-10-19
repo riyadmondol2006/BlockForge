@@ -429,7 +429,13 @@ mod tests {
             .map(item)
             .collect();
         let recipes = vec![
-            recipe("iron_nugget_from_smelting", Kind::Smelting, "minecraft:iron_nugget", 1, "minecraft:chainmail_boots"),
+            recipe(
+                "iron_nugget_from_smelting",
+                Kind::Smelting,
+                "minecraft:iron_nugget",
+                1,
+                "minecraft:chainmail_boots",
+            ),
             recipe("iron_nugget", Kind::Shapeless, "minecraft:iron_nugget", 9, "minecraft:iron_ingot"),
         ];
         let ds = Dataset::new("t", items, recipes, HashSet::new(), Vec::new()).unwrap();

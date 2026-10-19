@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use egui::{Align, CornerRadius, Layout, RichText, Stroke, Ui, vec2};
 
-use super::craft::{Act, Book, CraftState, Dialog, Env, LEFT_W, Load, PlanView, Tab, TWO_COLUMNS};
+use super::craft::{Act, Book, CraftState, Dialog, Env, LEFT_W, Load, PlanView, TWO_COLUMNS, Tab};
 use super::craft_fmt::*;
 use super::services::{confirm_modal, modal_scroll_height, modal_width};
 use super::theme::*;
@@ -134,7 +134,9 @@ impl CraftState {
                 self.icon(ui, &plan.request.item, &name, 48.0);
                 ui.vertical(|ui| {
                     ui.spacing_mut().item_spacing.y = 3.0;
-                    ui.label(RichText::new(format!("{} x {}", thousands(plan.request.quantity), name)).size(22.0).strong());
+                    ui.label(
+                        RichText::new(format!("{} x {}", thousands(plan.request.quantity), name)).size(22.0).strong(),
+                    );
                     ui.horizontal_wrapped(|ui| {
                         if plan.complete && plan.warnings.is_empty() {
                             tag(ui, "Complete plan", c_accent());
@@ -195,7 +197,9 @@ impl CraftState {
                     self.dialog = Some(Dialog::Save(current.unwrap_or(fallback)));
                 }
                 let n = self.store.plans.len();
-                if secondary(ui, &if n > 0 { format!("Saved plans ({n})") } else { "Saved plans".to_string() }).clicked() {
+                if secondary(ui, &if n > 0 { format!("Saved plans ({n})") } else { "Saved plans".to_string() })
+                    .clicked()
+                {
                     self.dialog = Some(Dialog::Saved);
                 }
                 if (!self.recipe_choices.is_empty() || !self.ingredient_choices.is_empty())
@@ -270,7 +274,9 @@ impl CraftState {
                     let mut bring = false;
                     let mut dummy = false;
                     self.list_row(ui, book, id, *qty, None::<&mut bool>, false, |ui| {
-                        let r = ui.add(egui::Button::new(RichText::new("I'll bring this").size(12.5)).min_size(vec2(0.0, 26.0)));
+                        let r = ui.add(
+                            egui::Button::new(RichText::new("I'll bring this").size(12.5)).min_size(vec2(0.0, 26.0)),
+                        );
                         if r.on_hover_text("Skip making it: it moves to the list of things to gather").clicked() {
                             bring = true;
                         }
@@ -308,7 +314,10 @@ impl CraftState {
                 for f in &plan.fuel {
                     self.list_row(ui, book, &f.item, f.count, None::<&mut bool>, false, |_| {});
                 }
-                small_muted(ui, "An estimate for one furnace running the whole time. It is not added to the list above.");
+                small_muted(
+                    ui,
+                    "An estimate for one furnace running the whole time. It is not added to the list above.",
+                );
             });
         }
         // containers that come back
@@ -392,7 +401,9 @@ impl CraftState {
         card(ui, |ui| {
             ui.horizontal(|ui| {
                 card_title(ui, "Steps in order");
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| small_muted(ui, format!("{ticked} of {n} done")));
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    small_muted(ui, format!("{ticked} of {n} done"))
+                });
             });
             small_muted(ui, "Each step needs the ones that make its ingredients to be ticked first.");
             progress_bar(ui, ticked as f32 / n as f32);
@@ -441,7 +452,9 @@ impl CraftState {
                     self.icon(ui, station, step.kind.station(), 32.0);
                     ui.vertical(|ui| {
                         ui.spacing_mut().item_spacing.y = 1.0;
-                        let title = RichText::new(format!("{} {}x", step.kind.verb(), thousands(step.operations))).size(16.0).strong();
+                        let title = RichText::new(format!("{} {}x", step.kind.verb(), thousands(step.operations)))
+                            .size(16.0)
+                            .strong();
                         ui.horizontal(|ui| {
                             ui.label(if ticked { title.color(c_muted()) } else { title });
                             ui.label(RichText::new(format!("at {}", step.kind.station())).color(c_muted()));
@@ -474,15 +487,21 @@ impl CraftState {
                         tag(ui, "Fits the inventory grid", c_accent());
                     }
                     if let Some(t) = step.ticks {
-                        small_muted(ui, format!("About {} in one {}", ticks_text(t), step.kind.station().to_lowercase()));
+                        small_muted(
+                            ui,
+                            format!("About {} in one {}", ticks_text(t), step.kind.station().to_lowercase()),
+                        );
                     }
                     if let Some(m) = recipe.and_then(|r| r.manual.as_ref()) {
                         ui.label(RichText::new(m).color(c_warn()).size(12.5));
                     }
                 });
                 if !step.byproducts.is_empty() {
-                    let text: Vec<String> =
-                        step.byproducts.iter().map(|(id, n)| format!("{} {}", thousands(*n), book.ds.name(id))).collect();
+                    let text: Vec<String> = step
+                        .byproducts
+                        .iter()
+                        .map(|(id, n)| format!("{} {}", thousands(*n), book.ds.name(id)))
+                        .collect();
                     small_muted(ui, format!("You get back: {}", text.join(", ")));
                 }
                 // the choices
@@ -521,7 +540,8 @@ impl CraftState {
         if list.len() < 2 {
             return;
         }
-        let shown = list.iter().find(|r| r.id == current).map_or_else(|| "Recipe".to_string(), |r| recipe_label(&book.ds, r));
+        let shown =
+            list.iter().find(|r| r.id == current).map_or_else(|| "Recipe".to_string(), |r| recipe_label(&book.ds, r));
         let mut pick: Option<String> = None;
         egui::ComboBox::from_id_salt(("craft-recipe", item, salt))
             .selected_text(clip(&shown, 44))
@@ -609,13 +629,11 @@ impl CraftState {
         let id = ui.make_persistent_id(("craft-tree", self.tree_epoch, path));
         let open = depth <= 1 || self.tree_all;
         let state = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, open);
-        state
-            .show_header(ui, |ui| self.tree_row(ui, book, node, path))
-            .body(|ui| {
-                for (i, c) in node.children.iter().enumerate() {
-                    self.tree_node(ui, book, c, path.wrapping_mul(31).wrapping_add(i as u64 + 1), depth + 1);
-                }
-            });
+        state.show_header(ui, |ui| self.tree_row(ui, book, node, path)).body(|ui| {
+            for (i, c) in node.children.iter().enumerate() {
+                self.tree_node(ui, book, c, path.wrapping_mul(31).wrapping_add(i as u64 + 1), depth + 1);
+            }
+        });
     }
 
     fn tree_row(&mut self, ui: &mut Ui, book: &Arc<Book>, n: &Node, path: u64) {
@@ -650,7 +668,10 @@ impl CraftState {
     // Storage
 
     fn tab_storage(&mut self, ui: &mut Ui, book: &Arc<Book>, v: &Arc<PlanView>) {
-        small_muted(ui, "Three separate estimates, not storage you need all at once: pick the one that matches how you work.");
+        small_muted(
+            ui,
+            "Three separate estimates, not storage you need all at once: pick the one that matches how you work.",
+        );
         let parts = [
             ("The things to gather", "What you carry home before you start crafting."),
             ("The finished product", "Only what you asked for, once it is made."),
@@ -691,25 +712,33 @@ impl CraftState {
             });
             small_muted(ui, "A chest holds 27 stacks, a double chest 54, a shulker box 27, an inventory 36.");
             ui.add_space(4.0);
-            egui::Grid::new(("craft-storage", title)).num_columns(3).spacing([14.0, 6.0]).striped(true).show(ui, |ui| {
-                for r in &s.rows {
-                    let name = book.ds.name(&r.item);
-                    ui.horizontal(|ui| {
-                        self.icon(ui, &r.item, &name, 24.0);
-                        ui.label(name);
-                    });
-                    ui.label(RichText::new(thousands(r.quantity)).strong());
-                    let text = if r.stack <= 1 {
-                        format!("{} slot{}", thousands(r.slots), if r.slots == 1 { "" } else { "s" })
-                    } else if r.partial > 0 {
-                        format!("{} full + {} spare, {} slots", thousands(r.full_stacks), r.partial, thousands(r.slots))
-                    } else {
-                        format!("{} full stacks, {} slots", thousands(r.full_stacks), thousands(r.slots))
-                    };
-                    ui.label(RichText::new(text).color(c_muted()).size(12.5));
-                    ui.end_row();
-                }
-            });
+            egui::Grid::new(("craft-storage", title)).num_columns(3).spacing([14.0, 6.0]).striped(true).show(
+                ui,
+                |ui| {
+                    for r in &s.rows {
+                        let name = book.ds.name(&r.item);
+                        ui.horizontal(|ui| {
+                            self.icon(ui, &r.item, &name, 24.0);
+                            ui.label(name);
+                        });
+                        ui.label(RichText::new(thousands(r.quantity)).strong());
+                        let text = if r.stack <= 1 {
+                            format!("{} slot{}", thousands(r.slots), if r.slots == 1 { "" } else { "s" })
+                        } else if r.partial > 0 {
+                            format!(
+                                "{} full + {} spare, {} slots",
+                                thousands(r.full_stacks),
+                                r.partial,
+                                thousands(r.slots)
+                            )
+                        } else {
+                            format!("{} full stacks, {} slots", thousands(r.full_stacks), thousands(r.slots))
+                        };
+                        ui.label(RichText::new(text).color(c_muted()).size(12.5));
+                        ui.end_row();
+                    }
+                },
+            );
         });
     }
 
@@ -796,7 +825,9 @@ impl CraftState {
         let existing = self.active.is_some();
         let m = egui::Modal::new(egui::Id::unique("craft-save")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
             ui.set_width(modal_width(ctx, 420.0));
-            ui.label(RichText::new(if existing { "Update your saved plan" } else { "Save this plan" }).size(19.0).strong());
+            ui.label(
+                RichText::new(if existing { "Update your saved plan" } else { "Save this plan" }).size(19.0).strong(),
+            );
             ui.add_space(2.0);
             muted(ui, "It keeps the item, the amount, your choices and what you ticked.");
             ui.add_space(8.0);

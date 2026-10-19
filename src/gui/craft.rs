@@ -36,11 +36,21 @@ const KEEP_AFTER_LEAVING: Duration = Duration::from_secs(600);
 /// What the background work tells the page.
 pub enum CraftMsg {
     /// The games on this computer and the saved plans, the first time the page is opened.
-    Listed { versions: Vec<InstalledVersion>, store: Store },
+    Listed {
+        versions: Vec<InstalledVersion>,
+        store: Store,
+    },
     /// The games on this computer again (after a download).
     Versions(Vec<InstalledVersion>),
-    Loaded { rev: u64, result: Result<Dataset, String> },
-    Icon { rev: u64, id: ItemId, image: Option<IconImage> },
+    Loaded {
+        rev: u64,
+        result: Result<Dataset, String>,
+    },
+    Icon {
+        rev: u64,
+        id: ItemId,
+        image: Option<IconImage>,
+    },
     /// A download of a game version ended (well or not).
     Downloaded(String),
     /// The saved plans and stock were written.
@@ -53,14 +63,22 @@ pub enum CraftMsg {
 
 /// What the page asks the window to do (it cannot, being taken out of the window while it is drawn).
 pub(super) enum Act {
-    Load { rev: u64, version: String, jar: PathBuf },
+    Load {
+        rev: u64,
+        version: String,
+        jar: PathBuf,
+    },
     Relist,
     Download(String),
     RefreshManifest,
     SaveStore(Store),
     Copy(String),
     /// Ask where to put a file and write `content` there.
-    Export { name: String, content: String, ext: &'static str },
+    Export {
+        name: String,
+        content: String,
+        ext: &'static str,
+    },
     ImportPlan,
     Toast(String, bool),
 }
@@ -274,7 +292,8 @@ impl CraftState {
 
     /// Start reading the recipes of `version`, forgetting everything that belonged to the one before.
     pub(super) fn begin_load(&mut self, version: &str, acts: &mut Vec<Act>) {
-        let Some(jar) = self.versions.as_ref().and_then(|v| v.iter().find(|i| i.version == version)).map(|i| i.jar.clone())
+        let Some(jar) =
+            self.versions.as_ref().and_then(|v| v.iter().find(|i| i.version == version)).map(|i| i.jar.clone())
         else {
             return;
         };
@@ -360,8 +379,7 @@ impl CraftState {
                 }
                 let slot = match image {
                     Some(img) if img.width > 0 && img.height > 0 && img.rgba.len() == img.width * img.height * 4 => {
-                        let color =
-                            egui::ColorImage::from_rgba_unmultiplied([img.width, img.height], &img.rgba);
+                        let color = egui::ColorImage::from_rgba_unmultiplied([img.width, img.height], &img.rgba);
                         Slot::Ready(ctx.load_texture(format!("craft:{id}"), color, egui::TextureOptions::NEAREST))
                     }
                     _ => Slot::Missing,
@@ -595,11 +613,8 @@ impl CraftState {
     }
 
     pub(super) fn choose_recipe(&mut self, item: &str, recipe: &str) {
-        let default = self
-            .book
-            .as_ref()
-            .and_then(|b| b.ds.recipes_for(item).next().map(|r| r.id.clone()))
-            .unwrap_or_default();
+        let default =
+            self.book.as_ref().and_then(|b| b.ds.recipes_for(item).next().map(|r| r.id.clone())).unwrap_or_default();
         if recipe == default {
             self.recipe_choices.remove(item);
         } else {
@@ -631,7 +646,10 @@ impl CraftState {
             self.pending_open = Some(p);
             self.begin_load(&v, acts);
         } else {
-            acts.push(Act::Toast(format!("Minecraft {} isn't on this computer. Get it first to open this plan.", p.version), true));
+            acts.push(Act::Toast(
+                format!("Minecraft {} isn't on this computer. Get it first to open this plan.", p.version),
+                true,
+            ));
         }
     }
 
@@ -671,7 +689,8 @@ impl CraftState {
             }
         }
         let sig = Self::sig_of(&req);
-        let p = SavedPlan { id: 0, name, version, request: req, done: self.done.clone(), created_ms: now, updated_ms: now };
+        let p =
+            SavedPlan { id: 0, name, version, request: req, done: self.done.clone(), created_ms: now, updated_ms: now };
         self.active = Some(self.add_plan(p));
         self.active_sig = Some(sig);
         self.unsaved = false;
@@ -777,7 +796,10 @@ impl CraftState {
             }
         }
         let esc = ctx.input(|i| i.key_pressed(egui::Key::Escape));
-        if esc && (ctx.memory(|m| m.has_focus(search_id)) || !ctx.egui_wants_keyboard_input()) && !self.search.is_empty() {
+        if esc
+            && (ctx.memory(|m| m.has_focus(search_id)) || !ctx.egui_wants_keyboard_input())
+            && !self.search.is_empty()
+        {
             self.search.clear();
         }
     }
@@ -785,7 +807,11 @@ impl CraftState {
     fn header(&mut self, ui: &mut Ui, env: &Env, acts: &mut Vec<Act>) {
         let narrow = ui.available_width() < 760.0;
         let status = self.book.as_ref().map(|b| {
-            format!("{} items \u{00B7} {} recipes", thousands(b.ds.items.len() as u64), thousands(b.ds.recipes.len() as u64))
+            format!(
+                "{} items \u{00B7} {} recipes",
+                thousands(b.ds.items.len() as u64),
+                thousands(b.ds.recipes.len() as u64)
+            )
         });
         ui.horizontal(|ui| {
             heading(ui, "Crafting calculator");
@@ -884,7 +910,8 @@ impl CraftState {
             return;
         };
         let latest = m.latest.get("release").cloned().unwrap_or_default();
-        let list: Vec<&ManifestVersion> = m.versions.iter().filter(|v| v.kind == "release" && supported(&v.id)).collect();
+        let list: Vec<&ManifestVersion> =
+            m.versions.iter().filter(|v| v.kind == "release" && supported(&v.id)).collect();
         small_muted(ui, "Releases from 1.13 on. Older versions keep their recipes in a form this page can't read.");
         ui.add_space(4.0);
         egui::Frame::new()
@@ -978,7 +1005,15 @@ impl App {
         let Some(st) = self.craft.as_mut() else { return };
         // the pictures of a version that has just been read come from a thread that owns the jar
         let started = if let CraftMsg::Loaded { rev, result: Ok(ds) } = &m {
-            (*rev == st.rev).then(|| (*rev, st.versions.as_ref().and_then(|l| l.iter().find(|v| v.version == ds.version)).map(|v| v.jar.clone())))
+            (*rev == st.rev).then(|| {
+                (
+                    *rev,
+                    st.versions
+                        .as_ref()
+                        .and_then(|l| l.iter().find(|v| v.version == ds.version))
+                        .map(|v| v.jar.clone()),
+                )
+            })
         } else {
             None
         };
@@ -1127,7 +1162,8 @@ impl App {
         self.page = Page::Craft;
         self.craft_open();
         let Some(st) = self.craft.as_mut() else { return };
-        let spec = |target: Option<(&'static str, u64)>, tab: Tab| ShotSpec { target, tab, stock: Vec::new(), dialog: None };
+        let spec =
+            |target: Option<(&'static str, u64)>, tab: Tab| ShotSpec { target, tab, stock: Vec::new(), dialog: None };
         st.shot = match variant {
             "craft" => Some(spec(Some(("minecraft:diamond_pickaxe", 64)), Tab::Materials)),
             "craft-steps" => Some(spec(Some(("minecraft:diamond_pickaxe", 64)), Tab::Steps)),
@@ -1145,7 +1181,10 @@ impl App {
                 ..spec(Some(("minecraft:diamond_pickaxe", 64)), Tab::Materials)
             }),
             "craft-get" => Some(ShotSpec { dialog: Some("get"), ..spec(None, Tab::Materials) }),
-            "craft-saved" => Some(ShotSpec { dialog: Some("saved"), ..spec(Some(("minecraft:diamond_pickaxe", 64)), Tab::Materials) }),
+            "craft-saved" => Some(ShotSpec {
+                dialog: Some("saved"),
+                ..spec(Some(("minecraft:diamond_pickaxe", 64)), Tab::Materials)
+            }),
             _ => Some(spec(None, Tab::Materials)),
         };
         if st.book.is_some() {

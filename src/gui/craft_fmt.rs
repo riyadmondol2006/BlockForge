@@ -79,13 +79,7 @@ pub fn stat_tile(ui: &mut Ui, width: f32, value: &str, label: &str) {
     let (rect, _) = ui.allocate_exact_size(vec2(width, 62.0), Sense::hover());
     let p = ui.painter();
     p.rect(rect, CornerRadius::same(10), c_field(), Stroke::NONE, egui::StrokeKind::Inside);
-    p.text(
-        rect.left_top() + vec2(12.0, 11.0),
-        egui::Align2::LEFT_TOP,
-        value,
-        FontId::proportional(20.0),
-        c_text(),
-    );
+    p.text(rect.left_top() + vec2(12.0, 11.0), egui::Align2::LEFT_TOP, value, FontId::proportional(20.0), c_text());
     p.text(rect.left_top() + vec2(12.0, 38.0), egui::Align2::LEFT_TOP, label, FontId::proportional(12.0), c_muted());
 }
 
