@@ -3,7 +3,7 @@
 The section for a version is used as the text of its release on GitHub. Older releases (the Java versions, up to
 3.4.42.x) are on the [releases page](https://github.com/riyadmondol2006/BlockForge/releases).
 
-## 4.4.0 (unreleased)
+## 4.4.0
 
 World conversion, powered by a Rust port of Chunker by Hive Games. This version converts Bedrock Edition worlds to
 Java Edition; the other direction is still to come.
