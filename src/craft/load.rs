@@ -713,7 +713,6 @@ const RAW: &[&str] = &[
     "phantom_membrane",
     "spider_eye",
     "rotten_flesh",
-    "netherite_scrap",
 ];
 
 /// The one item every ingredient of the recipe can be, if there is only one.
