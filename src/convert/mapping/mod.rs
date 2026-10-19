@@ -120,3 +120,5 @@ pub fn states(pairs: &[(&str, StateValue)]) -> StateMap {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod validation;
