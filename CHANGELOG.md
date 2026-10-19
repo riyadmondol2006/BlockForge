@@ -5,9 +5,8 @@ The section for a version is used as the text of its release on GitHub. Older re
 
 ## 4.4.0 (unreleased)
 
-World conversion between Java Edition and Bedrock Edition, powered by a Rust port of Chunker by Hive Games.
-
-TODO(lead): one sentence on how far the converter got when this version is released, and delete this line.
+World conversion, powered by a Rust port of Chunker by Hive Games. This version converts Bedrock Edition worlds to
+Java Edition; the other direction is still to come.
 
 ### What is new
 
@@ -18,8 +17,12 @@ TODO(lead): one sentence on how far the converter got when this version is relea
   ends with a summary (columns converted, warnings, blocks without an exact match) or the reason it failed with a
   button to copy the details. The original world is never written to, and the page refuses to save into it or into a
   folder that already has files in it.
-- TODO(lead): list what the engine converts in this version (block and biome coverage, which versions, which
-  directions, items, signs, chests, entities), and what it does not yet.
+- **What converts.** Bedrock worlds (a folder or a `.mcworld`, Bedrock 1.13 up to 1.26) to Java Edition 1.13 up to the
+  newest: blocks and their states, biomes, block entities (signs and hanging signs, chests and other containers with
+  their items and enchantments, command blocks, beds, banners, skulls, spawners, ...), the level settings and the
+  player's spawn. It was tried on a real Bedrock map and the result opens in Minecraft 26.3. Not converted yet:
+  entities (mobs, armor stands, paintings), pending block updates, map items' pictures, Java to Bedrock, and old
+  Bedrock worlds from before 1.13. Blocks without an equivalent become air and are listed in the summary.
 - **Credits.** The About page and the README credit ATLauncher and Chunker (MIT License, the license text is in
   NOTICE.md); BlockForge is not affiliated with or endorsed by Hive Games.
 
@@ -27,7 +30,9 @@ TODO(lead): one sentence on how far the converter got when this version is relea
 
 - The converter is the cargo feature `converter`, on by default; `cargo build --no-default-features` builds the
   launcher without it and without the Convert entries.
-- TODO(lead): release size growth and anything else worth knowing.
+- The block, item and biome tables are not written by hand: they were produced by running Chunker's own resolvers
+  (`tools/convert/`), and they are 131 KB in the program. The release binary grew by about 2.5 MB.
+- Heavy work runs on worker threads with bounded memory, and nothing of the converter loads until a world is converted.
 
 ## 4.3.0
 

@@ -37,8 +37,9 @@ export BLOCKFORGE_DIR=$HOME/blockforge-test
 cargo run --release -- gui
 ```
 
-The page shows what the engine says about a world. While the engine is unfinished it answers "The converter is not
-finished yet"; that message is what to expect before the engine is plugged in.
+The page detects the world (edition, version, name, dimensions) and converts Bedrock worlds to Java Edition. Java
+worlds are recognised but converting them (and writing Bedrock worlds) answers that it is not available yet. From the
+command line: `cargo run --release --example convert_world -- <world or .mcworld> <output folder> [java version]`.
 
 The converter's tests:
 

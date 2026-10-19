@@ -58,9 +58,10 @@
 - **A crafting calculator.** Pick an item and an amount and the Crafting page lists what to gather, what to craft or
   smelt in order, the fuel, and how many chests it takes, using the recipes of your own Minecraft files, so every
   version from 1.13 on works.
-- **World conversion between Java and Bedrock.** The Tools page has a Convert world screen that turns a world from one
-  edition into the other, powered by a Rust port of [Chunker](https://github.com/HiveGamesOSS/Chunker) by Hive Games
-  (MIT). The original world is never changed. See [Credits and license](#credits-and-license).
+- **World conversion.** The Tools page has a Convert world screen. Today it turns a Bedrock Edition world (a folder or
+  a `.mcworld`) into a Java Edition world, from 1.13 to the newest version; Java to Bedrock is next. World conversion
+  is powered by a Rust port of [Chunker](https://github.com/HiveGamesOSS/Chunker) by Hive Games (MIT). The original
+  world is never changed. See [Credits and license](#credits-and-license).
 - **Real desktop citizen.** Menu entries, icons and shortcuts on every system, a tray icon, a console window, light and
   dark themes, skins with a preview, backups, and drag and drop of mods, packs and instances.
 - **Private by default.** No usage statistics and no crash reports exist in BlockForge. See [PRIVACY.md](PRIVACY.md).
