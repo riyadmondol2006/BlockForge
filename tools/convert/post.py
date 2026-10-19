@@ -115,18 +115,29 @@ def pack_rows(edition, table, dumps, versions, commit, neutral):
     return out
 
 
+def simple_rows(lines):
+    """Dump lines of one simple table -> set of (kind, a, b); F key value + I value key pairs fold into B key value."""
+    f = {tuple(l.split("\t")[1:]) for l in lines if l.startswith("F\t")}
+    i = {tuple(l.split("\t")[1:]) for l in lines if l.startswith("I\t")}
+    inv = {(k, v) for v, k in i}
+    rows = {("B", k, v) for k, v in f & inv}
+    rows |= {("F", k, v) for k, v in f - inv}
+    rows |= {("I", k, v) for k, v in inv - f}
+    rows |= {("C",) + tuple(l.split("\t")[1:]) for l in lines if l.startswith("C\t")}
+    return rows
+
+
 def pack_simple(edition, dumps, versions):
     names = sorted({p.name[len("simple_"):-4] for v in versions for p in (dumps / edition / v).glob("simple_*.tsv")})
     out = []
     for name in names:
         present = defaultdict(set)
         for vi, v in enumerate(versions):
-            for l in read_lines(dumps / edition / v / ("simple_%s.tsv" % name)) or []:
-                present[l].add(vi)
-        for l in sorted(present):
-            f = l.split("\t")
-            for since, until in intervals(present[l], versions):
-                out.append("\t".join([name, f[0], since, until] + f[1:]))
+            for row in simple_rows(read_lines(dumps / edition / v / ("simple_%s.tsv" % name)) or []):
+                present[row].add(vi)
+        for row in sorted(present):
+            for since, until in intervals(present[row], versions):
+                out.append("\t".join([name, row[0], since, until] + list(row[1:])))
     return out
 
 
@@ -229,13 +240,21 @@ def verify(out, dumps, versions, edition, commit):
         for p in (dumps / edition / v).glob("simple_*.tsv"):
             name = p.name[len("simple_"):-4]
             for l in read_lines(p):
-                f = l.split("\t")
-                expect.add(tuple([name, f[0]] + f[1:]))
+                expect.add((name,) + tuple(l.split("\t")))
         got = set()
         for l in simple:
             f = l.split("\t")
             if in_force(v, f[2], f[3]):
-                got.add(tuple([f[0], f[1]] + f[4:]))
+                if f[1] == "B":
+                    got.add((f[0], "F", f[4], f[5]))
+                    got.add((f[0], "I", f[5], f[4]))
+                else:
+                    if f[1] == "F":
+                        got.add((f[0], "F", f[4], f[5]))
+                    elif f[1] == "I":
+                        got.add((f[0], "I", f[5], f[4]))
+                    else:
+                        got.add((f[0],) + tuple(["C"] + f[4:]))
         if got != expect:
             raise SystemExit("verify failed: %s simple %s" % (edition, v))
     print("verified %s: %d versions" % (edition, len(versions)))
@@ -270,7 +289,7 @@ def main():
                 if edition == "java" else []))
         emit("%s_groups.z" % edition, "%s state mapping groups (G) and type mappings (T)" % edition,
              pack_groups(edition, dumps))
-        emit("%s_misc.z" % edition, "%s id tables: table kind since until key value" % edition,
+        emit("%s_misc.z" % edition, "%s id tables: table kind(B|F|I|C) since until key value (I: value key)" % edition,
              pack_simple(edition, dumps, versions))
         if "--verify" in sys.argv:
             verify(out, dumps, versions, edition, commit)

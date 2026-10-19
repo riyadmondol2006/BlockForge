@@ -156,7 +156,10 @@ public class Dump {
         if (o instanceof Short i) return "i:" + i;
         if (o instanceof Byte i) return "i:" + i;
         if (o instanceof Long i) return "l:" + i;
-        if (o instanceof String s) return "s:" + chk(s);
+        if (o instanceof String s) {
+            if (s.contains(",") || s.contains("=") || s.contains("|")) throw new IllegalStateException("bad char in value " + s);
+            return "s:" + chk(s);
+        }
         if (o instanceof Enum<?> e) return e.name();
         return "?:" + chk(String.valueOf(o));
     }
@@ -378,9 +381,8 @@ public class Dump {
                 Map<Object, Object> fwd = castMap(im.forward());
                 Map<Object, Object> inv = castMap(im.inverse());
                 for (Map.Entry<Object, Object> e : fwd.entrySet()) rows.add("F\t" + val(e.getKey()) + "\t" + val(e.getValue()));
-                for (Map.Entry<Object, Object> e : inv.entrySet()) {
-                    if (!Objects.equals(fwd.get(e.getValue()), e.getKey())) rows.add("I\t" + val(e.getKey()) + "\t" + val(e.getValue()));
-                }
+                // The inverse is dumped completely: when several keys share a value, only the last put wins there.
+                for (Map.Entry<Object, Object> e : inv.entrySet()) rows.add("I\t" + val(e.getKey()) + "\t" + val(e.getValue()));
             }
             write(dir.resolve("simple_" + label + ".tsv"), rows);
         } catch (Throwable t) {
