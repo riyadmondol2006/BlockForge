@@ -342,3 +342,9 @@ fn write_round_trips_the_common_properties() {
         b.get(crate::convert::model::states::FACING_HORIZONTAL)
     );
 }
+
+#[test]
+fn items_can_be_shared_between_threads() {
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<BedrockItems>();
+}
