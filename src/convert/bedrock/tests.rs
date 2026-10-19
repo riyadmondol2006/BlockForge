@@ -67,7 +67,8 @@ fn test_world_open_and_scan() {
     assert_eq!((cols.iter().map(|c| c.z).min(), cols.iter().map(|c| c.z).max()), (Some(-23), Some(2)));
 
     // key census
-    let sub_keys: Vec<_> = keys.iter().filter_map(|k| ChunkKey::parse(k)).filter(|k| k.tag == ChunkTag::SubChunkPrefix).collect();
+    let sub_keys: Vec<_> =
+        keys.iter().filter_map(|k| ChunkKey::parse(k)).filter(|k| k.tag == ChunkTag::SubChunkPrefix).collect();
     assert_eq!(sub_keys.len(), 69);
 
     // decode every sub-chunk, re-encode it

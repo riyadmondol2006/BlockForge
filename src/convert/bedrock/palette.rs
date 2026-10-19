@@ -92,7 +92,8 @@ impl<'a> Reader<'a> {
     }
 
     fn take(&mut self, n: usize) -> Result<&'a [u8]> {
-        let end = self.pos.checked_add(n).filter(|e| *e <= self.data.len()).ok_or_else(|| fmt_err("data ends early"))?;
+        let end =
+            self.pos.checked_add(n).filter(|e| *e <= self.data.len()).ok_or_else(|| fmt_err("data ends early"))?;
         let s = &self.data[self.pos..end];
         self.pos = end;
         Ok(s)
@@ -660,7 +661,7 @@ mod tests {
         sub.layers[0].entries[1] = e.clone();
         let back = decode_sub_chunk(&encode_sub_chunk(&sub).unwrap(), -3).unwrap();
         assert_eq!(back.layers[0].entries[1], e);
-        assert_eq!(BlockStateRaw::from_tag(&Tag::Int(1)).is_err(), true);
+        assert!(BlockStateRaw::from_tag(&Tag::Int(1)).is_err());
     }
 
     #[test]

@@ -134,7 +134,10 @@ mod tests {
         root.insert("NetworkVersion", Tag::Int(1001));
         root.insert("RandomSeed", Tag::Long(1045923935239469310));
         root.insert("lastOpenedWithVersion", Tag::List(vec![1, 26, 51, 1, 0].into_iter().map(Tag::Int).collect()));
-        root.insert("MinimumCompatibleClientVersion", Tag::List(vec![1, 26, 50, 0, 0].into_iter().map(Tag::Int).collect()));
+        root.insert(
+            "MinimumCompatibleClientVersion",
+            Tag::List(vec![1, 26, 50, 0, 0].into_iter().map(Tag::Int).collect()),
+        );
         LevelDat { storage_version: 10, root_name: String::new(), root }
     }
 

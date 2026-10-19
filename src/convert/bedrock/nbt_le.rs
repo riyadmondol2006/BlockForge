@@ -228,4 +228,3 @@ pub(crate) fn to_vec(name: &str, tag: &Tag) -> Result<Vec<u8>> {
     write_named(&mut out, name, tag)?;
     Ok(out)
 }
-

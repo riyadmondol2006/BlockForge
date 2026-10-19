@@ -96,7 +96,11 @@ pub fn detect_bedrock(path: &Path) -> Option<BedrockWorldInfo> {
 }
 
 /// [`detect_bedrock`] with an explicit parent for the scratch directory and explicit extraction limits.
-pub fn detect_bedrock_in(path: &Path, scratch_parent: Option<&Path>, limits: &ExtractLimits) -> Option<BedrockWorldInfo> {
+pub fn detect_bedrock_in(
+    path: &Path,
+    scratch_parent: Option<&Path>,
+    limits: &ExtractLimits,
+) -> Option<BedrockWorldInfo> {
     if path.is_dir() {
         let root = find_root(path)?;
         return describe(root, None, path);
@@ -178,7 +182,11 @@ fn archive_has_world(path: &Path) -> Result<bool> {
 pub fn extract_zip(zip_path: &Path, dest: &Path, limits: &ExtractLimits) -> Result<()> {
     let mut archive = zip::ZipArchive::new(File::open(zip_path)?).map_err(archive_err)?;
     if archive.len() > limits.max_entries {
-        return Err(BedrockError::Archive(format!("archive has {} entries (limit {})", archive.len(), limits.max_entries)));
+        return Err(BedrockError::Archive(format!(
+            "archive has {} entries (limit {})",
+            archive.len(),
+            limits.max_entries
+        )));
     }
     let mut total: u64 = 0;
     for i in 0..archive.len() {
@@ -244,7 +252,10 @@ mod tests {
         std::fs::create_dir_all(dir).unwrap();
         let mut root = Compound::new();
         root.insert("LevelName", Tag::String(level_name.into()));
-        root.insert("lastOpenedWithVersion", Tag::List(vec![version[0], version[1], version[2], 0, 0].into_iter().map(Tag::Int).collect()));
+        root.insert(
+            "lastOpenedWithVersion",
+            Tag::List(vec![version[0], version[1], version[2], 0, 0].into_iter().map(Tag::Int).collect()),
+        );
         LevelDat { storage_version: 10, root_name: String::new(), root }.write(&dir.join("level.dat")).unwrap();
         let mut db = LevelDb::create_new(&dir.join("db"), &DbOptions::default()).unwrap();
         db.put(&keys::chunk_key(DimensionId::OVERWORLD, 0, 0, ChunkTag::Data3D), b"x").unwrap();
@@ -254,7 +265,13 @@ mod tests {
     fn zip_dir(src: &Path, zip_path: &Path, prefix: &str) {
         let mut z = zip::ZipWriter::new(File::create(zip_path).unwrap());
         let opts = zip::write::SimpleFileOptions::default();
-        fn walk(z: &mut zip::ZipWriter<File>, dir: &Path, base: &Path, prefix: &str, opts: zip::write::SimpleFileOptions) {
+        fn walk(
+            z: &mut zip::ZipWriter<File>,
+            dir: &Path,
+            base: &Path,
+            prefix: &str,
+            opts: zip::write::SimpleFileOptions,
+        ) {
             for e in std::fs::read_dir(dir).unwrap() {
                 let p = e.unwrap().path();
                 let rel = p.strip_prefix(base).unwrap().to_string_lossy().replace('\\', "/");
@@ -353,7 +370,11 @@ mod tests {
         // size cap, measured on the bytes really written
         let big = tmp.path().join("big.zip");
         let mut w = zip::ZipWriter::new(File::create(&big).unwrap());
-        w.start_file("zeros", zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated)).unwrap();
+        w.start_file(
+            "zeros",
+            zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated),
+        )
+        .unwrap();
         w.write_all(&vec![0u8; 1 << 20]).unwrap();
         w.finish().unwrap();
         let dest2 = tmp.path().join("dest2");

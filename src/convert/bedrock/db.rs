@@ -12,8 +12,8 @@ use rusty_leveldb::{
     Compressor, CompressorId, CompressorList, DB, LdbIterator, Options, Status, StatusCode, WriteBatch,
 };
 use std::collections::BTreeMap;
-use std::ops::Bound;
 use std::io::{Read, Write};
+use std::ops::Bound;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -290,14 +290,15 @@ impl Default for DbOptions {
 
 impl DbOptions {
     fn to_options(&self, create: bool) -> Options {
-        let mut o = Options::default();
-        o.create_if_missing = create;
-        o.compressor_list = Rc::new(compressor_list());
-        o.compressor = self.compressor;
-        o.write_buffer_size = self.write_buffer_size;
-        o.block_size = self.block_size;
-        o.block_cache_capacity_bytes = 8 * 1024 * 1024;
-        o
+        Options {
+            create_if_missing: create,
+            compressor_list: Rc::new(compressor_list()),
+            compressor: self.compressor,
+            write_buffer_size: self.write_buffer_size,
+            block_size: self.block_size,
+            block_cache_capacity_bytes: 8 * 1024 * 1024,
+            ..Options::default()
+        }
     }
 }
 
