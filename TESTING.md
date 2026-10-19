@@ -27,9 +27,13 @@ cargo run --release -- launch Test               # starts it
 
 ## Trying the world converter
 
-The converter is the cargo feature `converter` (on by default). Open **Tools > Convert world**, or the **Convert a world**
-button on an instance's overview, choose a world (a folder, or a `.mcworld` or `.zip`; you can also drop it on the page),
-pick the target and press Convert. Use a copy of a world you do not mind losing for the first tries: the converter never
+The converter is the cargo feature `converter` (on by default). It converts Bedrock worlds to Java Edition, and only
+that. Open **Tools > Convert a Bedrock world**, choose a world (a folder, or a `.mcworld` or `.zip`; you can also drop it
+on the page), pick the Java version and press Convert. The instance's overview has an **Add a Bedrock world** button:
+it opens the same page with the output set to the instance's `saves/<world name>` (a number is added when the name is
+taken) and the version set to the instance's Minecraft version (the newest when it is older than 1.13 or unknown). When
+it finishes, **Open the saves folder** shows the world, and it is in the instance's Singleplayer list. Try a Java world
+too: it must be refused with a message and no way to continue. Use a copy of a world you do not mind losing for the first tries: the converter never
 writes into the source, but it is new.
 
 ```sh

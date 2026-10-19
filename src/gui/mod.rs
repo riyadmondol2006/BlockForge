@@ -1023,7 +1023,7 @@ impl App {
                 for (page, label, icon) in items {
                     let active = self.page == page || (page == Page::Library && self.page == Page::Instance);
                     #[cfg(feature = "converter")]
-                    let active = active || (page == Page::Tools && self.page == Page::Convert);
+                    let active = active || (page == self.convert_nav_page() && self.page == Page::Convert);
                     if self.nav_button(ui, icon, label, active).clicked() {
                         self.page = page;
                     }
@@ -1425,7 +1425,7 @@ struct Shot {
     waiting: Arc<std::sync::atomic::AtomicBool>,
 }
 
-const SHOT_PAGES: [&str; 32] = [
+const SHOT_PAGES: [&str; 34] = [
     "home",
     "library",
     "instance",
@@ -1451,6 +1451,8 @@ const SHOT_PAGES: [&str; 32] = [
     "convert-progress",
     "convert-done",
     "convert-error",
+    "convert-instance",
+    "convert-instance-done",
     "packs",
     "ftb",
     "about",

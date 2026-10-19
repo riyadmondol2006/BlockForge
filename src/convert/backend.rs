@@ -132,6 +132,10 @@ pub trait Backend: Send + Sync {
     fn run(&self, job: ConvertJob, events: Sender<Event>, cancel: Arc<AtomicBool>);
 }
 
+/// What a Java Edition world is told: only Bedrock worlds are converted.
+pub const JAVA_WORLD: &str =
+    "This is a Java Edition world. BlockForge converts Bedrock worlds to Java Edition, not the other way round.";
+
 /// The text the stand-in engine answers with.
 pub const NOT_READY: &str = "The converter is not finished yet. Worlds cannot be converted in this version.";
 
@@ -225,7 +229,7 @@ impl Backend for Engine {
             });
         }
         if detect_java(path).is_some() {
-            return Err("This is a Java Edition world. BlockForge converts Bedrock worlds to Java Edition, not the other way round.".into());
+            return Err(JAVA_WORLD.to_string());
         }
         Err("This does not look like a Minecraft world (no level.dat with a Bedrock db or a Java region folder)."
             .into())
