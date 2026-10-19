@@ -27,6 +27,7 @@ pub mod canary;
 pub mod cf_seam;
 pub mod classcache;
 pub mod config;
+pub mod craft;
 pub mod content;
 pub mod curseforge;
 pub mod dependencies;
