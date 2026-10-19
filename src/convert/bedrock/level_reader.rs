@@ -495,7 +495,9 @@ mod tests {
         assert_eq!((player.position[0], player.position[2]), (10.5, -3.0));
         assert_eq!((player.yaw, player.pitch, player.game_type), (90.0, -10.0, 2));
         // Slots: stone 4, dirt (no slot: its index 2), helmet 103, boots 100, shield 150.
-        assert_eq!(player.inventory.keys().copied().collect::<Vec<_>>(), [2, 4, 100, 103, -106]);
+        let mut slots = player.inventory.keys().copied().collect::<Vec<_>>();
+        slots.sort_unstable();
+        assert_eq!(slots, [-106, 2, 4, 100, 103]);
         let none = parse_player(&p, &DimensionRegistry::new(), false);
         assert!(none.inventory.is_empty());
     }
