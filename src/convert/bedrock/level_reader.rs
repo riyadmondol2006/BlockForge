@@ -32,8 +32,18 @@ struct Experiment {
 
 /// One entry per `readCustomLevelSetting` override in `bedrock/v1_*/reader/LevelReader.java`.
 const EXPERIMENTS: [Experiment; 9] = [
-    Experiment { name: "CavesAndCliffs", key: Some("caves_and_cliffs"), since: [1, 17, 0], always_since: Some([1, 18, 0]) },
-    Experiment { name: "R20Support", key: Some("next_major_update"), since: [1, 19, 0], always_since: Some([1, 20, 0]) },
+    Experiment {
+        name: "CavesAndCliffs",
+        key: Some("caves_and_cliffs"),
+        since: [1, 17, 0],
+        always_since: Some([1, 18, 0]),
+    },
+    Experiment {
+        name: "R20Support",
+        key: Some("next_major_update"),
+        since: [1, 19, 0],
+        always_since: Some([1, 20, 0]),
+    },
     Experiment {
         name: "R21Support",
         key: Some("updateAnnouncedLive2023"),
@@ -41,10 +51,30 @@ const EXPERIMENTS: [Experiment; 9] = [
         always_since: Some([1, 21, 0]),
     },
     Experiment { name: "WinterDrop2024", key: None, since: [1, 21, 50], always_since: Some([1, 21, 50]) },
-    Experiment { name: "SummerDrop2025", key: Some("y_2025_drop_2"), since: [1, 21, 80], always_since: Some([1, 21, 90]) },
-    Experiment { name: "AutumnDrop2025", key: Some("y_2025_drop_3"), since: [1, 21, 100], always_since: Some([1, 21, 110]) },
-    Experiment { name: "SummerDrop2026", key: Some("y_2026_drop_2"), since: [1, 26, 20], always_since: Some([1, 26, 30]) },
-    Experiment { name: "AutumnDrop2026", key: Some("y_2026_drop_3"), since: [1, 26, 40], always_since: Some([1, 26, 50]) },
+    Experiment {
+        name: "SummerDrop2025",
+        key: Some("y_2025_drop_2"),
+        since: [1, 21, 80],
+        always_since: Some([1, 21, 90]),
+    },
+    Experiment {
+        name: "AutumnDrop2025",
+        key: Some("y_2025_drop_3"),
+        since: [1, 21, 100],
+        always_since: Some([1, 21, 110]),
+    },
+    Experiment {
+        name: "SummerDrop2026",
+        key: Some("y_2026_drop_2"),
+        since: [1, 26, 20],
+        always_since: Some([1, 26, 30]),
+    },
+    Experiment {
+        name: "AutumnDrop2026",
+        key: Some("y_2026_drop_3"),
+        since: [1, 26, 40],
+        always_since: Some([1, 26, 50]),
+    },
     Experiment { name: "WinterDrop2026", key: Some("y_2026_drop_4"), since: [1, 26, 60], always_since: None },
 ];
 
@@ -266,7 +296,9 @@ pub fn parse_maps(
 pub fn parse_portals(value: &[u8], registry: &DimensionRegistry) -> Result<Vec<Portal>, String> {
     let (_, tag) = super::nbt_le::from_slice(value).map_err(|e| e.to_string())?;
     let Tag::Compound(root) = tag else { return Err("portals is not a compound".into()) };
-    let Some(records) = root.get_compound("data").and_then(|d| d.get_list("PortalRecords")) else { return Ok(Vec::new()) };
+    let Some(records) = root.get_compound("data").and_then(|d| d.get_list("PortalRecords")) else {
+        return Ok(Vec::new());
+    };
     let mut portals = Vec::new();
     for record in records {
         let Tag::Compound(r) = record else { continue };
@@ -448,8 +480,14 @@ mod tests {
         p.insert("Rotation", Tag::List(vec![Tag::Float(90.0), Tag::Float(-10.0)]));
         p.insert("DimensionId", Tag::Int(1));
         p.insert("PlayerGameMode", Tag::Int(2));
-        p.insert("Inventory", Tag::List(vec![item("minecraft:stone", Some(4)), item("", Some(5)), item("minecraft:dirt", None)]));
-        p.insert("Armor", Tag::List(vec![item("minecraft:iron_helmet", Some(0)), item("minecraft:iron_boots", Some(3))]));
+        p.insert(
+            "Inventory",
+            Tag::List(vec![item("minecraft:stone", Some(4)), item("", Some(5)), item("minecraft:dirt", None)]),
+        );
+        p.insert(
+            "Armor",
+            Tag::List(vec![item("minecraft:iron_helmet", Some(0)), item("minecraft:iron_boots", Some(3))]),
+        );
         p.insert("Offhand", Tag::List(vec![item("minecraft:shield", Some(0))]));
         let player = parse_player(&p, &DimensionRegistry::new(), true);
         assert_eq!(player.dimension, Dimension::nether());
@@ -473,11 +511,8 @@ mod tests {
         map.insert("mapLocked", Tag::Byte(1));
         map.insert("colors", Tag::ByteArray(vec![-1, 0, 5]));
         let bytes = super::super::nbt_le::to_vec("", &Tag::Compound(map)).unwrap();
-        let entries = vec![
-            (b"map_-5".to_vec(), bytes.clone()),
-            (b"map_3".to_vec(), bytes),
-            (b"map_x".to_vec(), vec![]),
-        ];
+        let entries =
+            vec![(b"map_-5".to_vec(), bytes.clone()), (b"map_3".to_vec(), bytes), (b"map_x".to_vec(), vec![])];
         let mut warnings = Vec::new();
         let maps = parse_maps(&entries, &DimensionRegistry::new(), true, &mut warnings);
         assert_eq!(maps.iter().map(|m| m.id).collect::<Vec<_>>(), [-5, 3]);

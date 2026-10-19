@@ -49,10 +49,7 @@ pub(super) struct ColumnRecords {
 impl ColumnRecords {
     /// Whether the column has no record that matters to the reader.
     pub fn is_empty(&self) -> bool {
-        self.sub_chunks.is_empty()
-            && self.data3d.is_none()
-            && self.data2d.is_none()
-            && self.block_entities.is_none()
+        self.sub_chunks.is_empty() && self.data3d.is_none() && self.data2d.is_none() && self.block_entities.is_none()
     }
 }
 
@@ -276,7 +273,10 @@ mod tests {
             }
         });
         assert_eq!(handle.get(&chunk_key(DimensionId::OVERWORLD, 2, -3, ChunkTag::Version)).unwrap(), Some(vec![40]));
-        assert_eq!(handle.prefix(&chunk_key(DimensionId::OVERWORLD, 2, -3, ChunkTag::SubChunkPrefix)).unwrap().len(), 5);
+        assert_eq!(
+            handle.prefix(&chunk_key(DimensionId::OVERWORLD, 2, -3, ChunkTag::SubChunkPrefix)).unwrap().len(),
+            5
+        );
         drop(handle);
     }
 

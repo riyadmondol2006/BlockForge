@@ -217,13 +217,7 @@ mod tests {
         let desert = PaletteData::uniform(2);
         let data = Data3D {
             heights: vec![0; 256],
-            sections: vec![
-                plains,
-                PaletteData::inherit(),
-                desert,
-                PaletteData::inherit(),
-                PaletteData::inherit(),
-            ],
+            sections: vec![plains, PaletteData::inherit(), desert, PaletteData::inherit(), PaletteData::inherit()],
         };
         let Biomes::Palette(p) = r.data3d_biomes(&data, &fallback()) else { panic!() };
         // Trailing inherit sections are dropped; the middle one copies the section below.
@@ -258,7 +252,9 @@ mod tests {
         let r = reader();
         let mut biomes = vec![1u8; 256];
         biomes[17] = 2;
-        let Biomes::Column(c) = r.data2d_biomes(&Data2D { heights: vec![0; 256], biomes }, &fallback()) else { panic!() };
+        let Biomes::Column(c) = r.data2d_biomes(&Data2D { heights: vec![0; 256], biomes }, &fallback()) else {
+            panic!()
+        };
         assert_eq!(c.len(), 256);
         assert_eq!(c[17], Biome::Vanilla(VanillaBiome::DESERT));
         assert_eq!(c[16], Biome::Vanilla(VanillaBiome::PLAINS));

@@ -187,7 +187,7 @@ fn level_of_the_synthetic_world() {
 #[test]
 fn real_world_mace_map() {
     use crate::convert::bedrock::detect::detect_bedrock;
-    use crate::convert::model::{BlockEntityKind, Biome, Biomes};
+    use crate::convert::model::{Biome, Biomes, BlockEntityKind};
     use std::time::Instant;
 
     let Some(path) = crate::convert::bedrock::test_world_path() else {

@@ -11,7 +11,7 @@
 //! - [`dimensions`](BedrockWorldReader::dimensions) and [`columns`](BedrockWorldReader::columns) are what the
 //!   database holds, filtered by the conversion settings (dimension mapping and pruning);
 //! - [`read_column`](BedrockWorldReader::read_column) reads one column: its sub-chunks (`reader_blocks`), biomes and
-//!   height map (`reader_biomes`), block entities and the block fix-ups that go with them (`reader_post`), then
+//!   height map (`reader_biomes`), block entities and the block fix-ups that go with them (`resolvers::block_entity::read_into_column`), then
 //!   hands it to the pre-transform of the world's version.
 //!
 //! The reader is `Sync`. Every database access goes through one thread that owns the LevelDB handle
@@ -29,28 +29,18 @@ mod reader_biomes;
 mod reader_blocks;
 #[path = "reader_io.rs"]
 mod reader_io;
-#[path = "reader_post.rs"]
-mod reader_post;
-#[path = "reader_stub_items.rs"]
-mod reader_stub_items;
 #[cfg(test)]
 #[path = "reader_tests.rs"]
 mod reader_tests;
 
-/// Where the item and block entity readers come from (one line to change when the real ones are merged).
-mod items {
-    pub use super::reader_stub_items::{BedrockItems, read_block_entity};
-}
-
 use std::collections::{BTreeMap, HashMap};
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
-use self::items::BedrockItems;
 use self::reader_biomes::{BiomeReader, height_map};
 use self::reader_blocks::{BlockReader, build_chunk};
 use self::reader_io::{DbHandle, DbOpener, Want};
-use self::reader_post::{PostContext, read_block_entities};
+use super::BedrockError;
 use super::data_version::{BedrockVersion, GameVersion};
 use super::db::{BedrockDb, LevelDb};
 use super::detect::BedrockWorldInfo;
@@ -58,7 +48,8 @@ use super::keys::{self, DimensionId, DimensionTable};
 use super::level_dat::LevelDat;
 use super::level_reader::{parse_biome_ids, parse_maps, parse_player, parse_portals, read_level_settings};
 use super::palette::{decode_data2d, decode_data3d, decode_nbt_concat, decode_sub_chunk};
-use super::BedrockError;
+use super::resolvers::block_entity::read_into_column;
+use super::resolvers::itemstack::BedrockItems;
 use crate::convert::level::{
     ChunkPos, ConversionSettings, ConvertError, Dimension, DimensionRegistry, Level, LevelSettings, RegionPos,
 };
@@ -107,6 +98,7 @@ pub struct BedrockWorldReader {
     warnings: Mutex<Vec<String>>,
     warnings_dropped: AtomicU64,
     unmapped_block_entities: Mutex<HashMap<String, u64>>,
+    unmapped_items: std::sync::Arc<Mutex<HashMap<String, u64>>>,
     columns_read: AtomicU64,
     sub_chunks_read: AtomicU64,
     block_entities_read: AtomicU64,
@@ -183,8 +175,7 @@ impl BedrockWorldReader {
 
         let level_settings = read_level_settings(&level_dat.root, level_dat.storage_version, version, &warnings);
         let root = version.encoder_root();
-        let chunk_y_offset = if root >= [1, 17, 0]
-            && root < [1, 17, 30]
+        let chunk_y_offset = if ([1, 17, 0]..[1, 17, 30]).contains(&root)
             && level_settings.caves_and_cliffs
             && level_settings.generator_type == crate::convert::level::GeneratorType::Normal
         {
@@ -206,6 +197,18 @@ impl BedrockWorldReader {
             }
         }
 
+        let unmapped_items: std::sync::Arc<Mutex<HashMap<String, u64>>> = Arc::default();
+        let log = unmapped_items.clone();
+        let items = BedrockItems::new(version)
+            .with_custom_identifiers(settings.custom_identifiers)
+            .with_original_nbt(settings.allow_nbt_copying)
+            .with_loot_tables(settings.process_loot_tables)
+            .with_missing_logger(move |kind, what| {
+                if let Ok(mut m) = log.lock() {
+                    *m.entry(format!("{kind:?}: {what}")).or_insert(0) += 1;
+                }
+            });
+
         Ok(BedrockWorldReader {
             db,
             version,
@@ -216,11 +219,12 @@ impl BedrockWorldReader {
             dimensions,
             blocks: BlockReader::new(mapping, settings.custom_identifiers),
             biomes,
-            items: BedrockItems::new(version),
+            items,
             chunk_y_offset,
             warnings,
             warnings_dropped: AtomicU64::new(0),
             unmapped_block_entities: Mutex::default(),
+            unmapped_items,
             columns_read: AtomicU64::new(0),
             sub_chunks_read: AtomicU64::new(0),
             block_entities_read: AtomicU64::new(0),
@@ -380,11 +384,10 @@ impl BedrockWorldReader {
                         .into_iter()
                         .filter_map(|(_, t)| if let Tag::Compound(c) = t { Some(c) } else { None })
                         .collect();
-                    let ctx = PostContext { blocks: &self.blocks, items: &self.items, keep_unknown: s.allow_nbt_copying };
-                    let report = read_block_entities(&ctx, &mut column, &compounds);
-                    if !report.unmapped.is_empty() {
+                    let missing = read_into_column(&self.items, &compounds, &mut column, s.allow_nbt_copying);
+                    if !missing.is_empty() {
                         if let Ok(mut unmapped) = self.unmapped_block_entities.lock() {
-                            for id in report.unmapped {
+                            for id in missing {
                                 *unmapped.entry(id).or_insert(0) += 1;
                             }
                         }
@@ -438,6 +441,12 @@ impl BedrockWorldReader {
     /// Block entity ids no handler knows.
     pub fn unmapped_block_entities(&self) -> HashMap<String, u64> {
         self.unmapped_block_entities.lock().map(|m| m.clone()).unwrap_or_default()
+    }
+
+    /// Items, enchantments, effects and similar ids that had no mapping while reading block entities, as
+    /// `Kind: id`, with counts. Block mappings missed by block entity fix-ups are in here as `Block: ...`.
+    pub fn unmapped_items(&self) -> HashMap<String, u64> {
+        self.unmapped_items.lock().map(|m| m.clone()).unwrap_or_default()
     }
 
     /// Pivot states the model could not hold (`TYPE.STATE=VALUE`), with counts.

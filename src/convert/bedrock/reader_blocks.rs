@@ -21,10 +21,10 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use crate::convert::bedrock::palette::{BlockStateRaw, PaletteData, RawSubChunk, STORAGE_SIZE};
 use crate::convert::mapping::{BlockResolver, Edition, PivotBlock, StateMap, StateValue, Version};
+use crate::convert::model::identifier::StateValue as ModelStateValue;
 use crate::convert::model::{
     BlockIdentifier, BlockKind, BlockPalette, BlockRef, BlockType, Chunk, Palette, StateId, StateSet, air,
 };
-use crate::convert::model::identifier::StateValue as ModelStateValue;
 use crate::convert::nbt::{Compound, Tag};
 
 /// The Bedrock block resolver of one world: tables of the world's version, the cache and the unmapped counters.
@@ -146,11 +146,6 @@ impl BlockReader {
         block
     }
 
-    /// The block for a name and NBT states, for callers that hold no palette entry (flower pots, block entities).
-    pub fn resolve_named(&self, name: &str, states: &Compound, waterlogged: bool) -> BlockRef {
-        self.resolve(&BlockStateRaw::new(name, states.clone(), 0), waterlogged)
-    }
-
     fn intern(&self, block: BlockIdentifier) -> BlockRef {
         let Ok(mut interned) = self.interned.lock() else { return Arc::new(block) };
         if let Some(existing) = interned.get(&block) {
@@ -177,7 +172,10 @@ impl BlockReader {
                 return block;
             }
         } else if self.custom_allowed && !raw.name.starts_with("minecraft:") && raw.name.contains(':') {
-            return BlockIdentifier::custom(&raw.name, states.iter().map(|(k, v)| (k.to_string(), model_state_value(v))));
+            return BlockIdentifier::custom(
+                &raw.name,
+                states.iter().map(|(k, v)| (k.to_string(), model_state_value(v))),
+            );
         }
         self.count_unmapped(raw, &states);
         BlockIdentifier::new(BlockType::AIR)
@@ -185,7 +183,8 @@ impl BlockReader {
 
     fn count_unmapped(&self, raw: &BlockStateRaw, states: &StateMap) {
         let label = if self.resolver.is_supported_id(&raw.name) {
-            let shown: Vec<String> = states.iter().filter(|(k, _)| &***k != "waterlogged").map(|(k, v)| format!("{k}={v}")).collect();
+            let shown: Vec<String> =
+                states.iter().filter(|(k, _)| &***k != "waterlogged").map(|(k, v)| format!("{k}={v}")).collect();
             format!("{}[{}]", raw.name, shown.join(","))
         } else {
             raw.name.clone()
@@ -224,7 +223,8 @@ impl BlockReader {
         self.dropped_states.lock().map(|m| m.clone()).unwrap_or_default()
     }
 
-    /// The number of cached entries (tests, diagnostics).
+    /// The number of cached entries (tests).
+    #[cfg(test)]
     pub fn cached(&self) -> usize {
         self.cache.read().map_or(0, |c| c.len())
     }
@@ -338,7 +338,7 @@ pub(super) fn build_chunk(blocks: &BlockReader, sub: &RawSubChunk, y: i8) -> Chu
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::convert::bedrock::palette::{PaletteData, RawPalette};
+    use crate::convert::bedrock::palette::RawPalette;
 
     fn raw(name: &str, states: &[(&str, Tag)]) -> BlockStateRaw {
         let mut c = Compound::new();
@@ -482,7 +482,8 @@ mod tests {
         let mut idx = vec![0u16; STORAGE_SIZE];
         idx[0] = 1; // x0 z0 y0: stone
         idx[1] = 1; // x0 z0 y1: stone
-        let blocks = RawPalette::from_indices(vec![raw("minecraft:air", &[]), raw("minecraft:stone", &[])], idx).unwrap();
+        let blocks =
+            RawPalette::from_indices(vec![raw("minecraft:air", &[]), raw("minecraft:stone", &[])], idx).unwrap();
         let mut widx = vec![0u16; STORAGE_SIZE];
         widx[1] = 1; // only y1 is waterlogged
         widx[2] = 1; // water in the air above
