@@ -30,14 +30,28 @@ impl ConvertState {
     pub(super) fn show(&mut self, ui: &mut Ui) -> Vec<Act> {
         let mut acts = Vec::new();
         ui.horizontal(|ui| {
-            heading(ui, &tr!("Convert world"));
+            heading(ui, &if self.dest.is_some() { tr!("Add a Bedrock world") } else { tr!("Convert a Bedrock world") });
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if self.screen != Screen::Running && ui.link(tr!("Back to Tools")).clicked() {
-                    acts.push(Act::BackToTools);
+                if self.screen != Screen::Running {
+                    match &self.dest {
+                        Some(d) => {
+                            if ui.link(tr!("Back to {0}", &d.name)).clicked() {
+                                acts.push(Act::BackToInstance(d.folder.clone()));
+                            }
+                        }
+                        None => {
+                            if ui.link(tr!("Back to Tools")).clicked() {
+                                acts.push(Act::BackToTools);
+                            }
+                        }
+                    }
                 }
             });
         });
-        muted(ui, tr!("Turn a world from Java Edition into Bedrock Edition, or the other way round."));
+        match &self.dest {
+            Some(dest) => muted(ui, tr!("Bring a Bedrock world to Java Edition and add it to {0}", &dest.name)),
+            None => muted(ui, tr!("Turn a Bedrock Edition world into a Java Edition world")),
+        }
         ui.add_space(10.0);
         // the Convert button stays in view under the scrolling cards
         let bar = self.screen == Screen::Setup && self.found().is_some();
@@ -105,7 +119,7 @@ impl ConvertState {
 
     fn world_card(&mut self, ui: &mut Ui, acts: &mut Vec<Act>) {
         card(ui, |ui| {
-            label_over(ui, &tr!("WORLD TO CONVERT"));
+            label_over(ui, &tr!("BEDROCK WORLD"));
             match &self.look {
                 Look::Nothing => {
                     drop_zone(ui);
@@ -180,25 +194,18 @@ impl ConvertState {
     }
 
     fn target_card(&mut self, ui: &mut Ui) {
-        let source_edition = self.found().map(|d| d.edition);
-        let mut picked: Option<Edition> = None;
         card(ui, |ui| {
             label_over(ui, &tr!("CONVERT TO"));
             egui::Grid::new("convert-target").num_columns(2).spacing([20.0, 10.0]).show(ui, |ui| {
                 muted(ui, tr!("Game"));
-                ui.horizontal(|ui| {
-                    for e in [Edition::Java, Edition::Bedrock] {
-                        if chip(ui, e.label(), self.edition == e).clicked() {
-                            picked = Some(e);
-                        }
-                    }
-                });
+                // the target is always Java Edition: there is nothing to choose
+                ui.label(RichText::new(Edition::Java.label()).strong());
                 ui.end_row();
 
                 muted(ui, tr!("Version"));
                 ui.horizontal(|ui| {
                     if self.versions.is_empty() {
-                        small_muted(ui, tr!("No versions are available for this edition yet."));
+                        small_muted(ui, tr!("No versions are available yet."));
                     } else {
                         egui::ComboBox::from_id_salt("convert-version")
                             .selected_text(&self.version)
@@ -220,29 +227,39 @@ impl ConvertState {
                 });
                 ui.end_row();
             });
-            if source_edition == Some(self.edition) {
+            if let Some(dest) = &self.dest {
                 ui.add_space(4.0);
-                small_muted(ui, tr!("This is the edition the world already is."));
+                if self.version == dest.mc_version {
+                    small_muted(ui, tr!("The same version as {0}.", &dest.name));
+                } else if self.versions.contains(&dest.mc_version) {
+                    wrapped(
+                        ui,
+                        tr!(
+                            "{0} runs Minecraft {1}. A world made for another version may not open there.",
+                            &dest.name,
+                            &dest.mc_version
+                        ),
+                        c_warn(),
+                    );
+                } else {
+                    wrapped(
+                        ui,
+                        tr!(
+                            "{0} runs Minecraft {1}, which worlds cannot be written for. The world may not open there.",
+                            &dest.name,
+                            &dest.mc_version
+                        ),
+                        c_warn(),
+                    );
+                }
             }
-            ui.add_space(6.0);
-            setting_row(
-                ui,
-                &tr!("Keep unknown data"),
-                &tr!("Keep data the other edition has no use for, stored as it was, instead of dropping it."),
-                |ui| {
-                    toggle(ui, &mut self.keep_unknown);
-                },
-            );
         });
-        if let Some(e) = picked {
-            self.set_edition(e);
-        }
     }
 
     fn output_card(&mut self, ui: &mut Ui, acts: &mut Vec<Act>) {
         let check = self.output_check();
         card(ui, |ui| {
-            label_over(ui, &tr!("SAVE AS"));
+            label_over(ui, &if self.dest.is_some() { tr!("ADD TO THE INSTANCE AS") } else { tr!("SAVE AS") });
             ui.horizontal(|ui| {
                 let button_w = 150.0;
                 let field = ui.add(
@@ -263,7 +280,16 @@ impl ConvertState {
             });
             ui.add_space(2.0);
             match check {
-                OutputCheck::Ok => small_muted(ui, tr!("The original world is not changed.")),
+                OutputCheck::Ok => match &self.dest {
+                    Some(dest) => small_muted(
+                        ui,
+                        tr!(
+                            "The world goes into the saves folder of {0}. The original world is not changed.",
+                            &dest.name
+                        ),
+                    ),
+                    None => small_muted(ui, tr!("The original world is not changed.")),
+                },
                 OutputCheck::Empty => {
                     ui.label(RichText::new(tr!("Choose where to save the converted world.")).color(c_warn()));
                 }
@@ -361,9 +387,19 @@ impl ConvertState {
     fn done(&mut self, ui: &mut Ui, acts: &mut Vec<Act>) {
         let Some(s) = self.summary.as_ref() else { return };
         let mut again = false;
+        let dest = self.dest.clone();
         card(ui, |ui| {
             label_over(ui, &tr!("DONE"));
-            ui.label(RichText::new(tr!("Your world was converted")).size(19.0).strong());
+            match &dest {
+                Some(d) => {
+                    ui.label(RichText::new(tr!("Your world was added to {0}", &d.name)).size(19.0).strong());
+                    ui.add_space(2.0);
+                    muted(ui, tr!("It is in the instance's saves folder and shows up in Singleplayer."));
+                }
+                None => {
+                    ui.label(RichText::new(tr!("Your world was converted")).size(19.0).strong());
+                }
+            }
             ui.add_space(6.0);
             egui::Grid::new("convert-summary").num_columns(2).spacing([24.0, 8.0]).show(ui, |ui| {
                 muted(ui, tr!("Columns converted"));
@@ -374,7 +410,11 @@ impl ConvertState {
                 ui.end_row();
                 muted(ui, tr!("Blocks without a match"));
                 let kinds = s.unmapped_blocks.len();
-                ui.label(if kinds == 0 { tr!("None") } else { tr!("{0} kinds", kinds) });
+                ui.label(if kinds == 0 {
+                    tr!("None")
+                } else {
+                    crate::i18n::tr_n("{0} kind", "{0} kinds", kinds as u64, &[kinds.into()])
+                });
                 ui.end_row();
                 muted(ui, tr!("Saved in"));
                 ui.add(egui::Label::new(s.output.display().to_string()).truncate());
@@ -382,10 +422,20 @@ impl ConvertState {
             });
             ui.add_space(8.0);
             ui.horizontal(|ui| {
-                if primary_icon(ui, Icon::Folder, &tr!("Open folder")).clicked() {
-                    acts.push(Act::Open(s.output.clone()));
+                match &dest {
+                    Some(d) => {
+                        if primary_icon(ui, Icon::Folder, &tr!("Open the saves folder")).clicked() {
+                            acts.push(Act::Open(d.saves.clone()));
+                        }
+                    }
+                    None => {
+                        if primary_icon(ui, Icon::Folder, &tr!("Open folder")).clicked() {
+                            acts.push(Act::Open(s.output.clone()));
+                        }
+                    }
                 }
-                if secondary(ui, &tr!("Convert another")).clicked() {
+                let another = if dest.is_some() { tr!("Add another") } else { tr!("Convert another") };
+                if secondary(ui, &another).clicked() {
                     again = true;
                 }
             });
@@ -534,7 +584,7 @@ fn drop_zone(ui: &mut Ui) {
     let wrap = rect.width() - 32.0;
     let title = ui.painter().layout(tr!("Drop a world here"), egui::FontId::proportional(17.0), c_text(), wrap);
     let hint = ui.painter().layout(
-        tr!("A Java world folder, or a Bedrock world packed as .mcworld or .zip"),
+        tr!("A Bedrock world folder, or a world packed as .mcworld or .zip"),
         egui::FontId::proportional(14.0),
         c_muted(),
         wrap,

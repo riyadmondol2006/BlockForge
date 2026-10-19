@@ -1,4 +1,4 @@
-//! The Convert page: pick a world, say what to turn it into, watch it run, read what happened.
+//! The Convert page: pick a Bedrock world, choose the Java version to write, watch it run, read what happened.
 //!
 //! The engine is behind `crate::convert::backend::Backend`; this file is the page's state and its link to the window
 //! (background threads, files dropped on the window, the entries on the Tools page and an instance's overview), and
@@ -54,6 +54,7 @@ pub(super) enum Act {
     Copy(String),
     Link(&'static str),
     BackToTools,
+    BackToInstance(String),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -62,6 +63,27 @@ pub(super) enum Screen {
     Running,
     Done,
     Failed,
+}
+
+/// The instance a converted world is added to: its `saves` folder and the Minecraft version it runs.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct Dest {
+    /// The instance's folder name, to go back to it.
+    pub folder: String,
+    pub name: String,
+    pub saves: PathBuf,
+    pub mc_version: String,
+}
+
+impl Dest {
+    pub(super) fn of(inst: &Instance) -> Dest {
+        Dest {
+            folder: inst.folder.clone(),
+            name: inst.name().to_string(),
+            saves: inst.root.join("saves"),
+            mc_version: inst.mc_version().to_string(),
+        }
+    }
 }
 
 /// What is known about the chosen world.
@@ -117,11 +139,11 @@ pub struct ConvertState {
     /// Numbers the looks at a world, so the answer to an old one is ignored.
     seq: u64,
     pub(super) picking: bool,
-    pub(super) edition: Edition,
+    /// The instance the world is added to; `None` for the standalone flow of the Tools page.
+    pub(super) dest: Option<Dest>,
     pub(super) versions: Vec<String>,
     pub(super) version: String,
     pub(super) dims: Vec<(String, bool)>,
-    pub(super) keep_unknown: bool,
     pub(super) output: String,
     /// The player typed or chose the output, so a new world does not replace it.
     pub(super) out_edited: bool,
@@ -137,6 +159,8 @@ pub struct ConvertState {
 
 impl ConvertState {
     pub(super) fn new(backend: Arc<dyn Backend>) -> ConvertState {
+        let versions = backend.target_versions(Edition::Java);
+        let version = pick_version(&versions, None);
         ConvertState {
             backend,
             screen: Screen::Setup,
@@ -144,11 +168,10 @@ impl ConvertState {
             look: Look::Nothing,
             seq: 0,
             picking: false,
-            edition: Edition::Java,
-            versions: Vec::new(),
-            version: String::new(),
+            dest: None,
+            versions,
+            version,
             dims: Vec::new(),
-            keep_unknown: false,
             output: String::new(),
             out_edited: false,
             out_check: None,
@@ -176,6 +199,23 @@ impl ConvertState {
         self.last_warnings.clear();
     }
 
+    /// Adds the world to an instance (or, with `None`, back to the standalone flow): starts over, and the version
+    /// to write is the instance's own when it can be written, else the newest.
+    pub(super) fn set_dest(&mut self, dest: Option<Dest>) {
+        self.start_over();
+        self.version = pick_version(&self.versions, dest.as_ref().map(|d| d.mc_version.as_str()));
+        self.dest = dest;
+    }
+
+    /// Where the converted world goes by default.
+    fn suggested_output(&self, world_name: &str) -> Option<PathBuf> {
+        match (&self.dest, &self.source) {
+            (Some(dest), _) => Some(free_name(&dest.saves.join(safe_name(world_name)))),
+            (None, Some(src)) => Some(default_output(src, world_name)),
+            (None, None) => None,
+        }
+    }
+
     /// A world was chosen: forget the last one and number the look at this one. Returns its number.
     fn begin_look(&mut self, path: PathBuf) -> u64 {
         self.start_over();
@@ -190,27 +230,19 @@ impl ConvertState {
             return;
         }
         match result {
+            // only Bedrock worlds are converted; a Java one is told so and there is no way on
+            Ok(d) if d.edition != Edition::Bedrock => self.look = Look::Unknown(backend::JAVA_WORLD.to_string()),
             Ok(d) => {
                 self.dims = d.dimensions.iter().map(|n| (n.clone(), true)).collect();
-                self.set_edition(d.edition.other());
                 if !self.out_edited {
-                    if let Some(src) = &self.source {
-                        self.output = default_output(src, &d.name).to_string_lossy().to_string();
+                    if let Some(out) = self.suggested_output(&d.name) {
+                        self.output = out.to_string_lossy().to_string();
                         self.out_check = None;
                     }
                 }
                 self.look = Look::Found(d);
             }
             Err(e) => self.look = Look::Unknown(e),
-        }
-    }
-
-    /// Chooses the edition to write and the versions it offers (the newest to begin with).
-    pub(super) fn set_edition(&mut self, edition: Edition) {
-        self.edition = edition;
-        self.versions = self.backend.target_versions(edition);
-        if !self.versions.contains(&self.version) {
-            self.version = self.versions.first().cloned().unwrap_or_default();
         }
     }
 
@@ -271,9 +303,10 @@ impl ConvertState {
         Some(ConvertJob {
             input: self.source.clone()?,
             output: PathBuf::from(self.output.trim()),
-            target: Target { edition: self.edition, version: self.version.clone() },
+            target: Target { edition: Edition::Java, version: self.version.clone() },
             dimensions: selection,
-            keep_unknown_nbt: self.keep_unknown,
+            // nothing is copied between different editions, so there is nothing to keep
+            keep_unknown_nbt: false,
         })
     }
 
@@ -354,14 +387,16 @@ impl ConvertState {
         let mut out = format!("BlockForge {} ({})\n", crate::VERSION, std::env::consts::OS);
         if let Some(job) = &self.last_job {
             out += &format!(
-                "Source: {}\nOutput: {}\nTarget: {} {}\nDimensions: {:?}\nKeep unknown data: {}\n",
+                "Source: {}\nOutput: {}\nTarget: {} {}\nDimensions: {:?}\n",
                 job.input.display(),
                 job.output.display(),
                 job.target.edition.label(),
                 job.target.version,
-                job.dimensions,
-                job.keep_unknown_nbt
+                job.dimensions
             );
+        }
+        if let Some(dest) = &self.dest {
+            out += &format!("Instance: {} (Minecraft {})\n", dest.name, dest.mc_version);
         }
         if let Some(d) = self.found() {
             out += &format!("World: {} ({} {}, {} bytes)\n", d.name, d.edition.label(), d.version, d.size_bytes);
@@ -379,6 +414,15 @@ impl ConvertState {
 
 // ---------------------------------------------------------------------------------------------------------
 // Pure helpers
+
+/// The version to write: `wanted` (an instance's Minecraft version) when the list has it, else the newest.
+pub(super) fn pick_version(versions: &[String], wanted: Option<&str>) -> String {
+    wanted
+        .and_then(|w| versions.iter().find(|v| v.as_str() == w))
+        .or_else(|| versions.first())
+        .cloned()
+        .unwrap_or_default()
+}
 
 /// A world's name made safe to use as a folder name.
 pub(super) fn safe_name(name: &str) -> String {
@@ -473,18 +517,19 @@ pub(super) fn number(n: u64) -> String {
 // The window's side
 
 impl App {
-    /// Opens the page, making its state the first time. With `source`, that world is looked at right away (unless
-    /// a conversion is running, which is never interrupted).
-    pub(super) fn open_convert(&mut self, source: Option<PathBuf>) {
+    /// Opens the page, making its state the first time. With `into`, the world will be added to that instance; without
+    /// it, the page is the standalone converter. A running conversion is never interrupted.
+    pub(super) fn open_convert(&mut self, into: Option<&Instance>) {
         self.page = Page::Convert;
         self.convert_open();
-        let Some(st) = self.convert.as_ref() else { return };
-        if let Some(path) = source {
-            if st.screen == Screen::Running {
+        let Some(st) = self.convert.as_mut() else { return };
+        let dest = into.map(Dest::of);
+        if st.screen == Screen::Running {
+            if dest != st.dest {
                 self.toast(tr!("A conversion is already running. It has to finish first."));
-            } else {
-                self.convert_look(path);
             }
+        } else if dest.is_some() || st.dest.is_some() {
+            st.set_dest(dest);
         }
     }
 
@@ -586,6 +631,7 @@ impl App {
             }
             Act::Link(url) => self.open_link(url),
             Act::BackToTools => self.page = Page::Tools,
+            Act::BackToInstance(folder) => self.open_instance(&folder),
         }
     }
 
@@ -671,44 +717,26 @@ impl App {
         }
     }
 
-    /// The "Convert a world" menu of an instance: its worlds, and any other.
-    pub(super) fn convert_worlds_button(&mut self, ui: &mut Ui, inst: &Instance) {
-        let button = super::widgets::secondary(ui, &tr!("Convert a world"));
-        let mut chosen: Option<Option<PathBuf>> = None;
-        egui::Popup::menu(&button).show(|ui| {
-            ui.set_min_width(220.0);
-            let worlds = crate::content::service::worlds(&inst.root);
-            if worlds.is_empty() {
-                super::widgets::small_muted(ui, tr!("No single player worlds yet"));
-            }
-            egui::ScrollArea::vertical().max_height(260.0).auto_shrink([true, true]).show(ui, |ui| {
-                for w in &worlds {
-                    if ui.button(tr!("Convert {0}...", w)).clicked() {
-                        chosen = Some(Some(inst.root.join("saves").join(w)));
-                        ui.close();
-                    }
-                }
-            });
-            if !worlds.is_empty() {
-                ui.separator();
-            }
-            if ui.button(tr!("Another world...")).clicked() {
-                chosen = Some(None);
-                ui.close();
-            }
-        });
-        if let Some(source) = chosen {
-            self.open_convert(source);
+    /// The "Add a Bedrock world" button of an instance: opens the converter, set to save into the instance.
+    pub(super) fn add_bedrock_world_button(&mut self, ui: &mut Ui, inst: &Instance) {
+        let hint = tr!("Convert a Bedrock world to Java Edition and add it to this instance");
+        if super::widgets::secondary(ui, &tr!("Add a Bedrock world")).on_hover_text(hint).clicked() {
+            self.open_convert(Some(inst));
         }
+    }
+
+    /// The item of the side menu the page belongs to: the Library for an instance's world, else Tools.
+    pub(super) fn convert_nav_page(&self) -> Page {
+        if self.convert.as_ref().is_some_and(|s| s.dest.is_some()) { Page::Library } else { Page::Tools }
     }
 
     /// The entry on the Tools page. Returns whether its button was pressed.
     pub(super) fn convert_tool_card(&mut self, ui: &mut Ui) -> bool {
         super::tools::card_frame(
             ui,
-            &tr!("Convert world"),
-            &tr!("Turn a Minecraft world from Java Edition into Bedrock Edition, or the other way round."),
-            &tr!("Convert a world"),
+            &tr!("Convert a Bedrock world"),
+            &tr!("Turn a Bedrock Edition world into a Java Edition world"),
+            &tr!("Open"),
             true,
             None,
         )
@@ -744,12 +772,19 @@ impl ConvertState {
         self.error = None;
         self.versions = vec!["1.21.4".into(), "1.21.1".into(), "1.20.6".into(), "1.20.4".into()];
         self.version = "1.21.4".into();
-        self.edition = Edition::Java;
+        self.dest = None;
         self.dims = detected.dimensions.iter().map(|n| (n.clone(), n != "end")).collect();
         self.output = default_output(&source, &detected.name).to_string_lossy().to_string();
         self.out_edited = true;
         self.source = Some(source.clone());
+        let name = detected.name.clone();
         self.look = Look::Found(detected);
+        if variant.starts_with("convert-instance") {
+            let saves = PathBuf::from("/home/player/.local/share/BlockForge/instances/Survival/saves");
+            self.output = saves.join(safe_name(&name)).to_string_lossy().to_string();
+            self.dest =
+                Some(Dest { folder: "Survival".into(), name: "Survival".into(), saves, mc_version: "1.21.4".into() });
+        }
         let job = ConvertJob {
             input: source,
             output: PathBuf::from(&self.output),
@@ -758,12 +793,22 @@ impl ConvertState {
             keep_unknown_nbt: false,
         };
         match variant {
+            "convert-instance-done" => {
+                self.screen = Screen::Done;
+                self.summary = Some(Summary {
+                    columns: 1_284,
+                    unmapped_blocks: vec![("minecraft:trial_spawner".into(), 214)],
+                    warnings: Vec::new(),
+                    elapsed: Duration::from_secs(73),
+                    output: PathBuf::from(&self.output),
+                });
+            }
             "convert-empty" => {
                 self.source = None;
                 self.look = Look::Nothing;
             }
             "convert-unknown" => {
-                self.look = Look::Unknown(backend::NOT_READY.to_string());
+                self.look = Look::Unknown(backend::JAVA_WORLD.to_string());
             }
             "convert-conflict" => {
                 // a folder that exists and has files in it
@@ -843,7 +888,7 @@ mod tests {
         ConvertState::new(Arc::new(NotReady))
     }
 
-    /// A backend with a Java world and versions, for the flows.
+    /// A backend with a Bedrock world and Java versions, for the flows.
     struct Fake;
     impl Backend for Fake {
         fn detect(&self, _p: &Path) -> Result<Detected, String> {
@@ -860,6 +905,24 @@ mod tests {
                 Edition::Java => vec!["1.21.4".into(), "1.20.6".into()],
                 Edition::Bedrock => Vec::new(),
             }
+        }
+        fn run(&self, _j: ConvertJob, _e: std::sync::mpsc::Sender<Event>, _c: Arc<AtomicBool>) {}
+    }
+
+    /// A backend that finds a Java world, which the page must not go on with.
+    struct JavaFake;
+    impl Backend for JavaFake {
+        fn detect(&self, _p: &Path) -> Result<Detected, String> {
+            Ok(Detected {
+                edition: Edition::Java,
+                version: "1.21.4".into(),
+                name: "Home".into(),
+                dimensions: vec!["overworld".into()],
+                size_bytes: 10,
+            })
+        }
+        fn target_versions(&self, e: Edition) -> Vec<String> {
+            Fake.target_versions(e)
         }
         fn run(&self, _j: ConvertJob, _e: std::sync::mpsc::Sender<Event>, _c: Arc<AtomicBool>) {}
     }
@@ -926,7 +989,6 @@ mod tests {
         st.apply_detected(seq - 1, Err("old".into()));
         assert!(matches!(st.look, Look::Busy));
         st.apply_detected(seq, Ok(Fake.detect(Path::new("/")).unwrap()));
-        assert_eq!(st.edition, Edition::Java, "the other edition");
         assert_eq!(st.version, "1.21.4", "the newest");
         assert_eq!(st.dims.len(), 2);
         assert!(st.dims.iter().all(|(_, on)| *on));
@@ -938,10 +1000,131 @@ mod tests {
         assert!(st.output.is_empty(), "a new world starts without an output");
         st.apply_detected(seq, Ok(Fake.detect(Path::new("/")).unwrap()));
         assert_eq!(Path::new(&st.output), Path::new("/saves/Home (converted)"));
-        // a different edition has other versions; a version it does not have is replaced
-        st.set_edition(Edition::Bedrock);
-        assert!(st.versions.is_empty() && st.version.is_empty());
+        // nothing to write to: no Java versions at all
+        let mut none = state();
+        assert!(none.versions.is_empty() && none.version.is_empty());
+        assert!(none.blocked().is_some());
+    }
+
+    #[test]
+    fn the_version_follows_the_instance() {
+        let list: Vec<String> = ["1.21.4", "1.20.6", "1.13.2"].iter().map(|v| v.to_string()).collect();
+        assert_eq!(pick_version(&list, None), "1.21.4", "the newest");
+        assert_eq!(pick_version(&list, Some("1.20.6")), "1.20.6");
+        assert_eq!(pick_version(&list, Some("1.13.2")), "1.13.2");
+        assert_eq!(pick_version(&list, Some("1.12.2")), "1.21.4", "older than 1.13: the newest");
+        assert_eq!(pick_version(&list, Some("26.3")), "1.21.4", "not in the list: the newest");
+        assert_eq!(pick_version(&list, Some("")), "1.21.4");
+        assert_eq!(pick_version(&[], Some("1.21.4")), "");
+
+        let dest = |mc: &str| Dest {
+            folder: "Survival".into(),
+            name: "Survival".into(),
+            saves: "/inst/saves".into(),
+            mc_version: mc.into(),
+        };
+        let mut st = ConvertState::new(Arc::new(Fake));
+        assert_eq!(st.version, "1.21.4");
+        st.set_dest(Some(dest("1.20.6")));
+        assert_eq!(st.version, "1.20.6", "the instance's version");
+        st.set_dest(Some(dest("1.12.2")));
+        assert_eq!(st.version, "1.21.4", "an old instance gets the newest");
+        st.set_dest(Some(dest("1.20.6")));
+        st.set_dest(None);
+        assert_eq!(st.version, "1.21.4", "the Tools page flow is back to the newest");
+        assert!(st.dest.is_none());
+    }
+
+    #[test]
+    fn a_world_for_an_instance_goes_to_its_saves_with_a_free_name() {
+        let dir = tmp("dest");
+        let saves = dir.join("saves");
+        let dest = Dest {
+            folder: "Survival".into(),
+            name: "Survival".into(),
+            saves: saves.clone(),
+            mc_version: "1.20.6".into(),
+        };
+        let mut st = ConvertState::new(Arc::new(Fake));
+        st.set_dest(Some(dest));
+        // no saves folder yet: the world's name, as it is
+        let seq = st.begin_look(dir.join("dl").join("Home.mcworld"));
+        st.apply_detected(seq, Ok(Fake.detect(Path::new("/")).unwrap()));
+        assert_eq!(Path::new(&st.output), saves.join("Home"));
+        let job = st.job().expect("a free place in the saves");
+        assert_eq!(job.output, saves.join("Home"));
+        assert_eq!(job.target, Target { edition: Edition::Java, version: "1.20.6".into() });
+        assert!(!job.keep_unknown_nbt);
+        // a world of that name is there: the next one is called "Home 2", "Home 3"
+        std::fs::create_dir_all(saves.join("Home")).unwrap();
+        std::fs::write(saves.join("Home").join("level.dat"), b"x").unwrap();
+        let seq = st.begin_look(dir.join("dl").join("Home.mcworld"));
+        st.apply_detected(seq, Ok(Fake.detect(Path::new("/")).unwrap()));
+        assert_eq!(Path::new(&st.output), saves.join("Home 2"));
+        assert!(st.job().is_some());
+        std::fs::create_dir_all(saves.join("Home 2")).unwrap();
+        let seq = st.begin_look(dir.join("dl").join("Home.mcworld"));
+        st.apply_detected(seq, Ok(Fake.detect(Path::new("/")).unwrap()));
+        assert_eq!(Path::new(&st.output), saves.join("Home 3"));
+        // typing the name of a world that is there is refused as before
+        st.output = saves.join("Home").to_string_lossy().to_string();
+        st.output_edited();
+        assert_eq!(st.output_check(), OutputCheck::NotEmpty);
+        assert!(st.job().is_none());
+        // starting over keeps the instance; the Tools page flow puts the output next to the source again
+        st.start_over();
+        assert!(st.dest.is_some());
+        st.set_dest(None);
+        let seq = st.begin_look(dir.join("dl").join("Home.mcworld"));
+        st.apply_detected(seq, Ok(Fake.detect(Path::new("/")).unwrap()));
+        assert_eq!(Path::new(&st.output), dir.join("dl").join("Home (converted)"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_java_world_is_refused() {
+        let mut st = ConvertState::new(Arc::new(JavaFake));
+        let seq = st.begin_look(PathBuf::from("/saves/Home"));
+        st.apply_detected(seq, JavaFake.detect(Path::new("/")));
+        assert!(st.found().is_none());
+        match &st.look {
+            Look::Unknown(why) => assert_eq!(why, backend::JAVA_WORLD),
+            _ => panic!("a Java world must not be accepted"),
+        }
+        assert!(st.dims.is_empty() && st.output.is_empty());
         assert!(st.blocked().is_some());
+        assert!(st.job().is_none(), "no way to start");
+        // the engine says the same for what it detects as Java
+        assert!(backend::JAVA_WORLD.contains("Bedrock worlds to Java Edition"));
+        // a Bedrock world chosen afterwards works again
+        st.backend = Arc::new(Fake);
+        let seq = st.begin_look(PathBuf::from("/saves/Other"));
+        st.apply_detected(seq, Fake.detect(Path::new("/")));
+        assert!(st.found().is_some());
+    }
+
+    #[test]
+    fn a_dropped_file_that_is_no_world_is_refused() {
+        let dir = tmp("drop");
+        let file = dir.join("notes.txt");
+        std::fs::write(&file, b"hello").unwrap();
+        let empty = dir.join("empty");
+        std::fs::create_dir_all(&empty).unwrap();
+        let mut st = ConvertState::new(Arc::new(backend::Engine));
+        for path in [file, empty, dir.join("missing")] {
+            let seq = st.begin_look(path.clone());
+            let result = st.backend.detect(&path);
+            assert!(result.is_err(), "{path:?}");
+            st.apply_detected(seq, result);
+            assert!(matches!(st.look, Look::Unknown(_)), "{path:?}");
+            assert_eq!(st.source.as_deref(), Some(path.as_path()));
+            assert!(st.blocked().is_some() && st.job().is_none());
+        }
+        // the engine's own answer reaches the player as it is
+        let seq = st.begin_look(dir.join("notes.txt"));
+        st.apply_detected(seq, Err("This does not look like a Minecraft world".into()));
+        assert!(matches!(&st.look, Look::Unknown(w) if w.contains("does not look like")));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -956,10 +1139,9 @@ mod tests {
         assert_eq!(job.target, Target { edition: Edition::Java, version: "1.21.4".into() });
         assert!(!job.keep_unknown_nbt);
         st.dims[1].1 = false;
-        st.keep_unknown = true;
         let job = st.job().unwrap();
         assert_eq!(job.dimensions, DimensionSelection::Only(vec!["overworld".into()]));
-        assert!(job.keep_unknown_nbt);
+        assert!(!job.keep_unknown_nbt, "nothing is copied between editions");
         st.dims[0].1 = false;
         assert!(st.job().is_none(), "no dimension at all");
         assert!(st.blocked().unwrap().contains("dimension"));
@@ -1007,9 +1189,9 @@ mod tests {
         let job = ConvertJob {
             input: "/a".into(),
             output: "/b".into(),
-            target: Target { edition: Edition::Bedrock, version: "1.21.0".into() },
+            target: Target { edition: Edition::Java, version: "1.21.4".into() },
             dimensions: DimensionSelection::All,
-            keep_unknown_nbt: true,
+            keep_unknown_nbt: false,
         };
         let (_, cancel) = st.begin_run(job);
         st.run.as_mut().unwrap().started = Instant::now() - Duration::from_secs(6);
