@@ -58,13 +58,8 @@ surveys: core, model, java, bedrock).
 ### Phase 1 - foundations, in parallel (independent file sets)
 | Track | Chunker source | Rust destination | Status |
 |---|---|---|---|
-<<<<<<< HEAD
 | NBT | `nbt/**`, `util/**` (IO, tags, LZ4Block for MCA type 4, SNBT if used) | `src/convert/nbt/**`, `src/convert/util/**` | [x] |
-| Model | `conversion/intermediate/column/**`, `mapping/identifier/**` | `src/convert/model/**` (+ generated enums via `tools/convert/gen_model.py`) | [ ] |
-=======
-| NBT | `nbt/**`, `util/**` (IO, tags, LZ4Block for MCA type 4, SNBT if used) | `src/convert/nbt/**`, `src/convert/util/**` | [ ] |
 | Model | `conversion/intermediate/column/**`, `mapping/identifier/**` | `src/convert/model/**` (+ generated enums via `tools/convert/gen_model.py`) | [x] |
->>>>>>> conv-model
 | Table dumper | `conversion/encoding/{java,bedrock}/**/resolver/**`, `mapping/**` (engine semantics) | `tools/convert/dump/**`, `data/convert/*.bin.z`, loader `src/convert/mapping/data.rs` | [ ] |
 | Bedrock low level | `encoding/bedrock/util/**`, `base/reader` db/palette parts | `src/convert/bedrock/{db,keys,palette}.rs` | [ ] |
 | Java low level | `encoding/java/util/**`, `base/reader|writer` region parts, `level` I/O | `src/convert/java/{region,palette,dirs,version,format}.rs` | [ ] |
