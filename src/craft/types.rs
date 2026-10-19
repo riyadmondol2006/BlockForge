@@ -303,7 +303,8 @@ pub struct Node {
     pub children: Vec<Node>,
 }
 
-/// Per item: `required = from_stock + from_surplus + gather + produced - surplus`.
+/// Per item: `required = from_stock + gather + produced - surplus`, where `surplus` is what is left at the end (what
+/// came out of the surplus on the way was produced earlier, so it is inside `produced`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LedgerRow {
     pub item: ItemId,
