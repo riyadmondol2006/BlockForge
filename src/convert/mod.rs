@@ -12,4 +12,5 @@ pub mod level;
 pub mod mapping;
 pub mod model;
 pub mod nbt;
+pub mod pipeline;
 pub mod util;
