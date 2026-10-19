@@ -33,10 +33,24 @@ impl App {
         let flatpak = *FLATPAK.get_or_init(tools::is_flatpak);
         let per_row = ((ui.available_width() + 12.0) / (CARD_WIDTH + 12.0)).floor().max(1.0) as usize;
         let mut clicked: Option<&'static str> = None;
+        #[cfg(feature = "converter")]
+        let mut open_convert = false;
         ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
-            for row in TOOLS.chunks(per_row) {
+            // the world converter has a card of its own after the tools (it opens a page, not a job)
+            #[allow(unused_mut)]
+            let mut cards: Vec<Option<&ToolInfo>> = TOOLS.iter().map(Some).collect();
+            #[cfg(feature = "converter")]
+            cards.push(None);
+            for row in cards.chunks(per_row) {
                 ui.horizontal_top(|ui| {
                     for tool in row {
+                        let Some(tool) = tool else {
+                            #[cfg(feature = "converter")]
+                            if self.convert_tool_card(ui) {
+                                open_convert = true;
+                            }
+                            continue;
+                        };
                         let (enabled, hint) = match tool.id {
                             "network_checker" if !logs_on => {
                                 (false, Some("Turn on \"Report pack installs and play time\" in Settings first."))
@@ -56,6 +70,10 @@ impl App {
         });
         if let Some(id) = clicked {
             self.tool_clicked(id);
+        }
+        #[cfg(feature = "converter")]
+        if open_convert {
+            self.open_convert(None);
         }
     }
 
@@ -282,6 +300,18 @@ impl App {
 
 /// One card of the grid. Returns whether its button was pressed.
 fn tool_card(ui: &mut Ui, tool: &ToolInfo, enabled: bool, hint: Option<&str>) -> bool {
+    card_frame(ui, tool.name, tool.description, tool.action, enabled, hint)
+}
+
+/// A card with a title, a description and a button, as the grid draws them. Returns whether the button was pressed.
+pub(super) fn card_frame(
+    ui: &mut Ui,
+    name: &str,
+    description: &str,
+    action: &str,
+    enabled: bool,
+    hint: Option<&str>,
+) -> bool {
     let mut clicked = false;
     egui::Frame::new()
         .fill(c_card())
@@ -292,14 +322,14 @@ fn tool_card(ui: &mut Ui, tool: &ToolInfo, enabled: bool, hint: Option<&str>) ->
             ui.set_width(CARD_WIDTH - 34.0);
             ui.set_min_height(130.0);
             ui.vertical(|ui| {
-                ui.label(RichText::new(tool.name).strong().size(15.5));
-                ui.add(egui::Label::new(RichText::new(tool.description).color(c_muted()).size(12.5)).wrap());
+                ui.label(RichText::new(name).strong().size(15.5));
+                ui.add(egui::Label::new(RichText::new(description).color(c_muted()).size(12.5)).wrap());
                 if let Some(h) = hint {
                     ui.add_space(2.0);
                     ui.add(egui::Label::new(RichText::new(h).color(c_warn()).size(12.0)).wrap());
                 }
                 ui.add_space(8.0);
-                clicked = primary_enabled(ui, tool.action, enabled).clicked();
+                clicked = primary_enabled(ui, action, enabled).clicked();
             });
         });
     ui.add_space(4.0);

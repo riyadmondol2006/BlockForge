@@ -490,6 +490,8 @@ impl App {
                     if secondary(ui, "Export").clicked() {
                         self.open_export(&inst.folder);
                     }
+                    #[cfg(feature = "converter")]
+                    self.convert_worlds_button(ui, inst);
                     if let Some(v) = self.ftb.updates.get(&inst.folder).cloned() {
                         if primary(ui, &format!("Update to {}", v.label())).clicked() {
                             self.ftb_update_instance(&inst.folder);
