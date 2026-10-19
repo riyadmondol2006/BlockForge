@@ -55,6 +55,9 @@
   Forge and NeoForge. **Low-end mode** lowers the graphics settings of games on a slow computer (on by itself when the
   computer looks slow) and puts your own settings back when you switch it off. Each can be switched off in
   Settings > Game and for each instance on its own.
+- **A crafting calculator.** Pick an item and an amount and the Crafting page lists what to gather, what to craft or
+  smelt in order, the fuel, and how many chests it takes, using the recipes of your own Minecraft files, so every
+  version from 1.13 on works.
 - **Real desktop citizen.** Menu entries, icons and shortcuts on every system, a tray icon, a console window, light and
   dark themes, skins with a preview, backups, and drag and drop of mods, packs and instances.
 - **Private by default.** No usage statistics and no crash reports exist in BlockForge. See [PRIVACY.md](PRIVACY.md).
@@ -205,6 +208,8 @@ import screen, which is what double-clicking a `.mrpack` does.
 - **Performance helpers**: Fast start, the smoothness helper and Low-end mode (Settings > Game > Performance, and a
   switch on every instance), for every mod loader. If a game closes early with a helper on, BlockForge offers to turn
   them off, and switches the smoothness helper off by itself after two early closes in a row.
+- **Crafting calculator** (the Crafting page): materials, steps, tree and storage for any item, with your own stock,
+  saved plans and a shopping list to copy.
 - **Graphics card choice** for laptops with two cards (Settings > Game > Graphics card): power saving, high
   performance, or a card by name on Linux.
 - **One mods manager** per instance, with updates, dependencies, switch on and off, and a scan for known malicious mods
@@ -228,7 +233,9 @@ cargo test --release           # about 600 tests, a few seconds
 ```
 
 Packages are built by the scripts in [`packaging/`](packaging/) and by the
-[GitHub workflow](.github/workflows/build.yml), which builds, tests and publishes everything on every push to `main`.
+[GitHub workflow](.github/workflows/build.yml), which builds, tests and publishes everything on every push to `main`. A push that changes the program raises the version
+by itself (see `.github/scripts/version.sh`: `[skip bump]` in a commit message skips it, `[minor]` or `[major]` raises
+that part).
 See [CONTRIBUTING.md](CONTRIBUTING.md) for how the code is laid out and [TESTING.md](TESTING.md) for how to try it.
 
 ## Known limits

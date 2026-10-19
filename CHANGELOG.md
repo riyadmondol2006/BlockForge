@@ -3,6 +3,28 @@
 The section for a version is used as the text of its release on GitHub. Older releases (the Java versions, up to
 3.4.42.x) are on the [releases page](https://github.com/riyadmondol2006/BlockForge/releases).
 
+## 4.3.0
+
+A crafting calculator, and versions that raise themselves.
+
+### What is new
+
+- **Crafting calculator.** A new Crafting page works out what it takes to make an item: pick the item and how many,
+  and it lists what to gather (with a tick-off list), what to craft, smelt or cut and in which order, the fuel the
+  furnaces burn (an estimate), and how many stacks, chests or shulker boxes it all takes. Tell it what you already have
+  and it only plans what is missing; choose another recipe or another ingredient (planks of another wood, say) and the
+  plan follows. Plans can be saved, copied as a shopping list, exported as text or JSON and shared as a plan file. The
+  recipes are read from your own Minecraft files, so every version from 1.13 on works (including the newest), and
+  nothing of Mojang's is shipped with BlockForge. The page costs nothing while you are not on it. If no version is
+  installed it can download just the files it needs.
+
+### Behind the scenes
+
+- **The version raises itself.** When a push to main changes the program and its version was released already, the
+  build picks the next version, commits it to main and releases it, so nobody has to edit a version number. Pushes
+  that only change documentation or the workflows make no release, `[skip bump]` in a commit message skips it, and
+  `[minor]` or `[major]` raises that part instead of the patch number. The rules are in `.github/scripts/version.sh`.
+
 ## 4.2.0
 
 Smoother games, on every computer and every mod loader.
