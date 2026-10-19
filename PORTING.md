@@ -20,7 +20,7 @@ surveys: core, model, java, bedrock).
    (`register(BlockMapping.of(...))`, about 900 block rows per edition, state groups, type mappings, item, biome and
    entity tables, each gated by version). `tools/convert/dump/` (a small Java harness) compiles Chunker's sources with
    javac and dumps the resolver tables, per version, as plain text; `tools/convert/post.py` packs them into
-   `data/convert/*.bin.z` (checked in, loaded lazily with `include_bytes!` + `LazyLock`). The mapping engine
+   `data/convert/*.z` (checked in, zlib text, loaded lazily with `include_bytes!` + `LazyLock`). The mapping engine
    (`mapping/engine.rs`, port of `ChunkerBlockIdentifierResolver` and the state-group classes) interprets them.
    Regenerating needs a JDK and the Chunker clone; building BlockForge does not.
 3. **Bedrock LevelDB = `rusty-leveldb` 4.0.2** with a 20-line raw-deflate `Compressor` (id 4; zlib id 2) built on
@@ -60,12 +60,12 @@ surveys: core, model, java, bedrock).
 |---|---|---|---|
 | NBT | `nbt/**`, `util/**` (IO, tags, LZ4Block for MCA type 4, SNBT if used) | `src/convert/nbt/**`, `src/convert/util/**` | [ ] |
 | Model | `conversion/intermediate/column/**`, `mapping/identifier/**` | `src/convert/model/**` (+ generated enums via `tools/convert/gen_model.py`) | [ ] |
-| Table dumper | `conversion/encoding/{java,bedrock}/**/resolver/**`, `mapping/**` (engine semantics) | `tools/convert/dump/**`, `data/convert/*.bin.z`, loader `src/convert/mapping/data.rs` | [ ] |
+| Table dumper | `conversion/encoding/{java,bedrock}/**/resolver/**`, `mapping/**` (engine semantics) | `tools/convert/dump/**`, `tools/convert/post.py`, `data/convert/*.z` (131 KB), loader `src/convert/mapping/data.rs`, engine `engine.rs`/`items.rs`/`tables.rs` | [x] |
 | Bedrock low level | `encoding/bedrock/util/**`, `base/reader` db/palette parts | `src/convert/bedrock/{db,keys,palette}.rs` | [ ] |
 | Java low level | `encoding/java/util/**`, `base/reader|writer` region parts, `level` I/O | `src/convert/java/{region,palette,dirs,version,format}.rs` | [ ] |
 
 ### Phase 2 - the Bedrock -> Java path (M1)
-- [ ] `mapping/engine.rs` (port of `ChunkerBlockIdentifierResolver`, `StateMappingGroup`, `TypeMapping`, versioned groups)
+- [x] `mapping/engine.rs` (port of `ChunkerBlockIdentifierResolver`, `StateMappingGroup`, `TypeMapping`, versioned groups; also `items.rs`, `tables.rs`)
 - [ ] `bedrock/world_reader.rs`, `bedrock/level_reader.rs` (columns, Data3D, sub-chunks v8/v9, level.dat)
 - [ ] `bedrock/resolvers/{block,item,biome}.rs`, block entities (core set), item stacks
 - [ ] `bedrock/pretransform/**` (fence, pane, wall, stairs, door, gate, redstone, fire, chorus, vine, chest, snowy, ...)
@@ -100,8 +100,8 @@ surveys: core, model, java, bedrock).
 | `conversion.intermediate.column.**` | ~11,400 | `convert/model/**` (7.3k Rust incl. 2.4k generated) | [ ] |
 | `mapping.identifier.**` | ~460 | `convert/model/identifier.rs` | [ ] |
 | `mapping.resolver/mappings` (user JSON files) | ~1,100 | [-] later | [-] |
-| `conversion.encoding.base.**` | ~3,900 | `convert/mapping/`, `convert/resolve/` | [ ] |
+| `conversion.encoding.base.**` | ~3,900 | `convert/mapping/` (identifier resolvers, state groups, type mappings done), `convert/resolve/` | [~] |
 | `conversion.encoding.java.**` (v1_11 ... v26_3) | ~25,000 | `convert/java/**` + `data/convert/java*` | [ ] |
 | `conversion.encoding.bedrock.**` (v1_13 ... v1_26_60) | ~30,000 | `convert/bedrock/**` + `data/convert/bedrock*` | [ ] |
-| `resolver.**` | ~900 | `convert/mapping/engine.rs` | [ ] |
+| `resolver.**` | ~900 | `convert/mapping/engine.rs` (the id tables and block/item engine; `Resolver` traits and the block-entity/entity/item-stack handlers are other tracks) | [~] |
 | `conversion.encoding.preview`, `pruning`, `cli.**` | ~3,000 | [-] out of scope | [-] |

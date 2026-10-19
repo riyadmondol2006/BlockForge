@@ -69,6 +69,22 @@ Zlib-compressed text, header lines start with `#` (licence, Chunker commit, desc
 `since`/`until` versions (empty = open). `Version >= since && < until` selects the rows in force; the Rust loader is
 `src/convert/mapping/data.rs`. Sizes: see the end of the output of `post.py`.
 
+## Differential check against Chunker
+
+`check/gen_cases.py` draws about 160,000 block cases from the dumps (every row of 9 Java and 15 Bedrock versions plus the
+legacy tables, with valid, missing and unknown state values), `check/Check.java` answers them with Chunker's real
+`to(Identifier)` / `from(ChunkerBlockIdentifier)`, and the ignored Rust test `convert::mapping::tests::diff_tests`
+replays them through the Rust engine:
+
+```sh
+tools/convert/build_check.sh <jars> <classes>          # classes from build_dump.sh
+python3 tools/convert/check/gen_cases.py <dumps> cases.tsv
+java -cp <classes>:<jars> Check cases.tsv answers.tsv
+CONVERT_DIFF_ANSWERS=answers.tsv cargo test --lib convert::mapping::tests::diff -- --ignored --nocapture
+```
+
+Result for the committed data: 161,580 cases, 0 mismatches.
+
 ## Versions
 
 Dumped at every threshold of the sources. Probes that are always included: Java 1.13.2, 1.16.5, 1.18.2, 1.20.1, 1.20.4,
