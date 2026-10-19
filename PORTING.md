@@ -58,8 +58,13 @@ surveys: core, model, java, bedrock).
 ### Phase 1 - foundations, in parallel (independent file sets)
 | Track | Chunker source | Rust destination | Status |
 |---|---|---|---|
+<<<<<<< HEAD
 | NBT | `nbt/**`, `util/**` (IO, tags, LZ4Block for MCA type 4, SNBT if used) | `src/convert/nbt/**`, `src/convert/util/**` | [x] |
 | Model | `conversion/intermediate/column/**`, `mapping/identifier/**` | `src/convert/model/**` (+ generated enums via `tools/convert/gen_model.py`) | [ ] |
+=======
+| NBT | `nbt/**`, `util/**` (IO, tags, LZ4Block for MCA type 4, SNBT if used) | `src/convert/nbt/**`, `src/convert/util/**` | [ ] |
+| Model | `conversion/intermediate/column/**`, `mapping/identifier/**` | `src/convert/model/**` (+ generated enums via `tools/convert/gen_model.py`) | [x] |
+>>>>>>> conv-model
 | Table dumper | `conversion/encoding/{java,bedrock}/**/resolver/**`, `mapping/**` (engine semantics) | `tools/convert/dump/**`, `data/convert/*.bin.z`, loader `src/convert/mapping/data.rs` | [ ] |
 | Bedrock low level | `encoding/bedrock/util/**`, `base/reader` db/palette parts | `src/convert/bedrock/{db,keys,palette}.rs` | [ ] |
 | Java low level | `encoding/java/util/**`, `base/reader|writer` region parts, `level` I/O | `src/convert/java/{region,palette,dirs,version,format}.rs` | [ ] |
@@ -97,8 +102,8 @@ surveys: core, model, java, bedrock).
 | `util`, `scheduling.**` | ~2,300 | `convert/util/`, `convert/task.rs` | [~] util done (scheduling pending) |
 | `conversion` (WorldConverter), `conversion.handlers.**` | ~1,200 | `convert/pipeline.rs` | [ ] |
 | `conversion.intermediate.level/world` | ~1,900 | `convert/model/level.rs` | [ ] |
-| `conversion.intermediate.column.**` | ~11,400 | `convert/model/**` (7.3k Rust incl. 2.4k generated) | [ ] |
-| `mapping.identifier.**` | ~460 | `convert/model/identifier.rs` | [ ] |
+| `conversion.intermediate.column.**` | ~11,400 | `convert/model/**` (~9k Rust incl. 3.2k generated; `tools/convert/gen_model.py`) | [x] |
+| `mapping.identifier.**` | ~460 | `convert/model/identifier.rs` | [x] |
 | `mapping.resolver/mappings` (user JSON files) | ~1,100 | [-] later | [-] |
 | `conversion.encoding.base.**` | ~3,900 | `convert/mapping/`, `convert/resolve/` | [ ] |
 | `conversion.encoding.java.**` (v1_11 ... v26_3) | ~25,000 | `convert/java/**` + `data/convert/java*` | [ ] |
