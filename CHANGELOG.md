@@ -3,6 +3,32 @@
 The section for a version is used as the text of its release on GitHub. Older releases (the Java versions, up to
 3.4.42.x) are on the [releases page](https://github.com/riyadmondol2006/BlockForge/releases).
 
+## 4.4.0 (unreleased)
+
+World conversion between Java Edition and Bedrock Edition, powered by a Rust port of Chunker by Hive Games.
+
+TODO(lead): one sentence on how far the converter got when this version is released, and delete this line.
+
+### What is new
+
+- **Convert world.** A new Convert world page (a card on the Tools page, and a Convert a world button on an
+  instance's overview that lists its worlds) turns a world into the other edition: choose the world (a folder, or a
+  `.mcworld` or `.zip` file, or drop it on the page), the edition and version to write, the dimensions to keep and
+  whether to keep data the other edition cannot use, and where to save it. It shows the progress, can be stopped, and
+  ends with a summary (columns converted, warnings, blocks without an exact match) or the reason it failed with a
+  button to copy the details. The original world is never written to, and the page refuses to save into it or into a
+  folder that already has files in it.
+- TODO(lead): list what the engine converts in this version (block and biome coverage, which versions, which
+  directions, items, signs, chests, entities), and what it does not yet.
+- **Credits.** The About page and the README credit ATLauncher and Chunker (MIT License, the licence text is in
+  NOTICE.md); BlockForge is not affiliated with or endorsed by Hive Games.
+
+### Behind the scenes
+
+- The converter is the cargo feature `converter`, on by default; `cargo build --no-default-features` builds the
+  launcher without it and without the Convert entries.
+- TODO(lead): release size growth and anything else worth knowing.
+
 ## 4.3.0
 
 A crafting calculator, and versions that raise themselves.
