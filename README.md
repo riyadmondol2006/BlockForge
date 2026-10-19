@@ -254,6 +254,6 @@ BlockForge is free software under the [GNU General Public License v3](LICENSE). 
 credits and third-party licenses. "Minecraft" is a trademark of Mojang AB.
 
 World conversion is a Rust port of [Chunker](https://github.com/HiveGamesOSS/Chunker) by Hive Games, which is
-distributed under the MIT License (Copyright (c) 2024 Hive Games). The licence text is in [NOTICE.md](NOTICE.md), the
+distributed under the MIT License (Copyright (c) 2024 Hive Games). The license text is in [NOTICE.md](NOTICE.md), the
 files derived from Chunker say so in their header, and the Convert screen and the About page credit it. BlockForge is
 not affiliated with or endorsed by Hive Games.

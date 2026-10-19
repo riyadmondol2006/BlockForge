@@ -20,7 +20,7 @@ TODO(lead): one sentence on how far the converter got when this version is relea
   folder that already has files in it.
 - TODO(lead): list what the engine converts in this version (block and biome coverage, which versions, which
   directions, items, signs, chests, entities), and what it does not yet.
-- **Credits.** The About page and the README credit ATLauncher and Chunker (MIT License, the licence text is in
+- **Credits.** The About page and the README credit ATLauncher and Chunker (MIT License, the license text is in
   NOTICE.md); BlockForge is not affiliated with or endorsed by Hive Games.
 
 ### Behind the scenes

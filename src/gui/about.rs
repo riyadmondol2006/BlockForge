@@ -218,7 +218,7 @@ impl App {
                         if secondary(ui, &crate::tr!("Chunker on GitHub")).clicked() {
                             link = Some("https://github.com/HiveGamesOSS/Chunker".to_string());
                         }
-                        if secondary(ui, &crate::tr!("Chunker's licence")).clicked() {
+                        if secondary(ui, &crate::tr!("Chunker license")).clicked() {
                             link = Some(format!("{REPO}/blob/main/NOTICE.md"));
                         }
                     });

@@ -36,11 +36,12 @@ impl App {
         #[cfg(feature = "converter")]
         let mut open_convert = false;
         ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
-            // the world converter has a card of its own after the tools (it opens a page, not a job)
+            // the world converter has a card of its own, first (it opens a page, not a job)
             #[allow(unused_mut)]
-            let mut cards: Vec<Option<&ToolInfo>> = TOOLS.iter().map(Some).collect();
+            let mut cards: Vec<Option<&ToolInfo>> = Vec::new();
             #[cfg(feature = "converter")]
             cards.push(None);
+            cards.extend(TOOLS.iter().map(Some));
             for row in cards.chunks(per_row) {
                 ui.horizontal_top(|ui| {
                     for tool in row {
