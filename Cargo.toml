@@ -54,7 +54,7 @@ name = "craft_diff"
 
 [features]
 default = ["converter"]
-# World conversion (Java <-> Bedrock), a Rust port of Chunker by Hive Games (MIT). See PORTING.md.
+# World conversion (Bedrock to Java), a Rust port of Chunker by Hive Games (MIT). See PORTING.md.
 converter = ["dep:indexmap", "dep:rusty-leveldb", "dep:lz4_flex", "serde_json/preserve_order"]
 
 [profile.release]
