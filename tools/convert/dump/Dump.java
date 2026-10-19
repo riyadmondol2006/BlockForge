@@ -175,6 +175,11 @@ public class Dump {
         return chk(String.valueOf(o));
     }
 
+    /** Block identifiers: edition ids as they are, pivot block types by constant name. */
+    static String bid(Object o) {
+        return o instanceof Enum<?> e ? e.name() : id(o);
+    }
+
     static String key(Object o) {
         if (o instanceof BlockState<?> b) return "S:" + stateName(b);
         if (o instanceof com.hivemc.chunker.conversion.intermediate.column.chunk.itemstack.ChunkerItemProperty<?> p) return "P:" + p.getName();
@@ -327,7 +332,7 @@ public class Dump {
                         }
                         StringJoiner os = new StringJoiner(",");
                         for (Map.Entry<String, String> o : outs.entrySet()) os.add(o.getKey() + "=" + o.getValue());
-                        rows.add(dir + "\t" + id(e.getKey()) + "\t" + ins + "\t" + id(om.getIdentifier()) + "\t" + os + "\t"
+                        rows.add(dir + "\t" + bid(e.getKey()) + "\t" + ins + "\t" + bid(om.getIdentifier()) + "\t" + os + "\t"
                                 + groupName(om.getGroup()));
                     }
                 }
