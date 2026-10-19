@@ -5,21 +5,10 @@ use egui::{Color32, CornerRadius, FontId, RichText, Sense, Stroke, Ui, vec2};
 use super::theme::*;
 use crate::craft::MAX_QUANTITY;
 
-/// `1234567` -> `1,234,567`.
-pub fn thousands(n: u64) -> String {
-    let s = n.to_string();
-    let mut out = String::with_capacity(s.len() + s.len() / 3);
-    for (i, c) in s.chars().enumerate() {
-        if i > 0 && (s.len() - i) % 3 == 0 {
-            out.push(',');
-        }
-        out.push(c);
-    }
-    out
-}
+pub use crate::craft::saved::thousands;
 
 /// `2500` of a 64-stack -> `39 stacks + 4`; empty when the amount is less than a stack or items don't stack.
-pub fn stacks_text(n: u64, stack: u32) -> String {
+pub fn stack_note(n: u64, stack: u32) -> String {
     let st = u64::from(stack);
     if st <= 1 || n < st {
         return String::new();
@@ -155,10 +144,10 @@ mod tests {
         assert_eq!(thousands(999), "999");
         assert_eq!(thousands(1000), "1,000");
         assert_eq!(thousands(1_234_567), "1,234,567");
-        assert_eq!(stacks_text(10, 64), "");
-        assert_eq!(stacks_text(64, 64), "1 stack");
-        assert_eq!(stacks_text(2500, 64), "39 stacks + 4");
-        assert_eq!(stacks_text(100, 1), "");
+        assert_eq!(stack_note(10, 64), "");
+        assert_eq!(stack_note(64, 64), "1 stack");
+        assert_eq!(stack_note(2500, 64), "39 stacks + 4");
+        assert_eq!(stack_note(100, 1), "");
         assert_eq!(ticks_text(20 * 125), "2 min 5 s");
     }
 

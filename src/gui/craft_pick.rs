@@ -268,9 +268,7 @@ impl CraftState {
                         let typed = parse_qty(buf);
                         if r.changed() {
                             if let Ok(q) = typed {
-                                if let Some(s) = self.stock_mut() {
-                                    s.insert(id.clone(), q);
-                                }
+                                self.set_stock(id, q);
                                 self.touch_store();
                                 if self.use_stock {
                                     self.touch_plan();
@@ -284,9 +282,7 @@ impl CraftState {
                 });
             }
             if let Some(id) = remove {
-                if let Some(s) = self.stock_mut() {
-                    s.remove(&id);
-                }
+                self.set_stock(&id, 0);
                 self.stock_bufs.remove(&id);
                 self.touch_store();
                 if self.use_stock {
@@ -375,10 +371,8 @@ impl CraftState {
             });
             if add {
                 if let Ok(q) = parsed {
-                    if let Some(s) = self.stock_mut() {
-                        let e = s.entry(id.clone()).or_insert(0);
-                        *e = e.saturating_add(q).min(crate::craft::MAX_QUANTITY);
-                    }
+                    let have = self.stock().and_then(|s| s.get(&id)).copied().unwrap_or(0);
+                    self.set_stock(&id, have.saturating_add(q));
                     self.stock_bufs.remove(&id);
                     self.stock_pick = None;
                     self.touch_store();

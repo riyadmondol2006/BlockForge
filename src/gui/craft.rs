@@ -433,10 +433,9 @@ impl CraftState {
         self.active = None;
         self.done.clear();
         if let Some(v) = self.version.clone() {
-            let stock = self.store.stock.entry(v).or_default();
-            stock.clear();
+            self.store.stock.remove(&v);
             for (id, n) in spec.stock {
-                stock.insert(id.to_string(), n);
+                self.store.set_stock(&v, id, n);
             }
         }
         self.stock_bufs.clear();
@@ -459,12 +458,20 @@ impl CraftState {
 
     /// The player's stock for the version on show.
     pub(super) fn stock(&self) -> Option<&BTreeMap<ItemId, u64>> {
-        self.store.stock.get(self.version.as_deref()?)
+        Some(self.store.stock_for(self.version.as_deref()?))
     }
 
-    pub(super) fn stock_mut(&mut self) -> Option<&mut BTreeMap<ItemId, u64>> {
-        let v = self.version.clone()?;
-        Some(self.store.stock.entry(v).or_default())
+    /// Say how many of an item the player has (none takes it off the list).
+    pub(super) fn set_stock(&mut self, id: &str, qty: u64) {
+        if let Some(v) = self.version.clone() {
+            self.store.set_stock(&v, id, qty);
+        }
+    }
+
+    pub(super) fn clear_stock(&mut self) {
+        if let Some(v) = self.version.clone() {
+            self.store.stock.remove(&v);
+        }
     }
 
     /// Something in the store changed: write it a moment from now.
@@ -561,9 +568,9 @@ impl CraftState {
     pub(super) fn done_changed(&mut self) {
         if let Some(id) = self.active {
             let done = self.done.clone();
-            if let Some(p) = self.store.plans.iter_mut().find(|p| p.id == id) {
+            if let Some(p) = self.store.get_mut(id) {
                 p.done = done;
-                p.updated_ms = chrono::Utc::now().timestamp_millis();
+                p.updated_ms = saved::now_ms();
             }
             self.touch_store();
         }
@@ -605,11 +612,10 @@ impl CraftState {
     // ----------------------------------------------------------------------------------------------------
     // saved plans (the list lives in the store)
 
-    pub(super) fn add_plan(&mut self, mut p: SavedPlan) {
-        let now = chrono::Utc::now().timestamp_millis();
-        p.id = self.store.plans.iter().map(|q| q.id).max().map_or(now as u64, |m| m.max(now as u64 - 1) + 1);
-        self.store.plans.insert(0, p);
+    pub(super) fn add_plan(&mut self, p: SavedPlan) -> u64 {
+        let id = self.store.add(p);
         self.touch_store();
+        id
     }
 
     /// Open a saved plan: its version, item, amount and choices, and what was ticked.
@@ -646,11 +652,11 @@ impl CraftState {
         let Some(Ok(view)) = &self.plan else { return };
         let Some(version) = self.version.clone() else { return };
         let req = view.plan.request.clone();
-        let now = chrono::Utc::now().timestamp_millis();
+        let now = saved::now_ms();
         let name = name.trim().to_string();
         if let (false, Some(id)) = (as_new, self.active) {
-            if let Some(p) = self.store.plans.iter_mut().find(|p| p.id == id) {
-                p.name = name;
+            self.store.rename(id, &name, now);
+            if let Some(p) = self.store.get_mut(id) {
                 p.request = req.clone();
                 p.done = self.done.clone();
                 p.updated_ms = now;
@@ -662,8 +668,7 @@ impl CraftState {
         }
         let sig = Self::sig_of(&req);
         let p = SavedPlan { id: 0, name, version, request: req, done: self.done.clone(), created_ms: now, updated_ms: now };
-        self.add_plan(p);
-        self.active = self.store.plans.first().map(|p| p.id);
+        self.active = Some(self.add_plan(p));
         self.active_sig = Some(sig);
         self.unsaved = false;
     }
@@ -1036,7 +1041,7 @@ impl App {
                     let Some(path) = pick_open_path() else { return };
                     let r = std::fs::read_to_string(&path)
                         .map_err(|e| format!("Couldn't read {}: {e}", path.display()))
-                        .and_then(|t| saved::import_plan(&t));
+                        .and_then(|t| saved::import_plan(&t, saved::now_ms()));
                     n.send(Msg::Craft(CraftMsg::PlanFile(r)));
                 });
             }

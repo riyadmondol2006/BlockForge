@@ -137,7 +137,7 @@ impl CraftState {
                         } else {
                             tag(ui, "Needs a look", c_warn());
                         }
-                        if let Some(p) = self.active.and_then(|id| self.store.plans.iter().find(|p| p.id == id)) {
+                        if let Some(p) = self.active.and_then(|id| self.store.get(id)) {
                             tag(ui, &format!("Saved: {}", clip(&p.name, 24)), c_muted());
                             if self.unsaved {
                                 tag(ui, "Changed since saved", c_warn());
@@ -161,7 +161,7 @@ impl CraftState {
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing = vec2(8.0, 8.0);
                 if secondary(ui, "Copy shopping list").clicked() {
-                    acts.push(Act::Copy(saved::to_text(&book.ds, plan)));
+                    acts.push(Act::Copy(saved::clipboard_list(&book.ds, plan)));
                 }
                 let export = secondary(ui, "Export");
                 let slug = file_name(&name, plan.request.quantity);
@@ -187,7 +187,7 @@ impl CraftState {
                 let label = if self.active.is_some() { "Update plan" } else { "Save plan" };
                 if secondary(ui, label).clicked() {
                     let fallback = format!("{} x {}", thousands(plan.request.quantity), name);
-                    let current = self.active.and_then(|id| self.store.plans.iter().find(|p| p.id == id)).map(|p| p.name.clone());
+                    let current = self.active.and_then(|id| self.store.get(id)).map(|p| p.name.clone());
                     self.dialog = Some(Dialog::Save(current.unwrap_or(fallback)));
                 }
                 let n = self.store.plans.len();
@@ -351,7 +351,7 @@ impl CraftState {
         tail: impl FnOnce(&mut Ui),
     ) {
         let name = book.ds.name(id);
-        let sub = stacks_text(qty, book.ds.stack(id));
+        let sub = stack_note(qty, book.ds.stack(id));
         ui.horizontal(|ui| {
             ui.set_min_height(38.0);
             if let Some(on) = check {
@@ -725,7 +725,7 @@ impl CraftState {
             Dialog::Save(mut name) => self.save_dialog(ctx, &mut name).then_some(Dialog::Save(name)),
             Dialog::Rename(id, mut name) => self.rename_dialog(ctx, id, &mut name).then_some(Dialog::Rename(id, name)),
             Dialog::Delete(id) => {
-                let label = self.store.plans.iter().find(|p| p.id == id).map(|p| p.name.clone()).unwrap_or_default();
+                let label = self.store.get(id).map(|p| p.name.clone()).unwrap_or_default();
                 match confirm_modal(
                     ctx,
                     "craft-delete",
@@ -735,7 +735,7 @@ impl CraftState {
                     true,
                 ) {
                     Some(true) => {
-                        self.store.plans.retain(|p| p.id != id);
+                        self.store.delete(id);
                         if self.active == Some(id) {
                             self.active = None;
                             self.active_sig = None;
@@ -758,9 +758,7 @@ impl CraftState {
                     true,
                 ) {
                     Some(true) => {
-                        if let Some(s) = self.stock_mut() {
-                            s.clear();
-                        }
+                        self.clear_stock();
                         self.stock_bufs.clear();
                         self.touch_store();
                         self.touch_plan();
@@ -858,9 +856,7 @@ impl CraftState {
             });
         });
         if done {
-            if let Some(p) = self.store.plans.iter_mut().find(|p| p.id == id) {
-                p.name = name.trim().to_string();
-            }
+            self.store.rename(id, name, saved::now_ms());
             self.touch_store();
             return false;
         }
@@ -894,7 +890,10 @@ impl CraftState {
                     .max_height(modal_scroll_height(ctx, 380.0, 190.0))
                     .auto_shrink([false, true])
                     .show(ui, |ui| {
-                        for (k, p) in self.store.plans.iter().enumerate() {
+                        let mut order: Vec<usize> = (0..self.store.plans.len()).collect();
+                        order.sort_by_key(|&k| std::cmp::Reverse(self.store.plans[k].updated_ms));
+                        for k in order {
+                            let p = &self.store.plans[k];
                             let item = book
                                 .as_ref()
                                 .filter(|b| b.ds.version == p.version)
@@ -977,9 +976,9 @@ impl CraftState {
                     }
                 }
                 Row::Copy(k) => {
-                    if let Some(mut p) = self.store.plans.get(k).cloned() {
-                        p.name = format!("{} copy", p.name);
-                        self.add_plan(p);
+                    if let Some(id) = self.store.plans.get(k).map(|p| p.id) {
+                        self.store.duplicate(id, saved::now_ms());
+                        self.touch_store();
                     }
                 }
                 Row::Export(k) => {
