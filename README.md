@@ -59,7 +59,7 @@
   smelt in order, the fuel, and how many chests it takes, using the recipes of your own Minecraft files, so every
   version from 1.13 on works.
 - **World conversion.** The Tools page has a Convert world screen. Today it turns a Bedrock Edition world (a folder or
-  a `.mcworld`) into a Java Edition world, from 1.13 to the newest version; Java to Bedrock is next. World conversion
+  a `.mcworld`) into a Java Edition world, from 1.13 to the newest version (the other way round is not offered). World conversion
   is powered by a Rust port of [Chunker](https://github.com/HiveGamesOSS/Chunker) by Hive Games (MIT). The original
   world is never changed. See [Credits and license](#credits-and-license).
 - **Real desktop citizen.** Menu entries, icons and shortcuts on every system, a tray icon, a console window, light and

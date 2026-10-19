@@ -4,8 +4,8 @@
 //! Chunker drives this with a task tree and a column pre-transform handler that waits for neighbouring columns. Here
 //! a pool of worker threads reads columns in region order (so the writer keeps few region files busy), runs each
 //! column's pre-transform with its neighbours (read through a small shared cache), encodes the Java chunk and hands
-//! the bytes to the single writer thread over a bounded channel, which bounds memory. Today the Bedrock to Java
-//! direction exists; the other directions say so plainly.
+//! the bytes to the single writer thread over a bounded channel, which bounds memory. Only the Bedrock to Java
+//! direction exists (by decision); other requests say so plainly.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};

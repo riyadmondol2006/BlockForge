@@ -6,7 +6,7 @@ The section for a version is used as the text of its release on GitHub. Older re
 ## 4.4.0
 
 World conversion, powered by a Rust port of Chunker by Hive Games. This version converts Bedrock Edition worlds to
-Java Edition; the other direction is still to come.
+Java Edition (BlockForge does not convert in the other direction).
 
 ### What is new
 
@@ -21,7 +21,7 @@ Java Edition; the other direction is still to come.
   newest: blocks and their states, biomes, block entities (signs and hanging signs, chests and other containers with
   their items and enchantments, command blocks, beds, banners, skulls, spawners, ...), the level settings and the
   player's spawn. It was tried on a real Bedrock map and the result opens in Minecraft 26.3. Not converted yet:
-  entities (mobs, armor stands, paintings), pending block updates, map items' pictures, Java to Bedrock, and old
+  entities (mobs, armor stands, paintings), pending block updates, map items' pictures, and old
   Bedrock worlds from before 1.13. Blocks without an equivalent become air and are listed in the summary.
 - **Credits.** The About page and the README credit ATLauncher and Chunker (MIT License, the license text is in
   NOTICE.md); BlockForge is not affiliated with or endorsed by Hive Games.

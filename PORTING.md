@@ -47,7 +47,7 @@ surveys: core, model, java, bedrock).
 - **M1 (first usable): Bedrock -> Java**, modern worlds (Bedrock 1.20 - 1.26.x to Java 1.20/1.21): blocks, biomes,
   heights, chests/signs/command blocks/pistons/furnaces/beds/banners/skulls, items in containers, level.dat basics.
   Test world: `~/Downloads/Mace, Spear, Sword PvP Map! V4.mcworld` (Bedrock 1.26.51, 93 columns, v9 sub-chunks).
-- **M2: Java -> Bedrock** for modern worlds (writer side, `FinalizedState` etc.).
+- **Out of scope (decided by the owner): Java -> Bedrock.** BlockForge converts Bedrock worlds to Java Edition only.
 - **M3:** entities, players, maps, legacy (< 1.13) Java, older Bedrock, Java <-> Java version changes.
 
 ## Phases
@@ -73,10 +73,7 @@ surveys: core, model, java, bedrock).
 - [ ] `convert/{pipeline,task,settings}.rs` (pipeline, worker pool, progress, cancel), detect(), `convert_world()` API
 - [ ] CLI example `examples/convert_world.rs`, round-trip/golden tests, the test world
 
-### Phase 3 - the Java -> Bedrock path (M2)
-- [ ] `java/chunk/read.rs`, `java/level/read.rs`, Java-side pre-transforms
-- [ ] `bedrock/{world_writer,level_writer}.rs` (LevelDB write, level.dat header, `FinalizedState`, key set)
-- [ ] round-trip tests Java -> Bedrock -> Java on fixture worlds
+### Phase 3 - Java -> Bedrock: cancelled (Bedrock -> Java only)
 
 ### Phase 4 - GUI, credits, docs
 - [~] `src/gui/convert.rs` page (page + Backend trait done; engine not wired) + entry on an instance's worlds list; progress, cancel, summary; i18n strings
@@ -115,4 +112,4 @@ surveys: core, model, java, bedrock).
   `Backend` trait in `src/convert/backend.rs`, currently `NotReady`).
 - Wave 2 (in progress): Bedrock pre-transforms, Bedrock items + block entities (read), Java items (write), Java block
   entities (write), Bedrock world/level reader, Java world/level writer. Contracts: `docs/porting/CONTRACTS.md`.
-- Next: pipeline (`convert_world`), wire the GUI backend, test world end to end, then M2 (Java -> Bedrock).
+- Next: pipeline (`convert_world`), wire the GUI backend, test world end to end, then entities and the remaining Bedrock -> Java gaps. Java -> Bedrock is not planned.

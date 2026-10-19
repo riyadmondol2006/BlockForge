@@ -224,26 +224,8 @@ impl Backend for Engine {
                 size_bytes: Engine::size_of(path),
             });
         }
-        if let Some(info) = detect_java(path) {
-            return Ok(Detected {
-                edition: Edition::Java,
-                version: info
-                    .version_name
-                    .clone()
-                    .unwrap_or_else(|| format!("{}.{}.{}", info.version.major, info.version.minor, info.version.patch)),
-                name: info.name.clone(),
-                dimensions: info
-                    .dimensions
-                    .iter()
-                    .map(|d| match &d.dimension {
-                        crate::convert::java::dirs::JavaDimension::Overworld => "overworld".to_string(),
-                        crate::convert::java::dirs::JavaDimension::Nether => "nether".to_string(),
-                        crate::convert::java::dirs::JavaDimension::End => "end".to_string(),
-                        crate::convert::java::dirs::JavaDimension::Custom(ns, key) => format!("{ns}:{key}"),
-                    })
-                    .collect(),
-                size_bytes: Engine::size_of(path),
-            });
+        if detect_java(path).is_some() {
+            return Err("This is a Java Edition world. BlockForge converts Bedrock worlds to Java Edition, not the other way round.".into());
         }
         Err("This does not look like a Minecraft world (no level.dat with a Bedrock db or a Java region folder)."
             .into())
