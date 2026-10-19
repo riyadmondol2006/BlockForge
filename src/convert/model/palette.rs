@@ -148,6 +148,8 @@ pub enum Palette<T, const D: usize> {
     Packed { keys: Vec<T>, indices: PackedIndices },
 }
 
+// Not derived: a derive would require `T: Default`.
+#[allow(clippy::derivable_impls)]
 impl<T, const D: usize> Default for Palette<T, D> {
     fn default() -> Self {
         Palette::Empty
@@ -417,7 +419,7 @@ mod tests {
         assert_eq!(p.bits(), 4);
         assert_eq!((p.get(5), p.get(6), p.get(7)), (1, 9, 0));
         assert_eq!(p.byte_size(), 2048); // 2 KiB for up to 16 keys
-        assert_eq!(PackedIndices::zeroed(64, 4).byte_size(), 128);
+        assert_eq!(PackedIndices::zeroed(64, 4).byte_size(), 32);
         let q = PackedIndices::from_slice(&[0, 3, 2, 7]);
         assert_eq!(q.bits(), 3);
         assert_eq!(q, PackedIndices::from_slice(&[0, 3, 2, 7]));

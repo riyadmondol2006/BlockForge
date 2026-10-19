@@ -332,12 +332,7 @@ fn upsample_cells(old: &CellPalette) -> BiomePalette {
                 for lx in 0..4 {
                     for ly in 0..4 {
                         for lz in 0..4 {
-                            palette.set_index(
-                                (cluster_x << 2) + lx,
-                                (cluster_y << 2) + ly,
-                                (cluster_z << 2) + lz,
-                                key,
-                            );
+                            palette.set_index((cluster_x << 2) + lx, (cluster_y << 2) + ly, (cluster_z << 2) + lz, key);
                         }
                     }
                 }

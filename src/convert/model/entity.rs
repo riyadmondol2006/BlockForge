@@ -72,7 +72,9 @@ pub enum EntityData {
     ItemFrame(ItemFrame),
     Painting(Painting),
     /// `CushionEntity`.
-    Cushion { color: DyeColor },
+    Cushion {
+        color: DyeColor,
+    },
     /// `UnknownEntity`: anything else, identified by its type.
     Unknown(EntityType),
 }

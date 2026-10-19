@@ -24,6 +24,8 @@ pub mod item;
 pub mod palette;
 pub mod state;
 mod state_types;
+#[cfg(test)]
+mod tests;
 
 use std::fmt;
 

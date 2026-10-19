@@ -5,7 +5,7 @@
 use std::sync::{Arc, LazyLock};
 
 use super::blockentity::BlockEntityKind;
-use super::generated::{BLOCK_INFO, BlockInfo, BlockType, STATE_SETS, StateId, states};
+use super::generated::{BLOCK_INFO, BlockInfo, BlockType, Bool, STATE_SETS, StateId, states};
 use super::identifier::{Identifier, StateValue};
 use super::state::{State, StateEnum, StateMask, StateSet};
 
@@ -280,8 +280,6 @@ impl BlockIdentifier {
         format!("[{}]", parts.join(","))
     }
 }
-
-use super::generated::Bool;
 
 impl From<BlockType> for BlockIdentifier {
     fn from(ty: BlockType) -> Self {

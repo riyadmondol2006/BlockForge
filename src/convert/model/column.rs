@@ -184,12 +184,7 @@ impl Column {
 
     /// The highest block (world y and block) matching `predicate` at local x and z, scanning sections from the
     /// top; sections whose palette has no matching key are skipped (`getHighestBlock`).
-    pub fn highest_block(
-        &self,
-        x: i32,
-        z: i32,
-        predicate: impl Fn(&BlockRef) -> bool,
-    ) -> Option<(i32, &BlockRef)> {
+    pub fn highest_block(&self, x: i32, z: i32, predicate: impl Fn(&BlockRef) -> bool) -> Option<(i32, &BlockRef)> {
         let (x, z) = ((x & 15) as usize, (z & 15) as usize);
         for chunk in self.chunks.values().rev() {
             if !chunk.blocks.contains_key(&predicate) {

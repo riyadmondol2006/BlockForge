@@ -138,11 +138,7 @@ pub struct Cauldron {
 
 impl Default for Cauldron {
     fn default() -> Self {
-        Cauldron {
-            potion_type: PotionType::EMPTY,
-            potion_bottle_type: PotionBottleType::UNKNOWN,
-            custom_color: None,
-        }
+        Cauldron { potion_type: PotionType::EMPTY, potion_bottle_type: PotionBottleType::UNKNOWN, custom_color: None }
     }
 }
 
@@ -391,7 +387,9 @@ pub enum BlockEntityData {
     Chest(RandomContainer),
     ChiseledBookshelf(Box<[Option<ItemStack>; 6]>),
     CommandBlock(CommandBlock),
-    Comparator { output_signal: i32 },
+    Comparator {
+        output_signal: i32,
+    },
     Conduit,
     CopperGolemStatue,
     Crafter(Box<Crafter>),
@@ -408,8 +406,13 @@ pub enum BlockEntityData {
     HangingSign(Box<Sign>),
     Hopper(Container),
     Jigsaw(Box<Jigsaw>),
-    Jukebox { record: Option<Box<ItemStack>> },
-    Lectern { book: Option<Box<ItemStack>>, page: i32 },
+    Jukebox {
+        record: Option<Box<ItemStack>>,
+    },
+    Lectern {
+        book: Option<Box<ItemStack>>,
+        page: i32,
+    },
     PotentSulfur,
     SculkCatalyst,
     SculkSensor,
