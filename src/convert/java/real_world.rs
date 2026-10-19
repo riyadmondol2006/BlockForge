@@ -121,12 +121,22 @@ fn check_chunk(root: &Compound, counts: &mut Counts) {
 
 #[test]
 fn real_world_region_round_trip() {
-    let worlds = candidate_worlds();
-    let Some(world) = worlds.iter().find(|w| detect_java(w).is_some()) else {
+    let mut seen = Vec::new();
+    for world in candidate_worlds() {
+        let Some(info) = detect_java(&world) else { continue };
+        let canonical = std::fs::canonicalize(&info.root).unwrap_or(info.root.clone());
+        if seen.contains(&canonical) {
+            continue;
+        }
+        seen.push(canonical);
+        check_world(info);
+    }
+    if seen.is_empty() {
         eprintln!("real_world: no Java world found on this machine, skipping");
-        return;
-    };
-    let info = detect_java(world).unwrap();
+    }
+}
+
+fn check_world(info: super::dirs::JavaWorldInfo) {
     eprintln!(
         "real_world: {} ({}), data version {}, {:?}, dimensions {:?}",
         info.name,
@@ -140,6 +150,7 @@ fn real_world_region_round_trip() {
         eprintln!("real_world: the world has no region files, skipping");
         return;
     };
+    let dim = dim.clone();
     let regions = list_region_files(&RegionKind::Region.dir(&dim.dir)).unwrap();
     // The region with the most chunks.
     let mut best: Option<(usize, PathBuf)> = None;
@@ -187,6 +198,7 @@ fn real_world_region_round_trip() {
     );
     eprintln!("real_world: {counts:?}");
     assert_eq!(blobs.len(), present);
+    rewrite_and_compare(&path, &blobs);
     if counts.sections > 0 {
         assert!(counts.block_palettes > 0);
     }
@@ -204,4 +216,40 @@ fn real_world_region_round_trip() {
         assert_eq!(counts.spanning, 0, "1.18+ worlds use the padded layout");
     }
     let _ = dirs;
+}
+
+/// Write the chunks back with every compression type and read them again: the bytes must be identical.
+fn rewrite_and_compare(original: &std::path::Path, blobs: &[(u8, u8, Vec<u8>)]) {
+    use super::region::{Compression, RegionWriter};
+    let (rx, rz) = RegionFile::open_read(original).unwrap().region_coords().unwrap();
+    let dir = super::testutil::TestDir::new("rewrite-real");
+    for compression in [Compression::Zlib, Compression::Gzip, Compression::None, Compression::Lz4] {
+        let sub = dir.path().join(format!("{}", compression as u8));
+        let started = Instant::now();
+        let mut w = RegionWriter::create_in(&sub, rx, rz).unwrap();
+        w.set_compression(compression);
+        for (x, z, bytes) in blobs {
+            w.write_chunk(*x, *z, bytes).unwrap();
+        }
+        let path = sub.join(super::region::region_file_name(rx, rz));
+        w.finish().unwrap();
+        let write_time = started.elapsed();
+        let mut r = RegionFile::open_read(&path).unwrap();
+        let mut n = 0;
+        for item in r.chunks() {
+            let (x, z, bytes) = item.unwrap();
+            let orig = blobs.iter().find(|(ox, oz, _)| (*ox, *oz) == (x, z)).unwrap();
+            assert!(orig.2 == bytes, "chunk {x},{z} differs after a {compression:?} round trip");
+            n += 1;
+        }
+        assert_eq!(n, blobs.len());
+        eprintln!("real_world: rewrote {n} chunks as {compression:?} in {write_time:?}, {} bytes", std::fs::metadata(&path).unwrap().len());
+        if compression == Compression::Zlib {
+            if let Some(keep) = std::env::var_os("CONVERT_JAVA_SCRATCH") {
+                let target = std::path::PathBuf::from(keep);
+                let _ = std::fs::create_dir_all(&target);
+                let _ = std::fs::copy(&path, target.join(super::region::region_file_name(rx, rz)));
+            }
+        }
+    }
 }
