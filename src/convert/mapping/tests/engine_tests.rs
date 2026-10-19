@@ -389,3 +389,27 @@ fn item_default_data_is_added_for_legacy() {
     let (_, w) = r.from_pivot(&PivotItem::new(ItemKind::Item("STICK".into()), &[])).unwrap();
     assert_eq!(w, states(&[("data", StateValue::Int(0))]));
 }
+
+#[test]
+fn resolvers_are_shared_between_threads() {
+    fn assert_sync<T: Send + Sync>() {}
+    assert_sync::<BlockResolver>();
+    assert_sync::<ItemResolver>();
+    let mut r = BlockResolver::empty(pivot());
+    r.register(Flag::Register, BlockMapping::of("minecraft:plain", "PLAIN")).unwrap();
+    let r = Arc::new(r);
+    let handles: Vec<_> = (0..4)
+        .map(|_| {
+            let r = r.clone();
+            std::thread::spawn(move || {
+                for _ in 0..100 {
+                    assert!(r.to_pivot("minecraft:plain", &StateMap::new()).is_some());
+                    assert!(r.from_pivot(&pb("PLAIN", &[])).is_some());
+                }
+            })
+        })
+        .collect();
+    for h in handles {
+        h.join().unwrap();
+    }
+}

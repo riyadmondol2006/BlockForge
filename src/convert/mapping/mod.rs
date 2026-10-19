@@ -11,6 +11,16 @@
 //! property `facing`, which several constants share) and a value is the Chunker enum constant name (`"NORTH"`,
 //! `"TRUE"`). Edition-side values are typed ([`StateValue`]): Java properties are always strings, Bedrock states are
 //! bool, int or string, and Bedrock's `waterlogged` travels as a pseudo state like in Chunker.
+//!
+//! ```text
+//! let java = BlockResolver::new(Edition::Java, Version::new(1, 21, 4));
+//! let pivot = java.to_pivot("minecraft:oak_stairs", &states)?;            // PivotBlock { ty: "OAK_STAIRS", .. }
+//! let bedrock = BlockResolver::new(Edition::Bedrock, Version::new(1, 21, 50));
+//! let (id, states) = bedrock.from_pivot(&pivot)?;                          // "minecraft:oak_stairs", weirdo_direction, ...
+//! ```
+//!
+//! A `None` means the table has no mapping; callers log it and use air. Custom (namespaced) blocks are not handled
+//! here, the model layer decides whether to pass them through.
 
 pub mod data;
 pub mod engine;
