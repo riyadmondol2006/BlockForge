@@ -218,10 +218,8 @@ fn read_display(t: &Compound) -> Option<ItemDisplay> {
 
 /// One firework explosion compound.
 fn read_explosion(c: &Compound) -> FireworkExplosion {
-    let shape = c
-        .get_i8("FireworkType")
-        .and_then(|b| FireworkShape::by_id(b as i32))
-        .unwrap_or(FireworkShape::SMALL_BALL);
+    let shape =
+        c.get_i8("FireworkType").and_then(|b| FireworkShape::by_id(b as i32)).unwrap_or(FireworkShape::SMALL_BALL);
     FireworkExplosion {
         shape,
         colors: firework_colors(c.get_byte_array("FireworkColor")),

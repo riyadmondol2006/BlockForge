@@ -5,12 +5,12 @@
 
 use std::sync::Arc;
 
+use crate::convert::model::entity::{ItemFrame, Tile};
 use crate::convert::model::states;
 use crate::convert::model::{
     BlockEntity, BlockEntityData, BlockIdentifier, BlockKind, BlockType, Bool, ChestType, Column, Entity, EntityData,
     Note, Rotation, StateId,
 };
-use crate::convert::model::entity::{ItemFrame, Tile};
 use crate::convert::nbt::Compound;
 
 use super::{BedrockOnly, BedrockOnlyKind, Extra, Read, block_entity_id, read_block_entity_full};
@@ -87,7 +87,12 @@ const SKULLS: [(i8, &str, &str); 7] = [
 /// Read every block entity compound of a column, as `BedrockColumnReader.readBlockEntity` and its post processing
 /// do: the model entities are added to `column.block_entities` after the block states they imply were applied, and
 /// item frames become entities of the column. The ids that could not be read are returned.
-pub fn read_into_column(items: &BedrockItems, tags: &[Compound], column: &mut Column, keep_unknown: bool) -> Vec<String> {
+pub fn read_into_column(
+    items: &BedrockItems,
+    tags: &[Compound],
+    column: &mut Column,
+    keep_unknown: bool,
+) -> Vec<String> {
     let mut missing = Vec::new();
     let mut entities = Vec::new();
     let mut bedrock_only = Vec::new();
@@ -194,13 +199,23 @@ fn update_before_process(column: &mut Column, mut entity: BlockEntity, extra: Ex
         (BlockEntityData::Jukebox { record }, _) => {
             if block.block_type() == Some(BlockType::JUKEBOX) {
                 let has = record.as_ref().is_some_and(|r| !r.is_air());
-                column.set_block(x, y, z, Arc::new(block.with(states::HAS_RECORD, if has { Bool::TRUE } else { Bool::FALSE })));
+                column.set_block(
+                    x,
+                    y,
+                    z,
+                    Arc::new(block.with(states::HAS_RECORD, if has { Bool::TRUE } else { Bool::FALSE })),
+                );
             }
         }
         (BlockEntityData::Lectern { book, .. }, _) => {
             if block.block_type() == Some(BlockType::LECTERN) {
                 let has = book.as_ref().is_some_and(|b| !b.is_air());
-                column.set_block(x, y, z, Arc::new(block.with(states::HAS_BOOK, if has { Bool::TRUE } else { Bool::FALSE })));
+                column.set_block(
+                    x,
+                    y,
+                    z,
+                    Arc::new(block.with(states::HAS_BOOK, if has { Bool::TRUE } else { Bool::FALSE })),
+                );
             }
         }
         _ => {}

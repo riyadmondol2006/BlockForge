@@ -340,9 +340,7 @@ fn read_sign_face(input: &Compound, face: &mut SignFace, hanging: bool) {
         let text = input.get_str("Text").unwrap_or_default();
         let lines = java_split_newlines(text);
         let lines = font::split(if hanging { HANGING_SIGN_MAX_WIDTH } else { SIGN_MAX_WIDTH }, 4, lines);
-        face.lines = (0..4)
-            .map(|i| lines.get(i).map_or_else(|| empty.clone(), |l| json_text::from_text(l)))
-            .collect();
+        face.lines = (0..4).map(|i| lines.get(i).map_or_else(|| empty.clone(), |l| json_text::from_text(l))).collect();
     } else {
         face.lines = (1..=4)
             .map(|i| input.get_str(&format!("Text{i}")).map_or_else(|| empty.clone(), json_text::from_text))
@@ -432,7 +430,11 @@ fn read_structure(items: &BedrockItems, tag: &Compound, s: &mut crate::convert::
     }
 }
 
-fn read_decorated_pot(items: &BedrockItems, tag: &Compound, pot: &mut crate::convert::model::blockentity::DecoratedPot) {
+fn read_decorated_pot(
+    items: &BedrockItems,
+    tag: &Compound,
+    pot: &mut crate::convert::model::blockentity::DecoratedPot,
+) {
     let key = if tag.contains_key("sherds") { "sherds" } else { "shards" };
     let sherds: Option<Vec<&str>> = tag
         .get_list(key)

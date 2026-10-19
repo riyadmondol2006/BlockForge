@@ -64,10 +64,7 @@ impl Tables {
 
     /// A vanilla entity type from its identifier (`minecraft:` is assumed when there is no namespace).
     pub(crate) fn entity_type(&self, id: &str) -> Option<EntityType> {
-        self.entity_types
-            .to_pivot_name(id)
-            .and_then(VanillaEntityType::from_name)
-            .map(EntityType::Vanilla)
+        self.entity_types.to_pivot_name(id).and_then(VanillaEntityType::from_name).map(EntityType::Vanilla)
     }
 
     // The reverse lookups used when writing.
@@ -76,8 +73,6 @@ impl Tables {
         self.enchantments.from_pivot_int(e.name())
     }
 
-
-
     pub(crate) fn trim_pattern_id(&self, p: TrimPattern) -> Option<&str> {
         self.trim_patterns.from_pivot_str(p.name())
     }
@@ -85,7 +80,6 @@ impl Tables {
     pub(crate) fn trim_material_id(&self, m: TrimMaterial) -> Option<&str> {
         self.trim_materials.from_pivot_str(m.name())
     }
-
 
     pub(crate) fn entity_type_id(&self, t: VanillaEntityType) -> Option<Arc<str>> {
         self.entity_types.from_pivot_str(t.name()).map(Arc::from)

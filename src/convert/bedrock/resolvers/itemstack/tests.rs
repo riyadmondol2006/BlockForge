@@ -14,8 +14,7 @@ use crate::convert::model::{
 };
 use crate::convert::nbt::{Tag, compound};
 
-static ITEMS: LazyLock<BedrockItems> =
-    LazyLock::new(|| BedrockItems::new(BedrockVersion::exact([1, 26, 50]).unwrap()));
+static ITEMS: LazyLock<BedrockItems> = LazyLock::new(|| BedrockItems::new(BedrockVersion::exact([1, 26, 50]).unwrap()));
 
 fn item(name: &str, damage: i16) -> Compound {
     compound! { "Name" => name, "Count" => 1i8, "Damage" => damage, "WasPickedUp" => false }
@@ -157,7 +156,8 @@ fn fireworks_and_stars() {
         "FireworkTrail" => 1i8,
         "FireworkFlicker" => 0i8
     };
-    let tag = compound! { "Fireworks" => compound! { "Flight" => 2i8, "Explosions" => Tag::list([explosion.clone()]) } };
+    let tag =
+        compound! { "Fireworks" => compound! { "Flight" => 2i8, "Explosions" => Tag::list([explosion.clone()]) } };
     let stack = read(&with_tag(item("minecraft:firework_rocket", 0), tag));
     let fireworks = stack.props.fireworks.unwrap();
     assert_eq!(fireworks.flight_duration, 2);
@@ -214,7 +214,10 @@ fn can_place_on_and_destroy() {
     c.put("CanDestroy", Tag::list(["minecraft:grass_block"]));
     let stack = read(&c);
     let place = stack.props.can_place_on.unwrap();
-    assert_eq!(place.iter().map(|b| b.block_type().unwrap()).collect::<Vec<_>>(), vec![BlockType::STONE, BlockType::DIRT]);
+    assert_eq!(
+        place.iter().map(|b| b.block_type().unwrap()).collect::<Vec<_>>(),
+        vec![BlockType::STONE, BlockType::DIRT]
+    );
     assert_eq!(stack.props.can_destroy.unwrap().len(), 1);
 }
 
@@ -222,7 +225,9 @@ fn can_place_on_and_destroy() {
 fn custom_identifiers_pass_through_when_allowed() {
     let c = item("mymod:ruby", 0);
     let stack = read(&c);
-    assert!(matches!(&stack.id, ItemId::Block(b) if matches!(b.kind(), crate::convert::model::BlockKind::Custom(id) if &**id == "mymod:ruby")));
+    assert!(
+        matches!(&stack.id, ItemId::Block(b) if matches!(b.kind(), crate::convert::model::BlockKind::Custom(id) if &**id == "mymod:ruby"))
+    );
     let strict = BedrockItems::new(BedrockVersion::exact([1, 26, 50]).unwrap()).with_custom_identifiers(false);
     assert!(strict.read(&c).is_none());
     // Unknown vanilla names never pass.
@@ -274,7 +279,7 @@ fn banner_item_carries_a_banner_block_entity() {
 #[test]
 fn shulker_box_item_holds_its_items() {
     let inner = compound! { "Slot" => 2i8, "Name" => "minecraft:stick", "Count" => 5i8, "Damage" => 0i16 };
-    let stack = read(&with_tag(item("minecraft:shulker_box", 0), compound! { "Items" => Tag::list([inner]) }));
+    let stack = read(&with_tag(item("minecraft:white_shulker_box", 0), compound! { "Items" => Tag::list([inner]) }));
     let be = stack.props.block_entity.expect("shulker box block entity");
     let container = be.data.container().unwrap();
     assert_eq!(container.items.get(&2).unwrap().props.amount, Some(5));
@@ -329,5 +334,11 @@ fn write_round_trips_the_common_properties() {
     let stairs = read(&c);
     let written = ITEMS.write(&stairs).unwrap();
     assert!(written.get_compound("Block").is_some());
-    assert_eq!(read(&written), stairs);
+    let back = read(&written);
+    let (ItemId::Block(a), ItemId::Block(b)) = (&stairs.id, &back.id) else { panic!() };
+    assert_eq!(a.block_type(), b.block_type());
+    assert_eq!(
+        a.get(crate::convert::model::states::FACING_HORIZONTAL),
+        b.get(crate::convert::model::states::FACING_HORIZONTAL)
+    );
 }

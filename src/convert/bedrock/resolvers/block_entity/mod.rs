@@ -54,11 +54,24 @@ pub enum BedrockOnlyKind {
 pub enum Extra {
     None,
     /// `pairx`/`pairz` of a chest (only when both are present) and `pairlead`.
-    Chest { pair: Option<(i32, i32)>, lead: bool },
-    Bed { color: DyeColor },
-    Skull { skull_type: i8, rotation: i8, moving_mouth: bool },
-    Shulker { facing: FacingDirection },
-    CopperGolem { pose: CopperGolemPose },
+    Chest {
+        pair: Option<(i32, i32)>,
+        lead: bool,
+    },
+    Bed {
+        color: DyeColor,
+    },
+    Skull {
+        skull_type: i8,
+        rotation: i8,
+        moving_mouth: bool,
+    },
+    Shulker {
+        facing: FacingDirection,
+    },
+    CopperGolem {
+        pose: CopperGolemPose,
+    },
 }
 
 /// The result of reading one compound.
