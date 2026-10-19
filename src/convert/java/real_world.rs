@@ -195,7 +195,7 @@ fn check_world(info: super::dirs::JavaWorldInfo) {
     }
     let repack_time = started.elapsed();
     eprintln!(
-        "real_world: read+decompress {} chunks ({} MiB of NBT) in {:?}; parse NBT in {:?}; palette re-pack check in {:?}",
+        "real_world: read+decompress {} chunks ({} MiB of NBT) in {:?}; parse NBT {:?}; palette re-pack check {:?}",
         blobs.len(),
         raw_bytes >> 20,
         read_time,

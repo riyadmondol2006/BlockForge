@@ -1,7 +1,8 @@
 // Derived from Chunker (https://github.com/HiveGamesOSS/Chunker), Copyright (c) 2024 Hive Games, MIT License.
 //! The Java data-version table (Chunker's `JavaDataVersion`) and the data-version thresholds the format switches use.
 //!
-//! Versions are the shared `util::Version`. Only release builds are listed (1.9 = 169 ... 26.3 = 5017); snapshots round down to the release before them.
+//! Versions are the shared `util::Version`. Only release builds are listed (1.9 = 169 ... 26.3 = 5017); snapshots
+//! round down to the release before them.
 
 pub use crate::convert::util::Version;
 
