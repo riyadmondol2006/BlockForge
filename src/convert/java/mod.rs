@@ -19,7 +19,9 @@ mod nbtio;
 pub mod palette;
 pub mod pretransform;
 pub mod region;
+pub mod level_writer;
 pub mod resolvers;
+pub mod writer;
 pub mod version;
 
 #[cfg(test)]
