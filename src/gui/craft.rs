@@ -213,6 +213,8 @@ pub struct CraftState {
     pub(super) pending_open: Option<SavedPlan>,
     // the view
     pub(super) tab: Tab,
+    /// On a narrow page the item list is folded away once something is chosen; this opens it again.
+    pub(super) picking: bool,
     pub(super) tree_epoch: u32,
     pub(super) tree_all: bool,
 }
@@ -261,6 +263,7 @@ impl CraftState {
             unsaved: false,
             pending_open: None,
             tab: Tab::Materials,
+            picking: false,
             tree_epoch: 0,
             tree_all: false,
         }
@@ -580,6 +583,7 @@ impl CraftState {
         if self.target.as_deref() == Some(id) {
             return;
         }
+        self.picking = false;
         self.target = Some(id.to_string());
         self.recipe_choices.clear();
         self.ingredient_choices.clear();

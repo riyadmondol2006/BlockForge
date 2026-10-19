@@ -119,8 +119,10 @@ impl CraftState {
             if let Some(id) = pick {
                 self.set_target(&id);
             }
-            self.quantity_block(ui, book);
         });
+        if self.target.is_some() {
+            card(ui, |ui| self.quantity_block(ui, book, false));
+        }
     }
 
     /// One row of the item list: picture, name, and a small line under it. True when clicked.
@@ -152,18 +154,11 @@ impl CraftState {
     }
 
     /// Under the list: what was picked and how many of it.
-    fn quantity_block(&mut self, ui: &mut Ui, book: &Arc<Book>) {
-        let Some(target) = self.target.clone() else {
-            ui.add_space(4.0);
-            small_muted(ui, "Choose an item above to see what it takes.");
-            return;
-        };
+    pub(super) fn quantity_block(&mut self, ui: &mut Ui, book: &Arc<Book>, change: bool) {
+        let Some(target) = self.target.clone() else { return };
         let item = book.ds.item(&target);
         let name = item.map_or_else(|| book.ds.name(&target), |i| i.name.clone());
         let stack = item.map_or(64, |i| i.stack);
-        ui.add_space(6.0);
-        ui.separator();
-        ui.add_space(4.0);
         ui.horizontal(|ui| {
             self.icon(ui, &target, &name, 32.0);
             ui.vertical(|ui| {
@@ -171,9 +166,16 @@ impl CraftState {
                 ui.label(RichText::new(&name).size(16.0).strong());
                 small_muted(ui, if stack > 1 { format!("Stacks of {stack}") } else { "Does not stack".to_string() });
             });
+            if change {
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if secondary(ui, "Change item").clicked() {
+                        self.picking = true;
+                    }
+                });
+            }
         });
         ui.add_space(4.0);
-        ui.label(RichText::new("How many?").strong());
+        ui.label(RichText::new("How many?").size(15.0).strong());
         let parsed = parse_qty(&self.qty_text);
         ui.horizontal(|ui| {
             let mut edit = egui::TextEdit::singleline(&mut self.qty_text)

@@ -24,7 +24,7 @@ impl CraftState {
         let h = ui.available_height();
         if total_w >= TWO_COLUMNS {
             let right_w = total_w - LEFT_W - 16.0;
-            let list_h = (h - 440.0).clamp(170.0, 360.0);
+            let list_h = (h - 460.0).clamp(150.0, 340.0);
             ui.horizontal_top(|ui| {
                 ui.spacing_mut().item_spacing.x = 16.0;
                 ui.allocate_ui_with_layout(vec2(LEFT_W, h), Layout::top_down(Align::Min), |ui| {
@@ -47,7 +47,11 @@ impl CraftState {
         } else {
             egui::ScrollArea::vertical().id_salt("craft-one").auto_shrink([false, false]).show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 12.0;
-                self.left_pick(ui, &book, 230.0);
+                if self.target.is_some() && !self.picking {
+                    card(ui, |ui| self.quantity_block(ui, &book, true));
+                } else {
+                    self.left_pick(ui, &book, 230.0);
+                }
                 self.right(ui, &book, acts);
                 self.left_stock(ui, &book);
                 self.left_supplied(ui, &book);
@@ -301,22 +305,9 @@ impl CraftState {
                     ticks_text(plan.cook_ticks)
                 ));
                 ui.add_space(2.0);
-                ui.horizontal_wrapped(|ui| {
-                    ui.spacing_mut().item_spacing = vec2(8.0, 8.0);
-                    for f in &plan.fuel {
-                        let name = book.ds.name(&f.item);
-                        egui::Frame::new()
-                            .fill(c_field())
-                            .corner_radius(CornerRadius::same(10))
-                            .inner_margin(egui::Margin::symmetric(8, 5))
-                            .show(ui, |ui| {
-                                ui.horizontal(|ui| {
-                                    self.icon(ui, &f.item, &name, 24.0);
-                                    ui.label(format!("{} {}", thousands(f.count), name));
-                                });
-                            });
-                    }
-                });
+                for f in &plan.fuel {
+                    self.list_row(ui, book, &f.item, f.count, None::<&mut bool>, false, |_| {});
+                }
                 small_muted(ui, "An estimate for one furnace running the whole time. It is not added to the list above.");
             });
         }
@@ -359,8 +350,14 @@ impl CraftState {
             }
             self.icon(ui, id, &name, 32.0);
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                let q = RichText::new(thousands(qty)).size(15.0).strong();
-                ui.label(if struck { q.color(c_muted()) } else { q });
+                let (qr, _) = ui.allocate_exact_size(vec2(92.0, 20.0), egui::Sense::hover());
+                ui.painter().text(
+                    qr.right_center(),
+                    egui::Align2::RIGHT_CENTER,
+                    thousands(qty),
+                    egui::FontId::proportional(15.0),
+                    if struck { c_muted() } else { c_text() },
+                );
                 tail(ui);
                 ui.vertical(|ui| {
                     ui.set_width(ui.available_width());
@@ -419,6 +416,7 @@ impl CraftState {
             .inner_margin(egui::Margin::same(14))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
+                ui.spacing_mut().item_spacing.y = 6.0;
                 ui.horizontal(|ui| {
                     let mut on = ticked;
                     let r = ui.add_enabled(ready || ticked, egui::Checkbox::without_text(&mut on));
@@ -508,6 +506,7 @@ impl CraftState {
                                 if g.alternatives.len() < 2 {
                                     continue;
                                 }
+                                small_muted(ui, "Use");
                                 self.alternative_combo(ui, book, &r.id, key, current, &g.alternatives);
                             }
                         }
@@ -608,7 +607,7 @@ impl CraftState {
             return;
         }
         let id = ui.make_persistent_id(("craft-tree", self.tree_epoch, path));
-        let open = depth == 0 || self.tree_all;
+        let open = depth <= 1 || self.tree_all;
         let state = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, open);
         state
             .show_header(ui, |ui| self.tree_row(ui, book, node, path))
@@ -697,7 +696,7 @@ impl CraftState {
                     let name = book.ds.name(&r.item);
                     ui.horizontal(|ui| {
                         self.icon(ui, &r.item, &name, 24.0);
-                        ui.add(egui::Label::new(name).truncate());
+                        ui.label(name);
                     });
                     ui.label(RichText::new(thousands(r.quantity)).strong());
                     let text = if r.stack <= 1 {
@@ -1009,7 +1008,14 @@ fn recipe_label(ds: &craft::Dataset, r: &Recipe) -> String {
         .map(|g| {
             let first = g.alternatives.first().map(|a| ds.name(a)).unwrap_or_default();
             if g.alternatives.len() > 1 {
-                format!("{} {} or similar", g.count, first)
+                // "Oak Planks", "Birch Planks" -> "any Planks"
+                let last = |n: &str| n.rsplit(' ').next().unwrap_or("").to_string();
+                let word = last(&first);
+                if g.alternatives.iter().all(|a| last(&ds.name(a)) == word) {
+                    format!("{} any {}", g.count, word)
+                } else {
+                    format!("{} {} or similar", g.count, first)
+                }
             } else {
                 format!("{} {}", g.count, first)
             }
