@@ -31,25 +31,12 @@ pub(super) use super::resolvers::itemstack::JavaItems as ItemsImpl;
 
 /// The block entity compound for a model block entity.
 ///
-/// SWAP: `resolvers::block_entity::write_block_entity` still takes the private stand-in `JavaItems` of the be-java
-/// branch, which cannot be built from here. Until that module uses `resolvers::itemstack::JavaItems`, this writes
-/// only `{id, x, y, z}`; the whole body then becomes `write_block_entity(items, format, be)`.
 pub(super) fn write_block_entity_impl(
-    _items: &ItemsImpl,
+    items: &ItemsImpl,
     format: &JavaFormat,
     be: &crate::convert::model::BlockEntity,
 ) -> Option<crate::convert::nbt::Compound> {
-    use crate::convert::nbt::{Compound, Tag};
-    let id = super::resolvers::block_entity::java_block_entity_id(be.kind(), format);
-    if id.is_empty() {
-        return None;
-    }
-    let mut c = Compound::with_capacity(4);
-    c.insert("id", Tag::String(id.to_string()));
-    c.insert("x", Tag::Int(be.x));
-    c.insert("y", Tag::Int(be.y));
-    c.insert("z", Tag::Int(be.z));
-    Some(c)
+    super::resolvers::block_entity::write_block_entity(items, format, be)
 }
 
 use super::dirs::{JavaDimension, LevelDirs};
