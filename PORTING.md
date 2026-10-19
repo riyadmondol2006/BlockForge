@@ -94,9 +94,9 @@ surveys: core, model, java, bedrock).
 | Chunker package (`com.hivemc.chunker.`) | Lines | Rust | Status |
 |---|---:|---|---|
 | `nbt.tags.**`, `nbt.io.**`, `nbt` | ~4,000 | `convert/nbt/` | [ ] |
-| `util`, `scheduling.**` | ~2,300 | `convert/util/`, `convert/task.rs` | [ ] |
+| `util`, `scheduling.**` | ~2,300 | `convert/util/`, `convert/level/task.rs` (scheduling done, util by the NBT track) | [~] |
 | `conversion` (WorldConverter), `conversion.handlers.**` | ~1,200 | `convert/pipeline.rs` | [ ] |
-| `conversion.intermediate.level/world` | ~1,900 | `convert/model/level.rs` | [ ] |
+| `conversion.intermediate.level/world`, `encoding.EncodingType`, `WorldConverter` settings, pruning | ~2,300 | `convert/level/{level,level_settings,settings,dimension,world,player,portal,map,encoding,convert_api}.rs` | [x] |
 | `conversion.intermediate.column.**` | ~11,400 | `convert/model/**` (7.3k Rust incl. 2.4k generated) | [ ] |
 | `mapping.identifier.**` | ~460 | `convert/model/identifier.rs` | [ ] |
 | `mapping.resolver/mappings` (user JSON files) | ~1,100 | [-] later | [-] |
