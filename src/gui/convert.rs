@@ -738,6 +738,10 @@ impl ConvertState {
             dimensions: vec!["overworld".into(), "nether".into(), "end".into()],
             size_bytes: 48_300_000,
         };
+        self.screen = Screen::Setup;
+        self.run = None;
+        self.summary = None;
+        self.error = None;
         self.versions = vec!["1.21.4".into(), "1.21.1".into(), "1.20.6".into(), "1.20.4".into()];
         self.version = "1.21.4".into();
         self.edition = Edition::Java;
@@ -754,6 +758,33 @@ impl ConvertState {
             keep_unknown_nbt: false,
         };
         match variant {
+            "convert-empty" => {
+                self.source = None;
+                self.look = Look::Nothing;
+            }
+            "convert-unknown" => {
+                self.look = Look::Unknown(backend::NOT_READY.to_string());
+            }
+            "convert-conflict" => {
+                // a folder that exists and has files in it
+                self.output = std::env::temp_dir().to_string_lossy().to_string();
+                self.out_check = None;
+            }
+            "convert-stop" => {
+                self.screen = Screen::Running;
+                self.run = Some(RunView {
+                    id: 1,
+                    started: Instant::now() - Duration::from_secs(42),
+                    cancel: Arc::new(AtomicBool::new(false)),
+                    stage: "Converting the Overworld".into(),
+                    progress: 0.46,
+                    warnings: Vec::new(),
+                    more_warnings: 0,
+                    confirm: true,
+                    stopping: false,
+                    job,
+                });
+            }
             "convert-progress" => {
                 self.screen = Screen::Running;
                 self.run = Some(RunView {

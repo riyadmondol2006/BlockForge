@@ -7,7 +7,6 @@ use super::convert::{
     free_name, number,
 };
 use super::icons::Icon;
-use super::services::confirm_modal;
 use super::theme::*;
 use super::widgets::*;
 use crate::convert::backend::Edition;
@@ -17,6 +16,8 @@ use crate::tr;
 const PAGE_WIDTH: f32 = 720.0;
 /// The footer's height, kept free below the scrolling part.
 const FOOTER: f32 = 30.0;
+/// The height of the bar with the Convert button.
+const START_BAR: f32 = 50.0;
 
 /// The small capitals over a card.
 fn label_over(ui: &mut Ui, text: &str) {
@@ -38,7 +39,9 @@ impl ConvertState {
         });
         muted(ui, tr!("Turn a world from Java Edition into Bedrock Edition, or the other way round."));
         ui.add_space(10.0);
-        let height = (ui.available_height() - FOOTER).max(120.0);
+        // the Convert button stays in view under the scrolling cards
+        let bar = self.screen == Screen::Setup && self.found().is_some();
+        let height = (ui.available_height() - FOOTER - if bar { START_BAR } else { 0.0 }).max(120.0);
         ScrollArea::vertical().id_salt("convert-page").max_height(height).auto_shrink([false, false]).show(ui, |ui| {
             ui.set_max_width(ui.available_width().min(PAGE_WIDTH));
             match self.screen {
@@ -49,6 +52,9 @@ impl ConvertState {
             }
             ui.add_space(8.0);
         });
+        if bar {
+            self.start_bar(ui, &mut acts);
+        }
         self.footer(ui, &mut acts);
         if self.screen == Screen::Setup {
             drop_hint(ui);
@@ -81,8 +87,12 @@ impl ConvertState {
         self.target_card(ui);
         ui.add_space(8.0);
         self.output_card(ui, acts);
-        ui.add_space(12.0);
+    }
+
+    /// The Convert button, and why it cannot be pressed yet when that is so.
+    fn start_bar(&mut self, ui: &mut Ui, acts: &mut Vec<Act>) {
         let blocked = self.blocked();
+        ui.add_space(8.0);
         ui.horizontal(|ui| {
             if primary_enabled_icon(ui, Icon::Play, &tr!("Convert"), blocked.is_none()).clicked() {
                 acts.push(Act::Start);
@@ -116,17 +126,34 @@ impl ConvertState {
                     ui.add_space(6.0);
                 }
                 Look::Found(d) => {
-                    ui.horizontal(|ui| {
-                        ui.add(egui::Label::new(RichText::new(&d.name).size(17.0).strong()).truncate());
+                    ui.horizontal_top(|ui| {
+                        ui.vertical(|ui| {
+                            ui.set_max_width((ui.available_width() - 120.0).max(160.0));
+                            ui.add(egui::Label::new(RichText::new(&d.name).size(17.0).strong()).truncate());
+                            ui.horizontal(|ui| {
+                                tag(ui, d.edition.label(), edition_color(d.edition));
+                                tag(ui, &d.version, c_muted());
+                                small_muted(ui, human_size(d.size_bytes));
+                            });
+                            ui.add_space(2.0);
+                            self.source_path(ui);
+                        });
+                        ui.with_layout(Layout::right_to_left(Align::TOP), |ui| {
+                            let change = secondary(ui, &tr!("Change..."));
+                            egui::Popup::menu(&change).show(|ui| {
+                                ui.set_min_width(150.0);
+                                if ui.button(tr!("A world folder...")).clicked() {
+                                    acts.push(Act::Pick(Pick::SourceFolder));
+                                    ui.close();
+                                }
+                                if ui.button(tr!("A packed world...")).clicked() {
+                                    acts.push(Act::Pick(Pick::SourceFile));
+                                    ui.close();
+                                }
+                            });
+                        });
                     });
-                    ui.horizontal(|ui| {
-                        tag(ui, d.edition.label(), edition_color(d.edition));
-                        tag(ui, &d.version, c_muted());
-                        small_muted(ui, human_size(d.size_bytes));
-                    });
-                    ui.add_space(2.0);
-                    self.source_path(ui);
-                    ui.add_space(4.0);
+                    return;
                 }
             }
             ui.horizontal(|ui| {
@@ -306,20 +333,13 @@ impl ConvertState {
             });
             ui.add_space(8.0);
             ui.add_enabled_ui(!run.stopping, |ui| {
-                if danger_icon(ui, Icon::Stop, &tr!("Stop")).clicked() {
+                if danger_icon(ui, Icon::Stop, &tr!("Cancel")).clicked() {
                     stop = true;
                 }
             });
         });
         if run.confirm {
-            match confirm_modal(
-                ui.ctx(),
-                "convert-stop",
-                &tr!("Stop converting?"),
-                &tr!("The new world is not finished and will not work properly. The original world is not changed."),
-                &tr!("Stop"),
-                true,
-            ) {
+            match stop_modal(ui.ctx()) {
                 Some(true) => confirmed = true,
                 Some(false) => run.confirm = false,
                 None => {}
@@ -394,16 +414,10 @@ impl ConvertState {
                 ui.label(RichText::new(tr!("Blocks without an exact match")).strong());
                 small_muted(ui, tr!("These blocks have no exact equivalent in the new version."));
                 ui.add_space(4.0);
-                egui::Grid::new("convert-unmapped").num_columns(2).spacing([24.0, 4.0]).striped(true).show(ui, |ui| {
-                    ui.label(RichText::new(tr!("Block")).color(c_muted()).size(12.0));
-                    ui.label(RichText::new(tr!("Count")).color(c_muted()).size(12.0));
-                    ui.end_row();
-                    for (block, count) in s.unmapped_blocks.iter().take(MAX_UNMAPPED) {
-                        ui.add(egui::Label::new(RichText::new(block).monospace().size(12.5)).truncate());
-                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| ui.label(number(*count)));
-                        ui.end_row();
-                    }
-                });
+                unmapped_row(ui, &tr!("Block"), &tr!("Count"), true, false);
+                for (i, (block, count)) in s.unmapped_blocks.iter().take(MAX_UNMAPPED).enumerate() {
+                    unmapped_row(ui, block, &number(*count), false, i % 2 == 0);
+                }
                 let more = s.unmapped_blocks.len().saturating_sub(MAX_UNMAPPED);
                 if more > 0 {
                     small_muted(ui, tr!("and {0} more", more));
@@ -443,6 +457,57 @@ impl ConvertState {
     }
 }
 
+/// "Stop the conversion?": `Some(true)` to stop, `Some(false)` to go on, `None` while it is asked.
+fn stop_modal(ctx: &egui::Context) -> Option<bool> {
+    let mut answer = None;
+    egui::Modal::new(egui::Id::unique("convert-stop")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
+        ui.set_width(super::services::modal_width(ctx, 420.0));
+        ui.label(RichText::new(tr!("Cancel the conversion?")).size(19.0).strong());
+        ui.add_space(4.0);
+        muted(ui, tr!("The new world is not finished and will not work properly. The original world is not changed."));
+        ui.add_space(12.0);
+        ui.horizontal(|ui| {
+            if danger(ui, &tr!("Cancel conversion")).clicked() {
+                answer = Some(true);
+            }
+            if secondary(ui, &tr!("Keep converting")).clicked() {
+                answer = Some(false);
+            }
+        });
+    });
+    if answer.is_none() && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+        answer = Some(false);
+    }
+    answer
+}
+
+/// A row of the table of blocks without a match: the name on the left, the count on the right.
+fn unmapped_row(ui: &mut Ui, name: &str, count: &str, header: bool, shaded: bool) {
+    let fill = if shaded { c_field() } else { Color32::TRANSPARENT };
+    egui::Frame::new()
+        .fill(fill)
+        .corner_radius(CornerRadius::same(6))
+        .inner_margin(egui::Margin::symmetric(8, 3))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            let size = vec2(ui.available_width(), 18.0);
+            ui.allocate_ui_with_layout(size, Layout::right_to_left(Align::Center), |ui| {
+                if header {
+                    ui.label(RichText::new(count).color(c_muted()).size(12.0));
+                } else {
+                    ui.label(RichText::new(count).monospace().size(12.5));
+                }
+                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                    if header {
+                        ui.label(RichText::new(name).color(c_muted()).size(12.0));
+                    } else {
+                        ui.add(egui::Label::new(RichText::new(name).monospace().size(12.5)).truncate());
+                    }
+                });
+            });
+        });
+}
+
 fn tr_n_warnings(n: usize) -> String {
     crate::i18n::tr_n("{0} warning", "{0} warnings", n as u64, &[n.into()])
 }
@@ -461,26 +526,25 @@ fn wrapped(ui: &mut Ui, text: String, color: Color32) {
 
 /// The dashed box a world can be dropped on.
 fn drop_zone(ui: &mut Ui) {
-    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 104.0), Sense::hover());
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 100.0), Sense::hover());
     ui.painter().rect_filled(rect, CornerRadius::same(10), c_field());
     let r = rect.shrink(1.0);
     let corners = [r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom(), r.left_top()];
     ui.painter().extend(egui::Shape::dashed_line(&corners, Stroke::new(1.5, c_border()), 6.0, 5.0));
-    ui.scope_builder(
-        egui::UiBuilder::new().max_rect(rect.shrink2(vec2(16.0, 14.0))).layout(Layout::top_down(Align::Center)),
-        |ui| {
-            ui.add_space(8.0);
-            ui.label(RichText::new(tr!("Drop a world here")).size(17.0).strong());
-            ui.add_space(2.0);
-            ui.add(
-                egui::Label::new(
-                    RichText::new(tr!("A Java world folder, or a Bedrock world packed as .mcworld or .zip"))
-                        .color(c_muted()),
-                )
-                .wrap(),
-            );
-        },
+    let wrap = rect.width() - 32.0;
+    let title = ui.painter().layout(tr!("Drop a world here"), egui::FontId::proportional(17.0), c_text(), wrap);
+    let hint = ui.painter().layout(
+        tr!("A Java world folder, or a Bedrock world packed as .mcworld or .zip"),
+        egui::FontId::proportional(14.0),
+        c_muted(),
+        wrap,
     );
+    let total = title.size().y + 4.0 + hint.size().y;
+    let top = rect.center().y - total / 2.0;
+    let title_pos = egui::pos2(rect.center().x - title.size().x / 2.0, top);
+    let hint_pos = egui::pos2(rect.center().x - hint.size().x / 2.0, top + title.size().y + 4.0);
+    ui.painter().galley(title_pos, title, c_text());
+    ui.painter().galley(hint_pos, hint, c_muted());
 }
 
 /// Shown over the page while files are dragged above the window.
