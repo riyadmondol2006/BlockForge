@@ -190,14 +190,15 @@ fn parse_items<'a>(lines: impl Iterator<Item = &'a str>) -> ItemTable {
 /// Legacy files hold `@blocks` / `@items` sections.
 fn section<'a>(text: &'a str, name: &str) -> impl Iterator<Item = &'a str> {
     let mut current = "";
-    lines(text).filter_map(move |l| {
+    let mut out = Vec::new();
+    for l in lines(text) {
         if let Some(s) = l.strip_prefix('@') {
             current = s;
-            None
-        } else {
-            (current == name).then_some(l)
+        } else if current == name {
+            out.push(l);
         }
-    }).collect::<Vec<_>>().into_iter()
+    }
+    out.into_iter()
 }
 
 static PIVOT: LazyLock<Arc<PivotInfo>> = LazyLock::new(|| {

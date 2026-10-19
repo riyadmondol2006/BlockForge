@@ -103,31 +103,44 @@ impl ItemResolver {
         }
     }
 
-    /// Enter one mapping with the given register flavour (same flavours as blocks).
+    /// Enter one mapping with the given register flavour (same flavours as blocks); a failure changes nothing.
     pub fn register(&mut self, flag: super::engine::Flag, m: ItemMapping) -> Result<(), MappingError> {
         let (to_mode, from_mode) = flag.modes();
         let what = || format!("{} {:?} / {:?} {:?}", m.id, m.states, m.kind, m.props);
+        let to_names: Vec<Arc<str>> = m.states.keys().cloned().collect();
+        let to_values: Vec<StateValue> = m.states.values().cloned().collect();
+        let from_names: Vec<Arc<str>> = m.props.keys().cloned().collect();
+        let from_values: Vec<PivotValue> = m.props.values().cloned().collect();
+        let empty_to = Grouping::default();
+        let empty_from = Grouping::default();
         if to_mode != Mode::Skip {
-            let names: Vec<Arc<str>> = m.states.keys().cloned().collect();
-            let values: Vec<StateValue> = m.states.values().cloned().collect();
+            self.to.get(&m.id).unwrap_or(&empty_to).check(&to_names, &to_values, to_mode == Mode::Override, &what)?;
+        }
+        if from_mode != Mode::Skip {
+            self.from.get(&m.kind).unwrap_or(&empty_from).check(
+                &from_names,
+                &from_values,
+                from_mode == Mode::Override,
+                &what,
+            )?;
+        }
+        if to_mode != Mode::Skip {
             let output = Output { ident: m.kind.clone(), outputs: m.props.clone(), group: None };
             self.to.entry(m.id.clone()).or_default().insert(
-                names.clone(),
-                names.clone(),
-                values,
+                to_names.clone(),
+                to_names,
+                to_values,
                 output,
                 to_mode == Mode::Override,
                 &what,
             )?;
         }
         if from_mode != Mode::Skip {
-            let names: Vec<Arc<str>> = m.props.keys().cloned().collect();
-            let values: Vec<PivotValue> = m.props.values().cloned().collect();
             let output = Output { ident: m.id.clone(), outputs: m.states.clone(), group: None };
             self.from.entry(m.kind.clone()).or_default().insert(
-                names.clone(),
-                names,
-                values,
+                from_names.clone(),
+                from_names,
+                from_values,
                 output,
                 from_mode == Mode::Override,
                 &what,

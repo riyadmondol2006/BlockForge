@@ -46,7 +46,11 @@ fn group(maps: &[(&str, &str, TypeMapping)]) -> StateGroup {
     StateGroup {
         states: maps
             .iter()
-            .map(|(i, o, t)| StateMapping { input_names: vec![a(i)], output_states: vec![a(o)], ty: Arc::new(t.clone()) })
+            .map(|(i, o, t)| StateMapping {
+                input_names: vec![a(i)],
+                output_states: vec![a(o)],
+                ty: Arc::new(t.clone()),
+            })
             .collect(),
         ..StateGroup::default()
     }
@@ -123,7 +127,8 @@ fn override_input_output_replaces_both() {
     r.register(Flag::OverrideInputOutput, m).unwrap();
     assert_eq!(r.to_pivot("minecraft:x", &StateMap::new()).unwrap().ty, a("A"));
     // Pinning a different set of pivot states has no row to override on the way back.
-    let err = r.register(Flag::OverrideInputOutput, BlockMapping::of("minecraft:y", "B").with("HALF", "TOP")).unwrap_err();
+    let err =
+        r.register(Flag::OverrideInputOutput, BlockMapping::of("minecraft:y", "B").with("HALF", "TOP")).unwrap_err();
     assert!(matches!(err, MappingError::NothingToOverride(_)));
 }
 
@@ -146,7 +151,6 @@ fn duplicate_override_flavours_touch_one_direction() {
 
 #[test]
 fn override_without_existing_entry_is_an_error() {
-    let mut r = BlockResolver::empty(pivot());
     for flag in [
         Flag::OverrideOutput,
         Flag::OverrideInput,
@@ -154,8 +158,11 @@ fn override_without_existing_entry_is_an_error() {
         Flag::DuplicateOverrideInput,
         Flag::DuplicateOverrideOutput,
     ] {
+        let mut r = BlockResolver::empty(pivot());
         let err = r.register(flag, BlockMapping::of("minecraft:none", "A")).unwrap_err();
         assert!(matches!(err, MappingError::NothingToOverride(_)), "{flag:?}");
+        // A failed register leaves the tables untouched.
+        assert_eq!(r.row_counts(), (0, 0), "{flag:?}");
     }
 }
 
@@ -213,7 +220,10 @@ fn state_group_converts_states_both_ways() {
     assert_eq!(p, pb("STAIRS", &[("FACING", "SOUTH"), ("HALF", "TOP")]));
     assert_eq!(r.from_pivot(&p), Some((a("minecraft:stairs"), java)));
     // A missing edition state stays missing; a missing pivot state is written as the pivot default.
-    assert_eq!(r.to_pivot("minecraft:stairs", &states(&[("half", st("top"))])).unwrap(), pb("STAIRS", &[("HALF", "TOP")]));
+    assert_eq!(
+        r.to_pivot("minecraft:stairs", &states(&[("half", st("top"))])).unwrap(),
+        pb("STAIRS", &[("HALF", "TOP")])
+    );
     let (_, written) = r.from_pivot(&pb("STAIRS", &[("HALF", "TOP")])).unwrap();
     assert_eq!(written, states(&[("facing", st("north")), ("half", st("top"))]));
 }
@@ -310,7 +320,11 @@ fn extra_group_default_output_like_java() {
 fn pinned_states_on_both_sides() {
     // minecraft:double_slab -> A with HALF=TOP pinned; an edition state pinned on the way back.
     let mut r = BlockResolver::empty(pivot());
-    r.register(Flag::Register, BlockMapping::of("minecraft:slab_top", "A").with("HALF", "TOP").when("kind", st("slab"))).unwrap();
+    r.register(
+        Flag::Register,
+        BlockMapping::of("minecraft:slab_top", "A").with("HALF", "TOP").when("kind", st("slab")),
+    )
+    .unwrap();
     let p = r.to_pivot("minecraft:slab_top", &states(&[("kind", st("slab"))])).unwrap();
     assert_eq!(p, pb("A", &[("HALF", "TOP")]));
     assert_eq!(r.to_pivot("minecraft:slab_top", &states(&[("kind", st("other"))])), None);
@@ -336,13 +350,20 @@ fn lookups_are_cached_and_consistent() {
 fn items_with_data_values_and_properties() {
     let mut r = ItemResolver::empty(pivot(), false);
     r.register(Flag::Register, ItemMapping::of("minecraft:banner", ItemKind::Item("BLACK_BANNER".into()))).unwrap();
-    r.register(Flag::Register, ItemMapping::of("minecraft:banner", ItemKind::Item("RED_BANNER".into())).data(1)).unwrap();
+    r.register(Flag::Register, ItemMapping::of("minecraft:banner", ItemKind::Item("RED_BANNER".into())).data(1))
+        .unwrap();
     r.register(
         Flag::Register,
-        ItemMapping::of("minecraft:spawn_egg", ItemKind::Item("SPAWN_EGG".into())).data(10).prop("P:spawn_egg_mob", "ALLAY"),
+        ItemMapping::of("minecraft:spawn_egg", ItemKind::Item("SPAWN_EGG".into()))
+            .data(10)
+            .prop("P:spawn_egg_mob", "ALLAY"),
     )
     .unwrap();
-    r.register(Flag::Register, ItemMapping::of("minecraft:bed", ItemKind::Block("A".into())).data(3).prop("S:HALF", "TOP")).unwrap();
+    r.register(
+        Flag::Register,
+        ItemMapping::of("minecraft:bed", ItemKind::Block("A".into())).data(3).prop("S:HALF", "TOP"),
+    )
+    .unwrap();
     let get = |id: &str, data: Option<i32>| {
         let s = data.map_or_else(StateMap::new, |d| states(&[("data", StateValue::Int(d))]));
         r.to_pivot(id, &s)

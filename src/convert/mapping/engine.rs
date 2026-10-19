@@ -7,6 +7,7 @@
 //! first. A hit yields the output identifier, its pinned output states, and then the states derived by the mapping's
 //! [`StateGroup`] and by the resolver-wide extra group (Bedrock `waterlogged`, Java default `waterlogged=false`).
 
+use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::sync::{Arc, RwLock};
@@ -61,10 +62,7 @@ pub struct PivotBlock {
 
 impl PivotBlock {
     pub fn new(ty: &str, states: &[(&str, &str)]) -> PivotBlock {
-        PivotBlock {
-            ty: ty.into(),
-            states: states.iter().map(|(k, v)| (Arc::from(*k), Arc::from(*v))).collect(),
-        }
+        PivotBlock { ty: ty.into(), states: states.iter().map(|(k, v)| (Arc::from(*k), Arc::from(*v))).collect() }
     }
 }
 
@@ -207,7 +205,11 @@ pub struct StateGroup {
 
 impl StateGroup {
     /// Edition -> pivot: fill `outputs` (put-if-absent) from the edition states, then from the defaults.
-    pub fn apply_input(&self, lookup: &dyn Fn(&str) -> Option<StateValue>, outputs: &mut BTreeMap<Arc<str>, PivotValue>) {
+    pub fn apply_input(
+        &self,
+        lookup: &dyn Fn(&str) -> Option<StateValue>,
+        outputs: &mut BTreeMap<Arc<str>, PivotValue>,
+    ) {
         for sm in &self.states {
             let allow_default = !sm.output_states.iter().all(|s| self.default_outputs.contains_key(s));
             sm.apply_input(lookup, outputs, allow_default);
@@ -278,17 +280,33 @@ impl<IK: PartialEq + Clone, IV: Eq + std::hash::Hash, O, OK, OV> Grouping<IK, IV
                 self.entries.iter().position(|e| e.names == names).unwrap_or(0)
             }
         };
-        let rows = &mut self.entries[idx].rows;
-        if override_existing {
-            if rows.insert(values, output).is_none() {
-                return Err(MappingError::NothingToOverride(what()));
+        match self.entries[idx].rows.entry(values) {
+            Entry::Occupied(mut slot) if override_existing => {
+                slot.insert(output);
             }
-        } else if rows.contains_key(&values) {
-            return Err(MappingError::Duplicate(what()));
-        } else {
-            rows.insert(values, output);
+            Entry::Vacant(slot) if !override_existing => {
+                slot.insert(output);
+            }
+            Entry::Occupied(_) => return Err(MappingError::Duplicate(what())),
+            Entry::Vacant(_) => return Err(MappingError::NothingToOverride(what())),
         }
         Ok(())
+    }
+
+    /// Whether `insert` of this key would succeed.
+    pub(crate) fn check(
+        &self,
+        names: &[IK],
+        values: &[IV],
+        override_existing: bool,
+        what: &dyn Fn() -> String,
+    ) -> Result<(), MappingError> {
+        let exists = self.entries.iter().find(|e| e.names == names).is_some_and(|e| e.rows.contains_key(values));
+        match (override_existing, exists) {
+            (true, false) => Err(MappingError::NothingToOverride(what())),
+            (false, true) => Err(MappingError::Duplicate(what())),
+            _ => Ok(()),
+        }
     }
 
     /// `resolve`: the first group (largest name set first) whose states are all readable and match a row.
@@ -453,32 +471,45 @@ impl BlockResolver {
         self.extra = Some(group);
     }
 
-    /// Enter one mapping with the given register flavour.
+    /// Enter one mapping with the given register flavour. Unlike Chunker, a failing register changes nothing.
     pub fn register(&mut self, flag: Flag, m: BlockMapping) -> Result<(), MappingError> {
         let (to_mode, from_mode) = flag.modes();
         let what = || format!("{} {:?} / {} {:?}", m.id, m.states, m.ty, m.pivot_states);
+        let to_names: Vec<Arc<str>> = m.states.keys().cloned().collect();
+        let to_values: Vec<StateValue> = m.states.values().cloned().collect();
+        let from_names: Vec<Arc<str>> = m.pivot_states.keys().cloned().collect();
+        let from_values: Vec<PivotValue> = m.pivot_states.values().cloned().collect();
+        let empty_to = Grouping::default();
+        let empty_from = Grouping::default();
         if to_mode != Mode::Skip {
-            let names: Vec<Arc<str>> = m.states.keys().cloned().collect();
-            let values: Vec<StateValue> = m.states.values().cloned().collect();
+            self.to.get(&m.id).unwrap_or(&empty_to).check(&to_names, &to_values, to_mode == Mode::Override, &what)?;
+        }
+        if from_mode != Mode::Skip {
+            self.from.get(&m.ty).unwrap_or(&empty_from).check(
+                &from_names,
+                &from_values,
+                from_mode == Mode::Override,
+                &what,
+            )?;
+        }
+        if to_mode != Mode::Skip {
             let output = Output { ident: m.ty.clone(), outputs: m.pivot_states.clone(), group: m.group.clone() };
             self.to.entry(m.id.clone()).or_default().insert(
-                names.clone(),
-                names.iter().cloned().collect(),
-                values,
+                to_names.clone(),
+                to_names,
+                to_values,
                 output,
                 to_mode == Mode::Override,
                 &what,
             )?;
         }
         if from_mode != Mode::Skip {
-            let names: Vec<Arc<str>> = m.pivot_states.keys().cloned().collect();
-            let order: Vec<Arc<str>> = names.iter().map(|n| self.pivot.order_name(n)).collect();
-            let values: Vec<PivotValue> = m.pivot_states.values().cloned().collect();
+            let order: Vec<Arc<str>> = from_names.iter().map(|n| self.pivot.order_name(n)).collect();
             let output = Output { ident: m.id.clone(), outputs: m.states.clone(), group: m.group.clone() };
             self.from.entry(m.ty.clone()).or_default().insert(
-                names,
+                from_names,
                 order,
-                values,
+                from_values,
                 output,
                 from_mode == Mode::Override,
                 &what,
