@@ -233,6 +233,8 @@ fn score(r: &Recipe) -> u32 {
     // an ore block in a furnace is the older way: the raw metal is what you mine now
     let ore = matches!(r.kind, Kind::Smelting | Kind::Blasting | Kind::Smoking | Kind::Campfire)
         && r.ingredients.iter().all(|i| i.alternatives.iter().all(|a| a.ends_with("_ore")));
+    // nuggets from smelting tools or armor are a way to recycle them, not to make nuggets
+    let recycling = matches!(r.kind, Kind::Smelting | Kind::Blasting) && r.output.ends_with("_nugget");
     let kind = match r.kind {
         Kind::Shaped => 0,
         Kind::Shapeless => 1,
@@ -248,6 +250,7 @@ fn score(r: &Recipe) -> u32 {
         + (if unpacking || nuggets { 20 } else { 0 })
         + (if honey { 10 } else { 0 })
         + (if ore { 1 } else { 0 })
+        + (if recycling { 30 } else { 0 })
         + kind
 }
 
@@ -397,4 +400,45 @@ pub struct Storage {
     pub double_chests: Containers,
     pub shulker_boxes: Containers,
     pub player_inventories: Containers,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn item(id: &str) -> (ItemId, Item) {
+        (id.to_string(), Item { id: id.to_string(), name: pretty_name(id), stack: 64, category: Category::Misc })
+    }
+    fn recipe(id: &str, kind: Kind, out: &str, count: u32, input: &str) -> Recipe {
+        Recipe {
+            id: id.to_string(),
+            kind,
+            output: out.to_string(),
+            count,
+            ingredients: vec![Ingredient { key: "input".into(), count: 1, alternatives: vec![input.to_string()] }],
+            manual: None,
+            ticks: None,
+            small_grid: false,
+        }
+    }
+
+    #[test]
+    fn a_nugget_comes_from_an_ingot_not_from_smelting_armor() {
+        let items = ["minecraft:iron_nugget", "minecraft:iron_ingot", "minecraft:chainmail_boots"]
+            .into_iter()
+            .map(item)
+            .collect();
+        let recipes = vec![
+            recipe("iron_nugget_from_smelting", Kind::Smelting, "minecraft:iron_nugget", 1, "minecraft:chainmail_boots"),
+            recipe("iron_nugget", Kind::Shapeless, "minecraft:iron_nugget", 9, "minecraft:iron_ingot"),
+        ];
+        let ds = Dataset::new("t", items, recipes, HashSet::new(), Vec::new()).unwrap();
+        let first = ds.recipes_for("minecraft:iron_nugget").next().unwrap();
+        assert_eq!(first.id, "iron_nugget");
+    }
+
+    #[test]
+    fn pretty_names() {
+        assert_eq!(pretty_name("minecraft:oak_planks"), "Oak Planks");
+    }
 }
