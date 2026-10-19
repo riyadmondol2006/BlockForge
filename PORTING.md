@@ -62,7 +62,7 @@ surveys: core, model, java, bedrock).
 | Model | `conversion/intermediate/column/**`, `mapping/identifier/**` | `src/convert/model/**` (+ generated enums via `tools/convert/gen_model.py`) | [ ] |
 | Table dumper | `conversion/encoding/{java,bedrock}/**/resolver/**`, `mapping/**` (engine semantics) | `tools/convert/dump/**`, `data/convert/*.bin.z`, loader `src/convert/mapping/data.rs` | [ ] |
 | Bedrock low level | `encoding/bedrock/util/**`, `base/reader` db/palette parts | `src/convert/bedrock/{db,keys,palette}.rs` | [ ] |
-| Java low level | `encoding/java/util/**`, `base/reader|writer` region parts, `level` I/O | `src/convert/java/{region,palette,dirs,version,format}.rs` | [ ] |
+| Java low level | `encoding/java/util/**`, `base/reader|writer` region parts, `level` I/O | `src/convert/java/{region,palette,dirs,version,format,level_dat}.rs` | [x] data-version table (66 rows) + `JavaFormat` switches, Anvil reader/writer (types 1-4, `.mcc`, entities/poi helpers), palette packing (both layouts), 26.1 dir layout, `detect_java` (folder or zip), `level.dat` probe; cross-checked on a real 26.3 world (24,576 sections re-pack exactly); level.dat read/write of settings, chunk/column/level readers and writers are the later Java phases |
 
 ### Phase 2 - the Bedrock -> Java path (M1)
 - [ ] `mapping/engine.rs` (port of `ChunkerBlockIdentifierResolver`, `StateMappingGroup`, `TypeMapping`, versioned groups)

@@ -390,7 +390,11 @@ mod tests {
             let values: Vec<u16> = (0..4096).map(|_| (rng.next() % keys as u64) as u16).collect();
             for layout in [Layout::Spanning, Layout::Padded] {
                 let packed = pack_palette(layout, MIN_BITS_BLOCKS, 4096, keys, Some(&values)).unwrap();
-                assert_eq!(unpack_auto(MIN_BITS_BLOCKS, 4096, keys, &packed).unwrap(), values, "{keys} keys {bits} bits {layout:?}");
+                assert_eq!(
+                    unpack_auto(MIN_BITS_BLOCKS, 4096, keys, &packed).unwrap(),
+                    values,
+                    "{keys} keys {bits} bits {layout:?}"
+                );
             }
         }
         // Biomes: 64 values.
@@ -465,7 +469,8 @@ mod tests {
     #[test]
     fn legacy_arrays_round_trip() {
         let mut rng = Rng(11);
-        let values: Vec<(u16, u8)> = (0..4096).map(|_| ((rng.next() % 4096) as u16, (rng.next() & 0xF) as u8)).collect();
+        let values: Vec<(u16, u8)> =
+            (0..4096).map(|_| ((rng.next() % 4096) as u16, (rng.next() & 0xF) as u8)).collect();
         let (blocks, add, data) = legacy_blocks_encode(&values);
         assert_eq!(legacy_blocks(&blocks, Some(&add), Some(&data)).unwrap(), values);
         // Without Add/Data the ids stay below 256 and the data is 0.

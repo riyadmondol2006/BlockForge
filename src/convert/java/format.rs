@@ -348,13 +348,7 @@ mod tests {
         vec![
             (0, |e| {
                 // Base: Anvil 1.8.8.
-                *e = Expect {
-                    legacy_ids: true,
-                    level_wrapper: true,
-                    heightmap: true,
-                    beds: true,
-                    ..Expect::default()
-                };
+                *e = Expect { legacy_ids: true, level_wrapper: true, heightmap: true, beds: true, ..Expect::default() };
             }),
             (819, |e| e.entity_ids_modern = true),
             (1519, |e| {
@@ -454,7 +448,8 @@ mod tests {
                 assert_eq!(f.modern_entity_ids, e.entity_ids_modern, "{ctx}: entity ids");
                 assert_eq!(
                     f.sections,
-                    [SectionLayout::LegacyArrays, SectionLayout::FlatPalette, SectionLayout::NestedStates][e.sections as usize],
+                    [SectionLayout::LegacyArrays, SectionLayout::FlatPalette, SectionLayout::NestedStates]
+                        [e.sections as usize],
                     "{ctx}: sections"
                 );
                 if e.sections > 0 {
@@ -463,8 +458,12 @@ mod tests {
                 }
                 assert_eq!(
                     f.biomes,
-                    [BiomeKind::ByteArray256, BiomeKind::IntArray256, BiomeKind::IntArray1024, BiomeKind::SectionPalette]
-                        [e.biomes as usize],
+                    [
+                        BiomeKind::ByteArray256,
+                        BiomeKind::IntArray256,
+                        BiomeKind::IntArray1024,
+                        BiomeKind::SectionPalette
+                    ][e.biomes as usize],
                     "{ctx}: biomes"
                 );
                 assert_eq!(f.biome_names, e.biomes == 3, "{ctx}: biome names");
@@ -515,7 +514,10 @@ mod tests {
         assert_eq!((mid.palette_key, mid.palette_data_key), ("Palette", "BlockStates"));
         assert!(!mid.palette_spanning() && mid.level_wrapper && !mid.entities_separate);
         let new = JavaFormat::for_data_version(3465);
-        assert_eq!((new.sections_key, new.block_entities_key, new.palette_key, new.palette_data_key), ("sections", "block_entities", "palette", "data"));
+        assert_eq!(
+            (new.sections_key, new.block_entities_key, new.palette_key, new.palette_data_key),
+            ("sections", "block_entities", "palette", "data")
+        );
         assert!(new.writes_y_pos && new.extended_height && !new.level_wrapper);
         assert_eq!((new.min_bits_blocks, new.min_bits_biomes), (4, 1));
         assert_eq!(new.version, Version::new(1, 20, 1));
@@ -525,11 +527,20 @@ mod tests {
     fn spot_checks_from_the_survey() {
         // 1.13 flattening, 1.14 isLightOn, 1.15 biome cells, 1.16 non-spanning, 1.17 entities, 1.18 sections.
         assert!(JavaFormat::for_data_version(1518).legacy_ids && !JavaFormat::for_data_version(1519).legacy_ids);
-        assert!(!JavaFormat::for_data_version(1951).light_is_light_on() && JavaFormat::for_data_version(1952).light_is_light_on());
+        assert!(
+            !JavaFormat::for_data_version(1951).light_is_light_on()
+                && JavaFormat::for_data_version(1952).light_is_light_on()
+        );
         assert_eq!(JavaFormat::for_data_version(2224).biomes, BiomeKind::IntArray256);
         assert_eq!(JavaFormat::for_data_version(2225).biomes, BiomeKind::IntArray1024);
-        assert!(JavaFormat::for_data_version(2565).palette_spanning() && !JavaFormat::for_data_version(2566).palette_spanning());
-        assert!(!JavaFormat::for_data_version(2723).entities_separate && JavaFormat::for_data_version(2724).entities_separate);
+        assert!(
+            JavaFormat::for_data_version(2565).palette_spanning()
+                && !JavaFormat::for_data_version(2566).palette_spanning()
+        );
+        assert!(
+            !JavaFormat::for_data_version(2723).entities_separate
+                && JavaFormat::for_data_version(2724).entities_separate
+        );
         assert_eq!(JavaFormat::for_data_version(2859).sections, SectionLayout::FlatPalette);
         assert_eq!(JavaFormat::for_data_version(2860).sections, SectionLayout::NestedStates);
         // Nothing newer than the table is unknown: it uses the latest format.

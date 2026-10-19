@@ -145,7 +145,8 @@ mod tests {
 
     #[test]
     fn modern_level() {
-        let version = level(vec![("Id", Tag::Int(3465)), ("Name", Tag::String("1.20.1".into())), ("Snapshot", Tag::Byte(0))]);
+        let version =
+            level(vec![("Id", Tag::Int(3465)), ("Name", Tag::String("1.20.1".into())), ("Snapshot", Tag::Byte(0))]);
         let data = level(vec![
             ("LevelName", Tag::String("My World".into())),
             ("Version", Tag::Compound(version)),

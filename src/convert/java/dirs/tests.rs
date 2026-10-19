@@ -53,7 +53,10 @@ fn namespaced_layout_paths() {
     assert_eq!(dirs.dimension_dir(&JavaDimension::Nether), PathBuf::from("/w/dimensions/minecraft/the_nether"));
     assert_eq!(dirs.dimension_dir(&JavaDimension::End), PathBuf::from("/w/dimensions/minecraft/the_end"));
     assert_eq!(dirs.region_dir(&JavaDimension::Overworld), PathBuf::from("/w/dimensions/minecraft/overworld/region"));
-    assert_eq!(dirs.dimension_data_dir(&JavaDimension::End), PathBuf::from("/w/dimensions/minecraft/the_end/data/minecraft"));
+    assert_eq!(
+        dirs.dimension_data_dir(&JavaDimension::End),
+        PathBuf::from("/w/dimensions/minecraft/the_end/data/minecraft")
+    );
     assert_eq!(dirs.players_dir(), PathBuf::from("/w/players/data"));
     assert_eq!(dirs.minecraft_data_dir(), PathBuf::from("/w/data/minecraft"));
     assert_eq!(dirs.maps_dir(), PathBuf::from("/w/data/minecraft/maps"));
@@ -63,7 +66,11 @@ fn namespaced_layout_paths() {
     assert_eq!(dirs.parse_map_file_name("map_3.dat"), None);
     assert_eq!(dirs.parse_map_file_name("-3.dat"), None);
     // The layout follows the format switch, not the version name.
-    assert!(!LevelDirs::new("/w", &JavaFormat::for_data_version(4671)).dimension_dir(&JavaDimension::Nether).ends_with("dimensions/minecraft/the_nether"));
+    assert!(
+        !LevelDirs::new("/w", &JavaFormat::for_data_version(4671))
+            .dimension_dir(&JavaDimension::Nether)
+            .ends_with("dimensions/minecraft/the_nether")
+    );
 }
 
 #[test]
@@ -78,7 +85,22 @@ fn dimension_ids() {
     }
     assert_eq!(JavaDimension::Nether.legacy_id(), Some(-1));
     assert_eq!(JavaDimension::from_identifier("a:b").unwrap().legacy_id(), None);
-    for bad in ["", "overworld", ":x", "x:", "a:..", "a:../b", "../x:y", "a:b//c", "a:/b", "a:b/", "A:b", "a b:c", "a:b\\c", "a:."] {
+    for bad in [
+        "",
+        "overworld",
+        ":x",
+        "x:",
+        "a:..",
+        "a:../b",
+        "../x:y",
+        "a:b//c",
+        "a:/b",
+        "a:b/",
+        "A:b",
+        "a b:c",
+        "a:b\\c",
+        "a:.",
+    ] {
         assert_eq!(JavaDimension::from_identifier(bad), None, "{bad:?}");
     }
 }
@@ -204,7 +226,10 @@ fn zip_traversal_and_limits_are_rejected() {
     }
     assert!(!t.path().join("evil.txt").exists());
     let p = t.path().join("big.zip");
-    zip_with(&p, &[("level.dat", level_dat_bytes(3465, "x")), ("a.bin", vec![0u8; 100_000]), ("b.bin", vec![0u8; 100_000])]);
+    zip_with(
+        &p,
+        &[("level.dat", level_dat_bytes(3465, "x")), ("a.bin", vec![0u8; 100_000]), ("b.bin", vec![0u8; 100_000])],
+    );
     let tiny_total = ZipLimits { max_total_bytes: 50_000, ..ZipLimits::default() };
     assert!(matches!(detect_java_checked(&p, &scratch, tiny_total), Err(DetectError::BadZip(_))));
     let tiny_entry = ZipLimits { max_entry_bytes: 10_000, ..ZipLimits::default() };

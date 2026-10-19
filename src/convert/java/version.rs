@@ -1,54 +1,9 @@
 // Derived from Chunker (https://github.com/HiveGamesOSS/Chunker), Copyright (c) 2024 Hive Games, MIT License.
 //! The Java data-version table (Chunker's `JavaDataVersion`) and the data-version thresholds the format switches use.
 //!
-//! Only release builds are listed (1.9 = 169 ... 26.3 = 5017); snapshots round down to the release before them.
+//! Versions are the shared `util::Version`. Only release builds are listed (1.9 = 169 ... 26.3 = 5017); snapshots round down to the release before them.
 
-use std::fmt;
-
-/// A game version (`major.minor.patch`), ordered like Chunker's `Version`.
-///
-/// This is a local twin of `util::Version`; the two have the same shape.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Version {
-    pub major: u32,
-    pub minor: u32,
-    pub patch: u32,
-}
-
-impl Version {
-    pub const fn new(major: u32, minor: u32, patch: u32) -> Version {
-        Version { major, minor, patch }
-    }
-
-    /// True when this version is at least `major.minor.patch`.
-    pub fn at_least(&self, major: u32, minor: u32, patch: u32) -> bool {
-        *self >= Version::new(major, minor, patch)
-    }
-
-    /// Parse `1.20.4`, `1.21` or `26.1` (missing parts are 0). Returns None on anything else.
-    pub fn parse(text: &str) -> Option<Version> {
-        let mut parts = text.trim().split('.');
-        let major = parts.next()?.parse().ok()?;
-        let minor = match parts.next() {
-            Some(p) => p.parse().ok()?,
-            None => 0,
-        };
-        let patch = match parts.next() {
-            Some(p) => p.parse().ok()?,
-            None => 0,
-        };
-        if parts.next().is_some() {
-            return None;
-        }
-        Some(Version { major, minor, patch })
-    }
-}
-
-impl fmt::Display for Version {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}.{}.{}", self.major, self.minor, self.patch)
-    }
-}
+pub use crate::convert::util::Version;
 
 /// The `version` int of the last Anvil `level.dat` (1.8.x worlds have no `Version` compound, only this).
 pub const LAST_ANVIL_FILE_VERSION: i32 = 19133;
@@ -232,13 +187,10 @@ mod tests {
     }
 
     #[test]
-    fn version_parse_and_order() {
-        assert_eq!(Version::parse("1.20.4"), Some(Version::new(1, 20, 4)));
-        assert_eq!(Version::parse("26.1"), Some(Version::new(26, 1, 0)));
-        assert_eq!(Version::parse("1.2.3.4"), None);
-        assert_eq!(Version::parse("1.x"), None);
-        assert!(Version::new(1, 21, 0).at_least(1, 20, 5));
-        assert!(!Version::new(1, 12, 2).at_least(1, 13, 0));
+    fn version_order_and_text() {
+        assert!(Version::new(1, 21, 0).is_greater_than_or_equal(1, 20, 5));
+        assert!(!Version::new(1, 12, 2).is_greater_than_or_equal(1, 13, 0));
         assert_eq!(Version::new(1, 21, 0).to_string(), "1.21.0");
+        assert_eq!(Version::parse("26.1").unwrap(), Version::new(26, 1, 0));
     }
 }

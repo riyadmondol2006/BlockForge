@@ -85,12 +85,14 @@ fn empty_and_header_only_files() {
     assert_eq!(RegionFile::open_read(&p3).unwrap().present_chunks().len(), 0);
 }
 
+/// A chunk of about `bytes` incompressible bytes, as 4096-long arrays (the NBT reader caps one array at 65536).
 fn big_chunk(bytes: usize, seed: u64) -> Compound {
     let mut rng = Rng(seed);
-    let blob: Vec<i8> = (0..bytes).map(|_| rng.next() as i8).collect();
+    let arrays: Vec<Tag> =
+        (0..bytes.div_ceil(32768)).map(|_| Tag::LongArray((0..4096).map(|_| rng.next() as i64).collect())).collect();
     let mut c = Compound::new();
     c.insert("xPos", Tag::Int(1));
-    c.insert("blob", Tag::ByteArray(blob));
+    c.insert("blob", Tag::List(arrays));
     c
 }
 
@@ -195,16 +197,16 @@ fn malformed_entries_are_errors() {
     };
     let bytes = raw_region(
         &[
-            (0, 2 << 8 | 1),  // good
-            (1, 3 << 8 | 1),  // length 0xFFFFFFFF
-            (2, 4 << 8 | 1),  // zero length
-            (3, 5 << 8 | 1),  // type 0: none
-            (4, 6 << 8 | 1),  // type 9
-            (5, 7 << 8 | 1),  // garbage zlib
-            (6, 1 << 8 | 1),  // inside the header
+            (0, 2 << 8 | 1),   // good
+            (1, 3 << 8 | 1),   // length 0xFFFFFFFF
+            (2, 4 << 8 | 1),   // zero length
+            (3, 5 << 8 | 1),   // type 0: none
+            (4, 6 << 8 | 1),   // type 9
+            (5, 7 << 8 | 1),   // garbage zlib
+            (6, 1 << 8 | 1),   // inside the header
             (7, 500 << 8 | 1), // far past the end
-            (8, 8 << 8 | 1),  // not a compound root
-            (9, 9 << 8 | 1),  // starts exactly at the end of the file: no room for a header
+            (8, 8 << 8 | 1),   // not a compound root
+            (9, 9 << 8 | 1),   // starts exactly at the end of the file: no room for a header
         ],
         &[(2, chunk), (3, huge), (4, zero_len), (5, type0), (6, type9), (7, garbage), (8, not_compound)],
         9,
@@ -271,7 +273,8 @@ fn truncation_and_bit_flips_never_panic() {
         let flips = 1 + (round % 8);
         for _ in 0..flips {
             // Mostly hit the header and chunk headers, sometimes the bodies.
-            let at = if rng.next() % 2 == 0 { (rng.next() % 8200) as usize } else { (rng.next() as usize) % bytes.len() };
+            let at =
+                if rng.next() % 2 == 0 { (rng.next() % 8200) as usize } else { (rng.next() as usize) % bytes.len() };
             bytes[at] ^= 1 << (rng.next() % 8);
         }
         probe(&bytes);

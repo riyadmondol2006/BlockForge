@@ -73,7 +73,10 @@ fn valid_id_part(part: &str, allow_slash: bool) -> bool {
         return false;
     }
     let seg_ok = |s: &str| {
-        !s.is_empty() && s != "." && s != ".." && s.bytes().all(|b| matches!(b, b'a'..=b'z' | b'0'..=b'9' | b'_' | b'-' | b'.'))
+        !s.is_empty()
+            && s != "."
+            && s != ".."
+            && s.bytes().all(|b| matches!(b, b'a'..=b'z' | b'0'..=b'9' | b'_' | b'-' | b'.'))
     };
     if allow_slash { part.split('/').all(seg_ok) } else { seg_ok(part) }
 }
@@ -166,7 +169,11 @@ impl LevelDirs {
 
     /// The file of map `id`: `map_<id>.dat` before 26.1, `<id>.dat` from 26.1.
     pub fn map_file(&self, id: i64) -> PathBuf {
-        if self.namespaced { self.maps_dir().join(format!("{id}.dat")) } else { self.maps_dir().join(format!("map_{id}.dat")) }
+        if self.namespaced {
+            self.maps_dir().join(format!("{id}.dat"))
+        } else {
+            self.maps_dir().join(format!("map_{id}.dat"))
+        }
     }
 
     /// The map id counter: `idcounts.dat` before 26.1, `last_id.dat` from 26.1.
@@ -222,11 +229,15 @@ impl LevelDirs {
         let mut namespaces: Vec<_> = fs::read_dir(&dims).into_iter().flatten().flatten().collect();
         namespaces.sort_by_key(|e| e.file_name());
         for ns in namespaces {
-            let (Some(ns_name), true) = (ns.file_name().to_str().map(str::to_string), ns.path().is_dir()) else { continue };
+            let (Some(ns_name), true) = (ns.file_name().to_str().map(str::to_string), ns.path().is_dir()) else {
+                continue;
+            };
             let mut keys: Vec<_> = fs::read_dir(ns.path()).into_iter().flatten().flatten().collect();
             keys.sort_by_key(|e| e.file_name());
             for key in keys {
-                let (Some(key_name), true) = (key.file_name().to_str().map(str::to_string), key.path().is_dir()) else { continue };
+                let (Some(key_name), true) = (key.file_name().to_str().map(str::to_string), key.path().is_dir()) else {
+                    continue;
+                };
                 let Some(dim) = JavaDimension::from_identifier(&format!("{ns_name}:{key_name}")) else { continue };
                 if found.iter().any(|f| f.dimension == dim) || !key.path().join("region").is_dir() {
                     continue;
@@ -279,7 +290,8 @@ impl ScratchDir {
     pub fn new_in(parent: &Path) -> io::Result<ScratchDir> {
         fs::create_dir_all(parent)?;
         let n = SCRATCH_COUNTER.fetch_add(1, Ordering::SeqCst);
-        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.subsec_nanos()).unwrap_or(0);
+        let nanos =
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.subsec_nanos()).unwrap_or(0);
         let path = parent.join(format!("java-world-{}-{}-{}", std::process::id(), n, nanos));
         fs::create_dir(&path)?;
         Ok(ScratchDir { path })
@@ -386,7 +398,11 @@ pub fn detect_java(path: &Path) -> Option<JavaWorldInfo> {
 }
 
 /// Like [`detect_java`] with the reason for a failure, a chosen scratch parent and zip limits.
-pub fn detect_java_checked(path: &Path, scratch_parent: &Path, limits: ZipLimits) -> Result<JavaWorldInfo, DetectError> {
+pub fn detect_java_checked(
+    path: &Path,
+    scratch_parent: &Path,
+    limits: ZipLimits,
+) -> Result<JavaWorldInfo, DetectError> {
     let meta = fs::metadata(path)?;
     let (root, scratch, from_zip) = if meta.is_dir() {
         (path.to_path_buf(), None, false)

@@ -21,7 +21,8 @@ fn candidate_worlds() -> Vec<PathBuf> {
     let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else { return out };
     let mut push_children = |dir: PathBuf| {
         if let Ok(rd) = std::fs::read_dir(dir) {
-            let mut v: Vec<PathBuf> = rd.flatten().map(|e| e.path()).filter(|p| p.join("level.dat").is_file()).collect();
+            let mut v: Vec<PathBuf> =
+                rd.flatten().map(|e| e.path()).filter(|p| p.join("level.dat").is_file()).collect();
             v.sort();
             out.extend(v);
         }
@@ -75,7 +76,8 @@ fn check_palette(min_bits: u32, count: usize, keys: usize, data: &[i64]) -> (boo
     let first = palette::unpack_auto(min_bits, count, keys, data).expect("decode a real palette");
     assert!(first.iter().all(|&i| (i as usize) < keys.max(1)), "an index beyond the palette: {keys} keys");
     let bits = palette::bits_for(min_bits, keys);
-    let layout = if data.len() == palette::packed_len(Layout::Padded, count, bits) { Layout::Padded } else { Layout::Spanning };
+    let layout =
+        if data.len() == palette::packed_len(Layout::Padded, count, bits) { Layout::Padded } else { Layout::Spanning };
     let again = palette::pack_palette(layout, min_bits, count, keys, Some(&first)).expect("encode");
     let second = palette::unpack_auto(min_bits, count, keys, &again).expect("decode what we encoded");
     assert_eq!(first, second, "decode(encode(decode(x))) differs");
@@ -161,7 +163,11 @@ fn check_world(info: super::dirs::JavaWorldInfo) {
         }
     }
     let (present, path) = best.unwrap();
-    eprintln!("real_world: region {} with {present} chunks, {} bytes", path.display(), std::fs::metadata(&path).unwrap().len());
+    eprintln!(
+        "real_world: region {} with {present} chunks, {} bytes",
+        path.display(),
+        std::fs::metadata(&path).unwrap().len()
+    );
 
     // Timing: read + decompress every chunk, then parse every chunk's NBT.
     let started = Instant::now();
@@ -243,7 +249,10 @@ fn rewrite_and_compare(original: &std::path::Path, blobs: &[(u8, u8, Vec<u8>)]) 
             n += 1;
         }
         assert_eq!(n, blobs.len());
-        eprintln!("real_world: rewrote {n} chunks as {compression:?} in {write_time:?}, {} bytes", std::fs::metadata(&path).unwrap().len());
+        eprintln!(
+            "real_world: rewrote {n} chunks as {compression:?} in {write_time:?}, {} bytes",
+            std::fs::metadata(&path).unwrap().len()
+        );
         if compression == Compression::Zlib {
             if let Some(keep) = std::env::var_os("CONVERT_JAVA_SCRATCH") {
                 let target = std::path::PathBuf::from(keep);

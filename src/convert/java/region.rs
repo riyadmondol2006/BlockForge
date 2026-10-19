@@ -268,6 +268,12 @@ impl RegionFile {
         self.coords
     }
 
+    /// Absolute chunk coordinates of a local chunk, when the region coordinates are known.
+    pub fn chunk_coords(&self, x: u8, z: u8) -> Option<(i32, i32)> {
+        let (rx, rz) = self.coords?;
+        Some((rx * REGION_SIDE + x as i32, rz * REGION_SIDE + z as i32))
+    }
+
     /// The file size in bytes.
     pub fn len(&self) -> u64 {
         self.len
@@ -326,7 +332,8 @@ impl RegionFile {
             let (rx, rz) = self.coords.ok_or_else(|| {
                 RegionError::MissingExternal(self.path.with_file_name("c.?.?.mcc (region coordinates unknown)"))
             })?;
-            let path = self.path.with_file_name(external_file_name(rx * REGION_SIDE + x as i32, rz * REGION_SIDE + z as i32));
+            let path =
+                self.path.with_file_name(external_file_name(rx * REGION_SIDE + x as i32, rz * REGION_SIDE + z as i32));
             let meta = fs::metadata(&path).map_err(|_| RegionError::MissingExternal(path.clone()))?;
             if meta.len() > MAX_EXTERNAL_BYTES {
                 return Err(bad("the external chunk file is too large"));
@@ -468,7 +475,8 @@ impl RegionWriter {
         let external = sectors > MAX_SECTORS;
         let (stored_len, type_byte, count): (u32, u8, usize) = if external {
             let (rx, rz) = self.region;
-            let path = self.path.with_file_name(external_file_name(rx * REGION_SIDE + x as i32, rz * REGION_SIDE + z as i32));
+            let path =
+                self.path.with_file_name(external_file_name(rx * REGION_SIDE + x as i32, rz * REGION_SIDE + z as i32));
             fs::write(&path, data)?;
             (1, 0x80 | compression as u8, 1)
         } else {
