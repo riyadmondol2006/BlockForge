@@ -152,7 +152,10 @@ impl BlockWriter {
                 }
                 let mut props: Vec<(Arc<str>, Arc<str>)> = Vec::new();
                 if let Some(w) = block.states().get(states::WATERLOGGED) {
-                    props.push((Arc::from("waterlogged"), Arc::from(if w.value_ordinal() == 1 { "true" } else { "false" })));
+                    props.push((
+                        Arc::from("waterlogged"),
+                        Arc::from(if w.value_ordinal() == 1 { "true" } else { "false" }),
+                    ));
                 }
                 for (k, v) in block.states().custom() {
                     props.push((k.clone(), Arc::from(model_value_text(v))));
@@ -180,7 +183,8 @@ mod tests {
         let b = w.resolve(&stone).unwrap();
         assert_eq!(&*b.name, "minecraft:stone");
         assert!(b.props.is_empty());
-        let stairs = BlockIdentifier::new(BlockType::OAK_STAIRS).with(states::FACING_HORIZONTAL, FacingDirectionHorizontal::EAST);
+        let stairs = BlockIdentifier::new(BlockType::OAK_STAIRS)
+            .with(states::FACING_HORIZONTAL, FacingDirectionHorizontal::EAST);
         let b = w.resolve(&Arc::new(stairs)).unwrap();
         assert_eq!(&*b.name, "minecraft:oak_stairs");
         let props: Vec<_> = b.props.iter().map(|(k, v)| format!("{k}={v}")).collect();

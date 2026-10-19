@@ -27,7 +27,8 @@ use std::sync::Mutex;
 /// The name of the data pack that lifts the world height in 1.17.
 pub const HEIGHT_PACK_NAME: &str = "CavesAndCliffsHeightPack.zip";
 
-const HEIGHT_PACK_META: &str = "{\n  \"pack\": {\n    \"pack_format\": 7,\n    \"description\": \"Caves & Cliffs Height Compatibility\"\n  }\n}\n";
+const HEIGHT_PACK_META: &str =
+    "{\n  \"pack\": {\n    \"pack_format\": 7,\n    \"description\": \"Caves & Cliffs Height Compatibility\"\n  }\n}\n";
 
 fn height_dimension_type(has_ceiling: bool) -> String {
     format!(
@@ -211,7 +212,10 @@ impl JavaSettingsIo<'_, '_> {
         if fmt.world_gen_settings {
             let seed = parse_seed(&settings.random_seed);
             let mut dimensions = Compound::with_capacity(3);
-            dimensions.insert("minecraft:overworld", Tag::Compound(self.create_dimension("minecraft:overworld", generator, seed)));
+            dimensions.insert(
+                "minecraft:overworld",
+                Tag::Compound(self.create_dimension("minecraft:overworld", generator, seed)),
+            );
             // The client complains when the end and the nether are not generated.
             dimensions.insert(
                 "minecraft:the_end",
@@ -642,7 +646,8 @@ fn split_level_dat(f: &LevelFiles<'_>, data: &mut Compound) -> Result<(), Conver
                 Some(Tag::IntArray(ints)) if ints.len() == 4 => ints.clone(),
                 _ => vec![0, 0, 0, 0],
             };
-            let name = LevelDirs::uuid_from_ints(&uuid).unwrap_or_else(|| "00000000-0000-0000-0000-000000000000".into());
+            let name =
+                LevelDirs::uuid_from_ints(&uuid).unwrap_or_else(|| "00000000-0000-0000-0000-000000000000".into());
             write_data_file(f, &dirs.players_dir().join(format!("{name}.dat")), player, false)?;
             data.insert("singleplayer_uuid", Tag::IntArray(uuid));
         }
@@ -654,7 +659,10 @@ fn split_level_dat(f: &LevelFiles<'_>, data: &mut Compound) -> Result<(), Conver
 fn map_colors(f: &LevelFiles<'_>, rgba: &[u8]) -> Vec<i8> {
     const SHADES: [u32; 4] = [180, 220, 255, 135];
     let v = f.format.version;
-    let base = tables::map_colors(Edition::Java, MapVersion::new(v.major.max(0) as u32, v.minor.max(0) as u32, v.patch.max(0) as u32));
+    let base = tables::map_colors(
+        Edition::Java,
+        MapVersion::new(v.major.max(0) as u32, v.minor.max(0) as u32, v.patch.max(0) as u32),
+    );
     let mut shaded: Vec<[i64; 4]> = Vec::with_capacity(base.len() * 4);
     for c in &base {
         for s in SHADES {
@@ -699,11 +707,15 @@ fn write_maps(f: &LevelFiles<'_>) -> Result<(), ConvertError> {
         if let Some(Tag::Compound(inner)) = counter.get_mut("data") {
             inner.insert("map", Tag::Int(max_id as i32));
         }
-        write_java_file(f.dirs.map_counter_file(), &{
-            let mut root = counter;
-            root.insert("DataVersion", Tag::Int(fmt.row_data_version));
-            root
-        }, Compression::Gzip)
+        write_java_file(
+            f.dirs.map_counter_file(),
+            &{
+                let mut root = counter;
+                root.insert("DataVersion", Tag::Int(fmt.row_data_version));
+                root
+            },
+            Compression::Gzip,
+        )
         .map_err(nbt_error)?;
     } else {
         counter.insert("map", Tag::Short(max_id.clamp(0, i16::MAX as i64) as i16));

@@ -9,11 +9,11 @@ use crate::convert::java::palette::{bits_for, unpack};
 use crate::convert::java::region::RegionFile;
 use crate::convert::java::testutil::TestDir;
 use crate::convert::level::{GeneratorType, LevelPlayer};
-use crate::convert::model::{StateValue, 
-    BlockEntity, BlockEntityData, BlockIdentifier, BlockRef, BlockType, Biome, Biomes, ChunkCoord, VanillaBiome,
-    blockentity::Sign, states,
-};
 use crate::convert::model::generated::FacingDirectionHorizontal;
+use crate::convert::model::{
+    Biome, Biomes, BlockEntity, BlockEntityData, BlockIdentifier, BlockRef, BlockType, ChunkCoord, StateValue,
+    VanillaBiome, blockentity::Sign, states,
+};
 use crate::convert::nbt::Compound;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
@@ -46,12 +46,23 @@ fn sample_column(cx: i32, cz: i32) -> Column {
             c.set_block(x, 63, z, block(BlockType::GRASS_BLOCK));
         }
     }
-    let stairs = BlockIdentifier::new(BlockType::OAK_STAIRS).with(states::FACING_HORIZONTAL, FacingDirectionHorizontal::EAST);
+    let stairs =
+        BlockIdentifier::new(BlockType::OAK_STAIRS).with(states::FACING_HORIZONTAL, FacingDirectionHorizontal::EAST);
     c.set_block(1, 64, 1, Arc::new(stairs));
     c.set_block(2, 64, 2, block(BlockType::OAK_SIGN));
-    c.block_entities.push(BlockEntity::new(cx * 16 + 2, 64, cz * 16 + 2, BlockEntityData::Sign(Box::new(Sign::default()))));
+    c.block_entities.push(BlockEntity::new(
+        cx * 16 + 2,
+        64,
+        cz * 16 + 2,
+        BlockEntityData::Sign(Box::new(Sign::default())),
+    ));
     // A block entity without a block under it is dropped.
-    c.block_entities.push(BlockEntity::new(cx * 16 + 5, 100, cz * 16 + 5, BlockEntityData::Sign(Box::new(Sign::default()))));
+    c.block_entities.push(BlockEntity::new(
+        cx * 16 + 5,
+        100,
+        cz * 16 + 5,
+        BlockEntityData::Sign(Box::new(Sign::default())),
+    ));
     let mut cells = Vec::new();
     for i in 0..1024 {
         cells.push(Biome::Vanilla(if (i >> 6) < 8 { VanillaBiome::PLAINS } else { VanillaBiome::DESERT }));
@@ -65,7 +76,13 @@ fn names(v: &[Version]) -> Vec<String> {
 }
 
 fn targets() -> Vec<Version> {
-    vec![Version::new(1, 16, 5), Version::new(1, 18, 2), Version::new(1, 20, 4), Version::new(1, 21, 4), Version::new(26, 3, 0)]
+    vec![
+        Version::new(1, 16, 5),
+        Version::new(1, 18, 2),
+        Version::new(1, 20, 4),
+        Version::new(1, 21, 4),
+        Version::new(26, 3, 0),
+    ]
 }
 
 fn write_world(out: &Path, target: Version, columns: &[(i32, i32)]) -> WriterSummary {
@@ -86,10 +103,17 @@ fn read_chunk(dir: &Path, fmt: &JavaFormat, cx: i32, cz: i32) -> Compound {
 }
 
 /// (palette entries as `name[props]`, voxel indices) of section `y`.
-fn decode_section(root: &Compound, fmt: &JavaFormat, y: i8) -> Option<(Vec<(String, BTreeMap<String, String>)>, Vec<u16>)> {
+fn decode_section(
+    root: &Compound,
+    fmt: &JavaFormat,
+    y: i8,
+) -> Option<(Vec<(String, BTreeMap<String, String>)>, Vec<u16>)> {
     let level = if fmt.level_wrapper { root.get("Level")?.as_compound()? } else { root };
     let sections = level.get(fmt.sections_key)?.as_list()?;
-    let section = sections.iter().filter_map(|s| s.as_compound()).find(|s| s.get("Y").and_then(Tag::as_integer) == Some(y as i64))?;
+    let section = sections
+        .iter()
+        .filter_map(|s| s.as_compound())
+        .find(|s| s.get("Y").and_then(Tag::as_integer) == Some(y as i64))?;
     let (palette, data) = match fmt.sections {
         SectionLayout::NestedStates => {
             let bs = section.get("block_states")?.as_compound()?;
@@ -97,7 +121,8 @@ fn decode_section(root: &Compound, fmt: &JavaFormat, y: i8) -> Option<(Vec<(Stri
         }
         _ => (section.get("Palette")?.as_list()?, section.get("BlockStates")?.as_long_array()?),
     };
-    let (name_key, prop_key) = if fmt.renamed_block_state_fields { ("id", "properties") } else { ("Name", "Properties") };
+    let (name_key, prop_key) =
+        if fmt.renamed_block_state_fields { ("id", "properties") } else { ("Name", "Properties") };
     let entries: Vec<_> = palette
         .iter()
         .map(|p| {
@@ -127,7 +152,10 @@ fn oracle(version: &str) -> Option<VanillaBlocks> {
         let mut props = HashMap::new();
         if let Some(listed) = block.get("properties").and_then(|p| p.as_object()) {
             for (k, values) in listed {
-                props.insert(k.clone(), values.as_array()?.iter().filter_map(|v| v.as_str().map(str::to_string)).collect());
+                props.insert(
+                    k.clone(),
+                    values.as_array()?.iter().filter_map(|v| v.as_str().map(str::to_string)).collect(),
+                );
             }
         }
         out.insert(name.clone(), props);
@@ -242,15 +270,31 @@ fn biomes_follow_the_layout() {
 fn packed_bits_follow_the_palette_and_layout() {
     use BlockType as B;
     let kinds = [
-        B::STONE, B::DIRT, B::COBBLESTONE, B::OAK_PLANKS, B::SPRUCE_PLANKS, B::BIRCH_PLANKS, B::JUNGLE_PLANKS, B::SAND,
-        B::GRAVEL, B::GOLD_ORE, B::IRON_ORE, B::COAL_ORE, B::OAK_LOG, B::GLASS, B::BEDROCK, B::GRASS_BLOCK,
+        B::STONE,
+        B::DIRT,
+        B::COBBLESTONE,
+        B::OAK_PLANKS,
+        B::SPRUCE_PLANKS,
+        B::BIRCH_PLANKS,
+        B::JUNGLE_PLANKS,
+        B::SAND,
+        B::GRAVEL,
+        B::GOLD_ORE,
+        B::IRON_ORE,
+        B::COAL_ORE,
+        B::OAK_LOG,
+        B::GLASS,
+        B::BEDROCK,
+        B::GRASS_BLOCK,
     ];
     let mut c = Column::new(ChunkCoord::new(0, 0));
     for (i, k) in kinds.iter().enumerate() {
         c.set_block(i as i32, 0, 0, block(*k));
     }
     // 16 kinds + air = 17 keys: 5 bits.
-    for (target, expected_len) in [(Version::new(1, 15, 2), 320usize), (Version::new(1, 16, 5), 342), (Version::new(1, 21, 4), 342)] {
+    for (target, expected_len) in
+        [(Version::new(1, 15, 2), 320usize), (Version::new(1, 16, 5), 342), (Version::new(1, 21, 4), 342)]
+    {
         let dir = TestDir::new("writer-bits");
         let out = dir.path().join("w");
         let mut w = JavaWorldWriter::create(&out, target, &level(), &ConversionSettings::default()).unwrap();
@@ -284,7 +328,8 @@ fn unmapped_blocks_become_air_and_are_counted() {
     c.set_block(2, 0, 0, block(BlockType::STONE));
     let dir = TestDir::new("writer-unmapped");
     let out = dir.path().join("w");
-    let mut w = JavaWorldWriter::create(&out, Version::new(1, 21, 4), &level(), &ConversionSettings::default()).unwrap();
+    let mut w =
+        JavaWorldWriter::create(&out, Version::new(1, 21, 4), &level(), &ConversionSettings::default()).unwrap();
     w.write_column(&Dimension::overworld(), &c).unwrap();
     assert_eq!(w.unmapped_blocks(), vec![("bogus".to_string(), 2)]);
     w.finish().unwrap();
@@ -312,7 +357,10 @@ fn level_dat_for_each_version() {
         assert_eq!(info.data_version, Some(fmt.row_data_version), "{target}");
         assert_eq!(info.level_name.as_deref(), Some("Writer Test"));
         let d = &info.data;
-        assert_eq!(d.get("Version").and_then(Tag::as_compound).unwrap().get("Id").and_then(Tag::as_integer), Some(fmt.row_data_version as i64));
+        assert_eq!(
+            d.get("Version").and_then(Tag::as_compound).unwrap().get("Id").and_then(Tag::as_integer),
+            Some(fmt.row_data_version as i64)
+        );
         assert_eq!(d.get("initialized").and_then(Tag::as_integer), Some(1));
         assert!(d.get("LastPlayed").and_then(Tag::as_integer).unwrap() > 1_600_000_000_000);
         assert_eq!(fmt.dragon_fight_compound, d.contains_key("DragonFight") || fmt.split_level_dat);
@@ -337,7 +385,10 @@ fn level_dat_for_each_version() {
         } else if fmt.game_rule_registry_keys {
             assert!(d.get("game_rules").and_then(Tag::as_compound).unwrap().contains_key("minecraft:advance_time"));
         } else {
-            assert_eq!(d.get("GameRules").and_then(Tag::as_compound).unwrap().get("doDaylightCycle").and_then(Tag::as_str), Some("true"));
+            assert_eq!(
+                d.get("GameRules").and_then(Tag::as_compound).unwrap().get("doDaylightCycle").and_then(Tag::as_str),
+                Some("true")
+            );
             let player = d.get("Player").and_then(Tag::as_compound).unwrap();
             assert_eq!(player.get("playerGameType").and_then(Tag::as_integer), Some(1));
             if fmt.dimension_ids_as_strings {
@@ -346,9 +397,12 @@ fn level_dat_for_each_version() {
         }
         let gen_holder = if fmt.split_level_dat {
             let dirs = LevelDirs::new(&out, &fmt);
-            crate::convert::nbt::file::read_java_file(dirs.minecraft_data_dir().join("world_gen_settings.dat"), crate::convert::nbt::file::Compression::Gzip)
-                .unwrap()
-                .unwrap()
+            crate::convert::nbt::file::read_java_file(
+                dirs.minecraft_data_dir().join("world_gen_settings.dat"),
+                crate::convert::nbt::file::Compression::Gzip,
+            )
+            .unwrap()
+            .unwrap()
         } else {
             d.clone()
         };
@@ -359,8 +413,17 @@ fn level_dat_for_each_version() {
                 None => gen_holder.clone(),
             };
             assert_eq!(wgs.get("seed").and_then(Tag::as_integer), Some(424242));
-            let overworld = wgs.get("dimensions").and_then(Tag::as_compound).unwrap().get("minecraft:overworld").and_then(Tag::as_compound).unwrap();
-            assert_eq!(overworld.get("generator").and_then(Tag::as_compound).unwrap().get("type").and_then(Tag::as_str), Some("minecraft:flat"));
+            let overworld = wgs
+                .get("dimensions")
+                .and_then(Tag::as_compound)
+                .unwrap()
+                .get("minecraft:overworld")
+                .and_then(Tag::as_compound)
+                .unwrap();
+            assert_eq!(
+                overworld.get("generator").and_then(Tag::as_compound).unwrap().get("type").and_then(Tag::as_str),
+                Some("minecraft:flat")
+            );
         }
     }
 }
@@ -378,13 +441,15 @@ fn never_writes_into_a_non_empty_folder() {
     // An empty existing folder is fine, and abort empties it again without removing it.
     let empty = dir.path().join("empty");
     std::fs::create_dir(&empty).unwrap();
-    let mut w = JavaWorldWriter::create(&empty, Version::new(1, 21, 4), &level(), &ConversionSettings::default()).unwrap();
+    let mut w =
+        JavaWorldWriter::create(&empty, Version::new(1, 21, 4), &level(), &ConversionSettings::default()).unwrap();
     w.write_column(&Dimension::overworld(), &sample_column(0, 0)).unwrap();
     w.abort();
     assert!(empty.is_dir() && std::fs::read_dir(&empty).unwrap().next().is_none());
     // A new folder is removed by abort.
     let new = dir.path().join("new").join("deeper");
-    let mut w = JavaWorldWriter::create(&new, Version::new(1, 21, 4), &level(), &ConversionSettings::default()).unwrap();
+    let mut w =
+        JavaWorldWriter::create(&new, Version::new(1, 21, 4), &level(), &ConversionSettings::default()).unwrap();
     w.write_column(&Dimension::overworld(), &sample_column(3, 3)).unwrap();
     w.abort();
     assert!(!new.exists());
@@ -393,7 +458,12 @@ fn never_writes_into_a_non_empty_folder() {
 #[test]
 fn old_versions_are_refused() {
     let dir = TestDir::new("writer-old");
-    let r = JavaWorldWriter::create(&dir.path().join("w"), Version::new(1, 12, 2), &level(), &ConversionSettings::default());
+    let r = JavaWorldWriter::create(
+        &dir.path().join("w"),
+        Version::new(1, 12, 2),
+        &level(),
+        &ConversionSettings::default(),
+    );
     assert!(matches!(r, Err(ConvertError::Unsupported(_))));
     assert!(!dir.path().join("w").exists());
 }
@@ -403,7 +473,9 @@ fn memory_is_bounded_with_forty_regions() {
     let dir = TestDir::new("writer-regions");
     let out = dir.path().join("w");
     let options = WriterOptions { max_open_regions: 4, ..WriterOptions::default() };
-    let mut w = JavaWorldWriter::create_with(&out, Version::new(1, 21, 4), &level(), &ConversionSettings::default(), options).unwrap();
+    let mut w =
+        JavaWorldWriter::create_with(&out, Version::new(1, 21, 4), &level(), &ConversionSettings::default(), options)
+            .unwrap();
     let dim = Dimension::overworld();
     let tiny = |cx: i32, cz: i32| {
         let mut c = Column::new(ChunkCoord::new(cx, cz));
@@ -439,7 +511,8 @@ fn large_chunks_go_to_external_files() {
     // Random-looking data does not compress: a column with thousands of block entities gets over 1 MiB.
     let dir = TestDir::new("writer-mcc");
     let out = dir.path().join("w");
-    let mut w = JavaWorldWriter::create(&out, Version::new(1, 21, 4), &level(), &ConversionSettings::default()).unwrap();
+    let mut w =
+        JavaWorldWriter::create(&out, Version::new(1, 21, 4), &level(), &ConversionSettings::default()).unwrap();
     let mut c = Column::new(ChunkCoord::new(0, 0));
     for x in 0..16 {
         for z in 0..16 {
@@ -462,7 +535,8 @@ fn custom_dimensions_follow_the_layout() {
     let custom = Dimension::new(None, 1000, "mod:cave", "minecraft:plains", 24);
     let dir = TestDir::new("writer-custom");
     let out = dir.path().join("w");
-    let mut w = JavaWorldWriter::create(&out, Version::new(1, 21, 4), &level(), &ConversionSettings::default()).unwrap();
+    let mut w =
+        JavaWorldWriter::create(&out, Version::new(1, 21, 4), &level(), &ConversionSettings::default()).unwrap();
     w.write_column(&custom, &sample_column(0, 0)).unwrap();
     w.write_column(&Dimension::nether(), &sample_column(0, 0)).unwrap();
     w.write_column(&Dimension::the_end(), &sample_column(0, 0)).unwrap();
@@ -472,14 +546,16 @@ fn custom_dimensions_follow_the_layout() {
     assert!(out.join("DIM1/region/r.0.0.mca").is_file());
     // Before 1.16 custom dimensions are skipped, not an error.
     let out = dir.path().join("old");
-    let mut w = JavaWorldWriter::create(&out, Version::new(1, 15, 2), &level(), &ConversionSettings::default()).unwrap();
+    let mut w =
+        JavaWorldWriter::create(&out, Version::new(1, 15, 2), &level(), &ConversionSettings::default()).unwrap();
     assert!(!w.supports_dimension(&custom));
     w.write_column(&custom, &sample_column(0, 0)).unwrap();
     assert_eq!(w.summary().skipped_columns, 1);
     w.finish().unwrap();
     // 26.1 puts every dimension, the overworld too, under dimensions/.
     let out = dir.path().join("new");
-    let mut w = JavaWorldWriter::create(&out, Version::new(26, 1, 0), &level(), &ConversionSettings::default()).unwrap();
+    let mut w =
+        JavaWorldWriter::create(&out, Version::new(26, 1, 0), &level(), &ConversionSettings::default()).unwrap();
     w.write_column(&Dimension::overworld(), &sample_column(0, 0)).unwrap();
     w.finish().unwrap();
     assert!(out.join("dimensions/minecraft/overworld/region/r.0.0.mca").is_file());
@@ -499,7 +575,8 @@ fn every_block_type_resolves_to_a_vanilla_block_of_the_version() {
                 continue;
             };
             mapped += 1;
-            let props: BTreeMap<String, String> = java.props.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+            let props: BTreeMap<String, String> =
+                java.props.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
             assert_valid(&oracle, &java.name, &props);
         }
         eprintln!("{target}: {mapped} block types written, {missing} without a Java form");

@@ -48,7 +48,8 @@ impl OpenRegion {
             file.seek(SeekFrom::Start(0))?;
             file.read_exact(&mut header)?;
             for i in 0..1024 {
-                locations[i] = u32::from_be_bytes([header[i * 4], header[i * 4 + 1], header[i * 4 + 2], header[i * 4 + 3]]);
+                locations[i] =
+                    u32::from_be_bytes([header[i * 4], header[i * 4 + 1], header[i * 4 + 2], header[i * 4 + 3]]);
                 let at = SECTOR + i * 4;
                 timestamps[i] = u32::from_be_bytes([header[at], header[at + 1], header[at + 2], header[at + 3]]);
             }

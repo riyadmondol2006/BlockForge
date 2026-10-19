@@ -11,11 +11,11 @@
 //!   has never been lit). Chunker does the same.
 //! - Entities are not written in this version of the writer.
 
-use crate::convert::java::format::{BiomeKind, JavaFormat, LightFlag, SectionLayout};
-use crate::convert::java::palette::{BIOMES_PER_SECTION, BLOCKS_PER_SECTION, pack_palette};
 use super::writer_biomes::BiomeWriter;
 use super::writer_blocks::{BlockWriter, JavaBlock};
 use super::{ItemsImpl, write_block_entity_impl};
+use crate::convert::java::format::{BiomeKind, JavaFormat, LightFlag, SectionLayout};
+use crate::convert::java::palette::{BIOMES_PER_SECTION, BLOCKS_PER_SECTION, pack_palette};
 use crate::convert::level::{ConversionSettings, Dimension};
 use crate::convert::model::{Biome, Biomes, BlockPalette, CellPalette, Chunk, Column, Palette};
 use crate::convert::nbt::{Compound, Tag};
@@ -360,12 +360,12 @@ pub fn encode_column(ctx: &EncodeContext<'_>, dim: &Dimension, column: &Column) 
     );
     if !nested {
         if let Some(b) = biomes {
-            let (first, count) = if fmt.extended_height && ctx.tall_overworld && dim.identifier() == "minecraft:overworld"
-            {
-                (-4, 24)
-            } else {
-                (0, 16)
-            };
+            let (first, count) =
+                if fmt.extended_height && ctx.tall_overworld && dim.identifier() == "minecraft:overworld" {
+                    (-4, 24)
+                } else {
+                    (0, 16)
+                };
             level.insert("Biomes", encode_legacy_biomes(ctx, b, fallback, count, first));
         }
     }
