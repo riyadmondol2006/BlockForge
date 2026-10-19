@@ -385,7 +385,7 @@ mod tests {
         assert_eq!(m.get("weird"), Some(&StateValue::Bool(false)));
         assert_eq!(m.get("n"), Some(&StateValue::Int(7)));
         assert_eq!(m.get("s"), Some(&StateValue::str("north")));
-        assert!(m.get("skipped").is_none());
+        assert!(!m.contains_key("skipped"));
     }
 
     #[test]

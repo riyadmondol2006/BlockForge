@@ -10,6 +10,13 @@ use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::Sender;
 use std::time::Duration;
 
+use crate::convert::bedrock::detect::detect_bedrock;
+use crate::convert::bedrock::reader::BedrockWorldReader;
+use crate::convert::java::dirs::detect_java;
+use crate::convert::level::encoding::{EncodingType, TargetVersion, VersionTriple};
+use crate::convert::level::{ConversionSettings, ConvertRequest, ProgressSink};
+use crate::convert::pipeline::convert_world;
+
 /// Which game a world belongs to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Edition {
@@ -145,9 +152,172 @@ impl Backend for NotReady {
     }
 }
 
+/// The real engine: the Rust port of Chunker. Today it converts Bedrock worlds to Java Edition.
+pub struct Engine;
+
+impl Engine {
+    fn size_of(path: &Path) -> u64 {
+        fn walk(path: &Path, depth: u32) -> u64 {
+            let Ok(meta) = std::fs::symlink_metadata(path) else { return 0 };
+            if meta.is_file() {
+                return meta.len();
+            }
+            if !meta.is_dir() || depth > 12 {
+                return 0;
+            }
+            std::fs::read_dir(path).map(|rd| rd.flatten().map(|e| walk(&e.path(), depth + 1)).sum()).unwrap_or(0)
+        }
+        walk(path, 0)
+    }
+}
+
+fn dimension_name(identifier: &str) -> String {
+    match identifier {
+        "minecraft:overworld" => "overworld".to_string(),
+        "minecraft:the_nether" => "nether".to_string(),
+        "minecraft:the_end" => "end".to_string(),
+        other => other.to_string(),
+    }
+}
+
+fn dimension_identifier(name: &str) -> String {
+    match name {
+        "overworld" => "minecraft:overworld".to_string(),
+        "nether" => "minecraft:the_nether".to_string(),
+        "end" => "minecraft:the_end".to_string(),
+        other => other.to_string(),
+    }
+}
+
+/// Sends what the conversion reports to the page.
+struct EventSink {
+    events: Sender<Event>,
+}
+
+impl ProgressSink for EventSink {
+    fn progress(&self, fraction: f64) {
+        let _ = self.events.send(Event::Progress(fraction.clamp(0.0, 1.0) as f32));
+    }
+    fn stage(&self, text: &str) {
+        let _ = self.events.send(Event::Stage(text.to_string()));
+    }
+    fn warning(&self, message: &str) {
+        let _ = self.events.send(Event::Warning(message.to_string()));
+    }
+}
+
+impl Backend for Engine {
+    fn detect(&self, path: &Path) -> Result<Detected, String> {
+        if let Some(info) = detect_bedrock(path) {
+            let version = info
+                .game_version
+                .map(|v| format!("{}.{}.{}", v[0], v[1], v[2]))
+                .unwrap_or_else(|| info.version.name().to_string());
+            let dimensions = BedrockWorldReader::open(&info, &ConversionSettings::default())
+                .map(|r| r.dimensions().iter().map(|d| dimension_name(d.identifier())).collect())
+                .unwrap_or_else(|_| vec!["overworld".to_string()]);
+            return Ok(Detected {
+                edition: Edition::Bedrock,
+                version,
+                name: info.name.clone(),
+                dimensions,
+                size_bytes: Engine::size_of(path),
+            });
+        }
+        if let Some(info) = detect_java(path) {
+            return Ok(Detected {
+                edition: Edition::Java,
+                version: info
+                    .version_name
+                    .clone()
+                    .unwrap_or_else(|| format!("{}.{}.{}", info.version.major, info.version.minor, info.version.patch)),
+                name: info.name.clone(),
+                dimensions: info
+                    .dimensions
+                    .iter()
+                    .map(|d| match &d.dimension {
+                        crate::convert::java::dirs::JavaDimension::Overworld => "overworld".to_string(),
+                        crate::convert::java::dirs::JavaDimension::Nether => "nether".to_string(),
+                        crate::convert::java::dirs::JavaDimension::End => "end".to_string(),
+                        crate::convert::java::dirs::JavaDimension::Custom(ns, key) => format!("{ns}:{key}"),
+                    })
+                    .collect(),
+                size_bytes: Engine::size_of(path),
+            });
+        }
+        Err("This does not look like a Minecraft world (no level.dat with a Bedrock db or a Java region folder)."
+            .into())
+    }
+
+    fn target_versions(&self, edition: Edition) -> Vec<String> {
+        match edition {
+            Edition::Java => {
+                let mut seen = std::collections::BTreeSet::new();
+                let mut out = Vec::new();
+                for (_, v) in crate::convert::java::version::DATA_VERSIONS.iter().rev() {
+                    if (v.major, v.minor) < (1, 13) {
+                        continue;
+                    }
+                    let text = format!("{}.{}.{}", v.major, v.minor, v.patch);
+                    let text = text.strip_suffix(".0").map(str::to_string).unwrap_or(text);
+                    if seen.insert(text.clone()) {
+                        out.push(text);
+                    }
+                }
+                out
+            }
+            Edition::Bedrock => Vec::new(),
+        }
+    }
+
+    fn run(&self, job: ConvertJob, events: Sender<Event>, cancel: Arc<AtomicBool>) {
+        let started = std::time::Instant::now();
+        let sink = EventSink { events: events.clone() };
+        let Ok(version) = VersionTriple::from_string(&job.target.version) else {
+            let _ = events.send(Event::Failed(format!("{} is not a version.", job.target.version)));
+            return;
+        };
+        let edition = match job.target.edition {
+            Edition::Java => EncodingType::Java,
+            Edition::Bedrock => EncodingType::Bedrock,
+        };
+        let mut settings = ConversionSettings::builder().build();
+        if let DimensionSelection::Only(names) = &job.dimensions {
+            settings.dimension_mapping =
+                Some(names.iter().map(|n| (dimension_identifier(n), dimension_identifier(n))).collect());
+        }
+        settings.allow_nbt_copying = job.keep_unknown_nbt;
+        let request = ConvertRequest {
+            input: job.input.clone(),
+            output: job.output.clone(),
+            target: TargetVersion::new(edition, version),
+            settings,
+        };
+        match convert_world(&request, &sink, &cancel) {
+            Ok(summary) => {
+                let mut unmapped = summary.blocks_unmapped;
+                unmapped.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+                let _ = events.send(Event::Done(Summary {
+                    columns: summary.columns,
+                    unmapped_blocks: unmapped,
+                    warnings: summary.warnings,
+                    elapsed: started.elapsed(),
+                    output: job.output,
+                }));
+            }
+            Err(e) if e.is_cancelled() => {
+                let _ = events.send(Event::Cancelled);
+            }
+            Err(e) => {
+                let _ = events.send(Event::Failed(e.to_string()));
+            }
+        }
+    }
+}
+
 /// The engine in use.
 pub fn backend() -> Arc<dyn Backend> {
-    Arc::new(NotReady)
+    Arc::new(Engine)
 }
 
 #[cfg(test)]
@@ -175,7 +345,7 @@ mod tests {
 
     #[test]
     fn the_stand_in_says_it_is_not_finished() {
-        let b = backend();
+        let b = NotReady;
         let err = b.detect(Path::new("/nowhere")).unwrap_err();
         assert!(err.contains("not finished"), "{err}");
         assert!(b.target_versions(Edition::Java).is_empty());
@@ -190,5 +360,74 @@ mod tests {
         b.run(job, tx, Arc::new(AtomicBool::new(false)));
         let events: Vec<Event> = rx.iter().collect();
         assert!(matches!(events.as_slice(), [Event::Failed(m)] if m == NOT_READY));
+    }
+
+    fn test_world() -> Option<PathBuf> {
+        let p =
+            PathBuf::from(std::env::var_os("HOME")?).join("Downloads").join("Mace, Spear, Sword PvP Map! V4.mcworld");
+        p.exists().then_some(p)
+    }
+
+    fn job(input: &Path, output: &Path, edition: Edition, version: &str) -> ConvertJob {
+        ConvertJob {
+            input: input.into(),
+            output: output.into(),
+            target: Target { edition, version: version.into() },
+            dimensions: DimensionSelection::All,
+            keep_unknown_nbt: false,
+        }
+    }
+
+    #[test]
+    fn the_engine_lists_java_versions_newest_first() {
+        let versions = Engine.target_versions(Edition::Java);
+        assert!(versions.len() > 20);
+        assert!(versions.contains(&"1.21.4".to_string()) && versions.contains(&"1.13.2".to_string()));
+        assert!(!versions.iter().any(|v| v.starts_with("1.12")));
+        assert!(Engine.target_versions(Edition::Bedrock).is_empty());
+    }
+
+    #[test]
+    fn the_engine_refuses_what_it_cannot_do_with_a_clear_message() {
+        let dir = std::env::temp_dir().join(format!("bf-engine-refuse-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(Engine.detect(&dir).is_err());
+        let (tx, rx) = channel();
+        Engine.run(job(&dir, &dir.join("out"), Edition::Bedrock, "1.21.50"), tx, Arc::new(AtomicBool::new(false)));
+        let events: Vec<Event> = rx.iter().collect();
+        assert!(matches!(events.last(), Some(Event::Failed(m)) if m.contains("Bedrock")), "{events:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_engine_converts_the_test_world() {
+        let Some(world) = test_world() else { return };
+        let detected = Engine.detect(&world).unwrap();
+        assert_eq!(detected.edition, Edition::Bedrock);
+        assert_eq!(detected.version, "1.26.51");
+        assert!(detected.name.contains("Mace"));
+        assert!(detected.dimensions.contains(&"overworld".to_string()));
+        let out = std::env::temp_dir().join(format!("bf-engine-convert-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&out);
+        let (tx, rx) = channel();
+        Engine.run(job(&world, &out, Edition::Java, "1.21.4"), tx, Arc::new(AtomicBool::new(false)));
+        let events: Vec<Event> = rx.iter().collect();
+        let Some(Event::Done(summary)) = events.last() else { panic!("{events:?}") };
+        assert_eq!(summary.columns, 46);
+        assert!(summary.unmapped_blocks.is_empty(), "{:?}", summary.unmapped_blocks);
+        assert!(out.join("level.dat").is_file() && out.join("region").is_dir());
+        assert!(events.iter().any(|e| matches!(e, Event::Progress(p) if *p >= 0.99)));
+        // the same folder again must be refused (it is not empty), and a cancelled run leaves nothing behind
+        let (tx, rx) = channel();
+        Engine.run(job(&world, &out, Edition::Java, "1.21.4"), tx, Arc::new(AtomicBool::new(false)));
+        assert!(matches!(rx.iter().last(), Some(Event::Failed(_))));
+        let out2 = std::env::temp_dir().join(format!("bf-engine-cancel-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&out2);
+        let (tx, rx) = channel();
+        Engine.run(job(&world, &out2, Edition::Java, "1.21.4"), tx, Arc::new(AtomicBool::new(true)));
+        assert!(matches!(rx.iter().last(), Some(Event::Cancelled)));
+        assert!(!out2.exists() || std::fs::read_dir(&out2).map(|mut d| d.next().is_none()).unwrap_or(true));
+        let _ = std::fs::remove_dir_all(&out);
+        let _ = std::fs::remove_dir_all(&out2);
     }
 }

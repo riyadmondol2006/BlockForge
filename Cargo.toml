@@ -45,6 +45,13 @@ base64 = "0.23"
 sha2 = "0.11"
 toml = "0.9"
 
+[[example]]
+name = "convert_world"
+required-features = ["converter"]
+
+[[example]]
+name = "craft_diff"
+
 [features]
 default = ["converter"]
 # World conversion (Java <-> Bedrock), a Rust port of Chunker by Hive Games (MIT). See PORTING.md.

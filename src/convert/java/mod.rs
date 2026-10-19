@@ -15,14 +15,14 @@
 pub mod dirs;
 pub mod format;
 pub mod level_dat;
+pub mod level_writer;
 mod nbtio;
 pub mod palette;
 pub mod pretransform;
 pub mod region;
-pub mod level_writer;
 pub mod resolvers;
-pub mod writer;
 pub mod version;
+pub mod writer;
 
 #[cfg(test)]
 mod real_world;

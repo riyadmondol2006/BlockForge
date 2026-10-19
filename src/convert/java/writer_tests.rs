@@ -12,7 +12,7 @@ use crate::convert::level::{GeneratorType, LevelPlayer};
 use crate::convert::model::generated::FacingDirectionHorizontal;
 use crate::convert::model::{
     Biome, Biomes, BlockEntity, BlockEntityData, BlockIdentifier, BlockRef, BlockType, ChunkCoord, StateValue,
-    VanillaBiome, blockentity::Sign, states,
+    VanillaBiome, states,
 };
 use crate::convert::nbt::Compound;
 use std::collections::{BTreeMap, HashMap};
@@ -50,19 +50,9 @@ fn sample_column(cx: i32, cz: i32) -> Column {
         BlockIdentifier::new(BlockType::OAK_STAIRS).with(states::FACING_HORIZONTAL, FacingDirectionHorizontal::EAST);
     c.set_block(1, 64, 1, Arc::new(stairs));
     c.set_block(2, 64, 2, block(BlockType::OAK_SIGN));
-    c.block_entities.push(BlockEntity::new(
-        cx * 16 + 2,
-        64,
-        cz * 16 + 2,
-        BlockEntityData::Sign(Box::new(Sign::default())),
-    ));
+    c.block_entities.push(BlockEntity::new(cx * 16 + 2, 64, cz * 16 + 2, BlockEntityData::Sign(Box::default())));
     // A block entity without a block under it is dropped.
-    c.block_entities.push(BlockEntity::new(
-        cx * 16 + 5,
-        100,
-        cz * 16 + 5,
-        BlockEntityData::Sign(Box::new(Sign::default())),
-    ));
+    c.block_entities.push(BlockEntity::new(cx * 16 + 5, 100, cz * 16 + 5, BlockEntityData::Sign(Box::default())));
     let mut cells = Vec::new();
     for i in 0..1024 {
         cells.push(Biome::Vanilla(if (i >> 6) < 8 { VanillaBiome::PLAINS } else { VanillaBiome::DESERT }));
@@ -183,7 +173,7 @@ fn columns_round_trip_for_every_target() {
         let summary = write_world(&out, target, &[(0, 0), (1, 0), (-1, -1)]);
         let fmt = JavaFormat::for_version(target);
         assert_eq!(summary.columns, 3, "{target}");
-        let oracle = oracle(&fmt.version.to_string().trim_end_matches(".0").to_string());
+        let oracle = oracle(fmt.version.to_string().trim_end_matches(".0"));
         let root = read_chunk(&out, &fmt, 1, 0);
         assert_eq!(root.get("DataVersion").and_then(Tag::as_integer), Some(fmt.row_data_version as i64), "{target}");
         let level = if fmt.level_wrapper { root.get("Level").unwrap().as_compound().unwrap() } else { &root };
@@ -519,7 +509,7 @@ fn large_chunks_go_to_external_files() {
         for z in 0..16 {
             for y in 0..64 {
                 c.set_block(x, y, z, block(BlockType::OAK_SIGN));
-                c.block_entities.push(BlockEntity::new(x, y, z, BlockEntityData::Sign(Box::new(Sign::default()))));
+                c.block_entities.push(BlockEntity::new(x, y, z, BlockEntityData::Sign(Box::default())));
             }
         }
     }
