@@ -491,6 +491,7 @@ fn memory_is_bounded_with_forty_regions() {
             assert!(w.open_regions() <= 4);
         }
     }
+    assert!(w.reopened_regions() >= 40, "parked regions are reopened: {}", w.reopened_regions());
     w.finish_dimension(&dim).unwrap();
     assert_eq!(w.open_regions(), 0);
     let summary = w.finish_with_summary().unwrap();
@@ -582,4 +583,62 @@ fn every_block_type_resolves_to_a_vanilla_block_of_the_version() {
         eprintln!("{target}: {mapped} block types written, {missing} without a Java form");
         assert!(mapped > 500, "{target}");
     }
+}
+
+#[test]
+fn portals_get_poi_records_and_players_get_items() {
+    use crate::convert::level::Portal;
+    use crate::convert::model::{ItemStack, ItemType};
+    let nether = Dimension::nether();
+    let mut lvl = level();
+    lvl.portals.push(Portal { dimension: nether.clone(), x: 3, y: 40, z: 4, width: 2, xa: 1, za: 0 });
+    let mut player = LevelPlayer::new(Dimension::overworld());
+    player.game_type = 5;
+    lvl.player = Some(player);
+    let dir = TestDir::new("writer-poi");
+    let out = dir.path().join("w");
+    let target = Version::new(1, 21, 4);
+    let mut w = JavaWorldWriter::create(&out, target, &lvl, &ConversionSettings::default()).unwrap();
+    let mut c = Column::new(ChunkCoord::new(0, 0));
+    for x in 3..5 {
+        for y in 41..44 {
+            c.set_block(x, y, 4, block(BlockType::NETHER_PORTAL));
+        }
+    }
+    c.set_block(3, 40, 4, block(BlockType::OBSIDIAN));
+    // The frame row lies at y 40; the portal blocks start above it, so the records start at y 40 only if it is a portal.
+    c.set_block(3, 40, 4, block(BlockType::NETHER_PORTAL));
+    w.write_column(&nether, &c).unwrap();
+    w.set_player_items(BTreeMap::from([(0i8, ItemStack::with_amount(ItemType::STICK, 3))]));
+    w.finish().unwrap();
+    let mut poi = RegionFile::open_read(out.join("DIM-1/poi/r.0.0.mca")).unwrap();
+    let root = poi.read_chunk(0, 0).unwrap().unwrap();
+    let sections = root.get("Sections").and_then(Tag::as_compound).unwrap();
+    let records = sections.get("2").and_then(Tag::as_compound).unwrap().get("Records").and_then(Tag::as_list).unwrap();
+    assert!(records.len() >= 3, "{records:?}");
+    let info = read_level_dat(&out.join("level.dat")).unwrap();
+    let player = info.data.get("Player").and_then(Tag::as_compound).unwrap();
+    let inventory = player.get("Inventory").and_then(Tag::as_list).unwrap();
+    assert_eq!(inventory.len(), 1);
+    let item = inventory[0].as_compound().unwrap();
+    assert_eq!(item.get("id").and_then(Tag::as_str), Some("minecraft:stick"));
+    assert_eq!(item.get("Slot").and_then(Tag::as_integer), Some(0));
+    // game_type 5 means "use the world's".
+    assert_eq!(player.get("playerGameType").and_then(Tag::as_integer), Some(lvl.settings.game_type as i64));
+}
+
+#[test]
+#[ignore = "timing"]
+fn timing_one_region() {
+    let dir = TestDir::new("writer-timing");
+    let out = dir.path().join("w");
+    let start = std::time::Instant::now();
+    let mut w =
+        JavaWorldWriter::create(&out, Version::new(1, 21, 4), &level(), &ConversionSettings::default()).unwrap();
+    let dim = Dimension::overworld();
+    for i in 0..1024 {
+        w.write_column(&dim, &sample_column(i & 31, i >> 5)).unwrap();
+    }
+    w.finish().unwrap();
+    eprintln!("1024 columns of 25 sections: {:?}", start.elapsed());
 }

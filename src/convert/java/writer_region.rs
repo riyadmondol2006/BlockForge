@@ -42,8 +42,7 @@ impl OpenRegion {
         let len = file.metadata()?.len();
         let mut locations = vec![0u32; 1024];
         let mut timestamps = vec![0u32; 1024];
-        let next_sector;
-        if len >= HEADER_LEN as u64 {
+        let next_sector = if len >= HEADER_LEN as u64 {
             let mut header = vec![0u8; HEADER_LEN];
             file.seek(SeekFrom::Start(0))?;
             file.read_exact(&mut header)?;
@@ -53,12 +52,12 @@ impl OpenRegion {
                 let at = SECTOR + i * 4;
                 timestamps[i] = u32::from_be_bytes([header[at], header[at + 1], header[at + 2], header[at + 3]]);
             }
-            next_sector = len.div_ceil(SECTOR as u64);
+            len.div_ceil(SECTOR as u64)
         } else {
             file.set_len(0)?;
             file.write_all(&[0u8; HEADER_LEN])?;
-            next_sector = 2;
-        }
+            2
+        };
         Ok(OpenRegion { dir: dir.to_path_buf(), region, file, locations, timestamps, next_sector, dirty: false })
     }
 
@@ -127,7 +126,6 @@ pub struct RegionSet {
     open: Vec<OpenRegion>,
     /// How many times a parked region had to be opened again (for tests and tuning).
     reopened: usize,
-    chunks: u64,
 }
 
 impl RegionSet {
@@ -137,17 +135,12 @@ impl RegionSet {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs().min(u32::MAX as u64) as u32)
             .unwrap_or(0);
-        RegionSet { max_open: max_open.max(1), timestamp, open: Vec::new(), reopened: 0, chunks: 0 }
+        RegionSet { max_open: max_open.max(1), timestamp, open: Vec::new(), reopened: 0 }
     }
 
     /// Number of region files open right now.
     pub fn open_count(&self) -> usize {
         self.open.len()
-    }
-
-    /// Chunks written so far.
-    pub fn chunks_written(&self) -> u64 {
-        self.chunks
     }
 
     /// How many regions were opened again after being parked.
@@ -185,7 +178,6 @@ impl RegionSet {
         self.open.swap(at, last);
         let region = &mut self.open[last];
         region.append(lx, lz, compression, data, self.timestamp)?;
-        self.chunks += 1;
         Ok(())
     }
 

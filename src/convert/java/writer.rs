@@ -57,9 +57,10 @@ use super::format::JavaFormat;
 use super::nbtio;
 use super::region::Compression;
 use crate::convert::level::{ConversionSettings, ConvertError, Dimension, Level};
-use crate::convert::model::Column;
-use crate::convert::nbt::Tag;
+use crate::convert::model::{BlockType, Column};
+use crate::convert::nbt::{Compound, Tag};
 use crate::convert::util::Version;
+use std::collections::BTreeMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -105,6 +106,8 @@ pub struct PreparedColumn {
     chunk_z: i32,
     compression: Compression,
     data: Vec<u8>,
+    /// The compressed `poi/` chunk when the column holds nether portal blocks.
+    poi: Option<(PathBuf, Vec<u8>)>,
     stats: ColumnStats,
 }
 
@@ -228,6 +231,11 @@ impl JavaWorldWriter {
         self.java_dimension(dim).is_some()
     }
 
+    /// How many times a closed region file had to be opened again (the least recently used ones are closed).
+    pub fn reopened_regions(&self) -> usize {
+        self.regions.reopened()
+    }
+
     /// Region files open right now (at most [`WriterOptions::max_open_regions`]).
     pub fn open_regions(&self) -> usize {
         self.regions.open_count()
@@ -275,8 +283,46 @@ impl JavaWorldWriter {
             chunk_z: column.position.z,
             compression: self.options.compression,
             data: self.options.compression.compress(&bytes),
+            poi: self.poi_chunk(dim, &java, column),
             stats: encoded.stats,
         }))
+    }
+
+    /// Nether portal records of a column (`writePOI`): every portal block above the frame bottoms listed in the level.
+    fn poi_chunk(&self, dim: &Dimension, java: &JavaDimension, column: &Column) -> Option<(PathBuf, Vec<u8>)> {
+        if self.level.portals.is_empty() || self.format.row_data_version < super::version::DV_1_14 {
+            return None;
+        }
+        let chunk = crate::convert::level::ChunkPos::new(column.position.x, column.position.z);
+        let mut sections: BTreeMap<i32, Vec<Tag>> = BTreeMap::new();
+        for portal in self.level.portals.iter().filter(|p| p.dimension == *dim) {
+            for (x, y0, z) in portal.horizontal_blocks(chunk) {
+                let mut y = y0;
+                while column.block(x, y, z).block_type() == Some(BlockType::NETHER_PORTAL) {
+                    let mut record = Compound::with_capacity(3);
+                    record.insert("type", Tag::String("minecraft:nether_portal".into()));
+                    record.insert("pos", Tag::IntArray(vec![x, y, z]));
+                    record.insert("free_tickets", Tag::Int(0));
+                    sections.entry(y >> 4).or_default().push(Tag::Compound(record));
+                    y += 1;
+                }
+            }
+        }
+        if sections.is_empty() {
+            return None;
+        }
+        let mut out = Compound::with_capacity(sections.len());
+        for (y, records) in sections {
+            let mut section = Compound::with_capacity(2);
+            section.insert("Valid", Tag::Byte(1));
+            section.insert("Records", Tag::List(records));
+            out.insert(y.to_string(), Tag::Compound(section));
+        }
+        let mut root = Compound::with_capacity(2);
+        root.insert("Sections", Tag::Compound(out));
+        root.insert("DataVersion", Tag::Int(self.format.row_data_version));
+        let bytes = nbtio::to_vec("", &Tag::Compound(root));
+        Some((self.dirs.poi_dir(java), self.options.compression.compress(&bytes)))
     }
 
     /// Append a prepared column to its region file.
@@ -284,6 +330,11 @@ impl JavaWorldWriter {
         self.regions
             .write_chunk(&prepared.region_dir, prepared.chunk_x, prepared.chunk_z, prepared.compression, &prepared.data)
             .map_err(io_error)?;
+        if let Some((dir, data)) = &prepared.poi {
+            self.regions
+                .write_chunk(dir, prepared.chunk_x, prepared.chunk_z, prepared.compression, data)
+                .map_err(io_error)?;
+        }
         let s = &mut self.summary;
         s.columns += 1;
         s.sections += prepared.stats.sections as u64;
