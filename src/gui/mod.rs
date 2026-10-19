@@ -4,6 +4,10 @@
 mod about;
 mod accounts;
 mod console;
+mod craft;
+mod craft_fmt;
+mod craft_pick;
+mod craft_view;
 mod create;
 mod curseforge;
 mod discover;
@@ -76,6 +80,7 @@ pub enum Page {
     Accounts,
     Settings,
     Tools,
+    Craft,
     Servers,
     About,
 }
@@ -120,6 +125,7 @@ pub enum Msg {
     Svc(services::SvcMsg),
     Mods(mods::ModsMsg),
     Packs(packs::PacksMsg),
+    Craft(craft::CraftMsg),
 }
 
 #[derive(Clone)]
@@ -246,6 +252,8 @@ pub struct App {
     svc: services::SvcState,
     mods: mods::ModsState,
     packs: packs::PacksState,
+    /// The crafting calculator, made when its page is first opened.
+    craft: Option<Box<craft::CraftState>>,
     shot: Option<Shot>,
     autoplay: Option<AutoPlay>,
     frames: u64,
@@ -369,6 +377,7 @@ impl App {
             svc: services::SvcState::default(),
             mods: mods::ModsState::default(),
             packs: packs::PacksState::default(),
+            craft: None,
             cf: curseforge::CfState::default(),
             acct: accounts::AcctState::default(),
             shot: Shot::from_env(),
@@ -897,6 +906,7 @@ impl App {
             Msg::Svc(m) => self.svc_msg(m),
             Msg::Mods(m) => self.mods_handle(m),
             Msg::Packs(m) => self.packs_msg(m),
+            Msg::Craft(m) => self.craft_msg(m),
             Msg::Picked(p, path) => self.picked(p, path),
             Msg::DialogLoaderVersions { loader, mc, result } => self.dialog_loader_versions(loader, &mc, result),
             Msg::Tray(cmd) => match cmd {
@@ -963,6 +973,7 @@ impl App {
             (Page::Create, "Create", Icon::Plus),
             (Page::Accounts, "Accounts", Icon::User),
             (Page::Tools, "Tools", Icon::Sliders),
+            (Page::Craft, "Crafting", Icon::Craft),
             (Page::Servers, "Servers", Icon::Folder),
             (Page::Settings, "Settings", Icon::Sliders),
             (Page::About, "About", Icon::Info),
@@ -1248,6 +1259,7 @@ impl eframe::App for App {
             ctx.request_repaint_after(Duration::from_millis(120));
         }
         self.flush_settings(ctx);
+        self.craft_tick(ctx);
         self.frames += 1;
         if self.last_account_check.elapsed() > Duration::from_secs(600)
             && self.shot.is_none()
@@ -1323,6 +1335,7 @@ impl eframe::App for App {
                     Page::Accounts => self.accounts_ui(ui),
                     Page::Settings => self.settings_ui(ui),
                     Page::Tools => self.tools_ui(ui),
+                    Page::Craft => self.craft_ui(ui),
                     Page::Servers => self.servers_ui(ui),
                     Page::About => self.about_ui(ui),
                 }
@@ -1344,6 +1357,7 @@ impl eframe::App for App {
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        self.craft_flush_now();
         // a window moved just before closing still has its new place written
         if self.settings_save_due.is_some() {
             let _ = self.settings.save(&self.dirs);
@@ -1369,7 +1383,7 @@ struct Shot {
     waiting: Arc<std::sync::atomic::AtomicBool>,
 }
 
-const SHOT_PAGES: [&str; 22] = [
+const SHOT_PAGES: [&str; 28] = [
     "home",
     "library",
     "instance",
@@ -1385,6 +1399,12 @@ const SHOT_PAGES: [&str; 22] = [
     "create-fabric",
     "tools",
     "servers",
+    "craft",
+    "craft-steps",
+    "craft-tree",
+    "craft-storage",
+    "craft-stock",
+    "craft-get-light",
     "packs",
     "ftb",
     "about",
@@ -1525,6 +1545,7 @@ impl App {
                 }
                 "tools" => self.page = Page::Tools,
                 "servers" => self.page = Page::Servers,
+                v if v.starts_with("craft") => self.shot_craft(v.trim_end_matches("-light")),
                 "packs" => self.page = Page::Packs,
                 "ftb" => self.page = Page::Ftb,
                 "about" => self.page = Page::About,
@@ -1606,7 +1627,8 @@ impl App {
         let wait = if matches!(
             name.trim_end_matches("-light"),
             "discover" | "create-fabric" | "instance-mods" | "mods" | "packs" | "ftb" | "about" | "loader"
-        ) {
+        ) || name.trim_end_matches("-light").starts_with("craft")
+        {
             180
         } else {
             30

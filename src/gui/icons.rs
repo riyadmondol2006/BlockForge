@@ -15,6 +15,7 @@ pub enum Icon {
     Back,
     Folder,
     Info,
+    Craft,
 }
 
 /// Draw `icon` centred on `c`, fitting a square of side `size`.
@@ -80,6 +81,20 @@ pub fn paint(p: &Painter, icon: Icon, c: Pos2, size: f32, color: Color32) {
             p.circle_stroke(c, 0.95 * s, stroke);
             line(&[(0.0, -0.05), (0.0, 0.5)]);
             p.circle_filled(at(0.0, -0.45), 0.09 * s + 0.4, color);
+        }
+        Icon::Craft => {
+            // a 3x3 grid of small squares, the crafting table's grid
+            for row in 0..3 {
+                for col in 0..3 {
+                    let (x, y) = (-0.95 + col as f32 * 0.68, -0.95 + row as f32 * 0.68);
+                    p.rect_stroke(
+                        Rect::from_min_size(at(x, y), vec2(0.58 * s, 0.58 * s)),
+                        1.0,
+                        stroke,
+                        egui::StrokeKind::Inside,
+                    );
+                }
+            }
         }
         Icon::Folder => {
             line(&[

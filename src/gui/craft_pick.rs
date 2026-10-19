@@ -1,0 +1,434 @@
+//! The left column of the Crafting page: choose the item and the amount, and say what you already have.
+
+use std::sync::Arc;
+
+use egui::{Align, CornerRadius, FontId, Layout, RichText, Sense, Stroke, Ui, vec2};
+
+use super::craft::{Book, CraftState, Dialog, Entry};
+use super::craft_fmt::*;
+use super::theme::*;
+use super::widgets::*;
+use crate::craft::{Category, ItemId};
+
+const ROW_H: f32 = 44.0;
+
+/// The entries matching `query` (and the category), best first; at most `limit`. An empty query matches all.
+pub(super) fn search_entries(book: &Book, query: &str, cat: Option<Category>, limit: usize) -> Vec<u32> {
+    let q = query.trim().to_lowercase();
+    let q_id = q.replace(' ', "_");
+    let mut hits: Vec<(u8, u32)> = Vec::new();
+    for (i, e) in book.entries.iter().enumerate() {
+        if cat.is_some_and(|c| c != e.category) {
+            continue;
+        }
+        let rank = if q.is_empty() || e.lname.starts_with(&q) {
+            0
+        } else if e.lname.split(' ').any(|w| w.starts_with(&q)) {
+            1
+        } else if e.lname.contains(&q) {
+            2
+        } else if e.lid.contains(&q_id) {
+            3
+        } else {
+            continue;
+        };
+        hits.push((rank, i as u32));
+        // an empty query is already in order; with a query, every hit is needed to rank them
+        if q.is_empty() && hits.len() >= limit {
+            break;
+        }
+    }
+    hits.sort_by_key(|&(r, i)| (r, i));
+    hits.into_iter().take(limit).map(|(_, i)| i).collect()
+}
+
+impl CraftState {
+    /// The card that picks the item and the amount.
+    pub(super) fn left_pick(&mut self, ui: &mut Ui, book: &Arc<Book>, list_h: f32) {
+        card(ui, |ui| {
+            card_title(ui, "What do you want to make?");
+            ui.add_space(2.0);
+            let hint = format!("Search {} items", thousands(book.entries.len() as u64));
+            ui.add_sized(
+                [ui.available_width(), 36.0],
+                egui::TextEdit::singleline(&mut self.search)
+                    .id(egui::Id::unique("craft-search"))
+                    .hint_text(format!("{hint}   (press / to jump here)"))
+                    .margin(egui::Margin::symmetric(12, 8))
+                    .background_color(c_field()),
+            );
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
+                if chip(ui, "All", self.category.is_none()).clicked() {
+                    self.category = None;
+                }
+                for c in Category::ALL {
+                    if chip(ui, c.label(), self.category == Some(c)).clicked() {
+                        self.category = Some(c);
+                    }
+                }
+            });
+            let fresh = self
+                .filtered_for
+                .as_ref()
+                .is_some_and(|(s, c, g)| *s == self.search && *c == self.category && *g == self.rev);
+            if !fresh {
+                self.filtered = search_entries(book, &self.search, self.category, usize::MAX);
+                self.filtered_for = Some((self.search.clone(), self.category, self.rev));
+            }
+            let n = self.filtered.len();
+            small_muted(
+                ui,
+                if self.search.trim().is_empty() && self.category.is_none() {
+                    format!("{} items", thousands(n as u64))
+                } else if n == 1 {
+                    "1 match".to_string()
+                } else {
+                    format!("{} matches", thousands(n as u64))
+                },
+            );
+            let mut pick: Option<ItemId> = None;
+            egui::Frame::new()
+                .fill(c_field())
+                .stroke(Stroke::new(1.0, c_border()))
+                .corner_radius(CornerRadius::same(10))
+                .inner_margin(egui::Margin::same(4))
+                .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    if n == 0 {
+                        ui.add_space(24.0);
+                        ui.vertical_centered(|ui| muted(ui, "Nothing matches that. Try fewer letters."));
+                        ui.add_space(24.0);
+                        return;
+                    }
+                    ui.spacing_mut().item_spacing.y = 2.0;
+                    egui::ScrollArea::vertical()
+                        .id_salt("craft-items")
+                        .max_height(list_h)
+                        .auto_shrink([false, false])
+                        .show_rows(ui, ROW_H, n, |ui, range| {
+                            for k in range {
+                                let e = &book.entries[self.filtered[k] as usize];
+                                let selected = self.target.as_deref() == Some(e.id.as_str());
+                                if self.item_row(ui, e, selected) {
+                                    pick = Some(e.id.clone());
+                                }
+                            }
+                        });
+                });
+            if let Some(id) = pick {
+                self.set_target(&id);
+            }
+            self.quantity_block(ui, book);
+        });
+    }
+
+    /// One row of the item list: picture, name, and a small line under it. True when clicked.
+    fn item_row(&mut self, ui: &mut Ui, e: &Entry, selected: bool) -> bool {
+        let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_H), Sense::click());
+        if !ui.is_rect_visible(rect) {
+            return false;
+        }
+        let bg = if selected {
+            c_accent_soft()
+        } else if resp.hovered() {
+            c_card_hover()
+        } else {
+            egui::Color32::TRANSPARENT
+        };
+        ui.painter().rect_filled(rect, CornerRadius::same(9), bg);
+        let icon = egui::Rect::from_min_size(rect.left_top() + vec2(8.0, (ROW_H - 32.0) / 2.0), vec2(32.0, 32.0));
+        self.paint_icon(ui, icon, &e.id, &e.name);
+        let short = e.id.rsplit(':').next().unwrap_or(&e.id);
+        let sub = if e.stack > 1 { format!("{short}  \u{00B7}  stacks of {}", e.stack) } else { short.to_string() };
+        let clip = rect.shrink2(vec2(2.0, 0.0));
+        let p = ui.painter().with_clip_rect(clip);
+        let color = if selected { c_accent() } else { c_text() };
+        p.text(rect.left_top() + vec2(50.0, 9.0), egui::Align2::LEFT_TOP, &e.name, FontId::proportional(14.5), color);
+        p.text(rect.left_top() + vec2(50.0, 26.0), egui::Align2::LEFT_TOP, sub, FontId::proportional(11.5), c_muted());
+        focus_ring(ui, &resp, rect, 9);
+        resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, &e.name));
+        resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked()
+    }
+
+    /// Under the list: what was picked and how many of it.
+    fn quantity_block(&mut self, ui: &mut Ui, book: &Arc<Book>) {
+        let Some(target) = self.target.clone() else {
+            ui.add_space(4.0);
+            small_muted(ui, "Choose an item above to see what it takes.");
+            return;
+        };
+        let item = book.ds.item(&target);
+        let name = item.map_or_else(|| book.ds.name(&target), |i| i.name.clone());
+        let stack = item.map_or(64, |i| i.stack);
+        ui.add_space(6.0);
+        ui.separator();
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            self.icon(ui, &target, &name, 32.0);
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = 0.0;
+                ui.label(RichText::new(&name).size(16.0).strong());
+                small_muted(ui, if stack > 1 { format!("Stacks of {stack}") } else { "Does not stack".to_string() });
+            });
+        });
+        ui.add_space(4.0);
+        ui.label(RichText::new("How many?").strong());
+        let parsed = parse_qty(&self.qty_text);
+        ui.horizontal(|ui| {
+            let mut edit = egui::TextEdit::singleline(&mut self.qty_text)
+                .id(egui::Id::unique("craft-qty"))
+                .margin(egui::Margin::symmetric(12, 8))
+                .background_color(c_field());
+            if parsed.is_err() {
+                edit = edit.text_color(c_danger());
+            }
+            let r = ui.add_sized([140.0, 36.0], edit);
+            if r.changed() {
+                self.touch_plan();
+            }
+            if let Ok(q) = &parsed {
+                small_muted(ui, format!("= {}", thousands(*q)));
+            }
+        });
+        if let Err(e) = &parsed {
+            ui.label(RichText::new(e).color(c_danger()).size(12.5));
+        }
+        let current = parsed.as_ref().ok().copied();
+        let st = u64::from(stack);
+        let options: Vec<(String, u64)> = if stack > 1 {
+            vec![
+                ("1".to_string(), 1),
+                (format!("1 stack = {}", thousands(st)), st),
+                (format!("27 stacks = {}", thousands(27 * st)), 27 * st),
+                (format!("54 stacks = {}", thousands(54 * st)), 54 * st),
+            ]
+        } else {
+            vec![("1".to_string(), 1), ("9".to_string(), 9), ("27".to_string(), 27), ("54".to_string(), 54)]
+        };
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
+            for (label, v) in options {
+                if chip(ui, &label, current == Some(v)).clicked() {
+                    self.qty_text = thousands(v);
+                    self.touch_plan();
+                }
+            }
+        });
+        if stack > 1 {
+            small_muted(ui, "27 stacks fill a chest, 54 a double chest.");
+        }
+    }
+
+    /// The card with what the player already has.
+    pub(super) fn left_stock(&mut self, ui: &mut Ui, book: &Arc<Book>) {
+        let version = self.version.clone().unwrap_or_default();
+        card(ui, |ui| {
+            let count = self.stock().map_or(0, |s| s.len());
+            ui.horizontal(|ui| {
+                card_title(ui, "Items I already have");
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if count > 0 && ui.button("Clear").clicked() {
+                        self.dialog = Some(Dialog::ClearStock);
+                    }
+                });
+            });
+            small_muted(ui, format!("Kept for Minecraft {version} and taken off the list."));
+            ui.add_space(2.0);
+            ui.horizontal(|ui| {
+                let mut on = self.use_stock;
+                if toggle(ui, &mut on).changed() {
+                    self.use_stock = on;
+                    self.touch_plan();
+                }
+                ui.label("Use my items in the plan");
+            });
+            ui.add_space(2.0);
+            // the rows
+            let ids: Vec<ItemId> = self.stock().map(|s| s.keys().cloned().collect()).unwrap_or_default();
+            let mut remove: Option<ItemId> = None;
+            for id in &ids {
+                let name = book.ds.name(id);
+                let value = self.stock().and_then(|s| s.get(id)).copied().unwrap_or(0);
+                ui.horizontal(|ui| {
+                    self.icon(ui, id, &name, 28.0);
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if x_button(ui, "Remove") {
+                            remove = Some(id.clone());
+                        }
+                        let buf = self.stock_bufs.entry(id.clone()).or_insert_with(|| value.to_string());
+                        let bad = parse_qty(buf).is_err();
+                        let mut edit = egui::TextEdit::singleline(buf)
+                            .margin(egui::Margin::symmetric(8, 5))
+                            .background_color(c_field());
+                        if bad {
+                            edit = edit.text_color(c_danger());
+                        }
+                        let r = ui.add_sized([88.0, 30.0], edit);
+                        let typed = parse_qty(buf);
+                        if r.changed() {
+                            if let Ok(q) = typed {
+                                if let Some(s) = self.stock_mut() {
+                                    s.insert(id.clone(), q);
+                                }
+                                self.touch_store();
+                                if self.use_stock {
+                                    self.touch_plan();
+                                }
+                            }
+                        } else if !r.has_focus() {
+                            *self.stock_bufs.entry(id.clone()).or_default() = value.to_string();
+                        }
+                        ui.add(egui::Label::new(name.as_str()).truncate());
+                    });
+                });
+            }
+            if let Some(id) = remove {
+                if let Some(s) = self.stock_mut() {
+                    s.remove(&id);
+                }
+                self.stock_bufs.remove(&id);
+                self.touch_store();
+                if self.use_stock {
+                    self.touch_plan();
+                }
+            }
+            if ids.is_empty() {
+                small_muted(ui, "Nothing yet. Add what is already in your chests.");
+            }
+            ui.add_space(4.0);
+            self.stock_adder(ui, book);
+        });
+    }
+
+    /// The small form that adds an item to the stock.
+    fn stock_adder(&mut self, ui: &mut Ui, book: &Arc<Book>) {
+        ui.add_sized(
+            [ui.available_width(), 34.0],
+            egui::TextEdit::singleline(&mut self.stock_search)
+                .hint_text("Add an item you have")
+                .margin(egui::Margin::symmetric(12, 7))
+                .background_color(c_field()),
+        );
+        if self.stock_search != self.stock_hits_for {
+            self.stock_hits = if self.stock_search.trim().is_empty() {
+                Vec::new()
+            } else {
+                search_entries(book, &self.stock_search, None, 6)
+            };
+            self.stock_hits_for = self.stock_search.clone();
+        }
+        let mut chosen: Option<ItemId> = None;
+        if !self.stock_search.trim().is_empty() {
+            if self.stock_hits.is_empty() {
+                small_muted(ui, "Nothing matches that.");
+            }
+            for k in 0..self.stock_hits.len() {
+                let e = &book.entries[self.stock_hits[k] as usize];
+                let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 34.0), Sense::click());
+                if resp.hovered() {
+                    ui.painter().rect_filled(rect, CornerRadius::same(8), c_card_hover());
+                }
+                let icon = egui::Rect::from_min_size(rect.left_top() + vec2(4.0, 5.0), vec2(24.0, 24.0));
+                self.paint_icon(ui, icon, &e.id, &e.name);
+                ui.painter().with_clip_rect(rect).text(
+                    rect.left_center() + vec2(36.0, 0.0),
+                    egui::Align2::LEFT_CENTER,
+                    &e.name,
+                    FontId::proportional(14.0),
+                    c_text(),
+                );
+                if resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                    chosen = Some(e.id.clone());
+                }
+            }
+        }
+        if let Some(id) = chosen {
+            self.stock_pick = Some(id);
+            self.stock_search.clear();
+            self.stock_hits.clear();
+            self.stock_hits_for.clear();
+        }
+        if let Some(id) = self.stock_pick.clone() {
+            let name = book.ds.name(&id);
+            let parsed = parse_qty(&self.stock_qty);
+            let mut add = false;
+            let mut cancel = false;
+            ui.horizontal(|ui| {
+                self.icon(ui, &id, &name, 28.0);
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if x_button(ui, "Cancel") {
+                        cancel = true;
+                    }
+                    if primary_enabled(ui, "Add", parsed.is_ok()).clicked() {
+                        add = true;
+                    }
+                    let mut edit = egui::TextEdit::singleline(&mut self.stock_qty)
+                        .margin(egui::Margin::symmetric(8, 5))
+                        .background_color(c_field());
+                    if parsed.is_err() {
+                        edit = edit.text_color(c_danger());
+                    }
+                    ui.add_sized([76.0, 30.0], edit);
+                    ui.add(egui::Label::new(name.as_str()).truncate());
+                });
+            });
+            if add {
+                if let Ok(q) = parsed {
+                    if let Some(s) = self.stock_mut() {
+                        let e = s.entry(id.clone()).or_insert(0);
+                        *e = e.saturating_add(q).min(crate::craft::MAX_QUANTITY);
+                    }
+                    self.stock_bufs.remove(&id);
+                    self.stock_pick = None;
+                    self.touch_store();
+                    if self.use_stock {
+                        self.touch_plan();
+                    }
+                }
+            }
+            if cancel {
+                self.stock_pick = None;
+            }
+        }
+    }
+
+    /// The items the player will bring, as chips to take away again.
+    pub(super) fn left_supplied(&mut self, ui: &mut Ui, book: &Arc<Book>) {
+        if self.supplied.is_empty() {
+            return;
+        }
+        card(ui, |ui| {
+            card_title(ui, "Items I will bring");
+            small_muted(ui, "The plan stops at these and lists them to gather.");
+            ui.add_space(2.0);
+            let items: Vec<ItemId> = self.supplied.iter().cloned().collect();
+            let mut remove: Option<ItemId> = None;
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
+                for id in &items {
+                    let name = book.ds.name(id);
+                    egui::Frame::new()
+                        .fill(c_card_hover())
+                        .stroke(Stroke::new(1.0, c_border()))
+                        .corner_radius(CornerRadius::same(15))
+                        .inner_margin(egui::Margin { left: 6, right: 4, top: 2, bottom: 2 })
+                        .show(ui, |ui| {
+                            ui.spacing_mut().item_spacing.x = 6.0;
+                            ui.horizontal(|ui| {
+                                self.icon(ui, id, &name, 22.0);
+                                ui.label(RichText::new(&name).size(13.5));
+                                if x_button(ui, "Take away") {
+                                    remove = Some(id.clone());
+                                }
+                            });
+                        });
+                }
+            });
+            if let Some(id) = remove {
+                self.supplied.remove(&id);
+                self.touch_plan();
+            }
+        });
+    }
+}
