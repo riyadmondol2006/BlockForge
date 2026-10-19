@@ -195,7 +195,7 @@ mod tests {
         let b = w.resolve(&custom).unwrap();
         assert_eq!(&*b.name, "mod:thing");
         assert_eq!(b.props, vec![(Arc::from("age"), Arc::from("3"))]);
-        let fake: BlockRef = Arc::new(BlockIdentifier::custom("stone2", []));
+        let fake: BlockRef = Arc::new(BlockIdentifier::custom("stone2", Vec::<(&str, StateValue)>::new()));
         assert!(w.resolve(&fake).is_none());
         let off = BlockWriter::new(crate::convert::util::Version::new(1, 21, 4), false);
         assert!(off.resolve(&custom).is_none());
