@@ -5,6 +5,7 @@
 //! `bedrock` (readers and writers) -> `mapping` (identifier tables). `PORTING.md` maps every Chunker package to its
 //! destination here and tracks the status.
 
+pub mod backend;
 pub mod bedrock;
 pub mod java;
 pub mod level;

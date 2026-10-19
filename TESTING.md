@@ -25,6 +25,39 @@ cargo run --release -- launch Test --dry-run     # prints the command line witho
 cargo run --release -- launch Test               # starts it
 ```
 
+## Trying the world converter
+
+The converter is the cargo feature `converter` (on by default). Open **Tools > Convert world**, or the **Convert a world**
+button on an instance's overview, choose a world (a folder, or a `.mcworld` or `.zip`; you can also drop it on the page),
+pick the target and press Convert. Use a copy of a world you do not mind losing for the first tries: the converter never
+writes into the source, but it is new.
+
+```sh
+export BLOCKFORGE_DIR=$HOME/blockforge-test
+cargo run --release -- gui
+```
+
+The page shows what the engine says about a world. While the engine is unfinished it answers "The converter is not
+finished yet"; that message is what to expect before the engine is plugged in.
+
+The converter's tests:
+
+```sh
+cargo test --lib convert                   # the engine's unit tests and the page's tests
+cargo test --lib gui::convert              # only the page (state, output folder checks, events)
+cargo build --no-default-features          # the launcher without the converter must still build
+```
+
+Some tests need the identifier data of Chunker. They read it from the folder named by `CHUNKER_DATA` (by default
+`../Chunker/cli/data`, a clone of Chunker next to this repository) and skip themselves when it is missing:
+
+```sh
+CHUNKER_DATA=$HOME/src/Chunker/cli/data cargo test --lib convert
+```
+
+The test world for the Bedrock to Java direction is `~/Downloads/Mace, Spear, Sword PvP Map! V4.mcworld` (Bedrock
+1.26.51); the tests that use it skip when the file is not there. Chunker's data and big worlds are never committed.
+
 ## Developer switches (environment variables)
 
 | Variable | What it does |
@@ -32,6 +65,7 @@ cargo run --release -- launch Test               # starts it
 | `BLOCKFORGE_DIR` | the data folder to use |
 | `BLOCKFORGE_BENCH=1` | `blockforge gui` prints how long the first frame took and quits |
 | `BLOCKFORGE_SHOT=<folder>` | `blockforge gui` visits every page, saves a PNG of each into the folder and quits (used for the screenshots in `docs/`) |
+| `BLOCKFORGE_SHOT_PAGES=<a,b,c>` | with `BLOCKFORGE_SHOT`: only these pages (`convert`, `convert-progress`, `convert-done`, `convert-error` show the converter with made-up data; add `-light` for the light theme) |
 | `BLOCKFORGE_AUTOPLAY=<instance folder>` | with `BLOCKFORGE_SHOT`: presses Play through the window's own code, saves a picture of the log and stops the game |
 | `BLOCKFORGE_CF_KEY` | CurseForge API key to use instead of the built-in one |
 | `BLOCKFORGE_MS_CLIENT_ID` | Microsoft sign-in application id to use instead of the built-in one |
