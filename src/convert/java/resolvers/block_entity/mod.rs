@@ -18,12 +18,11 @@ mod misc;
 mod sign;
 mod skull;
 mod spawner;
-mod stub_items;
 mod tables;
 #[cfg(test)]
 mod tests;
 
-use stub_items::JavaItems;
+use crate::convert::java::resolvers::itemstack::JavaItems;
 
 use crate::convert::java::format::JavaFormat;
 use crate::convert::model::{BlockEntity, BlockEntityData, BlockEntityKind};
