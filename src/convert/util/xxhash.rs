@@ -30,7 +30,10 @@ pub fn xxh32(data: &[u8], seed: u32) -> u32 {
             v4 = round(v4, read_u32(&rest[12..]));
             rest = &rest[16..];
         }
-        v1.rotate_left(1).wrapping_add(v2.rotate_left(7)).wrapping_add(v3.rotate_left(12)).wrapping_add(v4.rotate_left(18))
+        v1.rotate_left(1)
+            .wrapping_add(v2.rotate_left(7))
+            .wrapping_add(v3.rotate_left(12))
+            .wrapping_add(v4.rotate_left(18))
     } else {
         seed.wrapping_add(P5)
     };

@@ -153,9 +153,8 @@ impl<I: Input> Decoder<I> {
                 Cow::Borrowed(b) => std::str::from_utf8(b)
                     .map(str::to_owned)
                     .map_err(|e| NbtError::BadString(format!("not valid UTF-8: {e}"))),
-                Cow::Owned(v) => {
-                    String::from_utf8(v).map_err(|e| NbtError::BadString(format!("not valid UTF-8: {}", e.utf8_error())))
-                }
+                Cow::Owned(v) => String::from_utf8(v)
+                    .map_err(|e| NbtError::BadString(format!("not valid UTF-8: {}", e.utf8_error()))),
             }
         }
     }
@@ -341,7 +340,11 @@ impl Encoder {
     }
 
     fn len(&mut self, len: usize, what: &'static str) -> Result<(), NbtError> {
-        let v = i32::try_from(len).map_err(|_| NbtError::LimitExceeded { what, len: len as i64, max: i32::MAX as usize })?;
+        let v = i32::try_from(len).map_err(|_| NbtError::LimitExceeded {
+            what,
+            len: len as i64,
+            max: i32::MAX as usize,
+        })?;
         self.i32(v);
         Ok(())
     }
@@ -463,14 +466,16 @@ pub fn inflate_raw(bytes: &[u8]) -> Result<Vec<u8>, NbtError> {
 
 /// Compress as gzip with the default level, as Java's `GZIPOutputStream` does.
 pub fn gzip(bytes: &[u8]) -> Result<Vec<u8>, NbtError> {
-    let mut enc = flate2::write::GzEncoder::new(Vec::with_capacity(bytes.len() / 2 + 32), flate2::Compression::default());
+    let mut enc =
+        flate2::write::GzEncoder::new(Vec::with_capacity(bytes.len() / 2 + 32), flate2::Compression::default());
     enc.write_all(bytes)?;
     Ok(enc.finish()?)
 }
 
 /// Compress as zlib with the fastest level (Chunker uses `Deflater.BEST_SPEED`).
 pub fn zlib(bytes: &[u8]) -> Result<Vec<u8>, NbtError> {
-    let mut enc = flate2::write::ZlibEncoder::new(Vec::with_capacity(bytes.len() / 2 + 32), flate2::Compression::fast());
+    let mut enc =
+        flate2::write::ZlibEncoder::new(Vec::with_capacity(bytes.len() / 2 + 32), flate2::Compression::fast());
     enc.write_all(bytes)?;
     Ok(enc.finish()?)
 }

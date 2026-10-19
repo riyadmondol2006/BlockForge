@@ -58,7 +58,7 @@ surveys: core, model, java, bedrock).
 ### Phase 1 - foundations, in parallel (independent file sets)
 | Track | Chunker source | Rust destination | Status |
 |---|---|---|---|
-| NBT | `nbt/**`, `util/**` (IO, tags, LZ4Block for MCA type 4, SNBT if used) | `src/convert/nbt/**`, `src/convert/util/**` | [ ] |
+| NBT | `nbt/**`, `util/**` (IO, tags, LZ4Block for MCA type 4, SNBT if used) | `src/convert/nbt/**`, `src/convert/util/**` | [x] |
 | Model | `conversion/intermediate/column/**`, `mapping/identifier/**` | `src/convert/model/**` (+ generated enums via `tools/convert/gen_model.py`) | [ ] |
 | Table dumper | `conversion/encoding/{java,bedrock}/**/resolver/**`, `mapping/**` (engine semantics) | `tools/convert/dump/**`, `data/convert/*.bin.z`, loader `src/convert/mapping/data.rs` | [ ] |
 | Bedrock low level | `encoding/bedrock/util/**`, `base/reader` db/palette parts | `src/convert/bedrock/{db,keys,palette}.rs` | [ ] |
@@ -93,8 +93,8 @@ surveys: core, model, java, bedrock).
 
 | Chunker package (`com.hivemc.chunker.`) | Lines | Rust | Status |
 |---|---:|---|---|
-| `nbt.tags.**`, `nbt.io.**`, `nbt` | ~4,000 | `convert/nbt/` | [ ] |
-| `util`, `scheduling.**` | ~2,300 | `convert/util/`, `convert/task.rs` | [ ] |
+| `nbt.tags.**`, `nbt.io.**`, `nbt` | ~4,000 | `convert/nbt/` | [x] |
+| `util`, `scheduling.**` | ~2,300 | `convert/util/`, `convert/task.rs` | [~] util done (scheduling pending) |
 | `conversion` (WorldConverter), `conversion.handlers.**` | ~1,200 | `convert/pipeline.rs` | [ ] |
 | `conversion.intermediate.level/world` | ~1,900 | `convert/model/level.rs` | [ ] |
 | `conversion.intermediate.column.**` | ~11,400 | `convert/model/**` (7.3k Rust incl. 2.4k generated) | [ ] |

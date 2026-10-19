@@ -175,10 +175,10 @@ mod tests {
     fn packing_layout() {
         // 4 bits: 16 entries per long, entry 0 lowest. 5 bits: 12 per long with 4 spare bits.
         assert_eq!(pack_padded(&[1, 2, 3], 4), [0x321]);
-        assert_eq!(pack_padded(&vec![31; 13], 5).len(), 2);
-        assert_eq!(pack_padded(&vec![31; 12], 5)[0] as u64, (1u64 << 60) - 1);
+        assert_eq!(pack_padded(&[31; 13], 5).len(), 2);
+        assert_eq!(pack_padded(&[31; 12], 5)[0] as u64, (1u64 << 60) - 1);
         // Spanning packs 5-bit entries continuously: 13 entries need 65 bits.
-        assert_eq!(pack_spanning(&vec![31; 13], 5).len(), 2);
+        assert_eq!(pack_spanning(&[31; 13], 5).len(), 2);
         assert_eq!(pack_words(&[1, 2, 3], 4), [0x321]);
     }
 }

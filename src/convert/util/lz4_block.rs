@@ -89,7 +89,8 @@ pub fn decode(input: &[u8]) -> Result<Vec<u8>, Lz4Error> {
         match method {
             METHOD_RAW => out.extend_from_slice(payload),
             METHOD_LZ4 => {
-                let block = lz4_flex::block::decompress(payload, original).map_err(|_| Lz4Error("corrupted LZ4 data"))?;
+                let block =
+                    lz4_flex::block::decompress(payload, original).map_err(|_| Lz4Error("corrupted LZ4 data"))?;
                 if block.len() != original {
                     return Err(Lz4Error("block decoded to the wrong size"));
                 }

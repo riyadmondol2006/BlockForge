@@ -17,22 +17,22 @@ pub const CHAT_COLOR: char = '\u{a7}';
 
 /// Colour names and the ARGB value Bedrock stores for them (as the unsigned form of Java's `int`).
 pub const COLOR_TO_BEDROCK_HEX: [(&str, u32); 16] = [
-    ("black", 0xff000000),
-    ("red", 0xffB02E26),
-    ("green", 0xff5E7C16),
-    ("brown", 0xff835432),
-    ("blue", 0xff3C44AA),
-    ("purple", 0xff8932B8),
-    ("cyan", 0xff169C9C),
-    ("light_gray", 0xff9D9D97),
-    ("gray", 0xff474F52),
-    ("pink", 0xffF38BAA),
-    ("lime", 0xff80C71F),
-    ("yellow", 0xffFED83D),
-    ("light_blue", 0xff3AB3DA),
-    ("magenta", 0xffC74EBD),
-    ("orange", 0xffF9801D),
-    ("white", 0xfff0f0f0),
+    ("black", 0xFF000000),
+    ("red", 0xFFB02E26),
+    ("green", 0xFF5E7C16),
+    ("brown", 0xFF835432),
+    ("blue", 0xFF3C44AA),
+    ("purple", 0xFF8932B8),
+    ("cyan", 0xFF169C9C),
+    ("light_gray", 0xFF9D9D97),
+    ("gray", 0xFF474F52),
+    ("pink", 0xFFF38BAA),
+    ("lime", 0xFF80C71F),
+    ("yellow", 0xFFFED83D),
+    ("light_blue", 0xFF3AB3DA),
+    ("magenta", 0xFFC74EBD),
+    ("orange", 0xFFF9801D),
+    ("white", 0xFFF0F0F0),
 ];
 
 /// Colour and style names and the character of their legacy `\u{a7}x` code.
@@ -341,10 +341,10 @@ pub fn from_nbt(tag: Option<&Tag>) -> Res<Value> {
     };
     match tag {
         Tag::String(s) => Ok(from_json(Some(s))),
-        Tag::Compound(c) => compound_from_nbt(c).map_err(|e| JsonTextError(format!("Unable to parse Text component {tag}: {e}"))),
-        Tag::List(items) => {
-            Ok(Value::Array(items.iter().map(|t| from_nbt(Some(t))).collect::<Res<Vec<_>>>()?))
+        Tag::Compound(c) => {
+            compound_from_nbt(c).map_err(|e| JsonTextError(format!("Unable to parse Text component {tag}: {e}")))
         }
+        Tag::List(items) => Ok(Value::Array(items.iter().map(|t| from_nbt(Some(t))).collect::<Res<Vec<_>>>()?)),
         other => err(format!("Unknown type for Text component {other}")),
     }
 }
@@ -578,7 +578,9 @@ fn object_to_nbt(o: &Map<String, Value>) -> Res<Tag> {
                                 }
                                 h.put("uuid", Tag::IntArray(out_ids.to_vec()));
                             }
-                            Some(Value::Object(_) | Value::Null) => return err(format!("Unknown UUID type {}", contents["id"])),
+                            Some(Value::Object(_) | Value::Null) => {
+                                return err(format!("Unknown UUID type {}", contents["id"]));
+                            }
                             Some(prim) => {
                                 h.put("uuid", as_string(prim)?);
                             }
@@ -607,7 +609,8 @@ fn object_to_nbt(o: &Map<String, Value>) -> Res<Tag> {
                         e.put("command", value);
                     }
                     "change_page" => {
-                        let page: i32 = value.trim().parse().or_else(|_| err(format!("Invalid page number {value}")))?;
+                        let page: i32 =
+                            value.trim().parse().or_else(|_| err(format!("Invalid page number {value}")))?;
                         e.put("page", page);
                     }
                     _ => {
@@ -692,13 +695,17 @@ mod tests {
 
     #[test]
     fn gson_style_json() {
-        assert_eq!(to_json(&json!({"text": "a<b>&c='d'"})), "{\"text\":\"a\\u003cb\\u003e\\u0026c\\u003d\\u0027d\\u0027\"}");
+        assert_eq!(
+            to_json(&json!({"text": "a<b>&c='d'"})),
+            "{\"text\":\"a\\u003cb\\u003e\\u0026c\\u003d\\u0027d\\u0027\"}"
+        );
         assert_eq!(to_json(&empty_text()), "{\"text\":\"\"}");
     }
 
     #[test]
     fn legacy_and_stripped() {
-        let v = json!({"text": "Hello ", "color": "red", "bold": true, "extra": [{"text": "w", "underline": true}, "!"]});
+        let v =
+            json!({"text": "Hello ", "color": "red", "bold": true, "extra": [{"text": "w", "underline": true}, "!"]});
         assert_eq!(to_legacy(&v, false).unwrap(), "\u{a7}c\u{a7}lHello \u{a7}nw!");
         assert_eq!(to_legacy(&v, true).unwrap(), "\u{a7}c\u{a7}lHello w!");
         assert_eq!(to_legacy(&json!({"color": "#ff0000", "text": "x"}), false).unwrap(), "x");
@@ -724,12 +731,15 @@ mod tests {
         // "extra" had a bare string, which is wrapped in {"": ..}
         let extra = c.get_list("extra").unwrap();
         assert_eq!(extra[1].as_compound().unwrap().get_str(""), Some("b"));
-        assert_eq!(from_nbt(Some(&tag)).unwrap(), json!({
-            "text": "hi", "color": "gold", "bold": true, "italic": false, "insertion": "ins",
-            "clickEvent": {"action": "open_url", "value": "https://x.y"},
-            "hoverEvent": {"action": "show_text", "contents": {"text": "tip"}},
-            "extra": [{"text": "a"}, {"text": "b"}]
-        }));
+        assert_eq!(
+            from_nbt(Some(&tag)).unwrap(),
+            json!({
+                "text": "hi", "color": "gold", "bold": true, "italic": false, "insertion": "ins",
+                "clickEvent": {"action": "open_url", "value": "https://x.y"},
+                "hoverEvent": {"action": "show_text", "contents": {"text": "tip"}},
+                "extra": [{"text": "a"}, {"text": "b"}]
+            })
+        );
     }
 
     #[test]
@@ -763,13 +773,16 @@ mod tests {
         assert!(new.validate().is_ok());
         let none = to_nbt_list(&[], 0, Version::new(1, 21, 5)).unwrap();
         assert_eq!(none, Tag::List(vec![]));
-        assert_eq!(to_nbt_for(&from_text("x"), Version::new(1, 21, 4)).unwrap(), Tag::String("{\"text\":\"x\"}".into()));
+        assert_eq!(
+            to_nbt_for(&from_text("x"), Version::new(1, 21, 4)).unwrap(),
+            Tag::String("{\"text\":\"x\"}".into())
+        );
     }
 
     #[test]
     fn color_tables() {
-        assert_eq!(bedrock_hex_of_color("red"), Some(0xffB02E26));
-        assert_eq!(color_of_bedrock_hex(0xfff0f0f0), Some("white"));
+        assert_eq!(bedrock_hex_of_color("red"), Some(0xFFB02E26));
+        assert_eq!(color_of_bedrock_hex(0xFFF0F0F0), Some("white"));
         assert_eq!(character_of_color("gold"), Some('6'));
         assert_eq!(color_of_character('r'), Some("reset"));
     }

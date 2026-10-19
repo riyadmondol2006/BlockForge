@@ -170,9 +170,27 @@ impl Compound {
     ref_accessors!(
         (str, String, "string", get_str, get_str_or, opt_str, require_str, String::as_str),
         (Compound, Compound, "compound", get_compound, get_compound_or, opt_compound, require_compound, id),
-        ([i8], ByteArray, "byte array", get_byte_array, get_byte_array_or, opt_byte_array, require_byte_array, as_slice),
+        (
+            [i8],
+            ByteArray,
+            "byte array",
+            get_byte_array,
+            get_byte_array_or,
+            opt_byte_array,
+            require_byte_array,
+            as_slice
+        ),
         ([i32], IntArray, "int array", get_int_array, get_int_array_or, opt_int_array, require_int_array, as_slice),
-        ([i64], LongArray, "long array", get_long_array, get_long_array_or, opt_long_array, require_long_array, as_slice),
+        (
+            [i64],
+            LongArray,
+            "long array",
+            get_long_array,
+            get_long_array_or,
+            opt_long_array,
+            require_long_array,
+            as_slice
+        ),
     );
 
     /// A byte under `key` as a boolean (non-zero is true), `None` when missing or not a byte.
