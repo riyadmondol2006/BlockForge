@@ -93,12 +93,15 @@ impl App {
             ui.label(RichText::new("\u{00B7}").size(FS_META).color(c_faint()));
             match inst.loader() {
                 Some((kind, ver)) => {
-                    ui.add(
-                        egui::Label::new(
-                            RichText::new(format!("{kind} {ver}")).size(FS_META).color(loader_color(kind)),
-                        )
-                        .truncate(),
-                    );
+                    // when the whole name would be cut, show just the loader: a line never ends on a dot and ellipsis
+                    let full = format!("{kind} {ver}");
+                    let w = ui
+                        .painter()
+                        .layout_no_wrap(full.clone(), egui::FontId::proportional(FS_META), c_text())
+                        .size()
+                        .x;
+                    let text = if w <= ui.available_width() { full } else { kind.to_string() };
+                    ui.add(egui::Label::new(RichText::new(text).size(FS_META).color(loader_color(kind))).truncate());
                 }
                 None => {
                     ui.label(RichText::new("Vanilla").size(FS_META).color(c_muted()));
@@ -227,7 +230,7 @@ impl App {
                 }
                 None => {
                     card(ui, |ui| {
-                        ui.label(RichText::new("No instances yet").size(18.0).semibold());
+                        ui.label(RichText::new("No instances yet").size(FS_SECTION).semibold());
                         muted(ui, "An instance is one copy of Minecraft with its own worlds and mods.");
                         ui.add_space(6.0);
                         ui.horizontal(|ui| {
@@ -287,7 +290,7 @@ impl App {
         let narrow = ui.available_width() < 780.0;
         ui.horizontal(|ui| {
             heading(ui, "Library");
-            ui.label(RichText::new(self.instances.len().to_string()).size(13.0).color(c_faint()));
+            ui.label(RichText::new(self.instances.len().to_string()).size(FS_BODY).color(c_faint()));
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if primary_icon(ui, Icon::Plus, "New instance").clicked() {
                     self.page = Page::Create;
@@ -296,12 +299,12 @@ impl App {
                     self.open_import(None);
                 }
                 if !narrow {
-                    self.library_filters(ui);
+                    self.library_filters(ui, true);
                 }
             });
         });
         if narrow {
-            ui.horizontal(|ui| self.library_filters(ui));
+            ui.horizontal(|ui| self.library_filters(ui, false));
         }
         ui.add_space(8.0);
         if let Some(a) = self.library_list(ui) {
@@ -310,13 +313,22 @@ impl App {
     }
 
     /// The sorting and the search of the Library.
-    fn library_filters(&mut self, ui: &mut Ui) {
+    fn library_filters(&mut self, ui: &mut Ui, right_to_left: bool) {
         let sorting = self.settings.default_instance_sorting.clone();
         let label = match sorting.as_str() {
             "BY_LAST_PLAYED" => "Last played first",
             "BY_NUMBER_OF_PLAYS" => "Most played first",
             _ => "By name",
         };
+        // the search reads first, then the sorting: a right-to-left row draws its last widget on the left
+        let search = |this: &mut Self, ui: &mut Ui| {
+            let mut s = std::mem::take(&mut this.library_search);
+            search_field(ui, &mut s, "Search instances", 240.0);
+            this.library_search = s;
+        };
+        if !right_to_left {
+            search(self, ui);
+        }
         egui::ComboBox::from_id_salt("library-sort").selected_text(label).width(170.0).show_ui(ui, |ui| {
             for (id, text) in [
                 ("BY_NAME", "By name"),
@@ -329,9 +341,9 @@ impl App {
                 }
             }
         });
-        let mut s = std::mem::take(&mut self.library_search);
-        search_field(ui, &mut s, "Search instances", 240.0);
-        self.library_search = s;
+        if right_to_left {
+            search(self, ui);
+        }
     }
 
     /// The instances matching the search, as cards. Returns what was asked of one of them.
@@ -348,7 +360,7 @@ impl App {
         if list.is_empty() {
             card(ui, |ui| {
                 if self.instances.is_empty() {
-                    ui.label(RichText::new("Nothing here yet").size(18.0).semibold());
+                    ui.label(RichText::new("Nothing here yet").size(FS_SECTION).semibold());
                     muted(ui, "Create an instance, or drop a Modrinth modpack (.mrpack) onto this window.");
                 } else {
                     muted(ui, "No instance matches your search.");

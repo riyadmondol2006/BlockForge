@@ -226,7 +226,18 @@ pub(super) fn tag_parts<'a>(names: impl Iterator<Item = &'a str>, max: usize) ->
     v.sort_by_key(|n| !is_loader(n));
     let loaders = v.iter().filter(|n| is_loader(n)).count();
     v.truncate(loaders + max);
-    v.into_iter().map(|n| (n.to_string(), tag_color(n))).collect()
+    v.into_iter().map(|n| (loader_display(n), tag_color(n))).collect()
+}
+
+/// A loader's name as it is written everywhere else ("neoforge" is "NeoForge"); other words stay as they are.
+fn loader_display(name: &str) -> String {
+    match name.to_ascii_lowercase().as_str() {
+        "fabric" => "Fabric".into(),
+        "quilt" => "Quilt".into(),
+        "forge" => "Forge".into(),
+        "neoforge" => "NeoForge".into(),
+        _ => name.to_string(),
+    }
 }
 
 fn run(color: Color32, size: f32) -> TextFormat {
@@ -845,7 +856,7 @@ mod tests {
         let parts = tag_parts(names.into_iter(), 2);
         let words: Vec<&str> = parts.iter().map(|(w, _)| w.as_str()).collect();
         // both loaders, then two categories in the order given
-        assert_eq!(words, ["quilt", "fabric", "optimization", "utility"]);
+        assert_eq!(words, ["Quilt", "Fabric", "optimization", "utility"]);
         assert_eq!(parts[0].1, loader_color("Quilt"));
         assert_eq!(parts[1].1, loader_color("Fabric"));
         assert_eq!(parts[2].1, c_faint());

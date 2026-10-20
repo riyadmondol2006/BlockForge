@@ -353,7 +353,9 @@ pub fn paint_avatar(ui: &Ui, rect: egui::Rect, name: &str) {
 /// An on/off switch: ink when on, a quiet outlined track when off.
 pub fn toggle(ui: &mut Ui, on: &mut bool) -> Response {
     let size = vec2(36.0, 20.0);
-    let (rect, mut resp) = ui.allocate_exact_size(size, Sense::click());
+    // the track is 36 x 20; the part that takes a click is 40 x 28
+    let (hit, mut resp) = ui.allocate_exact_size(vec2(40.0, 28.0), Sense::click());
+    let rect = egui::Rect::from_center_size(hit.center(), size);
     if resp.clicked() {
         *on = !*on;
         resp.mark_changed();

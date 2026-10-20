@@ -1250,7 +1250,7 @@ impl App {
         let mut delete = false;
         let modal = egui::Modal::new(egui::Id::unique("confirm-delete")).frame(modal_frame(ctx)).show(ctx, |ui| {
             ui.set_width(380.0);
-            ui.label(RichText::new(format!("Delete \"{name}\"?")).size(19.0).semibold());
+            ui.label(RichText::new(format!("Delete \"{name}\"?")).size(FS_SECTION).semibold());
             ui.add_space(4.0);
             if playing {
                 ui.label(
