@@ -150,14 +150,20 @@ impl App {
         });
     }
 
-    /// The picture and name at the top of an instance's page, and under the name one line of what it is.
+    /// The picture and name at the top of an instance's page, and under the name one line of what it is. The line
+    /// is made shorter, a whole part at a time, until it fits: it never ends in the middle of a word.
     fn instance_title(&self, ui: &mut Ui, inst: &Instance) {
         ui.spacing_mut().item_spacing.x = 16.0;
         self.instance_icon(ui, inst, 48.0);
         ui.vertical(|ui| {
             ui.spacing_mut().item_spacing.y = 2.0;
             ui.add(egui::Label::new(RichText::new(inst.name()).size(FS_TITLE).semibold()).truncate());
-            ui.add(egui::Label::new(instance_meta(inst)).truncate());
+            let room = ui.available_width();
+            let job = (0..META_LEVELS)
+                .map(|level| instance_meta(inst, level))
+                .find(|job| ui.painter().layout_job(job.clone()).size().x <= room)
+                .unwrap_or_else(|| instance_meta(inst, META_LEVELS - 1));
+            ui.add(egui::Label::new(job).truncate());
         });
     }
 
@@ -394,18 +400,52 @@ impl App {
             return;
         };
         let mut action = None;
+        // one right edge: the back link, the title row and the tab bar end where what is under them ends. The
+        // overview and the settings are forms and keep to the width of a form (their scroll bar stays at the window's
+        // edge, in a strip of its own); the mods get a little more; the log gets all of the room.
+        let room = ui.available_width();
+        let column = match self.tab {
+            InstTab::Overview | InstTab::Settings => (room - ui.spacing().scroll.allocated_width()).min(FORM_COLUMN),
+            InstTab::Mods => room.min(MODS_COLUMN),
+            InstTab::Logs => room,
+        };
+        ui.scope(|ui| {
+            ui.set_max_width(column);
+            self.instance_header(ui, &inst, &mut action);
+        });
+        match self.tab {
+            InstTab::Overview => self.tab_overview(ui, &inst),
+            InstTab::Mods => {
+                ui.scope(|ui| {
+                    ui.set_max_width(column);
+                    self.mods_tab(ui, &inst);
+                })
+                .inner
+            }
+            InstTab::Logs => self.tab_logs(ui, &inst),
+            InstTab::Settings => self.tab_settings(ui, &inst),
+        }
+        if let Some(a) = action {
+            self.apply(a);
+        }
+    }
+
+    /// The back link, the picture and name with Play and the menu, and the tabs of an instance's page.
+    fn instance_header(&mut self, ui: &mut Ui, inst: &Instance, action: &mut Option<Act>) {
+        let folder = inst.folder.clone();
         if back_link(ui, "Library").clicked() {
             self.page = Page::Library;
         }
         ui.add_space(4.0);
         // the picture and the name on the left; what is going on, Play as, Play and the menu on the right, read from
-        // left to right. "Play as" is left to the menu, which has it too, when the window is narrow or the name would
-        // be left with too little room.
+        // left to right. "Play as" goes to the menu, which has it too, when the window is narrow or the name would
+        // be left with less than 360 for its lines (after the picture and the gaps).
         let full_id = egui::Id::unique("instance-header-full");
         let full_w: f32 = ui.data(|d| d.get_temp(full_id)).unwrap_or(300.0);
-        let compact = ui.available_width() < 560.0 || ui.available_width() < full_w + 300.0;
+        let room = ui.available_width();
+        let compact = room < 560.0 || room - full_w - (48.0 + 16.0 + 16.0) < 360.0;
         let mut header = SplitRow::new(ui, egui::Id::unique("instance-header"), 48.0);
-        header.left(ui, |ui| self.instance_title(ui, &inst));
+        header.left(ui, |ui| self.instance_title(ui, inst));
         header.right(ui, |ui| {
             ui.spacing_mut().item_spacing.x = 8.0;
             match self.games.get(&folder).map(|g| g.phase) {
@@ -422,21 +462,21 @@ impl App {
             }
             if !compact {
                 if let Some(a) = self.play_as_menu(ui, &folder) {
-                    action = Some(a);
+                    *action = Some(a);
                 }
             }
             if self.is_playing(&folder) {
                 if danger_big(ui, Icon::Stop, "Stop").clicked() {
-                    action = Some(Act::Stop(folder.clone()));
+                    *action = Some(Act::Stop(folder.clone()));
                 }
             } else if play_button(ui, true).clicked() {
-                action = Some(Act::Play(folder.clone()));
+                *action = Some(Act::Play(folder.clone()));
             }
             if let Some(Some(a)) = kebab_menu(ui, |ui| {
                 menu_items(ui);
-                self.instance_menu(ui, &inst)
+                self.instance_menu(ui, inst)
             }) {
-                action = Some(a);
+                *action = Some(a);
             }
         });
         if !compact {
@@ -460,23 +500,15 @@ impl App {
                 }
             }
         });
-        ui.add_space(16.0);
-        match self.tab {
-            InstTab::Overview => self.tab_overview(ui, &inst),
-            InstTab::Mods => self.mods_tab(ui, &inst),
-            InstTab::Logs => self.tab_logs(ui, &inst),
-            InstTab::Settings => self.tab_settings(ui, &inst),
-        }
-        if let Some(a) = action {
-            self.apply(a);
-        }
+        // the page's own gap under the tabs is 16: this one and the spacing the scope gets after it
+        ui.add_space(8.0);
     }
 
     fn tab_overview(&mut self, ui: &mut Ui, inst: &Instance) {
-        let mut act = None;
+        let mut change = false;
         ScrollArea::vertical().id_salt("instance-overview").auto_shrink(false).show(ui, |ui| {
             // one column, as wide as a form should be, so a switch stays near its words
-            ui.set_max_width(ui.available_width().min(OVERVIEW_WIDTH));
+            ui.set_max_width(ui.available_width().min(FORM_COLUMN));
             // a newer version of the pack this instance came from
             if let Some(v) = self.ftb.updates.get(&inst.folder).cloned() {
                 let text = format!("A newer version of this modpack is available: {}", v.label());
@@ -509,6 +541,20 @@ impl App {
             self.play_history(ui, inst);
             section_break(ui);
 
+            // what the three switches say now, read only: they are changed in the settings of the instance
+            let mut head = SplitRow::new(ui, egui::Id::unique("overview-performance"), 32.0);
+            head.left(ui, |ui| {
+                ui.label(RichText::new("Performance").size(FS_SECTION).semibold());
+            });
+            head.right(ui, |ui| {
+                if ghost(ui, "Change").clicked() {
+                    change = true;
+                }
+            });
+            head.finish(ui);
+            ui.add(egui::Label::new(RichText::new(self.speed_summary(inst)).size(FS_BODY).color(c_muted())).wrap());
+            section_break(ui);
+
             section(ui, "Join a server on start");
             small_muted(ui, "Enter an address like play.example.com or play.example.com:25566");
             ui.add_space(2.0);
@@ -523,14 +569,6 @@ impl App {
                     self.play(&inst.folder, LaunchOptions { server: Some(server), world: None });
                 }
             });
-            section_break(ui);
-
-            // what used to be switches in the header
-            section(ui, "Speed and smoothness");
-            ui.add_space(4.0);
-            if let Some(a) = self.speed_rows(ui, inst) {
-                act = Some(a);
-            }
             section_break(ui);
 
             self.backups_card(ui, inst);
@@ -555,8 +593,12 @@ impl App {
             });
             ui.add_space(12.0);
         });
-        if let Some(a) = act {
-            self.apply(a);
+        if change {
+            // the Performance group is on the first tab of the settings, whichever one was open last
+            if let Some(d) = self.inst_draft.as_mut().filter(|d| d.folder == inst.folder) {
+                d.tab = 0;
+            }
+            self.tab = InstTab::Settings;
         }
     }
 
@@ -667,11 +709,19 @@ impl App {
     }
 }
 
-/// The widest the overview gets: the width of a form.
-const OVERVIEW_WIDTH: f32 = 760.0;
+/// The widest the overview and the settings of an instance get, with the header over them: the width of a form.
+pub(super) const FORM_COLUMN: f32 = 760.0;
 
-/// "Minecraft 1.21.1 · Fabric 0.20.0 · 7 mods": what an instance is, with the loader in its own colour.
-fn instance_meta(inst: &Instance) -> egui::text::LayoutJob {
+/// The widest the mods list gets, with the header over it: a switch stays within reach of its mod's name.
+const MODS_COLUMN: f32 = 1040.0;
+
+/// How many shortenings [`instance_meta`] has.
+const META_LEVELS: usize = 4;
+
+/// "Minecraft 1.21.1 · Fabric 0.20.0 · 7 mods": what an instance is, with the loader in its own colour. `level` 0 is
+/// all of it; each next level leaves out one more part, from the end (the number of mods, which the facts strip and
+/// the Mods tab show too; then the loader's version; then the loader).
+fn instance_meta(inst: &Instance, level: usize) -> egui::text::LayoutJob {
     let part = |color: egui::Color32| egui::TextFormat {
         font_id: egui::FontId::proportional(FS_BODY),
         color,
@@ -679,12 +729,16 @@ fn instance_meta(inst: &Instance) -> egui::text::LayoutJob {
     };
     let mut job = egui::text::LayoutJob::default();
     job.append(&format!("Minecraft {}", inst.mc_version()), 0.0, part(c_muted()));
+    if level >= 3 {
+        return job;
+    }
     job.append("  \u{00B7}  ", 0.0, part(c_faint()));
     match inst.loader() {
+        Some((kind, _)) if level >= 2 => job.append(kind, 0.0, part(loader_color(kind))),
         Some((kind, ver)) => job.append(&format!("{kind} {ver}"), 0.0, part(loader_color(kind))),
         None => job.append("Vanilla", 0.0, part(c_muted())),
     }
-    if inst.mod_count > 0 {
+    if inst.mod_count > 0 && level == 0 {
         job.append("  \u{00B7}  ", 0.0, part(c_faint()));
         let mods = if inst.mod_count == 1 { "1 mod".to_string() } else { format!("{} mods", inst.mod_count) };
         job.append(&mods, 0.0, part(c_muted()));
