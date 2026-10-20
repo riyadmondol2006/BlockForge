@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender, channel};
 
-use egui::{Align, CornerRadius, Layout, RichText, ScrollArea, Stroke, Ui};
+use egui::{CornerRadius, RichText, ScrollArea, Stroke, Ui};
 
 use super::App;
 use super::theme::*;
@@ -53,9 +53,14 @@ impl Default for ExportState {
     }
 }
 
+/// How far each level of the tree is moved in.
+const INDENT: f32 = 16.0;
+/// The room the arrow in front of a folder takes.
+const CHEVRON: f32 = 22.0;
+
 /// The small arrow in front of a folder: points right when closed, down when open.
 fn chevron(ui: &mut Ui, open: bool) -> egui::Response {
-    let (rect, resp) = ui.allocate_exact_size(egui::vec2(22.0, 22.0), egui::Sense::click());
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(CHEVRON, CHEVRON), egui::Sense::click());
     let c = rect.center();
     let color = if resp.hovered() { c_text() } else { c_muted() };
     let pts: [egui::Pos2; 3] = if open {
@@ -190,20 +195,16 @@ impl App {
             let mut toggle_open = false;
             let mut changed = false;
             ui.horizontal(|ui| {
-                ui.add_space(depth as f32 * 18.0);
+                ui.add_space(depth as f32 * INDENT);
                 if e.is_dir {
                     if chevron(ui, open).clicked() {
                         toggle_open = true;
                     }
                 } else {
-                    ui.add_space(22.0);
+                    ui.add_space(CHEVRON);
                 }
                 let label = if e.is_dir { format!("{}/", e.name) } else { e.name.clone() };
-                let text = if partial {
-                    RichText::new(format!("{label}  (some)")).color(c_warn())
-                } else {
-                    RichText::new(label)
-                };
+                let text = if partial { RichText::new(format!("{label}  (some)")) } else { RichText::new(label) };
                 changed = ui.checkbox(&mut checked, text).changed();
                 if !e.is_dir {
                     small_muted(ui, human_size(e.size));
@@ -240,110 +241,120 @@ impl App {
         let mut copy_note: Option<String> = None;
         let mut reset_dir = false;
 
-        let (width, room) = super::curseforge::modal_size(ctx, 600.0, 430.0);
+        let (width, room) = super::curseforge::modal_size(ctx, 640.0, 250.0);
         let modal = egui::Modal::new(egui::Id::new("export-modal")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
+            use super::discover::*;
             ui.set_width(width);
-            let Some(d) = self.export.dialog.as_mut() else { return };
-            ui.horizontal(|ui| {
-                ui.label(RichText::new(&d.title).size(18.0).semibold());
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if secondary(ui, "Close").clicked() {
-                        close = true;
-                    }
-                });
-            });
+            let Some(title) = self.export.dialog.as_ref().map(|d| d.title.clone()) else { return };
+            if dialog_title(ui, &title) {
+                close = true;
+            }
             muted(ui, "Make a modpack file other people can import.");
             ui.add_space(12.0);
 
-            if d.note.is_some() {
-                // Modrinth: which files were packed into the archive
-                super::discover::state_frame(ui, c_border(), |ui| {
-                    ui.label(RichText::new("Overrides included").semibold());
-                    small_muted(ui, "Your exported instance contains mods not on Modrinth, so they were put in the overrides folder. If you upload this to Modrinth, make sure you have permission to distribute the mods below, or your modpack will be denied.");
-                    let note = d.note.clone().unwrap_or_default();
-                    ScrollArea::vertical().id_salt("override-note").max_height(140.0).show(ui, |ui| {
-                        ui.add(egui::Label::new(RichText::new(&note).monospace().size(12.0)).wrap());
-                    });
-                    if secondary(ui, "Copy").clicked() {
-                        copy_note = Some(note);
+            // one scrolling part, so the buttons below it never leave the window
+            ScrollArea::vertical().id_salt("export-body").max_height(room).auto_shrink([false, true]).show(ui, |ui| {
+                let Some(d) = self.export.dialog.as_mut() else { return };
+                if let Some(note) = d.note.clone() {
+                    // Modrinth: which files were packed into the archive
+                    let text = "Mods that are not on Modrinth were put in the overrides folder. If you upload this to Modrinth, make sure you have permission to distribute them, or your modpack will be denied.";
+                    if notice(ui, NoticeKind::Info, text, Some("Copy list")).is_some_and(|r| r.clicked()) {
+                        copy_note = Some(note.clone());
                     }
-                });
-                ui.add_space(6.0);
-            }
-            if !d.written.is_empty() {
+                    egui::CollapsingHeader::new("Show the files").id_salt("override-files").show(ui, |ui| {
+                        ui.add(egui::Label::new(RichText::new(&note).monospace()).wrap());
+                    });
+                    ui.add_space(6.0);
+                }
                 for p in &d.written {
                     ui.horizontal_wrapped(|ui| {
-                        ui.label(RichText::new("Saved").color(c_accent()));
+                        check_label(ui, "Saved");
                         ui.label(p.display().to_string());
                     });
                 }
-                ui.add_space(6.0);
-            }
+                if !d.written.is_empty() {
+                    ui.add_space(6.0);
+                }
 
-            egui::Grid::new("export-fields").num_columns(2).spacing([14.0, 10.0]).show(ui, |ui| {
-                let field_width = (width - 90.0).clamp(160.0, 420.0);
-                let field = |ui: &mut Ui, label: &str, text: &mut String, hint: &str| {
-                    muted(ui, label);
-                    ui.add_sized([field_width, 32.0], egui::TextEdit::singleline(text).hint_text(RichText::new(hint).color(c_faint())).margin(egui::Margin::symmetric(10, 7)).background_color(c_field()));
+                egui::Grid::new("export-fields").num_columns(2).spacing([14.0, 10.0]).show(ui, |ui| {
+                    let field_width = (width - 90.0).clamp(160.0, 420.0);
+                    let field = |ui: &mut Ui, label: &str, text: &mut String, hint: &str| {
+                        muted(ui, label);
+                        ui.add_sized([field_width, 32.0], egui::TextEdit::singleline(text).hint_text(RichText::new(hint).color(c_faint())).margin(egui::Margin::symmetric(10, 7)).background_color(c_field()));
+                        ui.end_row();
+                    };
+                    field(ui, "Name", &mut d.name, "The name of the pack");
+                    field(ui, "Version", &mut d.version, "1.0");
+                    field(ui, "Author", &mut d.author, "Your name");
+                    muted(ui, "Format");
+                    let labels: Vec<&str> = ExportFormat::ALL.iter().map(|f| f.label()).collect();
+                    let current = ExportFormat::ALL.iter().position(|f| *f == d.format).unwrap_or(0);
+                    if let Some(i) = segmented(ui, &labels, current) {
+                        d.format = ExportFormat::ALL[i];
+                    }
                     ui.end_row();
-                };
-                field(ui, "Name", &mut d.name, "The name of the pack");
-                field(ui, "Version", &mut d.version, "1.0");
-                field(ui, "Author", &mut d.author, "Your name");
-                muted(ui, "Format");
-                ui.horizontal(|ui| {
-                    for f in ExportFormat::ALL {
-                        if chip(ui, f.label(), d.format == f).clicked() {
-                            d.format = f;
+                    muted(ui, "Save to");
+                    ui.horizontal(|ui| {
+                        ui.add_sized([(field_width - 170.0).max(120.0), 32.0], egui::TextEdit::singleline(&mut d.save_to).margin(egui::Margin::symmetric(10, 7)).background_color(c_field()));
+                        if secondary(ui, "Browse").clicked() {
+                            pick = true;
                         }
-                    }
+                        if ghost(ui, "Reset").clicked() {
+                            reset_dir = true;
+                        }
+                    });
+                    ui.end_row();
                 });
-                ui.end_row();
-                muted(ui, "Save to");
-                ui.horizontal(|ui| {
-                    ui.add_sized([(field_width - 170.0).max(120.0), 32.0], egui::TextEdit::singleline(&mut d.save_to).margin(egui::Margin::symmetric(10, 7)).background_color(c_field()));
-                    if secondary(ui, "Browse").clicked() {
-                        pick = true;
-                    }
-                    if secondary(ui, "Reset").clicked() {
-                        reset_dir = true;
-                    }
-                });
-                ui.end_row();
-            });
-            if d.picking {
-                small_muted(ui, "Waiting for the folder chooser");
-            }
+                if d.picking {
+                    small_muted(ui, "Waiting for the folder chooser");
+                }
 
-            ui.add_space(12.0);
-            ui.label(RichText::new("Folders and files to include").size(15.0).semibold());
-            small_muted(ui, "Mods that Modrinth or CurseForge know are listed by id, so they don't make the file bigger.");
-            egui::Frame::new().fill(c_field()).stroke(Stroke::new(1.0, c_border())).corner_radius(CornerRadius::same(R_CONTROL)).inner_margin(egui::Margin::same(8)).show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                ScrollArea::vertical().id_salt("export-tree").max_height(room.min(230.0)).auto_shrink([false, true]).show(ui, |ui| {
+                ui.add_space(12.0);
+                section(ui, "Folders and files to include");
+                small_muted(ui, "Mods that Modrinth or CurseForge know are listed by id, so they don't make the file bigger.");
+                egui::Frame::new().fill(c_field()).stroke(Stroke::new(1.0, c_border())).corner_radius(CornerRadius::same(R_CONTROL)).inner_margin(egui::Margin::same(8)).show(ui, |ui| {
+                    ui.set_width(ui.available_width());
                     self.tree_rows(ui, &root, "", 0);
                     if self.export.dialog.as_ref().is_some_and(|d| d.children.get("").is_some_and(Vec::is_empty)) {
                         small_muted(ui, "This instance has no files of its own to add yet, only its mod list.");
                     }
                 });
+                if let Some(e) = self.export.dialog.as_ref().and_then(|d| d.error.clone()) {
+                    ui.add_space(8.0);
+                    notice(ui, NoticeKind::Error, &e, None);
+                }
             });
 
             let Some(d) = self.export.dialog.as_mut() else { return };
-            if let Some(e) = &d.error {
-                ui.add_space(4.0);
-                ui.label(RichText::new(e).color(c_danger()));
-            }
             ui.add_space(12.0);
-            ui.horizontal(|ui| {
-                let ready = !d.running && !d.name.trim().is_empty() && !d.save_to.trim().is_empty();
-                if primary_enabled(ui, if d.running { "Exporting" } else { "Export" }, ready).clicked() {
-                    start = true;
-                }
-                if d.running {
-                    ui.spinner();
-                    muted(ui, "Working on it, you can follow along in the sidebar");
-                }
-            });
+            let ready = !d.running && !d.name.trim().is_empty() && !d.save_to.trim().is_empty();
+            let reason = if d.running {
+                ""
+            } else if d.name.trim().is_empty() {
+                "Give the pack a name"
+            } else if d.save_to.trim().is_empty() {
+                "Choose where to save it"
+            } else {
+                ""
+            };
+            let running = d.running;
+            dialog_footer(
+                ui,
+                "export",
+                |ui| {
+                    if running {
+                        ui.spinner();
+                        muted(ui, "Working on it, you can follow along in the sidebar");
+                    } else if !reason.is_empty() {
+                        small_muted(ui, reason);
+                    }
+                },
+                |ui| {
+                    if primary_enabled(ui, if running { "Exporting" } else { "Export" }, ready).clicked() {
+                        start = true;
+                    }
+                },
+            );
         });
         if modal.should_close() {
             close = true;

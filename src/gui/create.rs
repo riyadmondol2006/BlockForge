@@ -29,62 +29,22 @@ pub struct CreateState {
 /// The widest the form gets.
 const FORM_W: f32 = 720.0;
 
-/// One version in the grid of versions: plain until pointed at, ink when it is the chosen one.
+/// One version in the grid of versions: plain until pointed at, a tone step up when it is the chosen one.
 fn version_cell(ui: &mut Ui, text: &str, selected: bool, width: f32) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, 28.0), egui::Sense::click());
-    let (bg, fg) = if selected {
-        (c_ink(), c_on_ink())
+    let bg = if selected {
+        c_selection()
     } else if resp.hovered() {
-        (c_field_hover(), c_text())
+        c_hover()
     } else {
-        (egui::Color32::TRANSPARENT, c_text())
+        egui::Color32::TRANSPARENT
     };
     ui.painter().rect_filled(rect, CornerRadius::same(R_CONTROL), bg);
-    let font = if selected { super::fonts::medium(13.0) } else { egui::FontId::proportional(13.0) };
-    ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, text, font, fg);
+    let font = if selected { super::fonts::medium(FS_BODY) } else { egui::FontId::proportional(FS_BODY) };
+    ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, text, font, c_text());
     focus_ring(ui, &resp, rect, R_CONTROL);
     resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, text));
     resp.on_hover_cursor(egui::CursorIcon::PointingHand)
-}
-
-/// A row of choices joined into one control, the chosen one in ink. Returns the one that was pressed.
-fn segmented(ui: &mut Ui, labels: &[&str], selected: usize) -> Option<usize> {
-    let widths: Vec<f32> = labels
-        .iter()
-        .map(|l| ui.painter().layout_no_wrap(l.to_string(), super::fonts::medium(13.0), c_text()).size().x + 28.0)
-        .collect();
-    let total: f32 = widths.iter().sum::<f32>() + 8.0;
-    let (outer, _) = ui.allocate_exact_size(egui::vec2(total, 32.0), egui::Sense::hover());
-    ui.painter().rect(
-        outer,
-        CornerRadius::same(R_CONTROL),
-        c_field(),
-        Stroke::new(1.0, c_border()),
-        egui::StrokeKind::Inside,
-    );
-    let mut pressed = None;
-    let mut x = outer.left() + 4.0;
-    for (i, w) in widths.into_iter().enumerate() {
-        let rect = egui::Rect::from_min_size(egui::pos2(x, outer.top() + 4.0), egui::vec2(w, 24.0));
-        x += w;
-        let resp = ui.interact(rect, ui.scope_id().with(("segment", i)), egui::Sense::click());
-        let on = i == selected;
-        if on {
-            ui.painter().rect_filled(rect, CornerRadius::same(R_CONTROL - 2), c_ink());
-        } else if resp.hovered() {
-            ui.painter().rect_filled(rect, CornerRadius::same(R_CONTROL - 2), c_field_hover());
-        }
-        let fg = if on { c_on_ink() } else { c_text() };
-        let galley = ui.painter().layout_no_wrap(labels[i].to_string(), super::fonts::medium(13.0), fg);
-        ui.painter().galley(rect.center() - galley.size() / 2.0, galley, fg);
-        focus_ring(ui, &resp, rect, R_CONTROL - 2);
-        let label = labels[i];
-        resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, on, label));
-        if resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
-            pressed = Some(i);
-        }
-    }
-    pressed
 }
 
 /// What the finished task says when performance mods were asked for.
@@ -104,6 +64,21 @@ fn default_name(mc: &str, loader: Loader) -> String {
     match loader {
         Loader::Vanilla => format!("Minecraft {mc}"),
         l => format!("Minecraft {mc} with {}", l.label()),
+    }
+}
+
+/// What is about to be made, in a line: "Minecraft 1.21.1 with Fabric 0.16.5".
+fn summary(c: &CreateState) -> String {
+    if c.mc.is_empty() {
+        return String::new();
+    }
+    if c.loader == Loader::Vanilla {
+        return format!("Minecraft {}", c.mc);
+    }
+    let version = if c.loader_version.is_empty() { c.loader_versions.first() } else { Some(&c.loader_version) };
+    match version {
+        Some(v) => format!("Minecraft {} with {} {v}", c.mc, c.loader.label()),
+        None => format!("Minecraft {} with {}", c.mc, c.loader.label()),
     }
 }
 
@@ -186,7 +161,7 @@ impl App {
             // the hint is the name the instance gets when the field is left empty
             let hint = if c.mc.is_empty() { "My instance".to_string() } else { default_name(&c.mc, c.loader) };
             ui.add_sized(
-                [ui.available_width(), 32.0],
+                [ui.available_width().min(360.0), 32.0],
                 egui::TextEdit::singleline(&mut c.name)
                     .hint_text(RichText::new(hint).color(c_faint()))
                     .margin(egui::Margin::symmetric(10, 7))
@@ -196,7 +171,7 @@ impl App {
             // Minecraft version
             ui.add_space(16.0);
             ui.horizontal(|ui| {
-                ui.label(RichText::new("Minecraft version").size(15.0).semibold());
+                ui.label(RichText::new("Minecraft version").size(FS_SECTION).semibold());
                 if !self.create.mc.is_empty() {
                     ui.label(RichText::new(&self.create.mc).color(c_muted()));
                 }
@@ -204,11 +179,8 @@ impl App {
             match (&self.manifest, &self.manifest_error) {
                 (Some(m), _) => {
                     ui.horizontal(|ui| {
-                        if chip(ui, "Releases", !self.create.show_snapshots).clicked() {
-                            self.create.show_snapshots = false;
-                        }
-                        if chip(ui, "Snapshots too", self.create.show_snapshots).clicked() {
-                            self.create.show_snapshots = true;
+                        if let Some(i) = segmented(ui, &["Releases", "Snapshots too"], usize::from(self.create.show_snapshots)) {
+                            self.create.show_snapshots = i == 1;
                         }
                         ui.add_space(8.0);
                         let mut f = std::mem::take(&mut self.create.filter);
@@ -232,7 +204,7 @@ impl App {
                             ui.set_width(ui.available_width());
                             if versions.is_empty() {
                                 ui.add_space(4.0);
-                                small_muted(ui, "No version matches that filter.");
+                                small_muted(ui, format!("No version matches \u{201C}{}\u{201D}.", self.create.filter.trim()));
                                 ui.add_space(4.0);
                                 return;
                             }
@@ -259,17 +231,14 @@ impl App {
                         });
                 }
                 (None, Some(e)) => {
-                    ui.label(RichText::new(format!("Couldn't load the version list: {e}")).color(c_danger()));
-                    if secondary(ui, "Try again").clicked() {
+                    let text = format!("Couldn't load the version list: {e}");
+                    if notice(ui, NoticeKind::Error, &text, Some("Try again")).is_some_and(|r| r.clicked()) {
                         self.manifest_error = None;
                         self.refresh_manifest();
                     }
                 }
                 (None, None) => {
-                    ui.horizontal(|ui| {
-                        ui.spinner();
-                        muted(ui, "Loading versions");
-                    });
+                    skeleton_rows(ui, 4, 36.0);
                 }
             }
 
@@ -286,35 +255,18 @@ impl App {
             }
             if self.create.loader != Loader::Vanilla {
                 ui.add_space(4.0);
-                ui.horizontal_wrapped(|ui| {
+                ui.horizontal(|ui| {
                     filter_label(ui, &format!("{} version", self.create.loader.label()));
                     if self.create.loading {
                         ui.spinner();
-                    } else if let Some(e) = self.create.error.clone() {
-                        ui.label(RichText::new(format!("Couldn't get the versions: {e}")).color(c_danger()));
-                        if secondary(ui, "Try again").clicked() {
-                            // forget the failed request so it is made again
-                            self.create.requested = None;
-                            self.create.error = None;
-                            changed_version = true;
-                        }
-                    } else if self.create.loader_versions.is_empty() {
-                        ui.label(
-                            RichText::new(format!(
-                                "{} isn't available for Minecraft {}",
-                                self.create.loader.label(),
-                                self.create.mc
-                            ))
-                            .color(c_warn()),
-                        );
-                    } else {
+                    } else if !self.create.loader_versions.is_empty() {
                         let newest = self.create.loader_versions[0].clone();
                         let shown = if self.create.loader_version.is_empty() {
                             format!("Latest ({newest})")
                         } else {
                             self.create.loader_version.clone()
                         };
-                        egui::ComboBox::from_id_salt("loader-version").selected_text(shown).width(220.0).show_ui(
+                        egui::ComboBox::from_id_salt("loader-version").selected_text(shown).width(240.0).show_ui(
                             ui,
                             |ui| {
                                 if ui
@@ -335,6 +287,24 @@ impl App {
                         );
                     }
                 });
+                if !self.create.loading {
+                    if let Some(e) = self.create.error.clone() {
+                        let text = format!("Couldn't get the versions: {e}");
+                        if notice(ui, NoticeKind::Error, &text, Some("Try again")).is_some_and(|r| r.clicked()) {
+                            // forget the failed request so it is made again
+                            self.create.requested = None;
+                            self.create.error = None;
+                            changed_version = true;
+                        }
+                    } else if self.create.loader_versions.is_empty() {
+                        let text = format!(
+                            "{} isn't available for Minecraft {}.",
+                            self.create.loader.label(),
+                            self.create.mc
+                        );
+                        notice(ui, NoticeKind::Warn, &text, None);
+                    }
+                }
                 if matches!(self.create.loader, Loader::Forge | Loader::NeoForge) {
                     small_muted(
                         ui,
@@ -344,32 +314,45 @@ impl App {
                 let key = self.create.loader.modrinth_name();
                 if performance::offered_for(key) {
                     ui.add_space(8.0);
-                    ui.checkbox(&mut self.create.performance, "Add performance mods");
-                    small_muted(
-                        ui,
-                        format!(
-                            "{} from Modrinth, for a smoother game. Anything not made for this Minecraft version yet is left out.",
-                            performance::describe(key)
-                        ),
+                    let hint = format!(
+                        "{} from Modrinth, for a smoother game. Anything not made for this Minecraft version yet is left out.",
+                        performance::describe(key)
                     );
+                    setting_row(ui, "Add performance mods", &hint, |ui| {
+                        toggle(ui, &mut self.create.performance);
+                    });
                 }
             }
 
             ui.add_space(8.0);
         });
-        ui.separator();
-        ui.add_space(4.0);
+        let creating = self.tasks.iter().any(|t| t.label.starts_with("Creating"));
         let ready = !self.create.mc.is_empty()
-            && !self.tasks.iter().any(|t| t.label.starts_with("Creating"))
+            && !creating
             && (self.create.loader == Loader::Vanilla || !self.create.loader_versions.is_empty());
-        ui.horizontal(|ui| {
-            if primary_enabled(ui, "Create instance", ready).clicked() {
-                create = true;
-            }
-            if self.tasks.iter().any(|t| t.label.starts_with("Creating")) {
-                ui.spinner();
-                muted(ui, "Working on it, you can follow along in the sidebar");
-            }
+        let summary = summary(&self.create);
+        ui.scope(|ui| {
+            // the button sits under the form, not at the far edge of a wide window
+            ui.set_max_width(ui.available_width().min(FORM_W));
+            rule(ui);
+            ui.add_space(8.0);
+            super::discover::dialog_footer(
+                ui,
+                "create",
+                |ui| {
+                    if creating {
+                        ui.spinner();
+                        muted(ui, "Working on it, you can follow along in the sidebar");
+                    } else {
+                        small_muted(ui, summary);
+                    }
+                },
+                |ui| {
+                    if primary_enabled(ui, "Create instance", ready).clicked() {
+                        create = true;
+                    }
+                },
+            );
         });
         if changed_version {
             self.request_loader_versions();
@@ -413,6 +396,17 @@ mod tests {
             performance_note(ready, &["Sodium".into(), "Lithium".into()], &["ModernFix".into()]),
             "\"A\" is ready, with Sodium, Lithium. Not made for this version yet: ModernFix"
         );
+        // the line above the button says what is about to be made
+        let mut c = CreateState::default();
+        assert_eq!(summary(&c), "");
+        c.mc = "1.21.1".into();
+        assert_eq!(summary(&c), "Minecraft 1.21.1");
+        c.loader = Loader::Fabric;
+        assert_eq!(summary(&c), "Minecraft 1.21.1 with Fabric");
+        c.loader_versions = vec!["0.16.5".into(), "0.16.4".into()];
+        assert_eq!(summary(&c), "Minecraft 1.21.1 with Fabric 0.16.5");
+        c.loader_version = "0.16.4".into();
+        assert_eq!(summary(&c), "Minecraft 1.21.1 with Fabric 0.16.4");
         // performance mods are offered where they exist, not for plain Minecraft
         assert!(performance::offered_for(Loader::Fabric.modrinth_name()));
         assert!(!performance::offered_for(Loader::Vanilla.modrinth_name()));
