@@ -3,6 +3,7 @@
 use egui::RichText;
 
 use super::App;
+use super::theme::*;
 use super::widgets::*;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -67,8 +68,8 @@ impl App {
         let folder = self.dirs.base.to_string_lossy().to_string();
         let (mut yes, mut no, mut never) = (false, false, false);
         egui::Modal::new(egui::Id::unique("startup")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
-            ui.set_width(460.0);
-            ui.label(RichText::new(w.title()).size(18.0).semibold());
+            ui.set_width(super::services::modal_width(ctx, 460.0));
+            ui.label(RichText::new(w.title()).size(FS_SECTION).semibold());
             ui.add_space(6.0);
             ui.label(w.text(&folder));
             ui.add_space(10.0);

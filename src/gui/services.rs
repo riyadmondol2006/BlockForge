@@ -91,7 +91,7 @@ pub fn confirm_modal(ctx: &Context, id: &str, title: &str, body: &str, confirm: 
     let mut answer = None;
     egui::Modal::new(egui::Id::unique(id)).frame(super::modal_frame(ctx)).show(ctx, |ui| {
         ui.set_width(modal_width(ctx, 420.0));
-        ui.label(RichText::new(title).size(18.0).semibold());
+        ui.label(RichText::new(title).size(FS_SECTION).semibold());
         ui.add_space(4.0);
         muted(ui, body);
         ui.add_space(12.0);
@@ -264,11 +264,10 @@ impl App {
     pub(super) fn services_settings_ui(&mut self, ui: &mut Ui) {
         let mut s = self.svc_edit();
         let before = s.clone();
-        let mut folder_error: Option<String> = None;
         ui.add_space(20.0);
         card(ui, |ui| {
             let mut rows = super::settings::Rows::new();
-            egui::CollapsingHeader::new(RichText::new("Network, folders and backups").semibold().size(15.0))
+            egui::CollapsingHeader::new(RichText::new("Network, folders and backups").semibold().size(FS_SECTION))
                 .default_open(false)
                 .show(ui, |ui| {
                     small_muted(ui, "Connection changes apply the next time BlockForge starts.");
@@ -357,10 +356,12 @@ impl App {
                         "downloads-folder",
                         &downloads,
                         "Default",
-                        [width, 30.0],
+                        [width, 32.0],
                         margin,
                     );
-                    ui.label("Backups folder");
+                    folder_error_line(ui, "downloads");
+                    ui.add_space(4.0);
+                    ui.label(RichText::new("Backups folder").semibold());
                     small_muted(
                         ui,
                         "Where instance backups are saved. Empty uses the backups folder in the data folder.",
@@ -368,16 +369,24 @@ impl App {
                     let backups = s.backups_path.clone().unwrap_or_default();
                     let typed_backups =
                         super::settings::draft_text(ui, "backups-folder", &backups, "Default", [width, 32.0], margin);
-                    // a typed path is only taken once it names a folder that exists, as the Java edition does
+                    folder_error_line(ui, "backups");
+                    // a typed path is only taken once it names a folder that exists, as the Java edition does; when it
+                    // doesn't, that is said under the field
                     for (typed, slot, what) in [
                         (typed_downloads, &mut s.custom_downloads_path, "downloads"),
                         (typed_backups, &mut s.backups_path, "backups"),
                     ] {
                         let Some(text) = typed else { continue };
+                        let key = folder_error_id(what);
                         match folder_setting(&text) {
-                            Ok(value) => *slot = value,
+                            Ok(value) => {
+                                *slot = value;
+                                ui.data_mut(|d| d.remove::<String>(key));
+                            }
                             Err(()) => {
-                                folder_error = Some(format!("The {what} folder \"{}\" doesn't exist", text.trim()))
+                                let error = format!("The {what} folder \"{}\" doesn't exist", text.trim());
+                                ui.data_mut(|d| d.insert_temp(key, error));
+                                ui.ctx().request_repaint();
                             }
                         }
                     }
@@ -398,14 +407,24 @@ impl App {
                     });
                 });
         });
-        if let Some(e) = folder_error {
-            self.toast_err(e);
-        }
         if s != before {
             s.write_to(&mut self.settings);
             self.save_settings();
+            super::settings::mark_saved(ui.ctx());
             self.svc.edit = Some(s);
         }
+    }
+}
+
+/// Where the answer for a folder field that was typed wrongly is kept until a good one is typed.
+fn folder_error_id(what: &str) -> egui::Id {
+    egui::Id::unique(("settings-folder-error", what))
+}
+
+/// The reason a folder field's text was not taken, under the field.
+fn folder_error_line(ui: &mut Ui, what: &str) {
+    if let Some(error) = ui.data(|d| d.get_temp::<String>(folder_error_id(what))) {
+        ui.add(egui::Label::new(RichText::new(error).color(c_danger()).size(FS_META)).wrap());
     }
 }
 
