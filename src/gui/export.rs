@@ -53,6 +53,22 @@ impl Default for ExportState {
     }
 }
 
+/// The small arrow in front of a folder: points right when closed, down when open.
+fn chevron(ui: &mut Ui, open: bool) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(22.0, 22.0), egui::Sense::click());
+    let c = rect.center();
+    let color = if resp.hovered() { c_text() } else { c_muted() };
+    let pts: [egui::Pos2; 3] = if open {
+        [c + egui::vec2(-4.0, -2.0), c + egui::vec2(0.0, 2.5), c + egui::vec2(4.0, -2.0)]
+    } else {
+        [c + egui::vec2(-2.0, -4.0), c + egui::vec2(2.5, 0.0), c + egui::vec2(-2.0, 4.0)]
+    };
+    ui.painter().add(egui::Shape::line(pts.to_vec(), Stroke::new(1.6, color)));
+    focus_ring(ui, &resp, rect, R_TAG);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, if open { "Collapse" } else { "Expand" }));
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
 impl App {
     /// Open the export window for the instance in `folder`.
     pub fn open_export(&mut self, folder: &str) {
@@ -176,7 +192,7 @@ impl App {
             ui.horizontal(|ui| {
                 ui.add_space(depth as f32 * 18.0);
                 if e.is_dir {
-                    if ui.small_button(if open { "\u{25BE}" } else { "\u{25B8}" }).clicked() {
+                    if chevron(ui, open).clicked() {
                         toggle_open = true;
                     }
                 } else {
@@ -225,11 +241,11 @@ impl App {
         let mut reset_dir = false;
 
         let (width, room) = super::curseforge::modal_size(ctx, 600.0, 430.0);
-        let modal = egui::Modal::new(egui::Id::new("export-modal")).show(ctx, |ui| {
+        let modal = egui::Modal::new(egui::Id::new("export-modal")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
             ui.set_width(width);
             let Some(d) = self.export.dialog.as_mut() else { return };
             ui.horizontal(|ui| {
-                ui.label(RichText::new(&d.title).size(21.0).semibold());
+                ui.label(RichText::new(&d.title).size(18.0).semibold());
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if secondary(ui, "Close").clicked() {
                         close = true;
@@ -237,11 +253,11 @@ impl App {
                 });
             });
             muted(ui, "Make a modpack file other people can import.");
-            ui.add_space(6.0);
+            ui.add_space(12.0);
 
             if d.note.is_some() {
                 // Modrinth: which files were packed into the archive
-                card(ui, |ui| {
+                super::discover::state_frame(ui, c_border(), |ui| {
                     ui.label(RichText::new("Overrides included").semibold());
                     small_muted(ui, "Your exported instance contains mods not on Modrinth, so they were put in the overrides folder. If you upload this to Modrinth, make sure you have permission to distribute the mods below, or your modpack will be denied.");
                     let note = d.note.clone().unwrap_or_default();
@@ -268,7 +284,7 @@ impl App {
                 let field_width = (width - 90.0).clamp(160.0, 420.0);
                 let field = |ui: &mut Ui, label: &str, text: &mut String, hint: &str| {
                     muted(ui, label);
-                    ui.add_sized([field_width, 32.0], egui::TextEdit::singleline(text).hint_text(hint).margin(egui::Margin::symmetric(10, 6)).background_color(c_field()));
+                    ui.add_sized([field_width, 32.0], egui::TextEdit::singleline(text).hint_text(RichText::new(hint).color(c_faint())).margin(egui::Margin::symmetric(10, 7)).background_color(c_field()));
                     ui.end_row();
                 };
                 field(ui, "Name", &mut d.name, "The name of the pack");
@@ -285,7 +301,7 @@ impl App {
                 ui.end_row();
                 muted(ui, "Save to");
                 ui.horizontal(|ui| {
-                    ui.add_sized([(field_width - 170.0).max(120.0), 32.0], egui::TextEdit::singleline(&mut d.save_to).margin(egui::Margin::symmetric(10, 6)).background_color(c_field()));
+                    ui.add_sized([(field_width - 170.0).max(120.0), 32.0], egui::TextEdit::singleline(&mut d.save_to).margin(egui::Margin::symmetric(10, 7)).background_color(c_field()));
                     if secondary(ui, "Browse").clicked() {
                         pick = true;
                     }
@@ -299,10 +315,10 @@ impl App {
                 small_muted(ui, "Waiting for the folder chooser");
             }
 
-            ui.add_space(6.0);
-            ui.label(RichText::new("Folders and files to include").semibold());
+            ui.add_space(12.0);
+            ui.label(RichText::new("Folders and files to include").size(15.0).semibold());
             small_muted(ui, "Mods that Modrinth or CurseForge know are listed by id, so they don't make the file bigger.");
-            egui::Frame::new().fill(c_field()).stroke(Stroke::new(1.0, c_border())).corner_radius(CornerRadius::same(10)).inner_margin(egui::Margin::same(8)).show(ui, |ui| {
+            egui::Frame::new().fill(c_field()).stroke(Stroke::new(1.0, c_border())).corner_radius(CornerRadius::same(R_CONTROL)).inner_margin(egui::Margin::same(8)).show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ScrollArea::vertical().id_salt("export-tree").max_height(room.min(230.0)).auto_shrink([false, true]).show(ui, |ui| {
                     self.tree_rows(ui, &root, "", 0);
@@ -317,7 +333,7 @@ impl App {
                 ui.add_space(4.0);
                 ui.label(RichText::new(e).color(c_danger()));
             }
-            ui.add_space(8.0);
+            ui.add_space(12.0);
             ui.horizontal(|ui| {
                 let ready = !d.running && !d.name.trim().is_empty() && !d.save_to.trim().is_empty();
                 if primary_enabled(ui, if d.running { "Exporting" } else { "Export" }, ready).clicked() {

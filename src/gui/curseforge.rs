@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, channel};
 
-use egui::{Align, CornerRadius, Id, Layout, RichText, ScrollArea, Stroke, Ui};
+use egui::{Align, Id, Layout, RichText, ScrollArea, Ui};
 
 use super::App;
 use super::theme::*;
@@ -285,6 +285,7 @@ impl App {
     /// Draws Discover for CurseForge when that platform is selected. Returns `false` (drawing nothing) when
     /// Modrinth is selected, so the Modrinth page carries on.
     pub(super) fn cf_discover_ui(&mut self, ui: &mut Ui) -> bool {
+        use super::discover::*;
         self.cf_init();
         if !self.cf.active {
             return false;
@@ -292,61 +293,69 @@ impl App {
         let ctx = ui.ctx().clone();
         let enabled = *self.cf.enabled.get_or_insert_with(|| curseforge::platform_enabled(&self.dirs, "modsEnabled"));
         if !enabled {
-            ui.horizontal_wrapped(|ui| {
+            ui.horizontal(|ui| {
                 heading(ui, "Discover");
-                muted(ui, "from CurseForge");
+                ui.add_space(8.0);
                 self.cf_platform_chips(ui);
             });
-            card(ui, |ui| muted(ui, "CurseForge has been switched off by the launcher's configuration."));
+            ui.add_space(8.0);
+            empty_state(
+                ui,
+                "CurseForge is switched off",
+                "The launcher's configuration doesn't allow CurseForge.",
+                None,
+            );
             return true;
         }
         self.cf_load_categories(&ctx);
         let mut search = !self.cf.searched;
-        ui.horizontal_wrapped(|ui| {
+        ui.horizontal(|ui| {
             heading(ui, "Discover");
-            muted(ui, "from CurseForge");
             ui.add_space(8.0);
             self.cf_platform_chips(ui);
         });
+        ui.add_space(8.0);
+        let mut q = std::mem::take(&mut self.cf.query);
+        if big_search(ui, &mut q, &format!("Search {}", self.cf.section.label().to_lowercase())) {
+            search = true;
+        }
+        self.cf.query = q;
         ui.add_space(4.0);
-        ui.horizontal_wrapped(|ui| {
+        tab_row(ui, |ui| {
             for s in Section::ALL {
-                if chip(ui, s.label(), self.cf.section == s).clicked() && self.cf.section != s {
+                if tab(ui, s.label(), self.cf.section == s).clicked() && self.cf.section != s {
                     self.cf.section = s;
                     search = true;
                     self.cf_load_categories(&ctx);
                 }
             }
         });
+        ui.add_space(8.0);
         ui.horizontal_wrapped(|ui| {
-            let mut q = std::mem::take(&mut self.cf.query);
-            let r = search_field(
+            if self.cf.section != Section::Modpacks {
+                self.cf_target_combo(ui, &mut search);
+                ui.add_space(8.0);
+            }
+            filter_label(ui, "Sort by");
+            egui::ComboBox::from_id_salt("cf-sort").selected_text(self.cf.sort.label()).width(150.0).show_ui(
                 ui,
-                &mut q,
-                &format!("Search {}", self.cf.section.label().to_lowercase()),
-                320.0f32.min(ui.available_width()),
-            );
-            self.cf.query = q;
-            if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                search = true;
-            }
-            if primary(ui, "Search").clicked() {
-                search = true;
-            }
-            egui::ComboBox::from_id_salt("cf-sort").selected_text(self.cf.sort.label()).show_ui(ui, |ui| {
-                for s in Sort::ALL {
-                    if ui.selectable_value(&mut self.cf.sort, s, s.label()).clicked() {
-                        search = true;
+                |ui| {
+                    for s in Sort::ALL {
+                        if ui.selectable_value(&mut self.cf.sort, s, s.label()).clicked() {
+                            search = true;
+                        }
                     }
-                }
-            });
+                },
+            );
+            ui.add_space(8.0);
+            filter_label(ui, "Category");
             let current = self
                 .cf
                 .category
                 .and_then(|id| self.cf.categories.iter().find(|c| c.id == id))
                 .map(|c| c.name.clone())
                 .unwrap_or_else(|| "All categories".into());
-            egui::ComboBox::from_id_salt("cf-cat").selected_text(current).width(190.0).show_ui(ui, |ui| {
+            egui::ComboBox::from_id_salt("cf-cat").selected_text(current).width(170.0).show_ui(ui, |ui| {
                 if ui.selectable_label(self.cf.category.is_none(), "All categories").clicked() {
                     self.cf.category = None;
                     search = true;
@@ -364,30 +373,34 @@ impl App {
         if self.cf.section == Section::Modpacks {
             self.cf_modpack_tools(ui);
         } else {
-            self.cf_target_row(ui, &mut search);
+            self.cf_target_row(ui);
         }
         if search {
             self.cf_search(&ctx, true);
         }
-        ui.add_space(6.0);
+        ui.add_space(8.0);
 
         if let Some(e) = self.cf.error.clone() {
-            if super::discover::fetch_error_card(ui, "Couldn't reach CurseForge", &e) && !self.cf.loading {
+            if fetch_error_card(ui, "Couldn't reach CurseForge", &e) && !self.cf.loading {
                 // the first page again, or the page that failed to load
                 self.cf_search(&ctx, self.cf.projects.is_empty());
             }
         }
-        if self.cf.projects.is_empty() && !self.cf.loading && self.cf.error.is_none() && self.cf.searched {
-            card(ui, |ui| {
-                muted(
-                    ui,
-                    if self.cf.query.trim().is_empty() {
-                        "No results."
-                    } else {
-                        "No results. Remove your search words and try again."
-                    },
-                )
-            });
+        if self.cf.projects.is_empty() && self.cf.loading {
+            skeleton_rows(ui, 6);
+            return true;
+        }
+        if self.cf.projects.is_empty() && self.cf.error.is_none() && self.cf.searched {
+            let query = self.cf.query.trim().to_string();
+            let (title, hint) = if query.is_empty() {
+                ("Nothing to show".to_string(), "Try another section, or pick a different instance.")
+            } else {
+                (format!("No results for \u{201C}{query}\u{201D}"), "Try fewer words, or another section.")
+            };
+            if empty_state(ui, &title, hint, (!query.is_empty()).then_some("Clear search")) {
+                self.cf.query.clear();
+                self.cf_search(&ctx, true);
+            }
             return true;
         }
 
@@ -399,85 +412,108 @@ impl App {
             self.instances.iter().map(|i| (i.folder.clone(), i.name().to_string())).collect();
         let mut act: Option<CardAct> = None;
         let mut more = false;
+        if self.cf.total > 0 {
+            count_line(ui, format!("{} results", human_count(self.cf.total)));
+        }
         ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
             for p in &projects {
-                egui::Frame::new()
-                    .fill(c_card())
-                    .stroke(Stroke::new(1.0, c_border()))
-                    .corner_radius(CornerRadius::same(14))
-                    .inner_margin(egui::Margin::same(14))
-                    .show(ui, |ui| {
-                        ui.set_width(ui.available_width());
-                        ui.horizontal(|ui| {
-                            match p.logo_url() {
-                                Some(url) => self.remote_image(ui, url, 60.0, &p.name),
-                                None => {
-                                    avatar(ui, &p.name, 60.0);
-                                }
+                let key = format!("cf:{}", p.id);
+                let is_installed = installed.contains_key(&p.id) && section != Section::Modpacks;
+                row_frame(ui, |ui| {
+                    let wide = ui.available_width() >= 560.0;
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 12.0;
+                        match p.logo_url() {
+                            Some(url) => self.remote_image(ui, url, 48.0, &p.name),
+                            None => {
+                                avatar(ui, &p.name, 48.0);
                             }
-                            ui.vertical(|ui| {
-                                ui.set_max_width((ui.available_width() - 190.0).max(120.0));
-                                ui.horizontal_wrapped(|ui| {
-                                    ui.label(RichText::new(&p.name).semibold().size(16.0));
-                                    small_muted(ui, format!("by {}", p.author_names()));
-                                });
-                                ui.add(egui::Label::new(RichText::new(&p.summary).color(c_muted())).truncate());
-                                ui.horizontal_wrapped(|ui| {
-                                    small_muted(
-                                        ui,
-                                        format!("{} downloads", human_count(p.download_count.max(0.0) as u64)),
-                                    );
-                                    for c in p.categories.iter().take(3) {
-                                        tag(ui, &c.name, c_muted());
-                                    }
-                                    if installed.contains_key(&p.id) {
-                                        tag(ui, "Installed", c_accent());
-                                    }
-                                    if p.allow_mod_distribution == Some(false) {
-                                        tag(ui, "Download in browser", c_warn());
-                                    }
-                                });
+                        }
+                        let text_w = row_text_width(ui, &key);
+                        ui.vertical(|ui| {
+                            ui.set_max_width(text_w);
+                            ui.spacing_mut().item_spacing.y = 2.0;
+                            ui.horizontal_wrapped(|ui| {
+                                ui.spacing_mut().item_spacing.x = 6.0;
+                                ui.label(RichText::new(&p.name).size(15.0).semibold());
+                                ui.label(RichText::new(format!("by {}", p.author_names())).size(12.5).color(c_muted()));
                             });
-                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                if secondary(ui, "View").clicked() {
-                                    act = Some(CardAct::View(p.clone()));
+                            ui.add(egui::Label::new(RichText::new(&p.summary).color(c_muted()).size(13.0)).truncate());
+                            let downloads = p.download_count.max(0.0) as u64;
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing.x = 6.0;
+                                if !wide {
+                                    ui.label(
+                                        RichText::new(format!("{} downloads", human_count(downloads)))
+                                            .size(12.0)
+                                            .color(c_muted()),
+                                    );
                                 }
-                                let is_installed = installed.contains_key(&p.id) && section != Section::Modpacks;
+                                for c in tags_for(p.categories.iter().map(|c| c.name.as_str()), 3) {
+                                    tag(ui, c, tag_color(c));
+                                }
                                 if is_installed {
-                                    if let Some(t) = &target {
-                                        if danger(ui, "Remove").clicked() {
-                                            act = Some(CardAct::Remove(p.clone(), t.clone()));
-                                        }
-                                        if secondary(ui, "Reinstall").clicked() {
-                                            act = Some(CardAct::Reinstall(p.clone(), Some(t.clone())));
-                                        }
-                                    }
-                                } else if section == Section::Modpacks {
-                                    if primary(ui, "Install").clicked() {
-                                        act = Some(CardAct::Install(p.clone(), None));
-                                    }
-                                } else if let Some(t) = &target {
-                                    if primary(ui, "Install").clicked() {
-                                        act = Some(CardAct::Install(p.clone(), Some(t.clone())));
-                                    }
-                                } else {
-                                    ui.menu_button("Install", |ui| {
-                                        if instance_choices.is_empty() {
-                                            ui.label("Create an instance first");
-                                        }
-                                        for (folder, name) in &instance_choices {
-                                            if ui.button(name).clicked() {
-                                                act = Some(CardAct::Install(p.clone(), Some(folder.clone())));
-                                                ui.close();
-                                            }
-                                        }
-                                    });
+                                    tag(ui, "Installed", c_accent());
+                                }
+                                if p.allow_mod_distribution == Some(false) {
+                                    tag(ui, "Download in browser", c_warn());
                                 }
                             });
                         });
+                        row_actions(ui, &key, |ui| {
+                            // the three dots hold what is rarely needed: the project's page, and removing it
+                            kebab_menu(ui, |ui| {
+                                if ui.button("View on CurseForge").clicked() {
+                                    act = Some(CardAct::View(p.clone()));
+                                    ui.close();
+                                }
+                                if is_installed {
+                                    if let Some(t) = &target {
+                                        if ui.button(RichText::new("Remove").color(c_danger())).clicked() {
+                                            act = Some(CardAct::Remove(p.clone(), t.clone()));
+                                            ui.close();
+                                        }
+                                    }
+                                }
+                            });
+                            if is_installed {
+                                if let Some(t) = &target {
+                                    if secondary(ui, "Reinstall").clicked() {
+                                        act = Some(CardAct::Reinstall(p.clone(), Some(t.clone())));
+                                    }
+                                }
+                            } else if section == Section::Modpacks {
+                                if secondary(ui, "Install").clicked() {
+                                    act = Some(CardAct::Install(p.clone(), None));
+                                }
+                            } else if let Some(t) = &target {
+                                if secondary(ui, "Install").clicked() {
+                                    act = Some(CardAct::Install(p.clone(), Some(t.clone())));
+                                }
+                            } else {
+                                let r = secondary(ui, "Install");
+                                egui::Popup::menu(&r).show(|ui| {
+                                    ui.set_min_width(180.0);
+                                    if instance_choices.is_empty() {
+                                        ui.label("Create an instance first");
+                                    }
+                                    for (folder, name) in &instance_choices {
+                                        if ui.button(name).clicked() {
+                                            act = Some(CardAct::Install(p.clone(), Some(folder.clone())));
+                                            ui.close();
+                                        }
+                                    }
+                                });
+                            }
+                            if wide {
+                                ui.add_space(8.0);
+                                stat_column(ui, &human_count(p.download_count.max(0.0) as u64), "downloads");
+                            }
+                        });
                     });
-                ui.add_space(2.0);
+                });
             }
+            ui.add_space(8.0);
             if self.cf.has_more {
                 ui.horizontal(|ui| {
                     if self.cf.loading {
@@ -489,6 +525,7 @@ impl App {
             } else if self.cf.loading {
                 ui.spinner();
             }
+            ui.add_space(8.0);
         });
         self.cf.projects = projects;
         match act {
@@ -516,32 +553,38 @@ impl App {
         true
     }
 
-    /// "Install into" row for mods and the like, with the loader helper and the update check.
-    fn cf_target_row(&mut self, ui: &mut Ui, search: &mut bool) {
-        ui.horizontal_wrapped(|ui| {
-            muted(ui, "Install into");
-            let current = self
-                .discover
-                .target
-                .as_ref()
-                .and_then(|f| self.instance(f))
-                .map(|i| i.name().to_string())
-                .unwrap_or_else(|| "Choose an instance".into());
-            let names: Vec<(String, String)> =
-                self.instances.iter().map(|i| (i.folder.clone(), i.name().to_string())).collect();
-            egui::ComboBox::from_id_salt("cf-target").selected_text(current).width(240.0).show_ui(ui, |ui| {
-                if ui.selectable_label(self.discover.target.is_none(), "Any (show everything)").clicked() {
-                    self.discover.target = None;
+    /// The "Install into" drop-down of the filter row.
+    fn cf_target_combo(&mut self, ui: &mut Ui, search: &mut bool) {
+        super::discover::filter_label(ui, "Install into");
+        let current = self
+            .discover
+            .target
+            .as_ref()
+            .and_then(|f| self.instance(f))
+            .map(|i| i.name().to_string())
+            .unwrap_or_else(|| "Choose an instance".into());
+        let names: Vec<(String, String)> =
+            self.instances.iter().map(|i| (i.folder.clone(), i.name().to_string())).collect();
+        egui::ComboBox::from_id_salt("cf-target").selected_text(current).width(200.0).show_ui(ui, |ui| {
+            if ui.selectable_label(self.discover.target.is_none(), "Any (show everything)").clicked() {
+                self.discover.target = None;
+                *search = true;
+            }
+            for (folder, name) in &names {
+                if ui.selectable_label(self.discover.target.as_ref() == Some(folder), name).clicked() {
+                    self.discover.target = Some(folder.clone());
                     *search = true;
                 }
-                for (folder, name) in &names {
-                    if ui.selectable_label(self.discover.target.as_ref() == Some(folder), name).clicked() {
-                        self.discover.target = Some(folder.clone());
-                        *search = true;
-                    }
-                }
-            });
-            if let Some(folder) = self.discover.target.clone() {
+            }
+        });
+    }
+
+    /// Under the filters, for mods and the like: what the chosen instance runs, the update check, and the loader
+    /// helper (Fabric API and friends).
+    fn cf_target_row(&mut self, ui: &mut Ui) {
+        if let Some(folder) = self.discover.target.clone() {
+            ui.add_space(4.0);
+            ui.horizontal_wrapped(|ui| {
                 if let Some(inst) = self.instance(&folder) {
                     small_muted(
                         ui,
@@ -555,8 +598,8 @@ impl App {
                 if secondary(ui, "Check for updates").clicked() {
                     self.cf_check_mod_updates(ui.ctx(), &folder);
                 }
-            }
-        });
+            });
+        }
         // Fabric API and friends, which most mods of that loader need
         let missing = self.cf_target_info().and_then(|t| Some((t.folder.clone(), t.missing_api?)));
         if let Some((folder, (id, name))) = missing {
@@ -564,8 +607,9 @@ impl App {
             let text = format!("{name} is not installed. Most mods for {loader} need it.");
             let label = format!("Installing {name}");
             let running = self.tasks.iter().any(|t| t.label == label);
+            ui.add_space(4.0);
             ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new(text).color(c_warn()));
+                ui.label(RichText::new(text).color(c_warn()).size(13.0));
                 if running {
                     ui.spinner();
                 } else if secondary(ui, &format!("Install {name}")).clicked() {
@@ -575,16 +619,18 @@ impl App {
         }
     }
 
-    /// The row under the section chips for modpacks: import an address or a downloaded zip, and look for updates.
+    /// The row under the section tabs for modpacks: import an address or a downloaded zip, and look for updates.
     fn cf_modpack_tools(&mut self, ui: &mut Ui) {
+        ui.add_space(4.0);
         self.other_modpack_sources(ui);
+        ui.add_space(4.0);
         ui.horizontal_wrapped(|ui| {
             let mut text = std::mem::take(&mut self.cf.import_text);
             search_field(
                 ui,
                 &mut text,
                 "Paste a CurseForge modpack address, or the path of a downloaded .zip",
-                520.0f32.min(ui.available_width()),
+                (ui.available_width() - 240.0).clamp(220.0, 480.0),
             );
             self.cf.import_text = text;
             if secondary(ui, "Import").clicked() && !self.cf.import_text.trim().is_empty() {
@@ -1036,9 +1082,9 @@ impl App {
         let before = d.selected;
         let (width, body_height) = modal_size(ctx, 600.0, 200.0);
 
-        let modal = egui::Modal::new(Id::unique("cf-file-dialog")).show(ctx, |ui| {
+        let modal = egui::Modal::new(Id::unique("cf-file-dialog")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
             ui.set_width(width);
-            ui.add(egui::Label::new(RichText::new(format!("Installing {}", d.project.name)).size(19.0).semibold()).wrap());
+            ui.add(egui::Label::new(RichText::new(format!("Installing {}", d.project.name)).size(18.0).semibold()).wrap());
             if let Some((_, name)) = &target {
                 small_muted(ui, format!("into {name}"));
             } else if is_pack {
@@ -1046,7 +1092,7 @@ impl App {
             } else if d.folder.is_some() {
                 ui.label(RichText::new("That instance isn't there any more.").color(c_danger()));
             }
-            ui.add_space(6.0);
+            ui.add_space(8.0);
             let body = ScrollArea::vertical().id_salt("cf-file-body").max_height(body_height).auto_shrink([false, true]);
             body.show(ui, |ui| {
                 if d.loading {
@@ -1060,10 +1106,10 @@ impl App {
                 }
                 if !d.files.is_empty() {
                     if let Some(installed) = d.installed_file.and_then(|id| d.all_files.iter().find(|f| f.id == id)) {
-                        ui.label(RichText::new(format!("The version currently installed is {}", installed.label())).color(c_accent()));
+                        small_muted(ui, format!("The version currently installed is {}", installed.label()));
                     }
                     ui.horizontal(|ui| {
-                        muted(ui, "Version to install");
+                        super::discover::filter_label(ui, "Version to install");
                         let selected_text = d.files.get(d.selected).map(|f| f.label()).unwrap_or_default();
                         let combo_width = (ui.available_width() - 8.0).clamp(160.0, 420.0);
                         egui::ComboBox::from_id_salt("cf-file-version").selected_text(selected_text).width(combo_width).show_ui(ui, |ui| {
@@ -1081,7 +1127,7 @@ impl App {
                             match f.release_type {
                                 Some(2) => tag(ui, "Beta", c_warn()),
                                 Some(3) => tag(ui, "Alpha", c_danger()),
-                                _ => tag(ui, "Release", c_accent()),
+                                _ => tag(ui, "Release", c_muted()),
                             }
                             for g in f.game_versions.iter().take(8) {
                                 tag(ui, g, c_muted());
@@ -1105,7 +1151,7 @@ impl App {
                     if is_pack {
                         ui.add_space(4.0);
                         ui.horizontal(|ui| {
-                            muted(ui, "Instance name");
+                            super::discover::filter_label(ui, "Instance name");
                             ui.add(egui::TextEdit::singleline(&mut d.name).desired_width(320.0).background_color(c_field()));
                         });
                     }
@@ -1129,7 +1175,7 @@ impl App {
                             });
                         } else if !d.deps.is_empty() {
                             ui.add_space(6.0);
-                            ui.label(RichText::new("These mods go with it").semibold());
+                            ui.label(RichText::new("These mods go with it").size(15.0).semibold());
                             small_muted(ui, "Required ones are ticked. Tick the others to add them too.");
                             ScrollArea::vertical().max_height(170.0).id_salt("cf-deps").show(ui, |ui| {
                                 for (dep, on) in d.deps.iter_mut() {
@@ -1140,7 +1186,7 @@ impl App {
                                             ui.horizontal(|ui| {
                                                 ui.label(RichText::new(&dep.project.name).semibold());
                                                 if dep.is_required() {
-                                                    tag(ui, "Required", c_accent());
+                                                    tag(ui, "Required", c_text());
                                                 } else {
                                                     tag(ui, "Optional", c_muted());
                                                 }
@@ -1162,7 +1208,7 @@ impl App {
                         match &d.changelog {
                             Some((id, Ok(text))) if *id == fid => {
                                 ui.add_space(6.0);
-                                ui.label(RichText::new("What changed").semibold());
+                                ui.label(RichText::new("What changed").size(15.0).semibold());
                                 ScrollArea::vertical().max_height(150.0).id_salt("cf-changelog").show(ui, |ui| {
                                     ui.label(text.as_str());
                                 });
@@ -1173,7 +1219,7 @@ impl App {
                             _ => {
                                 if d.changelog_loading {
                                     ui.spinner();
-                                } else if ui.link("Show what changed in this version").clicked() {
+                                } else if super::discover::text_link(ui, "Show what changed in this version", 13.0).clicked() {
                                     want_changelog = true;
                                 }
                             }
@@ -1181,7 +1227,7 @@ impl App {
                     }
                 }
             });
-            ui.add_space(10.0);
+            ui.add_space(12.0);
             ui.horizontal_wrapped(|ui| {
                 // wait for the list of what the file needs, or the mod would go in without it
                 let can = !d.files.is_empty() && (is_pack || (target.is_some() && !d.deps_loading));
@@ -1278,44 +1324,43 @@ impl App {
         let mut confirm = self.cf.confirm_skip;
 
         let (width, list_height) = modal_size(ctx, 660.0, 300.0);
-        egui::Modal::new(Id::unique("cf-browser-dialog")).show(ctx, |ui| {
+        egui::Modal::new(Id::unique("cf-browser-dialog")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
             ui.set_width(width);
-            ui.label(RichText::new("Download these in your browser").size(19.0).semibold());
+            ui.label(RichText::new("Download these in your browser").size(18.0).semibold());
             ui.add_space(4.0);
             ui.label("The authors of these files do not let launchers download them. Open each one in your browser and save it to your Downloads folder; BlockForge notices it there and carries on by itself.");
             small_muted(ui, format!("Watching: {}", user_folder.display()));
             ui.add_space(8.0);
             ScrollArea::vertical().max_height(list_height.min(320.0)).id_salt("cf-browser-list").show(ui, |ui| {
                 for it in &items {
-                    egui::Frame::new().fill(c_card()).stroke(Stroke::new(1.0, c_border())).corner_radius(CornerRadius::same(10)).inner_margin(egui::Margin::symmetric(12, 8)).show(ui, |ui| {
-                        ui.set_width(ui.available_width());
-                        ui.horizontal(|ui| {
-                            ui.vertical(|ui| {
-                                ui.set_max_width((ui.available_width() - 260.0).max(120.0));
-                                ui.add(egui::Label::new(RichText::new(&it.request.label).semibold()).truncate());
-                                ui.add(egui::Label::new(RichText::new(&it.request.file_name).color(c_muted()).size(12.0)).truncate());
-                            });
-                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| match &it.state {
-                                ItemState::Waiting => {
-                                    if secondary(ui, "Skip").clicked() {
-                                        skip_one = Some(it.id);
-                                    }
-                                    if secondary(ui, "Copy link").clicked() {
-                                        ui.ctx().copy_text(it.request.url.clone());
-                                    }
-                                    if primary(ui, "Open").clicked() {
-                                        let _ = open::that(&it.request.url);
-                                    }
+                    ui.horizontal(|ui| {
+                        ui.vertical(|ui| {
+                            ui.set_max_width((ui.available_width() - 260.0).max(120.0));
+                            ui.add(egui::Label::new(RichText::new(&it.request.label).semibold()).truncate());
+                            ui.add(egui::Label::new(RichText::new(&it.request.file_name).color(c_muted()).size(12.0)).truncate());
+                        });
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| match &it.state {
+                            ItemState::Waiting => {
+                                if secondary(ui, "Skip").clicked() {
+                                    skip_one = Some(it.id);
                                 }
-                                ItemState::Found(_) => {
-                                    ui.label(RichText::new("Download complete").color(c_accent()));
+                                if secondary(ui, "Copy link").clicked() {
+                                    ui.ctx().copy_text(it.request.url.clone());
                                 }
-                                ItemState::Skipped => {
-                                    ui.label(RichText::new("Skipped").color(c_muted()));
+                                if secondary(ui, "Open").clicked() {
+                                    let _ = open::that(&it.request.url);
                                 }
-                            });
+                            }
+                            ItemState::Found(_) => {
+                                ui.label(RichText::new("Download complete").color(c_accent()));
+                            }
+                            ItemState::Skipped => {
+                                ui.label(RichText::new("Skipped").color(c_muted()));
+                            }
                         });
                     });
+                    ui.add_space(2.0);
+                    ui.separator();
                 }
             });
             ui.add_space(8.0);
@@ -1374,9 +1419,9 @@ impl App {
         let mut ignore_pack: Option<(String, i64)> = None;
         let mut update_all = false;
         let (width, list_height) = modal_size(ctx, 620.0, 220.0);
-        let modal = egui::Modal::new(Id::unique("cf-updates")).show(ctx, |ui| {
+        let modal = egui::Modal::new(Id::unique("cf-updates")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
             ui.set_width(width);
-            ui.label(RichText::new(&w.title).size(19.0).semibold());
+            ui.label(RichText::new(&w.title).size(18.0).semibold());
             ui.add_space(6.0);
             if w.loading {
                 ui.horizontal(|ui| {
@@ -1391,43 +1436,54 @@ impl App {
                 muted(ui, "Everything is up to date.");
             }
             ScrollArea::vertical().max_height(list_height.min(340.0)).id_salt("cf-updates-list").show(ui, |ui| {
+                let only_one = w.mods.len() + w.packs.len() == 1;
                 for u in &w.mods {
-                    card(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            ui.vertical(|ui| {
-                                ui.set_max_width((ui.available_width() - 110.0).max(160.0));
-                                ui.label(RichText::new(&u.project.name).semibold());
-                                small_muted(ui, format!("{}  ->  {}", u.installed_file, u.latest.label()));
-                            });
-                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                if primary(ui, "Update").clicked() {
-                                    apply_mod = Some(u.clone());
-                                }
-                            });
+                    ui.horizontal(|ui| {
+                        ui.vertical(|ui| {
+                            ui.set_max_width((ui.available_width() - 110.0).max(160.0));
+                            ui.label(RichText::new(&u.project.name).semibold());
+                            small_muted(ui, format!("{}  ->  {}", u.installed_file, u.latest.label()));
+                        });
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            let clicked = if only_one {
+                                primary(ui, "Update").clicked()
+                            } else {
+                                secondary(ui, "Update").clicked()
+                            };
+                            if clicked {
+                                apply_mod = Some(u.clone());
+                            }
                         });
                     });
+                    ui.add_space(2.0);
+                    ui.separator();
                 }
                 for (folder, name, u) in &w.packs {
-                    card(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            ui.vertical(|ui| {
-                                ui.set_max_width((ui.available_width() - 170.0).max(160.0));
-                                ui.label(RichText::new(name).semibold());
-                                small_muted(ui, format!("New version: {}", u.latest.label()));
-                                if u.ignored {
-                                    small_muted(ui, "You chose to ignore this update");
-                                }
-                            });
-                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                if primary(ui, "Update").clicked() {
-                                    apply_pack = Some((folder.clone(), u.clone()));
-                                }
-                                if !u.ignored && secondary(ui, "Ignore").clicked() {
-                                    ignore_pack = Some((folder.clone(), u.latest.id));
-                                }
-                            });
+                    ui.horizontal(|ui| {
+                        ui.vertical(|ui| {
+                            ui.set_max_width((ui.available_width() - 170.0).max(160.0));
+                            ui.label(RichText::new(name).semibold());
+                            small_muted(ui, format!("New version: {}", u.latest.label()));
+                            if u.ignored {
+                                small_muted(ui, "You chose to ignore this update");
+                            }
+                        });
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            let clicked = if only_one {
+                                primary(ui, "Update").clicked()
+                            } else {
+                                secondary(ui, "Update").clicked()
+                            };
+                            if clicked {
+                                apply_pack = Some((folder.clone(), u.clone()));
+                            }
+                            if !u.ignored && secondary(ui, "Ignore").clicked() {
+                                ignore_pack = Some((folder.clone(), u.latest.id));
+                            }
                         });
                     });
+                    ui.add_space(2.0);
+                    ui.separator();
                 }
             });
             ui.add_space(8.0);
