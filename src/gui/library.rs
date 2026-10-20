@@ -400,15 +400,11 @@ impl App {
             return;
         };
         let mut action = None;
-        // one right edge: the back link, the title row and the tab bar end where what is under them ends. The
-        // overview and the settings are forms and keep to the width of a form (their scroll bar stays at the window's
-        // edge, in a strip of its own); the mods get a little more; the log gets all of the room.
+        // one right edge, and the same one on every tab: the back link, the title row, the tab bar and what is under
+        // them all end at the same x, so Play stays where it is when the tab changes. In a wider window the page
+        // keeps to this column instead of stretching; the scroll bar has its own strip at the window's edge.
         let room = ui.available_width();
-        let column = match self.tab {
-            InstTab::Overview | InstTab::Settings => (room - ui.spacing().scroll.allocated_width()).min(FORM_COLUMN),
-            InstTab::Mods => room.min(MODS_COLUMN),
-            InstTab::Logs => room,
-        };
+        let column = (room - ui.spacing().scroll.allocated_width()).min(INSTANCE_COLUMN);
         ui.scope(|ui| {
             ui.set_max_width(column);
             self.instance_header(ui, &inst, &mut action);
@@ -422,7 +418,13 @@ impl App {
                 })
                 .inner
             }
-            InstTab::Logs => self.tab_logs(ui, &inst),
+            InstTab::Logs => {
+                ui.scope(|ui| {
+                    ui.set_max_width(column);
+                    self.tab_logs(ui, &inst);
+                })
+                .inner
+            }
             InstTab::Settings => self.tab_settings(ui, &inst),
         }
         if let Some(a) = action {
@@ -709,11 +711,12 @@ impl App {
     }
 }
 
-/// The widest the overview and the settings of an instance get, with the header over them: the width of a form.
-pub(super) const FORM_COLUMN: f32 = 760.0;
+/// The width of an instance's page on every tab (the header and what is under it end at the same edge, so Play stays
+/// where it is when the tab changes).
+const INSTANCE_COLUMN: f32 = 1040.0;
 
-/// The widest the mods list gets, with the header over it: a switch stays within reach of its mod's name.
-const MODS_COLUMN: f32 = 1040.0;
+/// The widest a form on an instance's page gets.
+pub(super) const FORM_COLUMN: f32 = INSTANCE_COLUMN;
 
 /// How many shortenings [`instance_meta`] has.
 const META_LEVELS: usize = 4;
