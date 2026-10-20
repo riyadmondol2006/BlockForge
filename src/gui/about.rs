@@ -189,6 +189,44 @@ impl App {
             ui.add_space(6.0);
 
             card(ui, |ui| {
+                ui.label(RichText::new(crate::tr!("CREDITS")).size(11.0).strong().color(c_accent()));
+                ui.horizontal_top(|ui| {
+                    ui.label(RichText::new("\u{2022}").color(c_accent()));
+                    ui.add(
+                        egui::Label::new(crate::tr!(
+                            "ATLauncher, by the ATLauncher team and its contributors (GPL-3.0): the foundation BlockForge is built on."
+                        ))
+                        .wrap(),
+                    );
+                });
+                #[cfg(feature = "converter")]
+                {
+                    ui.horizontal_top(|ui| {
+                        ui.label(RichText::new("\u{2022}").color(c_accent()));
+                        ui.add(
+                            egui::Label::new(crate::tr!(
+                                "Chunker, by Hive Games (MIT License): the world converter is a Rust port of it."
+                            ))
+                            .wrap(),
+                        );
+                    });
+                    small_muted(
+                        ui,
+                        crate::tr!("BlockForge is not affiliated with or endorsed by Hive Games, the makers of Chunker."),
+                    );
+                    ui.horizontal(|ui| {
+                        if secondary(ui, &crate::tr!("Chunker on GitHub")).clicked() {
+                            link = Some("https://github.com/HiveGamesOSS/Chunker".to_string());
+                        }
+                        if secondary(ui, &crate::tr!("Chunker license")).clicked() {
+                            link = Some(format!("{REPO}/blob/main/NOTICE.md"));
+                        }
+                    });
+                }
+            });
+            ui.add_space(6.0);
+
+            card(ui, |ui| {
                 ui.label(RichText::new("WHAT IT DOES").size(11.0).strong().color(c_accent()));
                 for line in [
                     "Play offline with any name, or sign in with Microsoft.",

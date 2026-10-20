@@ -474,7 +474,7 @@ impl App {
                 muted(ui, "Folder");
                 ui.add(egui::Label::new(inst.root.display().to_string()).truncate());
                 ui.add_space(6.0);
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     if secondary_icon(ui, Icon::Folder, "Open folder").clicked() {
                         self.open_path(&inst.root);
                     }
@@ -490,6 +490,8 @@ impl App {
                     if secondary(ui, "Export").clicked() {
                         self.open_export(&inst.folder);
                     }
+                    #[cfg(feature = "converter")]
+                    self.add_bedrock_world_button(ui, inst);
                     if let Some(v) = self.ftb.updates.get(&inst.folder).cloned() {
                         if primary(ui, &format!("Update to {}", v.label())).clicked() {
                             self.ftb_update_instance(&inst.folder);

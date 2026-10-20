@@ -58,6 +58,11 @@
 - **A crafting calculator.** Pick an item and an amount and the Crafting page lists what to gather, what to craft or
   smelt in order, the fuel, and how many chests it takes, using the recipes of your own Minecraft files, so every
   version from 1.13 on works.
+- **World conversion.** Bedrock Edition worlds to Java Edition, and only that way. The Tools page has a Convert a
+  Bedrock world screen (a world folder, or a `.mcworld` or `.zip`, to a Java world from 1.13 to the newest version), and
+  an instance has an Add a Bedrock world button that converts the world straight into its saves folder, so it shows
+  up in Singleplayer. World conversion is powered by a Rust port of [Chunker](https://github.com/HiveGamesOSS/Chunker) by Hive Games (MIT). The original
+  world is never changed. See [Credits and license](#credits-and-license).
 - **Real desktop citizen.** Menu entries, icons and shortcuts on every system, a tray icon, a console window, light and
   dark themes, skins with a preview, backups, and drag and drop of mods, packs and instances.
 - **Private by default.** No usage statistics and no crash reports exist in BlockForge. See [PRIVACY.md](PRIVACY.md).
@@ -249,3 +254,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for how the code is laid out and [TESTING
 BlockForge is free software under the [GNU General Public License v3](LICENSE). It is built on the work of
 [ATLauncher](https://github.com/ATLauncher/ATLauncher) and its contributors; see [NOTICE.md](NOTICE.md) for the full
 credits and third-party licenses. "Minecraft" is a trademark of Mojang AB.
+
+World conversion is a Rust port of [Chunker](https://github.com/HiveGamesOSS/Chunker) by Hive Games, which is
+distributed under the MIT License (Copyright (c) 2024 Hive Games). The license text is in [NOTICE.md](NOTICE.md), the
+files derived from Chunker say so in their header, and the Convert screen and the About page credit it. BlockForge is
+not affiliated with or endorsed by Hive Games.

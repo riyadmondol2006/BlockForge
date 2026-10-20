@@ -3,6 +3,39 @@
 The section for a version is used as the text of its release on GitHub. Older releases (the Java versions, up to
 3.4.42.x) are on the [releases page](https://github.com/riyadmondol2006/BlockForge/releases).
 
+## 4.4.0
+
+World conversion, powered by a Rust port of Chunker by Hive Games. This version converts Bedrock Edition worlds to
+Java Edition (BlockForge does not convert in the other direction).
+
+### What is new
+
+- **Convert a Bedrock world.** A new page (a card on the Tools page) turns a Bedrock Edition world into a Java Edition
+  world: choose the world (a folder, or a `.mcworld` or `.zip` file, or drop it on the page), the Java version to
+  write, the dimensions to keep, and where to save it. A Java world is refused with a message, because BlockForge
+  converts in this direction only. It shows the progress, can be stopped, and ends with a summary (columns converted,
+  warnings, blocks without an exact match) or the reason it failed with a button to copy the details. The original
+  world is never written to, and the page refuses to save into it or into a folder that already has files in it.
+- **Add a Bedrock world.** An instance's overview has an Add a Bedrock world button. It opens the same page, set to
+  save the world into the instance's saves folder (under a free name) and to write the instance's Minecraft version
+  when it is 1.13 or newer. When it is done, Open the saves folder shows it, and the world is in Singleplayer.
+- **What converts.** Bedrock worlds (a folder or a `.mcworld`, Bedrock 1.13 up to 1.26) to Java Edition 1.13 up to the
+  newest: blocks and their states, biomes, block entities (signs and hanging signs, chests and other containers with
+  their items and enchantments, command blocks, beds, banners, skulls, spawners, ...), the level settings and the
+  player's spawn. It was tried on a real Bedrock map and the result opens in Minecraft 26.3. Not converted yet:
+  entities (mobs, armor stands, paintings), pending block updates, map items' pictures, and old
+  Bedrock worlds from before 1.13. Blocks without an equivalent become air and are listed in the summary.
+- **Credits.** The About page and the README credit ATLauncher and Chunker (MIT License, the license text is in
+  NOTICE.md); BlockForge is not affiliated with or endorsed by Hive Games.
+
+### Behind the scenes
+
+- The converter is the cargo feature `converter`, on by default; `cargo build --no-default-features` builds the
+  launcher without it and without the Convert entries.
+- The block, item and biome tables are not written by hand: they were produced by running Chunker's own resolvers
+  (`tools/convert/`), and they are 131 KB in the program. The release binary grew by about 2.5 MB.
+- Heavy work runs on worker threads with bounded memory, and nothing of the converter loads until a world is converted.
+
 ## 4.3.0
 
 A crafting calculator, and versions that raise themselves.

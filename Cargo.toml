@@ -37,10 +37,25 @@ tokio = { version = "1.53.3", features = ["rt-multi-thread", "macros", "fs", "pr
 uuid = { version = "1.28.0", features = ["v4"] }
 zip = { version = "9.0.3", default-features = false, features = ["deflate"] }
 
+indexmap = { version = "2", optional = true }
+lz4_flex = { version = "0.11", default-features = false, features = ["std", "safe-encode", "safe-decode"], optional = true }
+rusty-leveldb = { version = "4.0.2", optional = true }
 regex = "1.11"
 base64 = "0.23"
 sha2 = "0.11"
 toml = "0.9"
+
+[[example]]
+name = "convert_world"
+required-features = ["converter"]
+
+[[example]]
+name = "craft_diff"
+
+[features]
+default = ["converter"]
+# World conversion (Bedrock to Java), a Rust port of Chunker by Hive Games (MIT). See PORTING.md.
+converter = ["dep:indexmap", "dep:rusty-leveldb", "dep:lz4_flex", "serde_json/preserve_order"]
 
 [profile.release]
 opt-level = 3

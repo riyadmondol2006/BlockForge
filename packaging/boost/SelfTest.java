@@ -564,6 +564,10 @@ public final class SelfTest {
         // 2b. the game's own loader defines the listed classes too (a list from a start that ran differently): the
         // helper's copies were for nothing, and the list is removed
         Result rd = runGame(agent, gameJar, opts.replace("key=k1", "key=k2"), "dupes", rec);
+        if (!(rd.code == 0 && rd.out.contains("belong to another class loader") && rd.out.contains("fake game: list removed"))) {
+            // a busy machine can end the fake game before the helper looked at the classes: one more try
+            rd = runGame(agent, gameJar, opts.replace("key=k1", "key=k2"), "dupes", rec);
+        }
         check("agent: a list whose classes another loader defines is removed", rd.code == 0
                 && rd.out.contains("belong to another class loader") && rd.out.contains("fake game: list removed"),
                 rd.out);

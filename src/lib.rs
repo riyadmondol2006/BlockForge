@@ -28,6 +28,8 @@ pub mod cf_seam;
 pub mod classcache;
 pub mod config;
 pub mod content;
+#[cfg(feature = "converter")]
+pub mod convert;
 pub mod craft;
 pub mod curseforge;
 pub mod dependencies;

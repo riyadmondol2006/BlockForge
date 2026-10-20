@@ -4,6 +4,10 @@
 mod about;
 mod accounts;
 mod console;
+#[cfg(feature = "converter")]
+mod convert;
+#[cfg(feature = "converter")]
+mod convert_view;
 mod craft;
 mod craft_fmt;
 mod craft_pick;
@@ -81,6 +85,9 @@ pub enum Page {
     Settings,
     Tools,
     Craft,
+    /// The world converter; reached from the Tools page and an instance, so it has no item of its own.
+    #[cfg(feature = "converter")]
+    Convert,
     Servers,
     About,
 }
@@ -102,10 +109,23 @@ pub enum Msg {
     Deleted(String),
     InstanceImage(String, Result<(), String>),
     Manifest(Result<Manifest, String>),
-    LoaderVersions { loader: Loader, mc: String, result: Result<Vec<String>, String> },
-    Search { seq: u64, result: Result<(Vec<Hit>, u64), String> },
-    Icon { url: String, bytes: Option<Vec<u8>> },
-    TaskDone { id: u64, result: Result<String, String> },
+    LoaderVersions {
+        loader: Loader,
+        mc: String,
+        result: Result<Vec<String>, String>,
+    },
+    Search {
+        seq: u64,
+        result: Result<(Vec<Hit>, u64), String>,
+    },
+    Icon {
+        url: String,
+        bytes: Option<Vec<u8>>,
+    },
+    TaskDone {
+        id: u64,
+        result: Result<String, String>,
+    },
     GameRunning(String),
     GameLog(String, LogLine),
     GameExit(String, Option<i32>),
@@ -117,7 +137,11 @@ pub enum Msg {
     Runtimes(Vec<(String, String)>),
     LogUploaded(Result<String, String>),
     Picked(instance_menu::PickPurpose, Option<std::path::PathBuf>),
-    DialogLoaderVersions { loader: Loader, mc: String, result: Result<Vec<String>, String> },
+    DialogLoaderVersions {
+        loader: Loader,
+        mc: String,
+        result: Result<Vec<String>, String>,
+    },
     Update(updates::UpdateMsg),
     Tray(tray::TrayCmd),
     AccountRefreshed(Result<Account, String>),
@@ -126,6 +150,8 @@ pub enum Msg {
     Mods(mods::ModsMsg),
     Packs(packs::PacksMsg),
     Craft(craft::CraftMsg),
+    #[cfg(feature = "converter")]
+    Convert(convert::ConvertMsg),
 }
 
 #[derive(Clone)]
@@ -254,6 +280,9 @@ pub struct App {
     packs: packs::PacksState,
     /// The crafting calculator, made when its page is first opened.
     craft: Option<Box<craft::CraftState>>,
+    /// The world converter, made when its page is first opened.
+    #[cfg(feature = "converter")]
+    convert: Option<Box<convert::ConvertState>>,
     shot: Option<Shot>,
     autoplay: Option<AutoPlay>,
     frames: u64,
@@ -378,6 +407,8 @@ impl App {
             mods: mods::ModsState::default(),
             packs: packs::PacksState::default(),
             craft: None,
+            #[cfg(feature = "converter")]
+            convert: None,
             cf: curseforge::CfState::default(),
             acct: accounts::AcctState::default(),
             shot: Shot::from_env(),
@@ -907,6 +938,8 @@ impl App {
             Msg::Mods(m) => self.mods_handle(m),
             Msg::Packs(m) => self.packs_msg(m),
             Msg::Craft(m) => self.craft_msg(m),
+            #[cfg(feature = "converter")]
+            Msg::Convert(m) => self.convert_msg(m),
             Msg::Picked(p, path) => self.picked(p, path),
             Msg::DialogLoaderVersions { loader, mc, result } => self.dialog_loader_versions(loader, &mc, result),
             Msg::Tray(cmd) => match cmd {
@@ -989,6 +1022,8 @@ impl App {
                 ui.spacing_mut().item_spacing.y = 4.0;
                 for (page, label, icon) in items {
                     let active = self.page == page || (page == Page::Library && self.page == Page::Instance);
+                    #[cfg(feature = "converter")]
+                    let active = active || (page == self.convert_nav_page() && self.page == Page::Convert);
                     if self.nav_button(ui, icon, label, active).clicked() {
                         self.page = page;
                     }
@@ -1245,6 +1280,9 @@ impl eframe::App for App {
         // modpacks and instance folders dropped on the window open the import window
         let dropped: Vec<std::path::PathBuf> =
             ctx.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).collect());
+        // a world dropped on the Convert page is the world to convert
+        #[cfg(feature = "converter")]
+        let dropped: Vec<std::path::PathBuf> = dropped.into_iter().filter(|p| !self.convert_handle_drop(p)).collect();
         // a PNG dropped on the skin window is the new skin; everything else goes to the import flow
         let dropped: Vec<std::path::PathBuf> =
             dropped.into_iter().filter(|p| !self.svc_handle_drop(p) && !self.mods_accept_drop(p)).collect();
@@ -1336,6 +1374,8 @@ impl eframe::App for App {
                     Page::Settings => self.settings_ui(ui),
                     Page::Tools => self.tools_ui(ui),
                     Page::Craft => self.craft_ui(ui),
+                    #[cfg(feature = "converter")]
+                    Page::Convert => self.convert_ui(ui),
                     Page::Servers => self.servers_ui(ui),
                     Page::About => self.about_ui(ui),
                 }
@@ -1358,6 +1398,8 @@ impl eframe::App for App {
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         self.craft_flush_now();
+        #[cfg(feature = "converter")]
+        self.convert_on_exit();
         // a window moved just before closing still has its new place written
         if self.settings_save_due.is_some() {
             let _ = self.settings.save(&self.dirs);
@@ -1383,7 +1425,7 @@ struct Shot {
     waiting: Arc<std::sync::atomic::AtomicBool>,
 }
 
-const SHOT_PAGES: [&str; 28] = [
+const SHOT_PAGES: [&str; 34] = [
     "home",
     "library",
     "instance",
@@ -1405,6 +1447,12 @@ const SHOT_PAGES: [&str; 28] = [
     "craft-storage",
     "craft-stock",
     "craft-get-light",
+    "convert",
+    "convert-progress",
+    "convert-done",
+    "convert-error",
+    "convert-instance",
+    "convert-instance-done",
     "packs",
     "ftb",
     "about",
@@ -1546,6 +1594,8 @@ impl App {
                 "tools" => self.page = Page::Tools,
                 "servers" => self.page = Page::Servers,
                 v if v.starts_with("craft") => self.shot_craft(v.trim_end_matches("-light")),
+                #[cfg(feature = "converter")]
+                v if v.starts_with("convert") => self.shot_convert(v),
                 "packs" => self.page = Page::Packs,
                 "ftb" => self.page = Page::Ftb,
                 "about" => self.page = Page::About,
