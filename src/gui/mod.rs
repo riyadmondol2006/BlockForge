@@ -16,6 +16,7 @@ mod create;
 mod curseforge;
 mod discover;
 mod export;
+mod fonts;
 mod ftb;
 mod icons;
 mod import;
@@ -339,6 +340,7 @@ impl App {
         let logo = cc.egui_ctx.load_texture("logo", logo, egui::TextureOptions::LINEAR);
         let (tx, rx) = std::sync::mpsc::channel();
         let settings = Settings::load(&dirs);
+        fonts::install(&cc.egui_ctx);
         theme::set_dark(theme::theme_is_dark(&settings.theme));
         theme::apply(&cc.egui_ctx, settings.light_mode.unwrap_or_else(low_end_pc));
         let accounts = crate::accounts::load(&dirs);
