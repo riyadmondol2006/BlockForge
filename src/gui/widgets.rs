@@ -68,7 +68,7 @@ fn styled_button(
             rect,
             CornerRadius::same(R_CONTROL),
             bg,
-            if enabled { stroke } else { Stroke::NONE },
+            if enabled { stroke } else { Stroke::new(1.0, c_border()) },
             egui::StrokeKind::Inside,
         );
         let galley = ui.painter().layout_no_wrap(text.to_string(), super::fonts::medium(14.0), fg);
@@ -173,20 +173,6 @@ pub fn danger_enabled(ui: &mut Ui, text: &str, enabled: bool) -> Response {
     )
 }
 
-pub fn danger_icon(ui: &mut Ui, icon: Icon, text: &str) -> Response {
-    styled_button(
-        ui,
-        text,
-        Some(icon),
-        c_danger_bg(),
-        c_danger_hover(),
-        c_danger(),
-        Stroke::new(1.0, c_danger_line()),
-        Vec2::ZERO,
-        true,
-    )
-}
-
 pub fn danger_big(ui: &mut Ui, icon: Icon, text: &str) -> Response {
     styled_button(
         ui,
@@ -231,16 +217,14 @@ pub fn chip(ui: &mut Ui, text: &str, selected: bool) -> Response {
 /// it with [`tab`] calls.
 pub fn tab_bar<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
     let width = ui.available_width();
-    let top = ui.cursor().min;
-    let out = ui
-        .horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 22.0;
-            add(ui)
-        })
-        .inner;
-    let y = ui.min_rect().bottom().max(top.y);
-    ui.painter().hline(top.x..=top.x + width, y, Stroke::new(1.0, c_border()));
-    out
+    let left = ui.cursor().min.x;
+    let out = ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 22.0;
+        add(ui)
+    });
+    let y = out.response.rect.bottom();
+    ui.painter().hline(left..=left + width, y, Stroke::new(1.0, c_border()));
+    out.inner
 }
 
 /// One tab of a [`tab_bar`].
