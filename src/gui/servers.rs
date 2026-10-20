@@ -73,8 +73,11 @@ impl App {
             self.reload_servers();
         }
         let mut act: Option<Act> = None;
+        // one width for the header and the list, so their right edges (the folder button and the card) line up; at most
+        // as wide as the list gets, but never wider than the window (the scroll bar floats over the edge)
+        let width = (ui.available_width() - 14.0).min(COLUMN);
         ui.scope(|ui| {
-            ui.set_max_width(ui.available_width().min(COLUMN));
+            ui.set_max_width(width);
             let title = |ui: &mut Ui| {
                 ui.horizontal(|ui| {
                     heading(ui, "Servers");
@@ -118,8 +121,7 @@ impl App {
         let account = self.current_account().cloned();
         let busy: Vec<bool> = self.svc.servers.iter().map(|s| self.server_busy(&s.name)).collect();
         ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
-            // at most as wide as the list gets, but never wider than the window (the scroll bar floats over the edge)
-            ui.set_max_width((ui.available_width() - 14.0).min(COLUMN));
+            ui.set_max_width(width);
             if self.svc.servers.is_empty() {
                 card(ui, |ui| {
                     ui.label(RichText::new("No servers yet").semibold());

@@ -326,7 +326,7 @@ impl App {
                             );
                             ui.add(egui::DragValue::new(&mut s.proxy_port).range(1..=65535));
                             let testing = self.svc.proxy_testing;
-                            if secondary(ui, if testing { "Testing..." } else { "Test" }).clicked() && !testing {
+                            if secondary(ui, if testing { "Testing\u{2026}" } else { "Test" }).clicked() && !testing {
                                 if let Some(proxy) = crate::net::NetConfig::from_settings(&s).proxy {
                                     self.svc.proxy_testing = true;
                                     let n = self.notifier();
