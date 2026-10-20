@@ -73,7 +73,7 @@ impl App {
         // when it was played, and the quiet Play button
         let foot = egui::Rect::from_min_max(egui::pos2(inner.left(), inner.bottom() - 34.0), inner.right_bottom());
         let mut bottom = ui.new_child(UiBuilder::new().max_rect(foot).layout(Layout::right_to_left(Align::Center)));
-        if play_chip(&mut bottom, playing).clicked() {
+        if play_chip(&mut bottom, playing, hovered).clicked() {
             act = Some(if playing { Act::Stop(folder.clone()) } else { Act::Play(folder.clone()) });
         }
         let mut note = if playing { "Playing now".to_string() } else { time_ago(inst.last_played()) };
@@ -221,7 +221,7 @@ impl App {
                                         if danger_big(ui, Icon::Stop, "Stop").clicked() {
                                             action = Some(Act::Stop(h.folder.clone()));
                                         }
-                                    } else if primary_big(ui, Icon::Play, "Play").clicked() {
+                                    } else if play_button(ui, true).clicked() {
                                         action = Some(Act::Play(h.folder.clone()));
                                     }
                                     if secondary(ui, "Details").clicked() {
@@ -408,7 +408,7 @@ impl App {
                 if danger_big(ui, Icon::Stop, "Stop").clicked() {
                     action = Some(Act::Stop(folder.clone()));
                 }
-            } else if primary_big(ui, Icon::Play, "Play").clicked() {
+            } else if play_button(ui, true).clicked() {
                 action = Some(Act::Play(folder.clone()));
             }
             if let Some(a) = this.play_as_menu(ui, &folder) {

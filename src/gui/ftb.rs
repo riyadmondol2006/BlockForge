@@ -430,7 +430,7 @@ impl App {
         }
 
         if self.ftb.packs.is_empty() && self.ftb.loading {
-            skeleton_rows(ui, 6);
+            skeleton_rows(ui, 6, 76.0);
         } else if self.ftb.packs.is_empty() && self.ftb.error.is_none() {
             let query = self.ftb.query.trim().to_string();
             let title = if query.is_empty() {

@@ -30,6 +30,7 @@ mod performance;
 mod pictures;
 mod settings;
 mod startup;
+mod strip;
 mod theme;
 mod tray;
 mod updates;

@@ -26,7 +26,7 @@ fn pick(dark: u32, light: u32) -> Color32 {
 
 /// Window background; the sidebar sits on the same ground.
 pub fn c_bg() -> Color32 {
-    pick(0x0E0F0F, 0xF5F6F5)
+    pick(0x0E100F, 0xF4F5F4)
 }
 /// The sidebar. The same ground as the window, divided from it by one line.
 pub fn c_surface() -> Color32 {
@@ -34,57 +34,78 @@ pub fn c_surface() -> Color32 {
 }
 /// Cards and panels.
 pub fn c_card() -> Color32 {
-    pick(0x151716, 0xFFFFFF)
-}
-pub fn c_card_hover() -> Color32 {
-    pick(0x1B1D1C, 0xF0F2F1)
+    pick(0x171A18, 0xFFFFFF)
 }
 /// Inputs and tonal buttons.
 pub fn c_field() -> Color32 {
-    pick(0x1B1D1C, 0xEDEFEE)
+    pick(0x1D201E, 0xFFFFFF)
+}
+/// The fill of a row, a nav item or a ghost button under the pointer.
+pub fn c_hover() -> Color32 {
+    pick(0x222624, 0xEAEDEB)
+}
+/// The open nav item, a pressed button, a selected segment, an empty cell of the play strip.
+pub fn c_active() -> Color32 {
+    pick(0x2A2E2C, 0xDEE2DF)
+}
+/// Old names for the hover fill, kept so older code reads the same.
+pub fn c_card_hover() -> Color32 {
+    c_hover()
 }
 pub fn c_field_hover() -> Color32 {
-    pick(0x242726, 0xE2E5E3)
+    c_hover()
 }
 /// Menus, dialogs and tooltips: what floats sits one step above the cards.
 pub fn c_raised() -> Color32 {
-    pick(0x1C1E1D, 0xFFFFFF)
+    pick(0x1F2321, 0xFFFFFF)
 }
 /// The line around cards and panels: barely there.
 pub fn c_border() -> Color32 {
-    pick(0x242726, 0xE2E5E3)
+    pick(0x272B29, 0xE2E5E3)
+}
+/// The line between rows inside one card or list.
+pub fn c_rule() -> Color32 {
+    pick(0x202422, 0xEDEFEE)
 }
 /// The line around things you can press: one step stronger than a card's.
 pub fn c_control() -> Color32 {
-    pick(0x353937, 0xCBD0CD)
+    pick(0x3C413E, 0xC9CECB)
 }
 pub fn c_text() -> Color32 {
     pick(0xECEEED, 0x121413)
 }
 pub fn c_muted() -> Color32 {
-    pick(0xA0A6A2, 0x59605C)
+    pick(0xA7ADA9, 0x565D59)
 }
-/// Meta text, placeholders and the like (still 4.5:1 on the cards).
+/// Meta text, placeholders and the like (4.5:1 on the cards). Never on `c_active` or `c_selection`: use `c_muted` there.
 pub fn c_faint() -> Color32 {
-    pick(0x898F8B, 0x6A716D)
+    pick(0x8C928E, 0x616864)
 }
-/// The ink fill of a selected filter or tab: the text colour turned into a surface.
+/// The ink fill: the main action of a screen, a selected filter, the tab indicator, a switch that is on.
 pub fn c_ink() -> Color32 {
     pick(0xECEEED, 0x1B1E1C)
 }
-pub fn c_on_ink() -> Color32 {
-    pick(0x0E0F0F, 0xF5F6F5)
+pub fn c_ink_hover() -> Color32 {
+    pick(0xFFFFFF, 0x2E322F)
 }
+pub fn c_on_ink() -> Color32 {
+    pick(0x0E100F, 0xFFFFFF)
+}
+/// A selected list row or combo item, and selected text.
+pub fn c_selection() -> Color32 {
+    pick(0x303633, 0xDCE1DE)
+}
+/// Green means Play: the Play button, a running game and the progress of getting one started.
 pub fn c_accent() -> Color32 {
     pick(0x5FD97A, 0x167A36)
 }
 pub fn c_accent_hover() -> Color32 {
-    pick(0x7BE892, 0x1D9141)
+    pick(0x7BE892, 0x12692E)
 }
 pub fn c_on_accent() -> Color32 {
     pick(0x04210C, 0xFFFFFF)
 }
-/// Text selection, and the faint tint behind a highlighted banner.
+/// The tint behind a highlighted banner or a file dropped on the window.
 pub fn c_accent_soft() -> Color32 {
     pick(0x173020, 0xDCEFE1)
 }
@@ -103,11 +124,22 @@ pub fn c_danger_line() -> Color32 {
 pub fn c_warn() -> Color32 {
     pick(0xF5C451, 0x8F6200)
 }
+pub fn c_warn_bg() -> Color32 {
+    pick(0x2A2410, 0xFFF6DB)
+}
 
-/// Corner radii, used everywhere so the shapes agree: cards and panels, things you press, small tags.
-pub const R_CARD: u8 = 12;
-pub const R_CONTROL: u8 = 8;
-pub const R_TAG: u8 = 6;
+/// Corner radii, used everywhere so the shapes agree: cards and panels, things you press, small tags, dialogs.
+pub const R_CARD: u8 = 8;
+pub const R_CONTROL: u8 = 6;
+pub const R_TAG: u8 = 4;
+pub const R_DIALOG: u8 = 12;
+
+/// The type scale: nothing else is used.
+pub const FS_TITLE: f32 = 22.0;
+pub const FS_FIGURE: f32 = 20.0;
+pub const FS_SECTION: f32 = 16.0;
+pub const FS_BODY: f32 = 14.0;
+pub const FS_META: f32 = 12.0;
 
 /// The themes the Java edition offers: id, label, and whether it is one of the dark ones.
 pub const THEMES: [(&str, &str, bool); 18] = [
@@ -147,12 +179,12 @@ pub fn apply(ctx: &egui::Context, reduced_motion: bool) {
     v.extreme_bg_color = c_field();
     v.faint_bg_color = c_card();
     v.window_stroke = Stroke::new(1.0, c_control());
-    v.window_corner_radius = CornerRadius::same(R_CARD + 4);
-    v.menu_corner_radius = CornerRadius::same(R_CONTROL + 2);
+    v.window_corner_radius = CornerRadius::same(R_DIALOG);
+    v.menu_corner_radius = CornerRadius::same(R_CARD);
     v.override_text_color = Some(c_text());
-    v.hyperlink_color = c_accent();
-    v.selection.bg_fill = c_accent_soft();
-    v.selection.stroke = Stroke::new(1.0, c_accent());
+    v.hyperlink_color = c_text();
+    v.selection.bg_fill = c_selection();
+    v.selection.stroke = Stroke::new(1.0, c_text());
     // shadows only on what floats (menus, dialogs, tooltips)
     let shadow = Color32::from_black_alpha(if is_dark() { 140 } else { 36 });
     v.window_shadow = egui::Shadow { offset: [0, 10], blur: 28, spread: 0, color: shadow };
@@ -169,14 +201,14 @@ pub fn apply(ctx: &egui::Context, reduced_motion: bool) {
     v.widgets.inactive.bg_stroke = Stroke::new(1.0, c_control());
     v.widgets.inactive.fg_stroke = Stroke::new(1.0, c_text());
     v.widgets.inactive.corner_radius = r;
-    v.widgets.hovered.bg_fill = c_field_hover();
-    v.widgets.hovered.weak_bg_fill = c_field_hover();
+    v.widgets.hovered.bg_fill = c_hover();
+    v.widgets.hovered.weak_bg_fill = c_hover();
     v.widgets.hovered.bg_stroke = Stroke::new(1.0, c_control());
     v.widgets.hovered.fg_stroke = Stroke::new(1.5, c_text());
     v.widgets.hovered.corner_radius = r;
-    v.widgets.active.bg_fill = c_field_hover();
-    v.widgets.active.weak_bg_fill = c_field_hover();
-    v.widgets.active.bg_stroke = Stroke::new(1.0, c_text());
+    v.widgets.active.bg_fill = c_active();
+    v.widgets.active.weak_bg_fill = c_active();
+    v.widgets.active.bg_stroke = Stroke::new(1.0, c_control());
     v.widgets.active.fg_stroke = Stroke::new(1.5, c_text());
     v.widgets.active.corner_radius = r;
     v.widgets.open = v.widgets.active;
@@ -193,7 +225,7 @@ pub fn apply(ctx: &egui::Context, reduced_motion: bool) {
             (TextStyle::Body, FontId::new(14.0, FontFamily::Proportional)),
             (TextStyle::Button, FontId::new(14.0, FontFamily::Proportional)),
             (TextStyle::Small, FontId::new(12.0, FontFamily::Proportional)),
-            (TextStyle::Monospace, FontId::new(12.5, FontFamily::Monospace)),
+            (TextStyle::Monospace, FontId::new(12.0, FontFamily::Monospace)),
         ]
         .into();
     });

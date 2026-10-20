@@ -277,27 +277,6 @@ pub(super) fn meta_line(ui: &mut Ui, figure: Option<String>, tags: &[(&str, egui
     });
 }
 
-/// Grey placeholders in the shape of rows, while the first results are on their way.
-pub(super) fn skeleton_rows(ui: &mut Ui, count: usize) {
-    for _ in 0..count {
-        row_frame_at(ui, false, |ui| {
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 12.0;
-                let (rect, _) = ui.allocate_exact_size(egui::vec2(48.0, 48.0), egui::Sense::hover());
-                ui.painter().rect_filled(rect, CornerRadius::same(11), c_field());
-                let (rect, _) =
-                    ui.allocate_exact_size(egui::vec2(260.0f32.min(ui.available_width()), 48.0), egui::Sense::hover());
-                let bar = |y: f32, w: f32, h: f32| {
-                    egui::Rect::from_min_size(rect.min + egui::vec2(0.0, y), egui::vec2(w.min(rect.width()), h))
-                };
-                ui.painter().rect_filled(bar(4.0, 150.0, 12.0), CornerRadius::same(4), c_field());
-                ui.painter().rect_filled(bar(22.0, 260.0, 10.0), CornerRadius::same(4), c_field());
-                ui.painter().rect_filled(bar(38.0, 90.0, 8.0), CornerRadius::same(4), c_field());
-            });
-        });
-    }
-}
-
 /// The count under the filters: "1.2K results", right where the list starts.
 pub(super) fn count_line(ui: &mut Ui, text: String) {
     ui.add_space(8.0);
@@ -510,7 +489,7 @@ impl App {
             }
         }
         if self.discover.hits.is_empty() && self.discover.loading {
-            skeleton_rows(ui, 6);
+            skeleton_rows(ui, 6, 76.0);
             return;
         }
         if self.discover.hits.is_empty() && self.discover.error.is_none() {

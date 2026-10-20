@@ -387,7 +387,7 @@ impl App {
             }
         }
         if self.cf.projects.is_empty() && self.cf.loading {
-            skeleton_rows(ui, 6);
+            skeleton_rows(ui, 6, 76.0);
             return true;
         }
         if self.cf.projects.is_empty() && self.cf.error.is_none() && self.cf.searched {

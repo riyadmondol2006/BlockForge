@@ -509,7 +509,7 @@ impl App {
             return;
         }
         let Some(list) = self.packs.atl.clone() else {
-            skeleton_rows(ui, 6);
+            skeleton_rows(ui, 6, 76.0);
             return;
         };
         let user = self.packs_user();
@@ -633,7 +633,7 @@ impl App {
             self.packs_search_technic();
         }
         if self.packs.tech_loading && self.packs.tech.is_empty() {
-            skeleton_rows(ui, 6);
+            skeleton_rows(ui, 6, 76.0);
         } else if self.packs.tech.is_empty() && self.packs.tech_error.is_none() && self.packs.tech_started {
             let query = self.packs.tech_query.trim().to_string();
             let title = if query.is_empty() {

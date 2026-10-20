@@ -111,11 +111,7 @@ pub fn panel<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
     })
 }
 
-/// A hairline across the width of the card, for dividing rows.
-pub fn rule(ui: &mut Ui) {
-    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 1.0), Sense::hover());
-    ui.painter().hline(rect.x_range(), rect.center().y, Stroke::new(1.0, c_border()));
-}
+pub use super::widgets::rule;
 
 /// A tick box: plain and neutral, green only once it is ticked. The hit area is larger than the box.
 pub fn check_box(ui: &mut Ui, on: &mut bool, enabled: bool) -> egui::Response {
