@@ -8,7 +8,7 @@ use std::time::{Duration, Instant, SystemTime};
 use egui::{RichText, Ui};
 
 use super::App;
-use super::instance_menu::Act;
+use super::instance_menu::{Act, ghost_menu, hairline};
 use super::theme::*;
 use super::widgets::*;
 use crate::config::Settings;
@@ -81,6 +81,7 @@ fn ago(t: SystemTime) -> String {
 
 /// `setting_row` with room for a wider control (a row of chips) on the right.
 fn wide_row(ui: &mut Ui, title: &str, control_width: f32, hint: &str, control: impl FnOnce(&mut Ui)) {
+    ui.add_space(12.0);
     ui.horizontal(|ui| {
         ui.vertical(|ui| {
             ui.set_max_width((ui.available_width() - control_width).max(200.0));
@@ -132,7 +133,7 @@ impl SettingsView {
         let mut dirty = false;
         ui.add_space(6.0);
         ui.separator();
-        ui.label(RichText::new("Performance").semibold().color(c_accent()));
+        section(ui, "Performance");
         setting_row(
             ui,
             "Fast start",
@@ -196,34 +197,52 @@ impl SettingsView {
 }
 
 impl App {
-    /// The smoothness and Low-end switches of an instance, shown next to its Fast start switch on the instance's page
-    /// (the cards have no room; their menu has the same switches, see [`App::helpers_menu`]).
+    /// The switches of an instance on its page, as one quiet row of small labelled toggles: Fast start, the
+    /// smoothness helper and the Low-end menu (the cards have no room; their menu has the same switches, see
+    /// [`App::helpers_menu`]).
     pub(super) fn helper_switches(&self, ui: &mut Ui, inst: &Instance) -> Option<Act> {
         let mut act = None;
-        let mut on = lite::enabled(&self.settings, inst);
-        let mode = lowend::mode(&self.settings, inst);
-        // label, switch, then the Low-end menu, read from the left also inside a right-to-left row
-        let order: [u8; 3] = if ui.layout().prefer_right_to_left() { [2, 1, 0] } else { [0, 1, 2] };
-        for step in order {
-            match step {
-                0 => small_muted(ui, "Smooth"),
-                1 => {
-                    if toggle(ui, &mut on).on_hover_text(format!("Smoothness helper: {LITE_HINT}.")).changed() {
-                        act = Some(Act::Helper(inst.folder.clone(), HelperChange::Lite(Some(on))));
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 5.0;
+            // read from the left also inside a right-to-left row
+            let mut order = [0, 1, 2];
+            if ui.layout().prefer_right_to_left() {
+                order.reverse();
+            }
+            for step in order {
+                match step {
+                    0 => {
+                        let mut fast = crate::launch::fast_start_enabled(&self.settings, inst);
+                        if labelled_switch(
+                            ui,
+                            &mut fast,
+                            "Fast start",
+                            "Fast start: a tiny helper that loads Minecraft's classes ahead of time so the game opens sooner. \
+                             Works with every version and mod loader. Turn it off if the game fails to start.",
+                        ) {
+                            act = Some(Act::FastStart(inst.folder.clone(), fast));
+                        }
+                        ui.add_space(8.0);
                     }
-                }
-                _ => {
-                    let shown = RichText::new(format!("Low-end: {}", mode.as_setting())).size(12.0).color(c_muted());
-                    ui.menu_button(shown, |ui| {
-                        if let Some(a) = self.low_end_choices(ui, inst) {
+                    1 => {
+                        let mut on = lite::enabled(&self.settings, inst);
+                        if labelled_switch(ui, &mut on, "Smooth", &format!("Smoothness helper: {LITE_HINT}.")) {
+                            act = Some(Act::Helper(inst.folder.clone(), HelperChange::Lite(Some(on))));
+                        }
+                    }
+                    _ => {
+                        let mode = lowend::mode(&self.settings, inst);
+                        let (resp, choice) = ghost_menu(ui, &format!("Low-end: {}", mode.as_setting()), |ui| {
+                            self.low_end_choices(ui, inst)
+                        });
+                        resp.on_hover_text(LOW_END_HINT);
+                        if let Some(Some(a)) = choice {
                             act = Some(a);
                         }
-                    })
-                    .response
-                    .on_hover_text(LOW_END_HINT);
+                    }
                 }
             }
-        }
+        });
         act
     }
 
@@ -257,11 +276,11 @@ impl App {
         ui.menu_button("Performance\u{2026}", |ui| {
             ui.set_min_width(220.0);
             let mut fast = crate::launch::fast_start_enabled(&self.settings, inst);
-            if ui.checkbox(&mut fast, "Fast start").on_hover_text("Opens the game sooner").changed() {
+            if menu_switch(ui, &mut fast, "Fast start", "Opens the game sooner") {
                 act = Some(Act::FastStart(inst.folder.clone(), fast));
             }
             let mut smooth = lite::enabled(&self.settings, inst);
-            if ui.checkbox(&mut smooth, "Smoothness helper").on_hover_text(LITE_HINT).changed() {
+            if menu_switch(ui, &mut smooth, "Smoothness helper", LITE_HINT) {
                 act = Some(Act::Helper(inst.folder.clone(), HelperChange::Lite(Some(smooth))));
             }
             ui.separator();
@@ -272,14 +291,15 @@ impl App {
         act
     }
 
-    /// The PERFORMANCE card of an instance's settings. Its switches apply at once.
+    /// The Performance block of an instance's settings. Its switches apply at once.
     pub(super) fn instance_performance_card(&self, ui: &mut Ui, inst: &Instance) -> Option<HelperChange> {
         let mut change = None;
         let s = &self.settings;
-        ui.add_space(8.0);
-        card(ui, |ui| {
-            ui.label(RichText::new("PERFORMANCE").size(11.0).semibold().color(c_accent()));
+        hairline(ui);
+        {
+            section(ui, "Performance");
             small_muted(ui, "These apply right away, from the next start of the game.");
+            ui.add_space(4.0);
             let fast_own = crate::launch::boost::instance_override(inst);
             wide_row(
                 ui,
@@ -320,7 +340,7 @@ impl App {
                     }
                 }
             });
-        });
+        }
         change
     }
 
@@ -477,6 +497,42 @@ impl App {
             self.boost_blame = None;
         }
     }
+}
+
+/// A small switch with its label beside it (the label can be pressed too). Returns whether it was changed.
+fn labelled_switch(ui: &mut Ui, on: &mut bool, label: &str, hint: &str) -> bool {
+    let text = egui::Label::new(RichText::new(label).size(12.0).color(c_muted())).sense(egui::Sense::click());
+    // the label follows the switch when read from the left, so it comes first in a right-to-left row
+    let (mut changed, mut clicked) = (false, false);
+    let add_label = |ui: &mut Ui| {
+        clicked = ui.add(text).on_hover_text(hint).on_hover_cursor(egui::CursorIcon::PointingHand).clicked();
+    };
+    if ui.layout().prefer_right_to_left() {
+        add_label(ui);
+        changed |= toggle(ui, on).on_hover_text(hint).changed();
+    } else {
+        changed |= toggle(ui, on).on_hover_text(hint).changed();
+        add_label(ui);
+    }
+    if clicked {
+        *on = !*on;
+        changed = true;
+    }
+    changed
+}
+
+/// A switch with its label in a menu.
+fn menu_switch(ui: &mut Ui, on: &mut bool, label: &str, hint: &str) -> bool {
+    ui.horizontal(|ui| {
+        let mut changed = toggle(ui, on).on_hover_text(hint).changed();
+        let r = ui.add(egui::Label::new(label).sense(egui::Sense::click())).on_hover_text(hint);
+        if r.clicked() {
+            *on = !*on;
+            changed = true;
+        }
+        changed
+    })
+    .inner
 }
 
 /// "Launcher (on)" / "On" / "Off" chips for a switch an instance can follow or override, inside a right-to-left

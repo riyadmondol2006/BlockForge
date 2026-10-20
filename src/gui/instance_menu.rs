@@ -3,13 +3,13 @@
 
 use std::path::PathBuf;
 
-use egui::{RichText, Ui};
+use egui::{Color32, CornerRadius, Response, RichText, Sense, Stroke, Ui, vec2};
 
 use super::theme::*;
 use super::widgets::*;
 use super::{App, InstTab, Msg, Page};
 use crate::instances::{self, Instance};
-use crate::launch::{self, LaunchOptions};
+use crate::launch::LaunchOptions;
 use crate::loaders::{self, Loader};
 
 /// What the player asked an instance to do.
@@ -56,6 +56,183 @@ pub struct LoaderDialog {
     loading: bool,
     requested: Option<(Loader, String)>,
     error: Option<String>,
+}
+
+// ---- quiet controls shared by the instance page (header, Overview, Mods, Backups)
+
+/// A text button with no frame until it is pointed at: for the small actions of a row. `color` is the resting colour
+/// (muted when `None`) and `hot` the colour while pointed at (the text colour when `None`). With `visible` false
+/// nothing is drawn (a row that shows its actions on hover) unless the keyboard is on it, but it can still be
+/// reached.
+pub(super) fn ghost_button(
+    ui: &mut Ui,
+    text: &str,
+    color: Option<Color32>,
+    hot: Option<Color32>,
+    visible: bool,
+) -> Response {
+    let rest = color.unwrap_or_else(c_muted);
+    let w = ui.painter().layout_no_wrap(text.to_string(), super::fonts::medium(13.0), rest).size().x;
+    let (rect, resp) = ui.allocate_exact_size(vec2(w + 20.0, 28.0), Sense::click());
+    let pointed = resp.hovered() || resp.is_pointer_button_down_on();
+    if ui.is_rect_visible(rect) && (visible || resp.has_focus() || pointed) {
+        if pointed {
+            ui.painter().rect_filled(rect, CornerRadius::same(R_CONTROL), c_field_hover());
+        }
+        let fg = if pointed { hot.unwrap_or_else(c_text) } else { rest };
+        let galley = ui.painter().layout_no_wrap(text.to_string(), super::fonts::medium(13.0), fg);
+        ui.painter().galley(rect.center() - galley.size() / 2.0, galley, fg);
+    }
+    focus_ring(ui, &resp, rect, R_CONTROL);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, text));
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+/// The small chevron of a button that opens a menu.
+fn chevron_down(ui: &Ui, c: egui::Pos2, color: Color32) {
+    let s = Stroke::new(1.5, color);
+    ui.painter().line_segment([c + vec2(-3.5, -1.5), c + vec2(0.0, 2.0)], s);
+    ui.painter().line_segment([c + vec2(0.0, 2.0), c + vec2(3.5, -1.5)], s);
+}
+
+/// The frame of a menu that floats: the raised surface, one line, padding 8.
+fn menu_frame(ctx: &egui::Context) -> egui::Frame {
+    let style = ctx.global_style();
+    egui::Frame::new()
+        .fill(c_raised())
+        .stroke(Stroke::new(1.0, c_control()))
+        .corner_radius(CornerRadius::same(R_CONTROL + 2))
+        .shadow(style.visuals.popup_shadow)
+        .inner_margin(egui::Margin::same(8))
+}
+
+/// Items of a menu 32 high with a little air between them.
+pub(super) fn menu_items(ui: &mut Ui) {
+    let s = ui.spacing_mut();
+    s.item_spacing.y = 2.0;
+    s.button_padding = vec2(10.0, 6.0);
+    s.interact_size.y = 32.0;
+}
+
+/// Opens `add` as a menu under `resp` when it is clicked, in the look of the app.
+pub(super) fn open_menu<R>(resp: &Response, add: impl FnOnce(&mut Ui) -> R) -> Option<R> {
+    egui::Popup::menu(resp)
+        .gap(4.0)
+        .frame(menu_frame(&resp.ctx))
+        .show(|ui| {
+            menu_items(ui);
+            add(ui)
+        })
+        .map(|r| r.inner)
+}
+
+/// A neutral button with a chevron that opens a menu (the "Play as" of the header). Returns what the menu returned
+/// while it is open.
+pub(super) fn secondary_menu<R>(ui: &mut Ui, text: &str, add: impl FnOnce(&mut Ui) -> R) -> (Response, Option<R>) {
+    let font = super::fonts::medium(14.0);
+    let w = ui.painter().layout_no_wrap(text.to_string(), font.clone(), c_text()).size().x;
+    let (rect, resp) = ui.allocate_exact_size(vec2(w + 28.0 + 18.0, 32.0), Sense::click());
+    let open = egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&resp));
+    if ui.is_rect_visible(rect) {
+        let bg = if resp.hovered() || open { c_field_hover() } else { c_field() };
+        ui.painter().rect(
+            rect,
+            CornerRadius::same(R_CONTROL),
+            bg,
+            Stroke::new(1.0, c_control()),
+            egui::StrokeKind::Inside,
+        );
+        let galley = ui.painter().layout_no_wrap(text.to_string(), font, c_text());
+        let left = rect.left() + 14.0;
+        ui.painter().galley(egui::pos2(left, rect.center().y - galley.size().y / 2.0), galley, c_text());
+        chevron_down(ui, egui::pos2(rect.right() - 16.0, rect.center().y), c_muted());
+    }
+    focus_ring(ui, &resp, rect, R_CONTROL);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, text));
+    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+    let out = open_menu(&resp, add);
+    (resp, out)
+}
+
+/// A line of muted text with a chevron that opens a menu (the "Low-end: off" of the header).
+pub(super) fn ghost_menu<R>(ui: &mut Ui, text: &str, add: impl FnOnce(&mut Ui) -> R) -> (Response, Option<R>) {
+    let font = super::fonts::medium(12.0);
+    let w = ui.painter().layout_no_wrap(text.to_string(), font.clone(), c_muted()).size().x;
+    let (rect, resp) = ui.allocate_exact_size(vec2(w + 8.0 + 18.0, 28.0), Sense::click());
+    let open = egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&resp));
+    if ui.is_rect_visible(rect) {
+        let pointed = resp.hovered() || open;
+        if pointed {
+            ui.painter().rect_filled(rect, CornerRadius::same(R_CONTROL), c_field_hover());
+        }
+        let fg = if pointed { c_text() } else { c_muted() };
+        let galley = ui.painter().layout_no_wrap(text.to_string(), font, fg);
+        ui.painter().galley(egui::pos2(rect.left() + 6.0, rect.center().y - galley.size().y / 2.0), galley, fg);
+        chevron_down(ui, egui::pos2(rect.right() - 12.0, rect.center().y), fg);
+    }
+    focus_ring(ui, &resp, rect, R_CONTROL);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, text));
+    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+    let out = open_menu(&resp, add);
+    (resp, out)
+}
+
+/// The "Library" link above an instance's page: small, no frame.
+pub(super) fn back_link(ui: &mut Ui, text: &str) -> Response {
+    let font = super::fonts::medium(13.0);
+    let w = ui.painter().layout_no_wrap(text.to_string(), font.clone(), c_muted()).size().x;
+    let (rect, resp) = ui.allocate_exact_size(vec2(w + 12.0 + 14.0, 28.0), Sense::click());
+    let fg = if resp.hovered() { c_text() } else { c_muted() };
+    if ui.is_rect_visible(rect) {
+        super::icons::paint(
+            ui.painter(),
+            super::icons::Icon::Back,
+            egui::pos2(rect.left() + 8.0, rect.center().y),
+            13.0,
+            fg,
+        );
+        let galley = ui.painter().layout_no_wrap(text.to_string(), font, fg);
+        ui.painter().galley(egui::pos2(rect.left() + 18.0, rect.center().y - galley.size().y / 2.0), galley, fg);
+    }
+    focus_ring(ui, &resp, rect, R_CONTROL);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, text));
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+/// One line across the page between two blocks, with air on both sides.
+pub(super) fn hairline(ui: &mut Ui) {
+    ui.add_space(12.0);
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 1.0), Sense::hover());
+    ui.painter().rect_filled(rect, 0.0, c_border());
+    ui.add_space(8.0);
+}
+
+/// A row of small facts, each a grey label over its value, divided by hairlines. It fills the width; in a narrow
+/// window the facts go on more rows.
+pub(super) fn facts_strip(ui: &mut Ui, facts: &[(&str, String)]) {
+    let w = ui.available_width();
+    let cols = ((w / 150.0).floor() as usize).clamp(1, facts.len().max(1));
+    let cw = (w / cols as f32).floor();
+    for row in facts.chunks(cols) {
+        let (rect, _) = ui.allocate_exact_size(vec2(w, 46.0), Sense::hover());
+        for (i, (label, value)) in row.iter().enumerate() {
+            let left = rect.left() + i as f32 * cw;
+            let pad = if i == 0 { 0.0 } else { 16.0 };
+            if i > 0 {
+                let x = left;
+                ui.painter().vline(x, rect.top() + 4.0..=rect.bottom() - 4.0, Stroke::new(1.0, c_border()));
+            }
+            let cell = egui::Rect::from_min_max(
+                egui::pos2(left + pad, rect.top()),
+                egui::pos2(left + cw - 8.0, rect.bottom()),
+            );
+            ui.scope_builder(egui::UiBuilder::new().max_rect(cell), |ui| {
+                ui.spacing_mut().item_spacing.y = 3.0;
+                small_muted(ui, label.to_string());
+                ui.add(egui::Label::new(RichText::new(value.as_str()).size(14.0)).truncate());
+            });
+        }
+    }
 }
 
 impl App {
@@ -134,35 +311,15 @@ impl App {
         }
     }
 
-    /// The "Fast start" switch of an instance: on by default, and the player's choice is kept for this instance.
-    pub(super) fn fast_start_switch(&self, ui: &mut Ui, inst: &Instance) -> Option<Act> {
-        let mut on = launch::fast_start_enabled(&self.settings, inst);
-        let before = on;
-        ui.horizontal(|ui| {
-            toggle(ui, &mut on).on_hover_text(
-                "Fast start: a tiny helper that loads Minecraft's classes ahead of time so the game opens sooner. \
-                 Works with every version and mod loader. Turn it off if the game fails to start.",
-            );
-            small_muted(ui, "Fast start");
-        });
-        (on != before).then(|| Act::FastStart(inst.folder.clone(), on))
-    }
-
-    /// The small arrow next to the big Play button, opening the "play as" menu. Under a right-to-left layout it is
-    /// added before the button so it ends up on its right.
+    /// The "Play as" button next to the big Play button, opening the menu for playing as somebody else. Under a
+    /// right-to-left layout it is added after the button so it ends up on its left.
     pub(super) fn play_as_menu(&self, ui: &mut Ui, folder: &str) -> Option<Act> {
-        let mut act = None;
         let running =
             self.sessions_of(folder).iter().filter(|k| self.games.get(*k).is_some_and(|g| g.active())).count();
-        ui.menu_button(
-            if running > 0 { format!("Play as ({running} running)") } else { "Play as".to_string() },
-            |ui| {
-                act = self.account_menu(ui, folder);
-            },
-        )
-        .response
-        .on_hover_text("Play as another account, or start another game at the same time");
-        act
+        let label = if running > 0 { format!("Play as ({running} running)") } else { "Play as".to_string() };
+        let (resp, act) = secondary_menu(ui, &label, |ui| self.account_menu(ui, folder));
+        resp.on_hover_text("Play as another account, or start another game at the same time");
+        act.flatten()
     }
 
     /// The menu for playing as somebody else: every account, a new offline name, a new Microsoft account, and a way to
@@ -171,6 +328,7 @@ impl App {
         let mut act = None;
         ui.set_min_width(240.0);
         let current = self.current_account().map(|a| a.uuid.clone());
+        ui.add_space(2.0);
         if self.accounts.is_empty() {
             small_muted(ui, "No accounts yet");
         } else {

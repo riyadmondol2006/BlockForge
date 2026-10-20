@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 use egui::{Align, Layout, RichText, Ui};
 
 use super::App;
+use super::instance_menu::ghost_button;
 use super::theme::*;
 use super::widgets::*;
 use crate::backups::{self, Backup, BackupMode};
@@ -80,73 +81,76 @@ impl App {
         let mut toggle_all = false;
         let mut open_folder = false;
 
-        card(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(RichText::new("Backups").semibold().size(16.0));
-                if svc.enable_automatic_backup_after_launch {
-                    tag(ui, "Automatic after playing", c_accent());
-                }
-            });
-            small_muted(
-                ui,
-                "A backup is a zip file of this instance. Worlds and settings are small; adding the mods or everything makes it bigger.",
-            );
-            ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("Backups").size(15.0).semibold());
+            if svc.enable_automatic_backup_after_launch {
+                tag(ui, "Automatic after playing", c_accent());
+            }
+        });
+        small_muted(
+            ui,
+            "A backup is a zip file of this instance. Worlds and settings are small; adding the mods or everything makes it bigger.",
+        );
+        ui.add_space(4.0);
+        ui.horizontal_wrapped(|ui| {
             if working {
                 // a backup or a restore of this instance is running: another one now would read half-written files
-                ui.horizontal(|ui| {
-                    ui.spinner();
-                    muted(ui, "A backup or restore of this instance is running\u{2026}");
-                });
+                ui.spinner();
+                muted(ui, "A backup or restore of this instance is running\u{2026}");
             } else {
-                ui.horizontal_wrapped(|ui| {
-                    for mode in BackupMode::ALL {
-                        if secondary(ui, mode.label()).clicked() {
-                            make = Some(mode);
-                        }
+                for mode in BackupMode::ALL {
+                    if secondary(ui, mode.label()).clicked() {
+                        make = Some(mode);
                     }
-                });
+                }
             }
-            ui.add_space(6.0);
-            if list.is_empty() {
-                small_muted(ui, "No backups of this instance yet.");
+            if secondary_icon(ui, super::icons::Icon::Folder, "Open backups folder").clicked() {
+                open_folder = true;
             }
-            for b in list.iter().take(if show_all { usize::MAX } else { SHOWN }) {
-                ui.horizontal(|ui| {
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        ui.add_enabled_ui(!working, |ui| {
-                            if danger(ui, "Delete").clicked() {
-                                delete = Some(b.path.clone());
-                            }
-                            if secondary(ui, "Restore").clicked() {
-                                restore = Some(b.path.clone());
-                            }
-                        });
-                        // a long file name wraps next to the buttons instead of running under them
-                        ui.with_layout(Layout::top_down(Align::Min), |ui| {
-                            ui.label(when(b));
-                            ui.add(
-                                egui::Label::new(
-                                    RichText::new(format!("{}  \u{00B7}  {}", human_size(b.size), b.file_name))
-                                        .color(c_muted())
-                                        .size(12.0),
-                                )
-                                .wrap(),
-                            );
-                        });
-                    });
-                });
-                ui.separator();
+        });
+        ui.add_space(4.0);
+        if list.is_empty() {
+            small_muted(ui, "No backups of this instance yet. The buttons above make the first one.");
+        }
+        let shown = list.iter().take(if show_all { usize::MAX } else { SHOWN });
+        for (i, b) in shown.enumerate() {
+            if i > 0 {
+                let (line, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 1.0), egui::Sense::hover());
+                ui.painter().rect_filled(line, 0.0, c_border());
             }
             ui.horizontal(|ui| {
-                if list.len() > SHOWN && secondary(ui, if show_all { "Show fewer" } else { "Show all" }).clicked() {
-                    toggle_all = true;
-                }
-                if secondary_icon(ui, super::icons::Icon::Folder, "Open backups folder").clicked() {
-                    open_folder = true;
-                }
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    ui.add_enabled_ui(!working, |ui| {
+                        if ghost_button(ui, "Delete", None, Some(c_danger()), true).clicked() {
+                            delete = Some(b.path.clone());
+                        }
+                        if ghost_button(ui, "Restore", Some(c_text()), None, true).clicked() {
+                            restore = Some(b.path.clone());
+                        }
+                    });
+                    // a long file name wraps next to the buttons instead of running under them
+                    ui.with_layout(Layout::top_down(Align::Min), |ui| {
+                        ui.add_space(4.0);
+                        ui.label(when(b));
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(format!("{}  \u{00B7}  {}", human_size(b.size), b.file_name))
+                                    .color(c_muted())
+                                    .size(12.0),
+                            )
+                            .wrap(),
+                        );
+                        ui.add_space(4.0);
+                    });
+                });
             });
-        });
+        }
+        if list.len() > SHOWN {
+            ui.add_space(4.0);
+            if secondary(ui, if show_all { "Show fewer" } else { "Show all" }).clicked() {
+                toggle_all = true;
+            }
+        }
 
         self.svc.backups.list = list;
         if open_folder {

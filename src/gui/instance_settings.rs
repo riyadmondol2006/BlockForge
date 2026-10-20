@@ -4,6 +4,7 @@
 use egui::{Align, Layout, RichText, ScrollArea, Ui};
 use serde_json::{Value, json};
 
+use super::instance_menu::hairline;
 use super::theme::*;
 use super::widgets::*;
 use super::{App, Msg};
@@ -210,28 +211,39 @@ fn tri(ui: &mut Ui, id: &str, value: &mut Option<bool>) {
         Some(true) => "Yes",
         Some(false) => "No",
     };
-    egui::ComboBox::from_id_salt(id).selected_text(label).width(220.0).show_ui(ui, |ui| {
+    egui::ComboBox::from_id_salt(id).selected_text(label).width(240.0).show_ui(ui, |ui| {
         ui.selectable_value(value, None, "Use launcher default");
         ui.selectable_value(value, Some(true), "Yes");
         ui.selectable_value(value, Some(false), "No");
     });
 }
 
-/// A row with the title above a full-width text field (long paths and commands).
+/// A row with the title above a text field as wide as the form (long paths and commands).
 fn stacked(ui: &mut Ui, title: &str, hint: &str, value: &mut String, placeholder: &str) {
-    ui.add_space(4.0);
+    ui.add_space(12.0);
     ui.label(RichText::new(title).semibold());
     if !hint.is_empty() {
         small_muted(ui, hint);
     }
-    ui.add_sized(
-        [ui.available_width().min(680.0), 38.0],
-        egui::TextEdit::singleline(value)
-            .hint_text(placeholder)
-            .margin(egui::Margin::symmetric(12, 9))
-            .background_color(c_field()),
-    );
+    let width = ui.available_width().min(FORM_WIDTH);
+    search_field(ui, value, placeholder, width);
 }
+
+/// One setting: its title and hint, and the control at the right.
+fn row(ui: &mut Ui, title: &str, hint: &str, control: impl FnOnce(&mut Ui)) {
+    ui.add_space(12.0);
+    setting_row(ui, title, hint, control);
+}
+
+/// A titled block of a settings tab: a plain heading, then its rows.
+fn block(ui: &mut Ui, title: &str, add: impl FnOnce(&mut Ui)) {
+    section(ui, title);
+    ui.add_space(2.0);
+    add(ui);
+}
+
+/// The widest a form gets, so lines of text stay readable on a big window.
+const FORM_WIDTH: f32 = 760.0;
 
 /// The folders in `saves`, sorted by name.
 fn world_names(saves: &std::path::Path) -> Vec<String> {
@@ -289,42 +301,47 @@ impl App {
         let mut rename = false;
         let mut helper_change = None;
 
-        ui.horizontal(|ui| {
-            for (i, label) in ["General", "Java and Minecraft", "Commands"].iter().enumerate() {
-                if chip(ui, label, d.tab == i as u8).clicked() {
-                    d.tab = i as u8;
+        // the tabs and Save sit over the form, so Save ends where the rows end
+        ui.scope(|ui| {
+            ui.set_max_width(ui.available_width().min(FORM_WIDTH));
+            ui.horizontal(|ui| {
+                for (i, label) in ["General", "Java and Minecraft", "Commands"].iter().enumerate() {
+                    if chip(ui, label, d.tab == i as u8).clicked() {
+                        d.tab = i as u8;
+                    }
                 }
-            }
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if primary(ui, "Save").clicked() {
-                    save = true;
-                }
-                if secondary(ui, "Reset").clicked() {
-                    reset = true;
-                }
-                const SHOWN: std::time::Duration = std::time::Duration::from_secs(3);
-                if let Some(left) = d.saved.and_then(|t| SHOWN.checked_sub(t.elapsed())) {
-                    small_muted(ui, "Saved");
-                    ui.ctx().request_repaint_after(left);
-                }
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if primary(ui, "Save").clicked() {
+                        save = true;
+                    }
+                    if secondary(ui, "Reset").clicked() {
+                        reset = true;
+                    }
+                    const SHOWN: std::time::Duration = std::time::Duration::from_secs(3);
+                    if let Some(left) = d.saved.and_then(|t| SHOWN.checked_sub(t.elapsed())) {
+                        small_muted(ui, "Saved");
+                        ui.ctx().request_repaint_after(left);
+                    }
+                });
             });
         });
+        ui.add_space(4.0);
         if let Some(e) = &d.error {
             ui.label(RichText::new(e).color(c_danger()));
         }
         ScrollArea::vertical().id_salt("instance-settings").auto_shrink(false).show(ui, |ui| {
-            // at most 780 wide, and never wider than the window
-            ui.set_max_width(ui.available_width().min(780.0));
+            // as wide as a form should be, and never wider than the window
+            ui.set_max_width(ui.available_width().min(FORM_WIDTH));
+            ui.spacing_mut().item_spacing.y = 4.0;
             match d.tab {
                 0 => {
-                    card(ui, |ui| {
-                        ui.label(RichText::new("ACCOUNT").size(11.0).semibold().color(c_accent()));
-                        setting_row(ui, "Play as", "The account used to start this instance. The launcher default is whichever account is selected in the launcher", |ui| {
+                    block(ui, "Account", |ui| {
+                        row(ui, "Play as", "The account used to start this instance. The launcher default is whichever account is selected in the launcher", |ui| {
                             let shown = match &d.account {
                                 None => "Use launcher default".to_string(),
                                 Some(u) => accounts.iter().find(|a| a.0.eq_ignore_ascii_case(u)).map(|a| a.1.clone()).unwrap_or_else(|| u.clone()),
                             };
-                            egui::ComboBox::from_id_salt("play-as").selected_text(shown).width(260.0).show_ui(ui, |ui| {
+                            egui::ComboBox::from_id_salt("play-as").selected_text(shown).width(240.0).show_ui(ui, |ui| {
                                 ui.selectable_value(&mut d.account, None, "Use launcher default");
                                 for (user, name) in &accounts {
                                     ui.selectable_value(&mut d.account, Some(user.clone()), name);
@@ -332,17 +349,16 @@ impl App {
                             });
                         });
                     });
-                    ui.add_space(8.0);
-                    card(ui, |ui| {
-                        ui.label(RichText::new("QUICK PLAY").size(11.0).semibold().color(c_accent()));
-                        setting_row(ui, "Start in", "Skip the title screen and go straight into a world, server or realm", |ui| {
+                    hairline(ui);
+                    block(ui, "Quick play", |ui| {
+                        row(ui, "Start in", "Skip the title screen and go straight into a world, server or realm", |ui| {
                             let label = |k: QuickKind| match k {
                                 QuickKind::Disabled => "The title screen",
                                 QuickKind::Single => "A single player world",
                                 QuickKind::Multi => "A multiplayer server",
                                 QuickKind::Realm => "A realm",
                             };
-                            egui::ComboBox::from_id_salt("quick-kind").selected_text(label(d.quick)).width(260.0).show_ui(ui, |ui| {
+                            egui::ComboBox::from_id_salt("quick-kind").selected_text(label(d.quick)).width(240.0).show_ui(ui, |ui| {
                                 for k in [QuickKind::Disabled, QuickKind::Single, QuickKind::Multi, QuickKind::Realm] {
                                     ui.selectable_value(&mut d.quick, k, label(k));
                                 }
@@ -351,14 +367,14 @@ impl App {
                         match d.quick {
                             QuickKind::Multi => stacked(ui, "Server address", "The multiplayer server to join once the game has started", &mut d.server, "play.example.com"),
                             QuickKind::Realm => stacked(ui, "Realm ID", "The ID of the realm to join once the game has started", &mut d.realm, ""),
-                            QuickKind::Single => setting_row(ui, "World", "The single player world to load once the game has started", |ui| {
+                            QuickKind::Single => row(ui, "World", "The single player world to load once the game has started", |ui| {
                                 if worlds.is_empty() {
                                     small_muted(ui, "No single player worlds yet");
                                 } else {
                                     if d.world.is_empty() {
                                         d.world = worlds[0].clone();
                                     }
-                                    egui::ComboBox::from_id_salt("quick-world").selected_text(d.world.clone()).width(260.0).show_ui(ui, |ui| {
+                                    egui::ComboBox::from_id_salt("quick-world").selected_text(d.world.clone()).width(240.0).show_ui(ui, |ui| {
                                         for w in &worlds {
                                             ui.selectable_value(&mut d.world, w.clone(), w);
                                         }
@@ -369,9 +385,8 @@ impl App {
                         }
                     });
                     helper_change = self.instance_performance_card(ui, inst);
-                    ui.add_space(8.0);
-                    card(ui, |ui| {
-                        ui.label(RichText::new("INSTANCE").size(11.0).semibold().color(c_accent()));
+                    hairline(ui);
+                    block(ui, "Instance", |ui| {
                         ui.horizontal(|ui| {
                             if secondary(ui, "Rename").clicked() {
                                 rename = true;
@@ -383,21 +398,20 @@ impl App {
                     });
                 }
                 1 => {
-                    card(ui, |ui| {
-                        ui.label(RichText::new("MEMORY").size(11.0).semibold().color(c_accent()));
+                    block(ui, "Memory", |ui| {
                         let hint = if total_mb == 0 {
                             "The most memory Minecraft may use".to_string()
                         } else {
                             format!("The most memory Minecraft may use. This computer has {}", gigabytes(total_mb))
                         };
-                        setting_row(ui, "Maximum memory", &hint, |ui| {
+                        row(ui, "Maximum memory", &hint, |ui| {
                             let follow_label = if launcher_auto { "Automatic (recommended)".to_string() } else { format!("Launcher setting ({launcher_mem} MB)") };
                             let current = match d.mem {
                                 MemChoice::Follow => follow_label.clone(),
                                 MemChoice::Automatic => "Automatic (recommended)".to_string(),
                                 MemChoice::Custom => "Custom".to_string(),
                             };
-                            egui::ComboBox::from_id_salt("mem-choice").selected_text(current).width(220.0).show_ui(ui, |ui| {
+                            egui::ComboBox::from_id_salt("mem-choice").selected_text(current).width(240.0).show_ui(ui, |ui| {
                                 ui.selectable_value(&mut d.mem, MemChoice::Follow, follow_label);
                                 if !launcher_auto {
                                     ui.selectable_value(&mut d.mem, MemChoice::Automatic, "Automatic (recommended)");
@@ -412,29 +426,28 @@ impl App {
                                 ui.add(egui::Slider::new(&mut d.mem_custom, 512..=max).step_by(512.0).suffix(" MB"));
                             });
                         }
-                        setting_row(ui, "PermGen size", "Memory for loaded code, only used by Java 7 and by older modpacks that ask for it", |ui| {
+                        row(ui, "PermGen size", "Memory for loaded code, only used by Java 7 and by older modpacks that ask for it", |ui| {
                             ui.add(egui::DragValue::new(&mut d.perm_gen).range(32..=total_mb.max(256) as u32).speed(8.0).suffix(" MB"));
                         });
                         if d.perm_gen > 256 && d.perm_gen != metaspace {
                             ui.label(RichText::new("Setting PermGen size above 256MB is not recommended and can cause issues.").color(c_warn()));
                         }
                     });
-                    ui.add_space(8.0);
-                    card(ui, |ui| {
-                        ui.label(RichText::new("JAVA").size(11.0).semibold().color(c_accent()));
+                    hairline(ui);
+                    block(ui, "Java", |ui| {
                         if inst.file.version.java_version.is_some() {
-                            setting_row(ui, "Use Java provided by Minecraft", "Recommended. Turning this off may stop Minecraft from starting", |ui| tri(ui, "use-mc-java", &mut d.use_mc_java));
+                            row(ui, "Use Java provided by Minecraft", "Recommended. Turning this off may stop Minecraft from starting", |ui| tri(ui, "use-mc-java", &mut d.use_mc_java));
                         }
                         if uses_mc_java {
-                            setting_row(ui, "Java", "This Minecraft version comes with its own Java. To pick another, turn off \"Use Java provided by Minecraft\" (not recommended)", |ui| {
+                            row(ui, "Java", "This Minecraft version comes with its own Java. To pick another, turn off \"Use Java provided by Minecraft\" (not recommended)", |ui| {
                                 small_muted(ui, "Provided by Minecraft");
                             });
-                            setting_row(ui, "Java runtime", "Which of Mojang's Java runtimes starts this instance. Changing it is rarely needed", |ui| {
+                            row(ui, "Java runtime", "Which of Mojang's Java runtimes starts this instance. Changing it is rarely needed", |ui| {
                                 let shown = match &d.runtime {
                                     None => "Use default (recommended)".to_string(),
                                     Some(r) => runtimes.iter().find(|x| &x.0 == r).map(|x| format!("{} (Java {})", x.0, x.1)).unwrap_or_else(|| r.clone()),
                                 };
-                                egui::ComboBox::from_id_salt("runtime").selected_text(shown).width(260.0).show_ui(ui, |ui| {
+                                egui::ComboBox::from_id_salt("runtime").selected_text(shown).width(240.0).show_ui(ui, |ui| {
                                     ui.selectable_value(&mut d.runtime, None, "Use default (recommended)");
                                     for (c, v) in &runtimes {
                                         ui.selectable_value(&mut d.runtime, Some(c.clone()), format!("{c} (Java {v})"));
@@ -445,7 +458,7 @@ impl App {
                             stacked(ui, "Java path", "The folder that holds Java's bin folder. Best left as it is; Reset goes back to the default", &mut d.java_path, "");
                             let installed = self.java_list.clone();
                             ui.horizontal(|ui| {
-                                egui::ComboBox::from_id_salt("installed-java").selected_text("Installed Javas").width(260.0).show_ui(ui, |ui| {
+                                egui::ComboBox::from_id_salt("installed-java").selected_text("Installed Javas").width(240.0).show_ui(ui, |ui| {
                                     if ui.selectable_label(false, "Use launcher default").clicked() {
                                         d.java_path = default_path.clone();
                                     }
@@ -466,40 +479,38 @@ impl App {
                             d.java_args = default_args.clone();
                         }
                     });
-                    ui.add_space(8.0);
-                    card(ui, |ui| {
-                        ui.label(RichText::new("ADVANCED").size(11.0).semibold().color(c_accent()));
-                        setting_row(ui, "Turn off legacy launching", "For Minecraft older than 1.6. Only change this if an old version won't start", |ui| tri(ui, "legacy", &mut d.disable_legacy));
-                        setting_row(ui, "Use system GLFW", "Use the GLFW library installed on this computer instead of Minecraft's own", |ui| tri(ui, "glfw", &mut d.system_glfw));
-                        setting_row(ui, "Use system OpenAL", "Use the OpenAL sound library installed on this computer instead of Minecraft's own", |ui| tri(ui, "openal", &mut d.system_openal));
+                    hairline(ui);
+                    block(ui, "Advanced", |ui| {
+                        row(ui, "Turn off legacy launching", "For Minecraft older than 1.6. Only change this if an old version won't start", |ui| tri(ui, "legacy", &mut d.disable_legacy));
+                        row(ui, "Use system GLFW", "Use the GLFW library installed on this computer instead of Minecraft's own", |ui| tri(ui, "glfw", &mut d.system_glfw));
+                        row(ui, "Use system OpenAL", "Use the OpenAL sound library installed on this computer instead of Minecraft's own", |ui| tri(ui, "openal", &mut d.system_openal));
                     });
                 }
                 _ => {
-                    card(ui, |ui| {
-                        ui.label(RichText::new("COMMANDS").size(11.0).semibold().color(c_accent()));
-                        setting_row(ui, "Run commands", "Turn the commands below on or off for this instance", |ui| tri(ui, "commands", &mut d.enable_commands));
+                    block(ui, "Commands", |ui| {
+                        row(ui, "Run commands", "Turn the commands below on or off for this instance", |ui| tri(ui, "commands", &mut d.enable_commands));
                         stacked(ui, "Before launch", "Runs before the game starts. The game waits until it has finished", &mut d.pre, "");
                         stacked(ui, "After exit", "Runs after the game closes, even if it crashed or was stopped", &mut d.post, "");
                         stacked(ui, "Wrapper command", "Starts the game through another program, such as prime-run on Linux. Use %command% for the launch command, or %\"command\"% for it as one quoted string", &mut d.wrapper, "prime-run %command%");
                     });
-                    ui.add_space(8.0);
-                    card(ui, |ui| {
-                        ui.label(RichText::new("VARIABLES").size(11.0).semibold().color(c_accent()));
+                    hairline(ui);
+                    block(ui, "Variables", |ui| {
                         ui.label(RichText::new("Available in every command").semibold());
                         small_muted(ui, "Commands run in the folder of the instance that is launched or exited");
-                        for (k, v) in [
-                            ("$INST_NAME", "The name of the instance"),
-                            ("$INST_ID", "The name of the instance's root directory"),
-                            ("$INST_DIR", "The absolute path to the instance directory"),
-                            ("$INST_MC_DIR", "Alias for $INST_DIR"),
-                            ("$INST_JAVA", "The absolute path to the java executable used for launch"),
-                            ("$INST_JAVA_ARGS", "The JVM parameters used for launch"),
-                        ] {
-                            ui.horizontal(|ui| {
-                                ui.label(RichText::new(k).monospace().color(c_accent()));
+                        egui::Grid::new("command-variables").num_columns(2).spacing([20.0, 6.0]).show(ui, |ui| {
+                            for (k, v) in [
+                                ("$INST_NAME", "The name of the instance"),
+                                ("$INST_ID", "The name of the instance's root directory"),
+                                ("$INST_DIR", "The absolute path to the instance directory"),
+                                ("$INST_MC_DIR", "Alias for $INST_DIR"),
+                                ("$INST_JAVA", "The absolute path to the java executable used for launch"),
+                                ("$INST_JAVA_ARGS", "The JVM parameters used for launch"),
+                            ] {
+                                ui.label(RichText::new(k).monospace());
                                 muted(ui, v);
-                            });
-                        }
+                                ui.end_row();
+                            }
+                        });
                     });
                 }
             }

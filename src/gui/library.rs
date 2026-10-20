@@ -3,7 +3,7 @@
 use egui::{Align, CornerRadius, Layout, RichText, ScrollArea, Sense, Stroke, Ui, UiBuilder, vec2};
 
 use super::icons::Icon;
-use super::instance_menu::Act;
+use super::instance_menu::{Act, back_link, facts_strip, hairline, menu_items};
 use super::theme::*;
 use super::widgets::*;
 use super::{App, InstTab, Page, Phase};
@@ -126,14 +126,18 @@ impl App {
     /// The picture, name and tags at the top of an instance's page; `beside` as for [`App::hero_title`].
     fn instance_title(&self, ui: &mut Ui, inst: &Instance, beside: Option<f32>) {
         ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 14.0;
             self.instance_icon(ui, inst, 56.0);
             ui.vertical(|ui| {
                 if let Some(w) = beside {
                     ui.set_max_width(ui.available_width() - w - 16.0);
                 }
-                ui.add_space(2.0);
+                ui.spacing_mut().item_spacing.y = 4.0;
+                ui.add_space(3.0);
                 ui.add(egui::Label::new(RichText::new(inst.name()).size(22.0).semibold()).truncate());
                 ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    ui.spacing_mut().interact_size.y = 20.0;
                     match inst.loader() {
                         Some((kind, ver)) => tag(ui, &format!("{kind} {ver}"), loader_color(kind)),
                         None => tag(ui, "Vanilla", c_muted()),
@@ -382,59 +386,70 @@ impl App {
             return;
         };
         let mut action = None;
-        ui.horizontal(|ui| {
-            if secondary_icon(ui, Icon::Back, "Library").clicked() {
-                self.page = Page::Library;
-            }
-        });
+        if back_link(ui, "Library").clicked() {
+            self.page = Page::Library;
+        }
         ui.add_space(4.0);
-        // as on Home: the buttons keep their room, or get a row of their own in a narrow window
+        // the buttons keep their room on the right; in a narrow window they get a row of their own under the title
         let buttons_id = egui::Id::unique("instance-header-buttons");
-        let buttons_w = remembered_width(ui, buttons_id, 420.0);
-        let narrow = ui.available_width() - 56.0 - buttons_w < 260.0;
+        let buttons_w = remembered_width(ui, buttons_id, 560.0);
+        let narrow = ui.available_width() - buttons_w < 336.0;
         let mut used = buttons_w;
+        let mut actions = |this: &mut Self, ui: &mut Ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            // added from the right edge inwards: the menu, Play, "Play as", then the quiet switches
+            if let Some(Some(a)) = kebab_menu(ui, |ui| {
+                menu_items(ui);
+                this.instance_menu(ui, &inst)
+            }) {
+                action = Some(a);
+            }
+            if this.is_playing(&folder) {
+                if danger_big(ui, Icon::Stop, "Stop").clicked() {
+                    action = Some(Act::Stop(folder.clone()));
+                }
+            } else if primary_big(ui, Icon::Play, "Play").clicked() {
+                action = Some(Act::Play(folder.clone()));
+            }
+            if let Some(a) = this.play_as_menu(ui, &folder) {
+                action = Some(a);
+            }
+            ui.add_space(6.0);
+            if let Some(a) = this.helper_switches(ui, &inst) {
+                action = Some(a);
+            }
+            match this.games.get(&folder).map(|g| g.phase) {
+                Some(Phase::Preparing) => {
+                    muted(ui, "Getting ready");
+                    ui.spinner();
+                }
+                Some(Phase::Running) => {
+                    small_muted(ui, "Running");
+                    let (dot, _) = ui.allocate_exact_size(vec2(8.0, 8.0), Sense::hover());
+                    ui.painter().circle_filled(dot.center(), 3.5, c_accent());
+                }
+                _ => {}
+            }
+            used = ui.min_rect().width();
+        };
         if narrow {
             self.instance_title(ui, &inst, None);
-        }
-        ui.horizontal(|ui| {
-            if !narrow {
-                self.instance_title(ui, &inst, Some(buttons_w));
-            }
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if let Some(a) = self.play_as_menu(ui, &folder) {
-                    action = Some(a);
-                }
-                if let Some(a) = self.helper_switches(ui, &inst) {
-                    action = Some(a);
-                }
-                if let Some(a) = self.fast_start_switch(ui, &inst) {
-                    action = Some(a);
-                }
-                if self.is_playing(&folder) {
-                    if danger_big(ui, Icon::Stop, "Stop").clicked() {
-                        action = Some(Act::Stop(folder.clone()));
-                    }
-                } else if primary_big(ui, Icon::Play, "Play").clicked() {
-                    action = Some(Act::Play(folder.clone()));
-                }
-                if let Some(Some(a)) = kebab_menu(ui, |ui| self.instance_menu(ui, &inst)) {
-                    action = Some(a);
-                }
-                match self.games.get(&folder).map(|g| g.phase) {
-                    Some(Phase::Preparing) => {
-                        ui.spinner();
-                        muted(ui, "Getting ready");
-                    }
-                    Some(Phase::Running) => {
-                        small_muted(ui, "Running");
-                    }
-                    _ => {}
-                }
-                used = ui.min_rect().width();
+            ui.add_space(4.0);
+            ui.allocate_ui_with_layout(vec2(ui.available_width(), 40.0), Layout::right_to_left(Align::Center), |ui| {
+                actions(self, ui)
             });
-        });
+        } else {
+            ui.horizontal(|ui| {
+                self.instance_title(ui, &inst, Some(buttons_w));
+                ui.allocate_ui_with_layout(
+                    vec2(ui.available_width(), 56.0),
+                    Layout::right_to_left(Align::Center),
+                    |ui| actions(self, ui),
+                );
+            });
+        }
         remember_width(ui, buttons_id, used);
-        ui.add_space(8.0);
+        ui.add_space(12.0);
         tab_bar(ui, |ui| {
             for (t, label) in [
                 (InstTab::Overview, "Overview"),
@@ -450,7 +465,7 @@ impl App {
                 }
             }
         });
-        ui.add_space(10.0);
+        ui.add_space(14.0);
         match self.tab {
             InstTab::Overview => self.tab_overview(ui, &inst),
             InstTab::Mods => self.mods_tab(ui, &inst),
@@ -464,81 +479,82 @@ impl App {
 
     fn tab_overview(&mut self, ui: &mut Ui, inst: &Instance) {
         ScrollArea::vertical().id_salt("instance-overview").auto_shrink(false).show(ui, |ui| {
-            card(ui, |ui| {
-                let java = inst
-                    .file
-                    .version
-                    .java_version
-                    .as_ref()
-                    .map(|j| format!("Java {}", j.major_version))
-                    .unwrap_or_else(|| "Automatic".into());
-                egui::Grid::new("overview").num_columns(2).spacing([28.0, 10.0]).show(ui, |ui| {
-                    let row = |ui: &mut Ui, k: &str, v: String| {
-                        muted(ui, k);
-                        ui.label(v);
-                        ui.end_row();
-                    };
-                    row(ui, "Minecraft", inst.mc_version().to_string());
-                    row(
+            let java = inst
+                .file
+                .version
+                .java_version
+                .as_ref()
+                .map(|j| format!("Java {}", j.major_version))
+                .unwrap_or_else(|| "Automatic".into());
+            // what this instance is, in one strip
+            egui::Frame::new()
+                .fill(c_card())
+                .stroke(Stroke::new(1.0, c_border()))
+                .corner_radius(CornerRadius::same(R_CARD))
+                .inner_margin(egui::Margin::symmetric(16, 10))
+                .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    facts_strip(
                         ui,
-                        "Loader",
-                        inst.loader().map(|(k, v)| format!("{k} {v}")).unwrap_or_else(|| "None (vanilla)".into()),
+                        &[
+                            ("Minecraft", inst.mc_version().to_string()),
+                            (
+                                "Loader",
+                                inst.loader()
+                                    .map(|(k, v)| format!("{k} {v}"))
+                                    .unwrap_or_else(|| "None (vanilla)".into()),
+                            ),
+                            ("Java", java),
+                            ("Last played", time_ago(inst.last_played())),
+                            ("Times played", inst.file.launcher.num_plays.unwrap_or(0).to_string()),
+                        ],
                     );
-                    row(ui, "Java", java);
-                    row(ui, "Last played", time_ago(inst.last_played()));
-                    row(ui, "Times played", inst.file.launcher.num_plays.unwrap_or(0).to_string());
                 });
-                ui.add_space(2.0);
-                muted(ui, "Folder");
-                ui.add(egui::Label::new(inst.root.display().to_string()).truncate());
-                ui.add_space(6.0);
-                ui.horizontal_wrapped(|ui| {
-                    if secondary_icon(ui, Icon::Folder, "Open folder").clicked() {
-                        self.open_path(&inst.root);
-                    }
-                    if secondary(ui, "Rename").clicked() {
-                        self.rename_target = Some((inst.folder.clone(), inst.name().to_string()));
-                    }
-                    if secondary(ui, "Open saves").clicked() {
-                        // a new instance has no saves folder until its first world
-                        let saves = inst.root.join("saves");
-                        let _ = std::fs::create_dir_all(&saves);
-                        self.open_path(&saves);
-                    }
-                    if secondary(ui, "Export").clicked() {
-                        self.open_export(&inst.folder);
-                    }
-                    #[cfg(feature = "converter")]
-                    self.add_bedrock_world_button(ui, inst);
-                    if let Some(v) = self.ftb.updates.get(&inst.folder).cloned() {
-                        if primary(ui, &format!("Update to {}", v.label())).clicked() {
-                            self.ftb_update_instance(&inst.folder);
-                        }
-                    }
-                });
+            ui.add_space(16.0);
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Folder").size(15.0).semibold());
+                ui.add(egui::Label::new(RichText::new(inst.root.display().to_string()).color(c_muted())).truncate());
             });
-            ui.add_space(6.0);
-            card(ui, |ui| {
-                ui.label(RichText::new("Join a server on start").semibold());
-                small_muted(ui, "Enter an address like play.example.com or play.example.com:25566");
-                ui.horizontal(|ui| {
-                    let mut s = std::mem::take(&mut self.quick_server);
-                    search_field(ui, &mut s, "Server address", 300.0);
-                    self.quick_server = s;
-                    if primary_enabled_icon(
-                        ui,
-                        Icon::Play,
-                        "Play and join",
-                        !self.quick_server.trim().is_empty() && !self.is_playing(&inst.folder),
-                    )
-                    .clicked()
-                    {
-                        let server = self.quick_server.trim().to_string();
-                        self.play(&inst.folder, LaunchOptions { server: Some(server), world: None });
+            ui.horizontal_wrapped(|ui| {
+                if secondary_icon(ui, Icon::Folder, "Open folder").clicked() {
+                    self.open_path(&inst.root);
+                }
+                if secondary(ui, "Rename").clicked() {
+                    self.rename_target = Some((inst.folder.clone(), inst.name().to_string()));
+                }
+                if secondary(ui, "Open saves").clicked() {
+                    // a new instance has no saves folder until its first world
+                    let saves = inst.root.join("saves");
+                    let _ = std::fs::create_dir_all(&saves);
+                    self.open_path(&saves);
+                }
+                if secondary(ui, "Export").clicked() {
+                    self.open_export(&inst.folder);
+                }
+                #[cfg(feature = "converter")]
+                self.add_bedrock_world_button(ui, inst);
+                if let Some(v) = self.ftb.updates.get(&inst.folder).cloned() {
+                    if secondary(ui, &format!("Update to {}", v.label())).clicked() {
+                        self.ftb_update_instance(&inst.folder);
                     }
-                });
+                }
             });
-            ui.add_space(6.0);
+            hairline(ui);
+            section(ui, "Join a server on start");
+            small_muted(ui, "Enter an address like play.example.com or play.example.com:25566");
+            ui.add_space(2.0);
+            ui.horizontal(|ui| {
+                let mut s = std::mem::take(&mut self.quick_server);
+                search_field(ui, &mut s, "Server address", 300.0);
+                self.quick_server = s;
+                let ready = !self.quick_server.trim().is_empty() && !self.is_playing(&inst.folder);
+                // neutral: the one green button of the page is Play
+                if ui.add_enabled_ui(ready, |ui| secondary_icon(ui, Icon::Play, "Play and join")).inner.clicked() {
+                    let server = self.quick_server.trim().to_string();
+                    self.play(&inst.folder, LaunchOptions { server: Some(server), world: None });
+                }
+            });
+            hairline(ui);
             self.backups_card(ui, inst);
         });
     }
@@ -546,8 +562,13 @@ impl App {
     fn tab_logs(&mut self, ui: &mut Ui, inst: &Instance) {
         let sessions = self.sessions_of(&inst.folder);
         if sessions.is_empty() {
-            card(ui, |ui| {
-                muted(ui, "The game's output shows up here while it runs. Press Play to start it.");
+            // nothing has run yet: say so inside the panel where the output will be
+            log_panel(ui, |ui| {
+                ui.vertical_centered(|ui| {
+                    ui.add_space((ui.available_height() / 2.0 - 40.0).clamp(12.0, 140.0));
+                    ui.label(RichText::new("No output yet").semibold());
+                    muted(ui, "The game's output shows up here while it runs. Press Play to start it.");
+                });
             });
             return;
         }
@@ -574,23 +595,26 @@ impl App {
         let Some(phase) = self.games.get(&folder).map(|g| g.phase) else { return };
         let (mut copy, mut clear) = (false, false);
         ui.horizontal(|ui| {
-            let status = match phase {
-                Phase::Preparing => "Getting ready".to_string(),
-                Phase::Running => "Running".to_string(),
-                Phase::Exited(Some(0)) => "Closed normally".to_string(),
-                Phase::Exited(Some(c)) => format!("Closed with code {c}"),
-                Phase::Exited(None) => "Closed".to_string(),
-                Phase::Failed => "Couldn't start".to_string(),
+            let (status, dot) = match phase {
+                Phase::Preparing => ("Getting ready".to_string(), c_accent()),
+                Phase::Running => ("Running".to_string(), c_accent()),
+                Phase::Exited(Some(0)) => ("Closed normally".to_string(), c_faint()),
+                Phase::Exited(Some(c)) => (format!("Closed with code {c}"), c_danger()),
+                Phase::Exited(None) => ("Closed".to_string(), c_faint()),
+                Phase::Failed => ("Couldn't start".to_string(), c_danger()),
             };
+            let (rect, _) = ui.allocate_exact_size(vec2(8.0, 8.0), Sense::hover());
+            ui.painter().circle_filled(rect.center(), 3.5, dot);
             muted(ui, status);
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 copy = secondary(ui, "Copy all").clicked();
                 clear = secondary(ui, "Clear").clicked();
                 let mut f = std::mem::take(&mut self.log_filter);
-                search_field(ui, &mut f, "Filter", 200.0);
+                search_field(ui, &mut f, "Filter", 220.0);
                 self.log_filter = f;
             });
         });
+        ui.add_space(4.0);
         if clear {
             if let Some(g) = self.games.get_mut(&folder) {
                 g.lines.clear();
@@ -610,28 +634,25 @@ impl App {
             (0..game.lines.len()).filter(|&i| contains_ignoring_case(&game.lines[i].text, &filter)).collect()
         };
         let count = if filter.is_empty() { game.lines.len() } else { shown.len() };
-        egui::Frame::new()
-            .fill(c_field())
-            .stroke(Stroke::new(1.0, c_border()))
-            .corner_radius(CornerRadius::same(12))
-            .inner_margin(egui::Margin::same(10))
-            .show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                let height = ui.available_height().max(120.0);
-                ui.spacing_mut().item_spacing.y = 2.0;
-                let row_h = ui.text_style_height(&egui::TextStyle::Monospace);
-                ScrollArea::both()
-                    .id_salt("instance-log")
-                    .auto_shrink(false)
-                    .max_height(height)
-                    .stick_to_bottom(true)
-                    .show_rows(ui, row_h, count, |ui, range| {
-                        for i in range {
-                            let line = &game.lines[if filter.is_empty() { i } else { shown[i] }];
-                            ui.add(egui::Label::new(log_text(line)).extend());
-                        }
-                    });
-            });
+        log_panel(ui, |ui| {
+            let height = ui.available_height().max(120.0);
+            ui.spacing_mut().item_spacing.y = 2.0;
+            let row_h = ui.text_style_height(&egui::TextStyle::Monospace);
+            if count == 0 && !filter.is_empty() {
+                muted(ui, "No line matches the filter.");
+            }
+            ScrollArea::both()
+                .id_salt("instance-log")
+                .auto_shrink(false)
+                .max_height(height)
+                .stick_to_bottom(true)
+                .show_rows(ui, row_h, count, |ui, range| {
+                    for i in range {
+                        let line = &game.lines[if filter.is_empty() { i } else { shown[i] }];
+                        ui.add(egui::Label::new(log_text(line)).extend());
+                    }
+                });
+        });
         if copy {
             self.toast("Log copied");
         }
@@ -640,6 +661,19 @@ impl App {
     fn tab_settings(&mut self, ui: &mut Ui, inst: &Instance) {
         self.instance_settings_ui(ui, inst);
     }
+}
+
+/// The flat panel the log is read in.
+fn log_panel(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
+    egui::Frame::new()
+        .fill(c_field())
+        .stroke(Stroke::new(1.0, c_border()))
+        .corner_radius(CornerRadius::same(R_CARD))
+        .inner_margin(egui::Margin::same(12))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            add(ui)
+        });
 }
 
 /// One log line in its colour.
