@@ -51,12 +51,11 @@ impl CraftState {
         panel(ui, |ui| {
             card_title(ui, "What do you want to make?");
             ui.add_space(2.0);
-            let hint = format!("Search {} items", thousands(book.entries.len() as u64));
             let field = ui.add_sized(
                 [ui.available_width(), 32.0],
                 egui::TextEdit::singleline(&mut self.search)
                     .id(egui::Id::unique("craft-search"))
-                    .hint_text(RichText::new(format!("{hint}   (press / to jump here)")).color(c_faint()))
+                    .hint_text(RichText::new("Search items").color(c_faint()))
                     .margin(egui::Margin::symmetric(10, 7))
                     .background_color(c_field()),
             );
@@ -64,6 +63,7 @@ impl CraftState {
                 // nothing is picked yet: typing can start at once
                 focus_when_shown(ui, &field);
             }
+            small_faint(ui, "Press / to search");
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
                 if chip(ui, "All", self.category.is_none()).clicked() {
