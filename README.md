@@ -73,16 +73,16 @@
 
 <table>
   <tr>
+    <td width="50%"><img src="docs/screenshots/home.png" alt="Home" width="100%"><br><sub>Home: continue where you left off, with a strip of the days you played</sub></td>
     <td width="50%"><img src="docs/screenshots/library.png" alt="Library" width="100%"><br><sub>Library of your instances</sub></td>
+  </tr>
+  <tr>
     <td width="50%"><img src="docs/screenshots/mods.png" alt="Mods" width="100%"><br><sub>Mods with icons, updates and one-click switches</sub></td>
-  </tr>
-  <tr>
     <td width="50%"><img src="docs/screenshots/discover.png" alt="Discover" width="100%"><br><sub>Find mods on Modrinth or CurseForge</sub></td>
-    <td width="50%"><img src="docs/screenshots/packs.png" alt="Modpacks" width="100%"><br><sub>ATLauncher and Technic modpacks</sub></td>
   </tr>
   <tr>
-    <td width="50%"><img src="docs/screenshots/create.png" alt="New instance" width="100%"><br><sub>New instance with any version and mod loader</sub></td>
-    <td width="50%"><img src="docs/screenshots/logs.png" alt="Game log" width="100%"><br><sub>The game's log, live, with filter and copy</sub></td>
+    <td width="50%"><img src="docs/screenshots/convert.png" alt="World converter" width="100%"><br><sub>World converter: Bedrock to Java</sub></td>
+    <td width="50%"><img src="docs/screenshots/crafting.png" alt="Crafting calculator" width="100%"><br><sub>Crafting calculator: what to gather and craft</sub></td>
   </tr>
 </table>
 
@@ -91,20 +91,28 @@
 
 <table>
   <tr>
+    <td width="50%"><img src="docs/screenshots/instance.png" alt="Instance" width="100%"><br><sub>One instance: facts, play history and backups</sub></td>
+    <td width="50%"><img src="docs/screenshots/logs.png" alt="Game log" width="100%"><br><sub>The game's log, live, with filter and copy</sub></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/packs.png" alt="Modpacks" width="100%"><br><sub>ATLauncher and Technic modpacks</sub></td>
+    <td width="50%"><img src="docs/screenshots/create.png" alt="New instance" width="100%"><br><sub>New instance with any version and mod loader</sub></td>
+  </tr>
+  <tr>
     <td width="50%"><img src="docs/screenshots/who-is-playing.png" alt="Who's playing" width="100%"><br><sub>Who's playing: an offline name or Microsoft</sub></td>
     <td width="50%"><img src="docs/screenshots/instance-settings.png" alt="Instance settings" width="100%"><br><sub>Settings of one instance: memory, Java, commands</sub></td>
   </tr>
   <tr>
+    <td width="50%"><img src="docs/screenshots/accounts.png" alt="Accounts" width="100%"><br><sub>Accounts</sub></td>
     <td width="50%"><img src="docs/screenshots/settings.png" alt="Settings" width="100%"><br><sub>Settings</sub></td>
+  </tr>
+  <tr>
     <td width="50%"><img src="docs/screenshots/tools.png" alt="Tools" width="100%"><br><sub>Tools: network checker, support bundle, clean-up</sub></td>
+    <td width="50%"><img src="docs/screenshots/about.png" alt="About" width="100%"><br><sub>About: version, update check and credits</sub></td>
   </tr>
   <tr>
     <td width="50%"><img src="docs/screenshots/home-light.png" alt="Home, light look" width="100%"><br><sub>Home in the light look</sub></td>
     <td width="50%"><img src="docs/screenshots/mods-light.png" alt="Mods, light look" width="100%"><br><sub>Mods in the light look</sub></td>
-  </tr>
-  <tr>
-    <td width="50%"><img src="docs/screenshots/about.png" alt="About" width="100%"><br><sub>About: version, update check and credits</sub></td>
-    <td width="50%"></td>
   </tr>
 </table>
 

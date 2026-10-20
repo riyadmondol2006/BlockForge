@@ -68,7 +68,7 @@ The test world for the Bedrock to Java direction is `~/Downloads/Mace, Spear, Sw
 |---|---|
 | `BLOCKFORGE_DIR` | the data folder to use |
 | `BLOCKFORGE_BENCH=1` | `blockforge gui` prints how long the first frame took and quits |
-| `BLOCKFORGE_SHOT=<folder>` | `blockforge gui` visits every page, saves a PNG of each into the folder and quits (used for the screenshots in `docs/`) |
+| `BLOCKFORGE_SHOT=<folder>` | `blockforge gui` visits every page, saves a PNG of each into the folder and quits (used for the screenshots in `docs/`; `tools/screenshots/` makes a sample data folder and runs it on a private virtual display, see its README) |
 | `BLOCKFORGE_SHOT_PAGES=<a,b,c>` | with `BLOCKFORGE_SHOT`: only these pages (`convert`, `convert-progress`, `convert-done`, `convert-error` show the converter with made-up data; add `-light` for the light theme) |
 | `BLOCKFORGE_AUTOPLAY=<instance folder>` | with `BLOCKFORGE_SHOT`: presses Play through the window's own code, saves a picture of the log and stops the game |
 | `BLOCKFORGE_CF_KEY` | CurseForge API key to use instead of the built-in one |
