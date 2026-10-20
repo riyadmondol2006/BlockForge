@@ -252,6 +252,10 @@ impl App {
                         "ATLauncher, by the ATLauncher team and its contributors (GPL-3.0): the foundation BlockForge is built on."
                     ),
                 );
+                bullet(
+                    ui,
+                    &crate::tr!("Inter, by The Inter Project Authors (SIL Open Font License 1.1): the typeface of the window."),
+                );
                 #[cfg(feature = "converter")]
                 {
                     bullet(
