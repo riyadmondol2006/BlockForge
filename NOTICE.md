@@ -10,6 +10,9 @@ by ATLauncher, Mojang or Microsoft.
 
 - **Fonts** compiled into the window library (`egui`): Ubuntu-Light (Ubuntu Font Licence 1.0), Hack (MIT licence),
   NotoEmoji (SIL Open Font Licence 1.1) and emoji-icon-font (SIL Open Font Licence 1.1 and MIT licence).
+- **Inter** (`assets/fonts/Inter-Regular.ttf`, `Inter-Medium.ttf`, `Inter-SemiBold.ttf`): the interface typeface, copyright
+  (c) 2016 The Inter Project Authors, SIL Open Font License 1.1 (`assets/fonts/OFL.txt`). The files are Latin subsets of
+  the static Inter 4.1 fonts with the tabular figures set as the default digits.
 - **legacy-launch.jar** (`assets/legacy-launch.jar`): the small wrapper that starts Minecraft versions older than 1.6.
   Its source is in `legacy-launch/` and it comes from ATLauncher (GPL-3.0).
 - **Rust libraries**: each one keeps its own licence (MIT, Apache-2.0 or similar). `cargo tree` lists them, and
