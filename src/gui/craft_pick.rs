@@ -128,9 +128,9 @@ impl CraftState {
             return false;
         }
         let bg = if selected {
-            c_field_hover()
+            c_selection()
         } else if resp.hovered() {
-            c_card_hover()
+            c_hover()
         } else {
             egui::Color32::TRANSPARENT
         };
@@ -141,9 +141,17 @@ impl CraftState {
         let sub = if e.stack > 1 { format!("{short}  \u{00B7}  stacks of {}", e.stack) } else { short.to_string() };
         let clip = rect.shrink2(vec2(2.0, 0.0));
         let p = ui.painter().with_clip_rect(clip);
-        let font = if selected { super::fonts::semibold(14.0) } else { FontId::proportional(14.0) };
-        p.text(rect.left_top() + vec2(46.0, 7.0), egui::Align2::LEFT_TOP, &e.name, font, c_text());
-        p.text(rect.left_top() + vec2(46.0, 24.0), egui::Align2::LEFT_TOP, sub, FontId::proportional(11.5), c_faint());
+        let font = if selected { super::fonts::semibold(FS_BODY) } else { FontId::proportional(FS_BODY) };
+        p.text(rect.left_top() + vec2(46.0, 5.0), egui::Align2::LEFT_TOP, &e.name, font, c_text());
+        // faint text never sits on the selection fill
+        let sub_color = if selected { c_muted() } else { c_faint() };
+        p.text(
+            rect.left_top() + vec2(46.0, 23.0),
+            egui::Align2::LEFT_TOP,
+            sub,
+            FontId::proportional(FS_META),
+            sub_color,
+        );
         focus_ring(ui, &resp, rect, R_CONTROL);
         resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, &e.name));
         resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked()
@@ -159,7 +167,7 @@ impl CraftState {
             self.icon(ui, &target, &name, 32.0);
             ui.vertical(|ui| {
                 ui.spacing_mut().item_spacing.y = 0.0;
-                ui.label(RichText::new(&name).size(16.0).semibold());
+                ui.label(RichText::new(&name).size(FS_SECTION).semibold());
                 small_muted(ui, if stack > 1 { format!("Stacks of {stack}") } else { "Does not stack".to_string() });
             });
             if change {
@@ -190,7 +198,7 @@ impl CraftState {
             }
         });
         if let Err(e) = &parsed {
-            ui.label(RichText::new(e).color(c_danger()).size(12.5));
+            ui.label(RichText::new(e).color(c_danger()).size(FS_META));
         }
         let current = parsed.as_ref().ok().copied();
         let st = u64::from(stack);
@@ -326,7 +334,7 @@ impl CraftState {
                 let e = &book.entries[self.stock_hits[k] as usize];
                 let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 34.0), Sense::click());
                 if resp.hovered() {
-                    ui.painter().rect_filled(rect, CornerRadius::same(8), c_card_hover());
+                    ui.painter().rect_filled(rect, CornerRadius::same(R_CONTROL), c_hover());
                 }
                 let icon = egui::Rect::from_min_size(rect.left_top() + vec2(4.0, 5.0), vec2(24.0, 24.0));
                 self.paint_icon(ui, icon, &e.id, &e.name);
@@ -334,7 +342,7 @@ impl CraftState {
                     rect.left_center() + vec2(36.0, 0.0),
                     egui::Align2::LEFT_CENTER,
                     &e.name,
-                    FontId::proportional(14.0),
+                    FontId::proportional(FS_BODY),
                     c_text(),
                 );
                 if resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
@@ -408,7 +416,7 @@ impl CraftState {
                 for id in &items {
                     let name = book.ds.name(id);
                     egui::Frame::new()
-                        .fill(c_card_hover())
+                        .fill(c_hover())
                         .stroke(Stroke::new(1.0, c_border()))
                         .corner_radius(CornerRadius::same(R_CONTROL))
                         .inner_margin(egui::Margin { left: 6, right: 4, top: 2, bottom: 2 })
@@ -416,7 +424,7 @@ impl CraftState {
                             ui.spacing_mut().item_spacing.x = 6.0;
                             ui.horizontal(|ui| {
                                 self.icon(ui, id, &name, 22.0);
-                                ui.label(RichText::new(&name).size(13.5));
+                                ui.label(RichText::new(&name).size(FS_BODY));
                                 if x_button(ui, "Take away") {
                                     remove = Some(id.clone());
                                 }

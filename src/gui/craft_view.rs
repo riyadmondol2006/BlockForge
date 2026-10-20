@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use egui::{Align, CornerRadius, Layout, RichText, Ui, vec2};
+use egui::{Align, Layout, RichText, Ui, vec2};
 
 use super::craft::{Act, Book, CraftState, Dialog, Env, LEFT_W, Load, PlanView, TWO_COLUMNS, Tab};
 use super::craft_fmt::*;
@@ -74,7 +74,7 @@ impl CraftState {
                 ui.vertical_centered(|ui| {
                     ui.label(
                         RichText::new(if bad { "Check the amount" } else { "Pick something to build" })
-                            .size(16.0)
+                            .size(FS_SECTION)
                             .semibold(),
                     );
                     ui.add_space(2.0);
@@ -95,7 +95,7 @@ impl CraftState {
                 });
             }
             Some(Err(e)) => {
-                note_box(ui, c_danger(), |ui| {
+                note_box(ui, NoticeKind::Error, |ui| {
                     ui.label(RichText::new("This can't be worked out").semibold().color(c_danger()));
                     ui.label(e);
                 });
@@ -107,7 +107,7 @@ impl CraftState {
     fn result(&mut self, ui: &mut Ui, book: &Arc<Book>, v: &Arc<PlanView>, acts: &mut Vec<Act>) {
         self.result_header(ui, book, v, acts);
         if !v.plan.warnings.is_empty() || !v.plan.complete {
-            note_box(ui, c_warn(), |ui| {
+            note_box(ui, NoticeKind::Warn, |ui| {
                 ui.label(RichText::new("Worth a look").semibold().color(c_warn()));
                 for w in &v.plan.warnings {
                     ui.label(w);
@@ -145,20 +145,20 @@ impl CraftState {
                 ui.spacing_mut().item_spacing.y = 3.0;
                 ui.add(
                     egui::Label::new(
-                        RichText::new(format!("{} x {}", thousands(plan.request.quantity), name)).size(22.0).semibold(),
+                        RichText::new(format!("{} \u{00D7} {}", thousands(plan.request.quantity), name))
+                            .size(FS_TITLE)
+                            .semibold(),
                     )
                     .truncate(),
                 );
                 ui.horizontal_wrapped(|ui| {
-                    if plan.complete && plan.warnings.is_empty() {
-                        tag(ui, "Complete plan", c_accent());
-                    } else {
-                        tag(ui, "Needs a look", c_warn());
-                    }
+                    ui.spacing_mut().item_spacing.x = 14.0;
+                    let good = plan.complete && plan.warnings.is_empty();
+                    status_text(ui, good, if good { "Complete plan" } else { "Needs a look" });
                     if let Some(p) = self.active.and_then(|id| self.store.get(id)) {
-                        tag(ui, &format!("Saved: {}", clip(&p.name, 24)), c_muted());
+                        small_muted(ui, format!("Saved: {}", clip(&p.name, 24)));
                         if self.unsaved {
-                            tag(ui, "Changed since saved", c_warn());
+                            small_muted(ui, "Changed since saved");
                         }
                     }
                 });
@@ -166,13 +166,13 @@ impl CraftState {
         });
         ui.add_space(4.0);
         let gather: u64 = plan.materials.iter().map(|(_, n)| *n).sum();
-        stat_strip(
+        facts_rows(
             ui,
             &[
-                (thousands(plan.operations), "Operations"),
-                (thousands(gather), "Items to gather"),
-                (thousands(plan.steps.len() as u64), "Steps"),
-                (thousands(v.storage[0].slots), "Storage slots"),
+                ("Operations", thousands(plan.operations)),
+                ("Items to gather", thousands(gather)),
+                ("Steps", thousands(plan.steps.len() as u64)),
+                ("Storage slots", thousands(v.storage[0].slots)),
             ],
         );
         ui.horizontal_wrapped(|ui| {
@@ -203,7 +203,7 @@ impl CraftState {
             });
             let label = if self.active.is_some() { "Update plan" } else { "Save plan" };
             if secondary(ui, label).clicked() {
-                let fallback = format!("{} x {}", thousands(plan.request.quantity), name);
+                let fallback = format!("{} \u{00D7} {}", thousands(plan.request.quantity), name);
                 let current = self.active.and_then(|id| self.store.get(id)).map(|p| p.name.clone());
                 self.dialog = Some(Dialog::Save(current.unwrap_or(fallback)));
             }
@@ -242,7 +242,7 @@ impl CraftState {
                 muted(ui, "Nothing to gather: everything comes from your items or from what you bring.");
                 return;
             }
-            progress_bar(ui, ticked as f32 / total as f32);
+            progress_bar(ui, Some(ticked as f32 / total as f32), 4.0);
             ui.add_space(4.0);
             for (k, (id, qty)) in plan.materials.iter().enumerate() {
                 let key = format!("gather:{id}");
@@ -255,7 +255,7 @@ impl CraftState {
                         if x_button(ui, "No longer bringing this") {
                             unbring = true;
                         }
-                        tag(ui, "you bring", c_muted());
+                        small_faint(ui, "you bring");
                     }
                 });
                 if on != before {
@@ -370,22 +370,22 @@ impl CraftState {
             ui.horizontal(|ui| {
                 ui.set_min_height(44.0);
                 if let Some(on) = check {
-                    check_box(ui, on, true);
+                    check_box(ui, on, true, &name);
                 }
                 self.icon(ui, id, &name, 28.0);
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    ui.allocate_ui_with_layout(
-                        vec2(104.0, 38.0),
-                        Layout::top_down(Align::Max).with_main_align(Align::Center),
-                        |ui| {
-                            ui.spacing_mut().item_spacing.y = 0.0;
-                            let color = if struck { c_muted() } else { c_text() };
-                            ui.label(RichText::new(thousands(qty)).font(super::fonts::medium(15.0)).color(color));
-                            if !sub.is_empty() {
-                                small_muted(ui, sub.as_str());
-                            }
-                        },
-                    );
+                    ui.allocate_ui_with_layout(vec2(104.0, 38.0), Layout::top_down(Align::Max), |ui| {
+                        ui.spacing_mut().item_spacing.y = 0.0;
+                        if sub.is_empty() {
+                            // one line: centre it on the row
+                            ui.add_space(9.0);
+                        }
+                        let color = if struck { c_muted() } else { c_text() };
+                        ui.label(RichText::new(thousands(qty)).font(super::fonts::medium(FS_BODY)).color(color));
+                        if !sub.is_empty() {
+                            small_muted(ui, sub.as_str());
+                        }
+                    });
                     tail(ui);
                     ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                         let mut t = RichText::new(&name);
@@ -425,7 +425,7 @@ impl CraftState {
             });
             small_muted(ui, "Each step needs the ones that make its ingredients to be ticked first.");
             ui.add_space(2.0);
-            progress_bar(ui, ticked as f32 / n as f32);
+            progress_bar(ui, Some(ticked as f32 / n as f32), 4.0);
             for i in 0..n {
                 ui.add_space(10.0);
                 rule(ui);
@@ -446,7 +446,7 @@ impl CraftState {
         ui.spacing_mut().item_spacing.y = 6.0;
         ui.horizontal(|ui| {
             let mut on = ticked;
-            let r = check_box(ui, &mut on, ready || ticked);
+            let r = check_box(ui, &mut on, ready || ticked, &format!("Step {}", i + 1));
             if !ready && !ticked {
                 r.on_hover_text("Tick the steps that make its ingredients first");
             }
@@ -468,9 +468,8 @@ impl CraftState {
             self.icon(ui, station, step.kind.station(), 28.0);
             ui.vertical(|ui| {
                 ui.spacing_mut().item_spacing.y = 1.0;
-                let title = RichText::new(format!("{} {}x", step.kind.verb(), thousands(step.operations)))
-                    .size(15.0)
-                    .semibold();
+                let title = RichText::new(format!("{} {} \u{00D7}", step.kind.verb(), thousands(step.operations)))
+                    .font(super::fonts::medium(FS_BODY));
                 ui.horizontal(|ui| {
                     ui.label(if ticked { title.color(c_muted()) } else { title });
                     ui.label(RichText::new(format!("at {}", step.kind.station())).color(c_muted()));
@@ -505,13 +504,13 @@ impl CraftState {
             ui.horizontal_wrapped(|ui| {
                 ui.add_space(36.0);
                 if recipe.is_some_and(|r| r.small_grid && matches!(r.kind, Kind::Shaped | Kind::Shapeless)) {
-                    tag(ui, "Fits the inventory grid", c_muted());
+                    small_faint(ui, "Fits the inventory grid");
                 }
                 if let Some(t) = step.ticks {
                     small_muted(ui, format!("About {} in one {}", ticks_text(t), step.kind.station().to_lowercase()));
                 }
                 if let Some(m) = recipe.and_then(|r| r.manual.as_ref()) {
-                    ui.label(RichText::new(m).color(c_warn()).size(12.5));
+                    ui.label(RichText::new(m).color(c_warn()).size(FS_META));
                 }
             });
         }
@@ -662,9 +661,9 @@ impl CraftState {
         ui.label(RichText::new(&name).semibold());
         small_muted(ui, format!("need {}", thousands(n.required)));
         match n.stop {
-            Some(Stop::Inventory) => tag(ui, "from your items", c_accent()),
-            Some(Stop::Raw) => tag(ui, "gather", c_accent()),
-            Some(Stop::Supplied) => tag(ui, "you bring", c_muted()),
+            Some(Stop::Inventory) => small_faint(ui, "from your items"),
+            Some(Stop::Raw) => small_faint(ui, "gather"),
+            Some(Stop::Supplied) => small_faint(ui, "you bring"),
             Some(Stop::NoRecipe) => tag(ui, "no recipe", c_warn()),
             Some(Stop::Manual) => tag(ui, "manual", c_warn()),
             Some(Stop::Cycle) => tag(ui, "cycle", c_danger()),
@@ -716,13 +715,13 @@ impl CraftState {
                 return;
             }
             ui.add_space(4.0);
-            stat_strip(
+            facts_rows(
                 ui,
                 &[
-                    (thousands(s.single_chests.count), "Single chests"),
-                    (thousands(s.double_chests.count), "Double chests"),
-                    (thousands(s.shulker_boxes.count), "Shulker boxes"),
-                    (thousands(s.player_inventories.count), "Inventories"),
+                    ("Single chests", thousands(s.single_chests.count)),
+                    ("Double chests", thousands(s.double_chests.count)),
+                    ("Shulker boxes", thousands(s.shulker_boxes.count)),
+                    ("Inventories", thousands(s.player_inventories.count)),
                 ],
             );
             small_muted(ui, "A chest holds 27 stacks, a double chest 54, a shulker box 27, an inventory 36.");
@@ -748,7 +747,7 @@ impl CraftState {
                                 dr.right_center(),
                                 egui::Align2::RIGHT_CENTER,
                                 text,
-                                egui::FontId::proportional(12.5),
+                                egui::FontId::proportional(FS_META),
                                 c_muted(),
                             );
                             let (qr, _) = ui.allocate_exact_size(vec2(72.0, 20.0), egui::Sense::hover());
@@ -756,7 +755,7 @@ impl CraftState {
                                 qr.right_center(),
                                 egui::Align2::RIGHT_CENTER,
                                 thousands(r.quantity),
-                                super::fonts::medium(14.0),
+                                super::fonts::medium(FS_BODY),
                                 c_text(),
                             );
                             ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
@@ -836,7 +835,7 @@ impl CraftState {
         let mut open = true;
         let m = egui::Modal::new(egui::Id::unique("craft-get")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
             ui.set_width(modal_width(ctx, 460.0));
-            ui.label(RichText::new("Get another version").size(19.0).semibold());
+            ui.label(RichText::new("Get another version").size(FS_SECTION).semibold());
             ui.add_space(2.0);
             muted(ui, "Only the game file is downloaded, to read its recipes. You can play it later or never.");
             ui.add_space(8.0);
@@ -856,7 +855,9 @@ impl CraftState {
         let m = egui::Modal::new(egui::Id::unique("craft-save")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
             ui.set_width(modal_width(ctx, 420.0));
             ui.label(
-                RichText::new(if existing { "Update your saved plan" } else { "Save this plan" }).size(19.0).semibold(),
+                RichText::new(if existing { "Update your saved plan" } else { "Save this plan" })
+                    .size(FS_SECTION)
+                    .semibold(),
             );
             ui.add_space(2.0);
             muted(ui, "It keeps the item, the amount, your choices and what you ticked.");
@@ -896,7 +897,7 @@ impl CraftState {
         let mut done = false;
         let m = egui::Modal::new(egui::Id::unique("craft-rename")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
             ui.set_width(modal_width(ctx, 420.0));
-            ui.label(RichText::new("Rename the plan").size(19.0).semibold());
+            ui.label(RichText::new("Rename the plan").size(FS_SECTION).semibold());
             ui.add_space(8.0);
             let r = ui.add_sized(
                 [ui.available_width(), 36.0],
@@ -937,7 +938,7 @@ impl CraftState {
         let book = self.book.clone();
         let m = egui::Modal::new(egui::Id::unique("craft-saved")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
             ui.set_width(modal_width(ctx, 600.0));
-            ui.label(RichText::new("Saved plans").size(19.0).semibold());
+            ui.label(RichText::new("Saved plans").size(FS_SECTION).semibold());
             ui.add_space(2.0);
             muted(ui, "Plans live on this computer. Open one to carry on where you stopped.");
             ui.add_space(12.0);
@@ -984,7 +985,7 @@ impl CraftState {
                                         row = Some(Row::Open(k));
                                     }
                                     if active {
-                                        tag(ui, "Open now", c_accent());
+                                        small_muted(ui, "Open now");
                                     }
                                     ui.vertical(|ui| {
                                         ui.set_width(ui.available_width());
@@ -993,7 +994,7 @@ impl CraftState {
                                         small_muted(
                                             ui,
                                             format!(
-                                                "{} x {} \u{00B7} Minecraft {} \u{00B7} {}",
+                                                "{} \u{00D7} {} \u{00B7} Minecraft {} \u{00B7} {}",
                                                 thousands(p.request.quantity),
                                                 item,
                                                 p.version,
@@ -1059,7 +1060,7 @@ impl CraftState {
     }
 }
 
-/// How an item's recipe reads in a list: "Crafting table: 2 Wheat + 1 Cocoa Beans -> 8 Cookie".
+/// How an item's recipe reads in a list: "Crafting table: 2 Wheat + 1 Cocoa Beans → 8 Cookie".
 fn recipe_label(ds: &craft::Dataset, r: &Recipe) -> String {
     let inputs: Vec<String> = r
         .ingredients
@@ -1081,7 +1082,7 @@ fn recipe_label(ds: &craft::Dataset, r: &Recipe) -> String {
         })
         .collect();
     let inputs = if inputs.is_empty() { "by hand".to_string() } else { inputs.join(" + ") };
-    format!("{}: {} -> {} {}", r.kind.station(), inputs, r.count, ds.name(&r.output))
+    format!("{}: {} \u{2192} {} {}", r.kind.station(), inputs, r.count, ds.name(&r.output))
 }
 
 /// The block or item that stands for the station of a step.
@@ -1106,17 +1107,6 @@ fn file_name(name: &str, quantity: u64) -> String {
     let s = s.trim_matches('-').to_string();
     let s = if s.is_empty() { "crafting-plan".to_string() } else { s };
     if quantity > 0 { format!("{s}-{quantity}") } else { s }
-}
-
-/// A thin bar showing how much is done.
-fn progress_bar(ui: &mut Ui, fraction: f32) {
-    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 4.0), egui::Sense::hover());
-    ui.painter().rect_filled(rect, CornerRadius::same(2), c_field_hover());
-    if fraction > 0.0 {
-        let mut fill = rect;
-        fill.set_width((rect.width() * fraction.clamp(0.0, 1.0)).max(4.0));
-        ui.painter().rect_filled(fill, CornerRadius::same(2), c_accent());
-    }
 }
 
 #[cfg(test)]

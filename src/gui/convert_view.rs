@@ -6,6 +6,7 @@ use super::convert::{
     Act, CHUNKER_URL, ConvertState, Look, MAX_UNMAPPED, OutputCheck, Pick, Screen, dimension_label, format_elapsed,
     free_name, number,
 };
+use super::craft_fmt::{check_labeled, small_faint};
 use super::icons::Icon;
 use super::theme::*;
 use super::widgets::*;
@@ -18,6 +19,8 @@ const PAGE_WIDTH: f32 = 720.0;
 const FOOTER: f32 = 30.0;
 /// The height of the bar with the Convert button.
 const START_BAR: f32 = 52.0;
+/// The height of the dashed area that waits for a world.
+const ZONE_HEIGHT: f32 = 112.0;
 
 /// A block's label in sentence case. The texts are written in capitals in the source (they are the keys of the
 /// translations), so a text that is all capitals is read as a sentence: "BEDROCK WORLD" -> "Bedrock world".
@@ -36,17 +39,12 @@ fn sentence(text: &str) -> String {
 
 /// The title of a block of the page, with the room under it.
 fn block_title(ui: &mut Ui, text: &str) {
-    ui.label(RichText::new(sentence(text)).size(15.0).semibold());
+    ui.label(RichText::new(sentence(text)).size(FS_SECTION).semibold());
     ui.add_space(2.0);
 }
 
-/// A hairline across the card, with a little room either side.
-fn rule(ui: &mut Ui) {
-    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 1.0), Sense::hover());
-    ui.painter().hline(rect.x_range(), rect.center().y, Stroke::new(1.0, c_border()));
-}
-
-/// One option of a card: its name on the left, its control on the right, both centred on the row.
+/// One option of a card: its name on the left, its control on the right, both centred on the row. (The shared
+/// `setting_row` puts a title without a hint at the top of the row, so it is not used here.)
 fn option_row(ui: &mut Ui, title: &str, control: impl FnOnce(&mut Ui)) {
     ui.horizontal(|ui| {
         ui.set_min_height(32.0);
@@ -55,51 +53,21 @@ fn option_row(ui: &mut Ui, title: &str, control: impl FnOnce(&mut Ui)) {
     });
 }
 
-/// Numbers as type: a small grey label over a value, the cells divided by hairlines.
-fn stat_strip(ui: &mut Ui, cells: &[(String, String)]) {
-    let width = ui.available_width();
-    let (rect, _) = ui.allocate_exact_size(vec2(width, 46.0), Sense::hover());
-    let cell_w = width / cells.len().max(1) as f32;
-    let painter = ui.painter();
-    for (i, (label, value)) in cells.iter().enumerate() {
-        let left = rect.left() + cell_w * i as f32;
-        let pad = if i == 0 { 0.0 } else { 16.0 };
-        if i > 0 {
-            painter.vline(left, rect.y_range(), Stroke::new(1.0, c_border()));
+/// The tick boxes of the dimensions in a row, first to last, so Tab visits them in the order they are read. The group
+/// is measured first, as it sits at the right of its row.
+fn dimension_checks(ui: &mut Ui, dims: &mut [(String, bool)]) {
+    let spacing = ui.spacing().item_spacing.x;
+    let labels: Vec<String> = dims.iter().map(|(name, _)| dimension_label(name)).collect();
+    let width: f32 = labels
+        .iter()
+        .map(|l| ui.painter().layout_no_wrap(l.clone(), egui::FontId::proportional(FS_BODY), c_text()).size().x + 28.0)
+        .sum::<f32>()
+        + spacing * labels.len().saturating_sub(1) as f32;
+    ui.allocate_ui_with_layout(vec2(width, 32.0), Layout::left_to_right(Align::Center), |ui| {
+        for ((_, on), label) in dims.iter_mut().zip(&labels) {
+            check_labeled(ui, on, label);
         }
-        let cell = egui::Rect::from_min_max(
-            egui::pos2(left + pad, rect.top()),
-            egui::pos2(left + cell_w - 8.0, rect.bottom()),
-        );
-        let clipped = painter.with_clip_rect(cell);
-        clipped.text(cell.left_top(), egui::Align2::LEFT_TOP, label, egui::FontId::proportional(12.0), c_muted());
-        clipped.text(
-            cell.left_top() + vec2(0.0, 18.0),
-            egui::Align2::LEFT_TOP,
-            value,
-            super::fonts::semibold(18.0),
-            c_text(),
-        );
-    }
-}
-
-/// A thin bar in the accent colour; a short piece slides along it while nothing is known yet.
-fn progress_line(ui: &mut Ui, fraction: f32) {
-    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 6.0), Sense::hover());
-    ui.painter().rect_filled(rect, CornerRadius::same(3), c_field_hover());
-    if fraction > 0.0 {
-        let mut fill = rect;
-        fill.set_width((rect.width() * fraction.clamp(0.0, 1.0)).max(6.0));
-        ui.painter().rect_filled(fill, CornerRadius::same(3), c_accent());
-    } else {
-        let t = ui.input(|i| i.time) as f32;
-        let piece = rect.width() * 0.25;
-        let x = rect.left() + (rect.width() - piece) * (0.5 - 0.5 * (t * 2.0).cos());
-        let mut fill = egui::Rect::from_min_size(egui::pos2(x, rect.top()), vec2(piece, rect.height()));
-        fill = fill.intersect(rect);
-        ui.painter().rect_filled(fill, CornerRadius::same(3), c_accent());
-        ui.ctx().request_repaint();
-    }
+    });
 }
 
 impl ConvertState {
@@ -150,7 +118,7 @@ impl ConvertState {
             self.start_bar(ui, &mut acts);
         }
         self.footer(ui, &mut acts);
-        if self.screen == Screen::Setup {
+        if self.screen == Screen::Setup && !matches!(self.look, Look::Nothing) {
             drop_hint(ui);
         }
         acts
@@ -161,15 +129,15 @@ impl ConvertState {
         ui.add_space(8.0);
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
-            small_muted(ui, tr!("Powered by"));
+            small_faint(ui, tr!("Powered by"));
             if ui
-                .link(RichText::new(tr!("Chunker by Hive Games")).size(12.0).color(c_muted()).underline())
+                .link(RichText::new(tr!("Chunker by Hive Games")).size(FS_META).color(c_faint()).underline())
                 .on_hover_text(CHUNKER_URL)
                 .clicked()
             {
                 acts.push(Act::Link(CHUNKER_URL));
             }
-            small_muted(ui, "(MIT)");
+            small_faint(ui, "(MIT)");
         });
     }
 
@@ -192,11 +160,11 @@ impl ConvertState {
         let blocked = self.blocked();
         ui.add_space(10.0);
         ui.horizontal(|ui| {
-            if primary_enabled_icon(ui, Icon::Play, &tr!("Convert"), blocked.is_none()).clicked() {
+            if primary_enabled_icon(ui, Icon::Convert, &tr!("Convert"), blocked.is_none()).clicked() {
                 acts.push(Act::Start);
             }
             if let Some(why) = &blocked {
-                ui.add(egui::Label::new(RichText::new(why).color(c_muted()).size(12.5)).wrap());
+                ui.add(egui::Label::new(RichText::new(why).color(c_faint()).size(FS_META)).wrap());
             }
         });
     }
@@ -221,7 +189,7 @@ impl ConvertState {
                 card(ui, |ui| {
                     self.source_path(ui);
                     ui.add_space(4.0);
-                    danger_row(ui, why);
+                    notice(ui, NoticeKind::Error, why, None);
                 });
             }
             Look::Found(d) => {
@@ -230,7 +198,7 @@ impl ConvertState {
                         ui.vertical(|ui| {
                             ui.set_max_width((ui.available_width() - 120.0).max(160.0));
                             ui.spacing_mut().item_spacing.y = 2.0;
-                            ui.add(egui::Label::new(RichText::new(&d.name).size(16.0).semibold()).truncate());
+                            ui.add(egui::Label::new(RichText::new(&d.name).size(FS_SECTION).semibold()).truncate());
                             small_muted(
                                 ui,
                                 format!(
@@ -274,32 +242,44 @@ impl ConvertState {
         });
     }
 
-    /// The calm dashed area that waits for a world: one sentence, and the two ways to choose one.
+    /// The calm dashed area that waits for a world: one sentence, and the two ways to choose one. It takes the hover
+    /// fill under the pointer and the selection fill while a file is dragged over the window.
     fn drop_zone(&self, ui: &mut Ui, acts: &mut Vec<Act>) {
-        let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 150.0), Sense::hover());
-        let r = rect.shrink(0.5);
-        let corners = [r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom(), r.left_top()];
-        ui.painter().extend(egui::Shape::dashed_line(&corners, Stroke::new(1.0, c_control()), 5.0, 4.0));
+        let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), ZONE_HEIGHT), Sense::hover());
+        let dragging = ui.ctx().input(|i| !i.raw.hovered_files.is_empty());
+        let (fill, edge) = if dragging {
+            (Some(c_selection()), c_text())
+        } else if ui.rect_contains_pointer(rect) {
+            (Some(c_hover()), c_control())
+        } else {
+            (None, c_control())
+        };
+        if let Some(fill) = fill {
+            ui.painter().rect_filled(rect, CornerRadius::same(R_CARD), fill);
+        }
+        let outline = rounded_outline(rect.shrink(0.5), f32::from(R_CARD));
+        ui.painter().extend(egui::Shape::dashed_line(&outline, Stroke::new(1.0, edge), 5.0, 4.0));
         let mut inner = ui.new_child(
             egui::UiBuilder::new().max_rect(rect.shrink2(vec2(16.0, 0.0))).layout(Layout::top_down(Align::Center)),
         );
-        inner.add_space(26.0);
-        inner.label(RichText::new(tr!("Drop a world here")).size(16.0).semibold());
+        inner.spacing_mut().item_spacing.y = 4.0;
+        inner.add_space(14.0);
+        inner.label(RichText::new(tr!("Drop a world here")).font(super::fonts::medium(FS_BODY)));
         inner.add(
             egui::Label::new(
                 RichText::new(tr!("A Bedrock world folder, or a world packed as .mcworld or .zip"))
                     .color(c_muted())
-                    .size(13.0),
+                    .size(FS_META),
             )
             .wrap(),
         );
-        inner.add_space(10.0);
+        inner.add_space(8.0);
         inner.add_enabled_ui(!self.picking, |ui| {
             // two buttons, centred as a pair
             let folder = tr!("Choose a folder...");
             let file = tr!("Choose a file...");
             let est = |t: &str| {
-                ui.painter().layout_no_wrap(t.to_string(), super::fonts::medium(14.0), c_text()).size().x + 28.0
+                ui.painter().layout_no_wrap(t.to_string(), super::fonts::medium(FS_BODY), c_text()).size().x + 28.0
             };
             let pair = est(&folder) + 22.0 + est(&file) + ui.spacing().item_spacing.x;
             ui.horizontal(|ui| {
@@ -316,7 +296,9 @@ impl ConvertState {
 
     fn source_path(&self, ui: &mut Ui) {
         if let Some(src) = &self.source {
-            ui.add(egui::Label::new(RichText::new(src.display().to_string()).color(c_faint()).size(12.0)).truncate());
+            ui.add(
+                egui::Label::new(RichText::new(src.display().to_string()).color(c_faint()).size(FS_META)).truncate(),
+            );
         }
     }
 
@@ -343,12 +325,7 @@ impl ConvertState {
                 }
             });
             rule(ui);
-            option_row(ui, &tr!("Dimensions"), |ui| {
-                // right to left, so the last one is drawn first
-                for (name, on) in self.dims.iter_mut().rev() {
-                    ui.checkbox(on, dimension_label(name));
-                }
-            });
+            option_row(ui, &tr!("Dimensions"), |ui| dimension_checks(ui, &mut self.dims));
             if let Some(dest) = &self.dest {
                 ui.add_space(6.0);
                 if self.version == dest.mc_version {
@@ -462,13 +439,13 @@ impl ConvertState {
         let mut confirmed = false;
         block_title(ui, &tr!("CONVERTING"));
         card(ui, |ui| {
-            ui.add(egui::Label::new(RichText::new(&name).size(16.0).semibold()).truncate());
+            ui.add(egui::Label::new(RichText::new(&name).size(FS_SECTION).semibold()).truncate());
             small_muted(ui, format!("{} {}", run.job.target.edition.label(), run.job.target.version));
             ui.add_space(12.0);
             let stage = if run.stopping { tr!("Stopping...") } else { run.stage.clone() };
             ui.add(egui::Label::new(RichText::new(stage).color(c_muted())).truncate());
             ui.add_space(2.0);
-            progress_line(ui, run.progress);
+            progress_bar(ui, (run.progress > 0.0).then_some(run.progress), 6.0);
             ui.add_space(12.0);
             // "Time passed: 0:42" is one text in the translations; its label and value are told apart again here
             let passed = tr!("Time passed: {0}", format_elapsed(run.started.elapsed()));
@@ -478,12 +455,13 @@ impl ConvertState {
             };
             let warnings = run.warnings.len() + run.more_warnings;
             let progress = if run.progress > 0.0 { format!("{:.0}%", run.progress * 100.0) } else { "\u{2013}".into() };
-            stat_strip(
+            let (progress_label, warnings_label) = (tr!("Progress"), tr!("Warnings"));
+            facts(
                 ui,
                 &[
-                    (tr!("Progress"), progress),
-                    (passed_label, passed_value),
-                    (tr!("Warnings"), number(warnings as u64)),
+                    (progress_label.as_str(), progress),
+                    (passed_label.as_str(), passed_value),
+                    (warnings_label.as_str(), number(warnings as u64)),
                 ],
             );
             ui.add_space(12.0);
@@ -520,22 +498,24 @@ impl ConvertState {
         card(ui, |ui| {
             match &dest {
                 Some(d) => {
-                    ui.label(RichText::new(tr!("Your world was added to {0}", &d.name)).size(17.0).semibold());
+                    ui.label(RichText::new(tr!("Your world was added to {0}", &d.name)).size(FS_SECTION).semibold());
                     small_muted(ui, tr!("It is in the instance's saves folder and shows up in Singleplayer."));
                 }
                 None => {
-                    ui.label(RichText::new(tr!("Your world was converted")).size(17.0).semibold());
+                    ui.label(RichText::new(tr!("Your world was converted")).size(FS_SECTION).semibold());
                 }
             }
             ui.add_space(12.0);
             let kinds = s.unmapped_blocks.len();
-            stat_strip(
+            let (columns_label, time_label, unmatched_label) =
+                (tr!("Columns converted"), tr!("Time taken"), tr!("Blocks without a match"));
+            facts(
                 ui,
                 &[
-                    (tr!("Columns converted"), number(s.columns)),
-                    (tr!("Time taken"), format_elapsed(s.elapsed)),
+                    (columns_label.as_str(), number(s.columns)),
+                    (time_label.as_str(), format_elapsed(s.elapsed)),
                     (
-                        tr!("Blocks without a match"),
+                        unmatched_label.as_str(),
                         if kinds == 0 {
                             tr!("None")
                         } else {
@@ -548,7 +528,7 @@ impl ConvertState {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 8.0;
                 small_muted(ui, tr!("Saved in"));
-                ui.add(egui::Label::new(RichText::new(s.output.display().to_string()).size(12.5)).truncate());
+                ui.add(egui::Label::new(RichText::new(s.output.display().to_string()).size(FS_META)).truncate());
             });
             ui.add_space(12.0);
             ui.horizontal(|ui| {
@@ -613,22 +593,9 @@ impl ConvertState {
     fn failed(&mut self, ui: &mut Ui, acts: &mut Vec<Act>) {
         let message = self.error.clone().unwrap_or_default();
         let details = self.details();
-        egui::Frame::new()
-            .fill(c_danger_bg())
-            .stroke(Stroke::new(1.0, c_danger_line()))
-            .corner_radius(CornerRadius::same(R_CARD))
-            .inner_margin(egui::Margin::same(16))
-            .show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                ui.label(
-                    RichText::new(sentence(&tr!("THE WORLD COULD NOT BE CONVERTED")))
-                        .size(15.0)
-                        .semibold()
-                        .color(c_danger()),
-                );
-                ui.add_space(4.0);
-                ui.add(egui::Label::new(RichText::new(message).size(14.0).color(c_text())).wrap());
-            });
+        notice(ui, NoticeKind::Error, &sentence(&tr!("THE WORLD COULD NOT BE CONVERTED")), None);
+        ui.add_space(8.0);
+        ui.add(egui::Label::new(RichText::new(message).size(FS_BODY).color(c_text())).wrap());
         ui.add_space(8.0);
         small_muted(
             ui,
@@ -639,20 +606,20 @@ impl ConvertState {
             ui,
             |ui| {
                 ScrollArea::vertical().max_height(160.0).auto_shrink([false, true]).show(ui, |ui| {
-                    ui.add(egui::Label::new(RichText::new(details).monospace().size(12.0).color(c_muted())).wrap());
+                    ui.add(egui::Label::new(RichText::new(details).monospace().size(FS_META).color(c_muted())).wrap());
                 });
             },
         );
         ui.add_space(12.0);
         ui.horizontal(|ui| {
-            if primary(ui, &tr!("Try again")).clicked() {
+            if secondary(ui, &tr!("Try again")).clicked() {
                 self.screen = Screen::Setup;
                 self.error = None;
             }
-            if secondary(ui, &tr!("Copy details")).clicked() {
+            if ghost(ui, &tr!("Copy details")).clicked() {
                 acts.push(Act::Copy(self.details()));
             }
-            if secondary(ui, &tr!("Choose another world")).clicked() {
+            if ghost(ui, &tr!("Choose another world")).clicked() {
                 self.start_over();
             }
         });
@@ -664,7 +631,7 @@ fn stop_modal(ctx: &egui::Context) -> Option<bool> {
     let mut answer = None;
     egui::Modal::new(egui::Id::unique("convert-stop")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
         ui.set_width(super::services::modal_width(ctx, 420.0));
-        ui.label(RichText::new(tr!("Cancel the conversion?")).size(19.0).semibold());
+        ui.label(RichText::new(tr!("Cancel the conversion?")).size(FS_SECTION).semibold());
         ui.add_space(4.0);
         muted(ui, tr!("The new world is not finished and will not work properly. The original world is not changed."));
         ui.add_space(12.0);
@@ -689,9 +656,9 @@ fn unmapped_row(ui: &mut Ui, name: &str, count: &str, header: bool) {
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
     let painter = ui.painter();
     let (color, font_name, font_count) = if header {
-        (c_muted(), egui::FontId::proportional(12.0), egui::FontId::proportional(12.0))
+        (c_muted(), egui::FontId::proportional(FS_META), egui::FontId::proportional(FS_META))
     } else {
-        (c_text(), egui::FontId::monospace(12.5), egui::FontId::proportional(13.0))
+        (c_text(), egui::FontId::monospace(FS_META), egui::FontId::proportional(FS_BODY))
     };
     painter.with_clip_rect(rect.shrink2(vec2(0.0, 0.0)).with_max_x(rect.right() - 80.0)).text(
         rect.left_center(),
@@ -701,32 +668,20 @@ fn unmapped_row(ui: &mut Ui, name: &str, count: &str, header: bool) {
         color,
     );
     painter.text(rect.right_center(), egui::Align2::RIGHT_CENTER, count, font_count, color);
-    painter.hline(rect.x_range(), rect.bottom(), Stroke::new(1.0, c_border()));
+    painter.hline(rect.x_range(), rect.bottom(), Stroke::new(1.0, c_rule()));
 }
 
 fn tr_n_warnings(n: usize) -> String {
     crate::i18n::tr_n("{0} warning", "{0} warnings", n as u64, &[n.into()])
 }
 
-/// A wrapped line of coloured text.
+/// A wrapped line of coloured small text, for what is said under a field.
 fn wrapped(ui: &mut Ui, text: String, color: Color32) {
-    ui.add(egui::Label::new(RichText::new(text).color(color)).wrap());
+    ui.add(egui::Label::new(RichText::new(text).color(color).size(FS_META)).wrap());
 }
 
-/// A message in a row tinted with the danger colour.
-fn danger_row(ui: &mut Ui, text: &str) {
-    egui::Frame::new()
-        .fill(c_danger_bg())
-        .stroke(Stroke::new(1.0, c_danger_line()))
-        .corner_radius(CornerRadius::same(R_CONTROL))
-        .inner_margin(egui::Margin::symmetric(12, 8))
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.add(egui::Label::new(RichText::new(text).color(c_danger())).wrap());
-        });
-}
-
-/// Shown over the page while files are dragged above the window.
+/// Shown over the page while files are dragged above the window, when no drop area is on show: the selection fill and a
+/// plain edge, not colour.
 fn drop_hint(ui: &mut Ui) {
     if ui.ctx().input(|i| i.raw.hovered_files.is_empty()) {
         return;
@@ -734,18 +689,38 @@ fn drop_hint(ui: &mut Ui) {
     let rect = ui.max_rect();
     let painter =
         ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Foreground, ui.scope_id().with("convert-drop")));
-    painter.rect_filled(rect, CornerRadius::same(12), c_accent_soft());
+    painter.rect_filled(rect, CornerRadius::same(R_CARD), c_selection());
     painter.rect_stroke(
         rect.shrink(4.0),
-        CornerRadius::same(12),
-        Stroke::new(2.0, c_accent()),
+        CornerRadius::same(R_CARD),
+        Stroke::new(2.0, c_text()),
         egui::StrokeKind::Inside,
     );
     painter.text(
         rect.center(),
         egui::Align2::CENTER_CENTER,
         tr!("Drop the world to convert it"),
-        egui::FontId::proportional(20.0),
+        super::fonts::semibold(FS_TITLE),
         c_text(),
     );
+}
+
+/// The outline of a rectangle with round corners, as points to draw a dashed line along.
+fn rounded_outline(rect: egui::Rect, radius: f32) -> Vec<egui::Pos2> {
+    let r = radius.min(rect.width() / 2.0).min(rect.height() / 2.0);
+    let corners = [
+        (egui::pos2(rect.right() - r, rect.top() + r), -std::f32::consts::FRAC_PI_2),
+        (egui::pos2(rect.right() - r, rect.bottom() - r), 0.0),
+        (egui::pos2(rect.left() + r, rect.bottom() - r), std::f32::consts::FRAC_PI_2),
+        (egui::pos2(rect.left() + r, rect.top() + r), std::f32::consts::PI),
+    ];
+    let mut points = Vec::new();
+    for (centre, start) in corners {
+        for k in 0..=6 {
+            let a = start + std::f32::consts::FRAC_PI_2 * k as f32 / 6.0;
+            points.push(centre + vec2(a.cos(), a.sin()) * r);
+        }
+    }
+    points.push(points[0]);
+    points
 }

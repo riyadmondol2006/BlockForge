@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::sync::mpsc::{Sender, channel};
 use std::time::{Duration, Instant};
 
-use egui::{Align, CornerRadius, Layout, RichText, Sense, Stroke, TextureHandle, Ui, vec2};
+use egui::{Align, CornerRadius, Layout, RichText, Sense, TextureHandle, Ui, vec2};
 
 use super::craft_fmt::*;
 use super::theme::*;
@@ -725,8 +725,7 @@ impl CraftState {
                 }
             }
         }
-        let r = (rect.width() * 0.2).round() as u8;
-        ui.painter().rect_filled(rect, CornerRadius::same(r), c_field());
+        ui.painter().rect_filled(rect, CornerRadius::same(R_TAG), c_field());
         let letter: String =
             name.chars().find(|c| c.is_alphanumeric()).map(|c| c.to_uppercase().collect()).unwrap_or_default();
         ui.painter().text(
@@ -856,7 +855,7 @@ impl CraftState {
     /// No game is on this computer: explain, and offer to fetch one.
     fn no_game(&mut self, ui: &mut Ui, env: &Env, acts: &mut Vec<Act>) {
         card(ui, |ui| {
-            ui.label(RichText::new("The recipes come from your game files").size(17.0).semibold());
+            ui.label(RichText::new("The recipes come from your game files").size(FS_SECTION).semibold());
             ui.add_space(2.0);
             muted(
                 ui,
@@ -873,7 +872,9 @@ impl CraftState {
     fn failed(&mut self, ui: &mut Ui, error: &str, acts: &mut Vec<Act>) {
         let version = self.version.clone().unwrap_or_default();
         card(ui, |ui| {
-            ui.label(RichText::new(format!("Couldn't read the recipes of Minecraft {version}")).size(17.0).semibold());
+            ui.label(
+                RichText::new(format!("Couldn't read the recipes of Minecraft {version}")).size(FS_SECTION).semibold(),
+            );
             ui.add_space(2.0);
             ui.label(RichText::new(error).color(c_danger()));
             ui.add_space(6.0);
@@ -927,7 +928,7 @@ impl CraftState {
                         ui.set_height(45.0);
                         ui.label(RichText::new(&v.id).semibold());
                         if v.id == latest {
-                            tag(ui, "Latest", c_accent());
+                            small_faint(ui, "Latest");
                         }
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             if have {
@@ -941,8 +942,7 @@ impl CraftState {
                             }
                         });
                     });
-                    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 1.0), Sense::hover());
-                    ui.painter().hline(rect.x_range(), rect.center().y, Stroke::new(1.0, c_border()));
+                    rule(ui);
                 }
             });
     }
