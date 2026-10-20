@@ -29,6 +29,7 @@ impl App {
         let mut select: Option<String> = None;
         let mut remove: Option<String> = None;
         let mut change_skin: Option<String> = None;
+        let mut copied = false;
         let current = self.current_account().map(|a| a.uuid.clone());
         ScrollArea::vertical().id_salt("accounts").auto_shrink(false).show(ui, |ui| {
             // at most 720 wide, but never wider than the window
@@ -55,7 +56,6 @@ impl App {
                                 ui.spacing_mut().item_spacing.y = 2.0;
                                 ui.horizontal_wrapped(|ui| {
                                     ui.label(RichText::new(acc.name()).semibold());
-                                    tag(ui, acc.kind(), c_muted());
                                     if current.as_ref() == Some(&acc.uuid) {
                                         ink_tag(ui, "Playing as");
                                     }
@@ -63,7 +63,7 @@ impl App {
                                         tag(ui, "Sign in again", c_danger());
                                     }
                                 });
-                                small_muted(ui, &acc.uuid);
+                                account_meta(ui, acc.offline, &acc.uuid);
                             });
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                 // removing asks once more: a Microsoft account has to be signed in again afterwards
@@ -78,6 +78,12 @@ impl App {
                                     return;
                                 }
                                 kebab_menu(ui, |ui| {
+                                    if ui.button("Copy UUID").clicked() {
+                                        ui.ctx().copy_text(acc.uuid.clone());
+                                        copied = true;
+                                        ui.close();
+                                    }
+                                    ui.separator();
                                     if ui.button("Remove").clicked() {
                                         self.acct.confirm_remove = Some(acc.uuid.clone());
                                         ui.close();
@@ -200,6 +206,9 @@ impl App {
             });
             ui.add_space(16.0);
         });
+        if copied {
+            self.toast("Copied the UUID");
+        }
         if let Some(id) = change_skin {
             self.open_skin_dialog(&id);
         }
@@ -217,6 +226,22 @@ impl App {
             self.save_settings();
         }
     }
+}
+
+/// The second line of an account row: what kind of account it is and its UUID, as one muted line. The UUID is set in
+/// the monospace style (figures of equal width) and cut with an ellipsis when the row is narrow; the tooltip has it all.
+fn account_meta(ui: &mut Ui, offline: bool, uuid: &str) {
+    let format = |font_id: egui::FontId| egui::TextFormat {
+        font_id,
+        color: c_muted(),
+        valign: Align::Center,
+        ..Default::default()
+    };
+    let kind = if offline { "Offline player" } else { "Microsoft account" };
+    let mut job = egui::text::LayoutJob::default();
+    job.append(&format!("{kind} \u{00B7} "), 0.0, format(egui::FontId::proportional(FS_META)));
+    job.append(uuid, 0.0, format(egui::TextStyle::Monospace.resolve(ui.style())));
+    ui.add(egui::Label::new(job).truncate()).on_hover_text(uuid);
 }
 
 /// A small filled label in the ink colour: what is true of this one row (the account that is playing).

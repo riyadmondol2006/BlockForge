@@ -301,7 +301,7 @@ impl App {
                         if d.uploading {
                             ui.horizontal(|ui| {
                                 ui.spinner();
-                                muted(ui, "Uploading your skin...");
+                                muted(ui, "Uploading your skin\u{2026}");
                             });
                         } else if let Some((text, error)) = &d.message {
                             ui.add(egui::Label::new(RichText::new(text).color(if *error { c_danger() } else { c_muted() }).size(FS_META)).wrap());

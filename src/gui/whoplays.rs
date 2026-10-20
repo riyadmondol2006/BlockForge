@@ -121,6 +121,9 @@ impl App {
                             });
                         let resp =
                             row.response.interact(Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
+                        resp.widget_info(|| {
+                            egui::WidgetInfo::labeled(egui::Role::Button, true, format!("{name}, {kind}"))
+                        });
                         ui.painter().set(
                             fill,
                             egui::Shape::rect_filled(
