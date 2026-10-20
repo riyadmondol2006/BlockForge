@@ -8,7 +8,8 @@ use std::time::{Duration, Instant, SystemTime};
 use egui::{RichText, Ui};
 
 use super::App;
-use super::instance_menu::{Act, secondary_menu, section_break};
+use super::instance_menu::Act;
+use super::settings::{Rows, wide_row};
 use super::theme::*;
 use super::widgets::*;
 use crate::config::Settings;
@@ -79,36 +80,22 @@ fn ago(t: SystemTime) -> String {
     }
 }
 
-/// `setting_row` with room for a wider control (a choice of several words). On a narrow page the control goes under
-/// the text.
-fn wide_row(ui: &mut Ui, title: &str, control_width: f32, hint: &str, control: impl FnOnce(&mut Ui)) {
-    let room = ui.available_width();
-    if room < control_width + 240.0 {
-        ui.label(RichText::new(title).semibold());
-        if !hint.is_empty() {
-            small_muted(ui, hint);
-        }
-        ui.horizontal_wrapped(control);
-        return;
-    }
-    ui.horizontal(|ui| {
-        ui.vertical(|ui| {
-            ui.spacing_mut().item_spacing.y = 2.0;
-            ui.set_max_width(room - control_width - 16.0);
-            ui.label(RichText::new(title).semibold());
-            if !hint.is_empty() {
-                small_muted(ui, hint);
-            }
-        });
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), control);
-    });
+/// The hairline between two rows of a card, with the same air on both sides as the rules of the other cards.
+fn row_gap(ui: &mut Ui) {
+    let pad = (10.0 - ui.spacing().item_spacing.y).max(0.0);
+    ui.add_space(pad);
+    rule(ui);
+    ui.add_space(pad);
 }
 
-/// The hairline between two rows of a block, with the same air on both sides.
-fn row_gap(ui: &mut Ui) {
-    ui.add_space(4.0);
-    rule(ui);
-    ui.add_space(4.0);
+/// The words of [`App::speed_summary`]: `own` is the instance's own Low-end mode (`None`: it follows the launcher's).
+fn speed_summary_text(fast: bool, smooth: bool, own: Option<Mode>, launcher: Mode) -> String {
+    let state = |on: bool| if on { "on" } else { "off" };
+    let low_end = match own {
+        Some(mode) => format!("Low-end mode {}", mode.label().to_lowercase()),
+        None => format!("Low-end mode like the launcher ({})", launcher.label().to_lowercase()),
+    };
+    format!("Fast start {} \u{00B7} Smoothness helper {} \u{00B7} {low_end}", state(fast), state(smooth))
 }
 
 fn state_color(state: PatchState) -> egui::Color32 {
@@ -149,10 +136,10 @@ impl SettingsView {
     pub(super) fn rows(&self, ui: &mut Ui, s: &mut Settings) -> bool {
         let mut dirty = false;
         ui.scope(|ui| {
-            ui.spacing_mut().item_spacing.y = 8.0;
+            ui.spacing_mut().item_spacing.y = 2.0;
             row_gap(ui);
             ui.label(RichText::new("Performance").size(FS_SECTION).semibold());
-            ui.add_space(4.0);
+            ui.add_space(6.0);
             setting_row(
                 ui,
                 "Fast start",
@@ -167,7 +154,7 @@ impl SettingsView {
             });
             row_gap(ui);
             let mode = Mode::parse(&s.low_end_mode);
-            wide_row(ui, "Low-end mode", 200.0, &format!("{LOW_END_HINT} {}.", self.low_end_status(mode)), |ui| {
+            wide_row(ui, "Low-end mode", &format!("{LOW_END_HINT} {}.", self.low_end_status(mode)), 200.0, |ui| {
                 let modes = [Mode::Auto, Mode::On, Mode::Off];
                 let labels: Vec<&str> = modes.iter().map(|m| m.label()).collect();
                 let chosen = modes.iter().position(|m| *m == mode).unwrap_or(0);
@@ -223,42 +210,15 @@ impl SettingsView {
 }
 
 impl App {
-    /// "Speed and smoothness" on an instance's overview: Fast start, the smoothness helper and the Low-end menu (the
-    /// cards have no room; their menu has the same switches, see [`App::helpers_menu`]). Returns what was changed.
-    pub(super) fn speed_rows(&self, ui: &mut Ui, inst: &Instance) -> Option<Act> {
-        let mut act = None;
-        ui.spacing_mut().item_spacing.y = 8.0;
-        let mut fast = crate::launch::fast_start_enabled(&self.settings, inst);
-        setting_row(
-            ui,
-            "Fast start",
-            "Loads Minecraft's classes ahead of time so the game opens sooner. Works with every version and mod loader. Turn it off if the game fails to start.",
-            |ui| {
-                if toggle(ui, &mut fast).changed() {
-                    act = Some(Act::FastStart(inst.folder.clone(), fast));
-                }
-            },
-        );
-        row_gap(ui);
-        let mut on = lite::enabled(&self.settings, inst);
-        setting_row(ui, "Smoothness helper", LITE_HINT, |ui| {
-            if toggle(ui, &mut on).changed() {
-                act = Some(Act::Helper(inst.folder.clone(), HelperChange::Lite(Some(on))));
-            }
-        });
-        row_gap(ui);
-        let own = lowend::instance_override(inst);
-        let launcher = Mode::parse(&self.settings.low_end_mode);
-        let shown = match own {
-            Some(m) => m.label().to_string(),
-            None => format!("Like the launcher ({})", launcher.label().to_lowercase()),
-        };
-        setting_row(ui, "Low-end mode", LOW_END_HINT, |ui| {
-            if let (_, Some(Some(a))) = secondary_menu(ui, &shown, |ui| self.low_end_choices(ui, inst)) {
-                act = Some(a);
-            }
-        });
-        act
+    /// What an instance's three helpers are doing, in one line, for its Overview (they are changed in its settings):
+    /// "Fast start on · Smoothness helper on · Low-end mode like the launcher (off)".
+    pub(super) fn speed_summary(&self, inst: &Instance) -> String {
+        speed_summary_text(
+            crate::launch::fast_start_enabled(&self.settings, inst),
+            lite::enabled(&self.settings, inst),
+            lowend::instance_override(inst),
+            Mode::parse(&self.settings.low_end_mode),
+        )
     }
 
     /// The Low-end choices of an instance, as menu items.
@@ -306,28 +266,29 @@ impl App {
         act
     }
 
-    /// The Performance block of an instance's settings. Its switches apply at once.
-    pub(super) fn instance_performance_card(&self, ui: &mut Ui, inst: &Instance) -> Option<HelperChange> {
+    /// The rows of the Performance group of an instance's settings, in the card of `rows`. Their choices apply at once.
+    pub(super) fn instance_performance_rows(
+        &self,
+        ui: &mut Ui,
+        inst: &Instance,
+        rows: &mut Rows,
+    ) -> Option<HelperChange> {
         let mut change = None;
         let s = &self.settings;
-        section_break(ui);
-        section(ui, "Performance");
-        small_muted(ui, "These apply right away, from the next start of the game.");
-        ui.add_space(12.0);
         let fast_own = crate::launch::boost::instance_override(inst);
-        wide_row(ui, "Fast start", 230.0, "Loads Minecraft's classes ahead of time so the game opens sooner", |ui| {
+        rows.gap(ui);
+        wide_row(ui, "Fast start", "Loads Minecraft's classes ahead of time so the game opens sooner", 230.0, |ui| {
             if let Some(v) = tri_choice(ui, "fast-start", fast_own, s.fast_start) {
                 change = Some(HelperChange::FastStart(v));
             }
         });
-        row_gap(ui);
         let lite_own = lite::instance_override(inst);
-        wide_row(ui, "Smoothness helper", 230.0, "Small fixes inside the game that make it run smoother", |ui| {
+        rows.gap(ui);
+        wide_row(ui, "Smoothness helper", "Small fixes inside the game that make it run smoother", 230.0, |ui| {
             if let Some(v) = tri_choice(ui, "smoothness", lite_own, s.lite) {
                 change = Some(HelperChange::Lite(v));
             }
         });
-        row_gap(ui);
         let own = lowend::instance_override(inst);
         let launcher = Mode::parse(&s.low_end_mode);
         let status = if inst.root.join(lowend::BACKUP_FILE).exists() {
@@ -336,7 +297,8 @@ impl App {
         } else {
             String::new()
         };
-        wide_row(ui, "Low-end mode", 310.0, &format!("{LOW_END_HINT}{status}"), |ui| {
+        rows.gap(ui);
+        wide_row(ui, "Low-end mode", &format!("{LOW_END_HINT}{status}"), 310.0, |ui| {
             let follow = format!("Launcher ({})", launcher.label().to_lowercase());
             let choices = [
                 (follow.as_str(), None),
@@ -542,5 +504,18 @@ mod tests {
         assert_eq!(ago(SystemTime::now()), "just now");
         assert_eq!(ago(SystemTime::now() - Duration::from_secs(600)), "10 min ago");
         assert_eq!(ago(SystemTime::now() - Duration::from_secs(3 * 86400)), "3 days ago");
+    }
+
+    #[test]
+    fn the_overview_line_says_what_each_helper_is_doing() {
+        assert_eq!(
+            speed_summary_text(true, true, None, Mode::Off),
+            "Fast start on \u{00B7} Smoothness helper on \u{00B7} Low-end mode like the launcher (off)"
+        );
+        assert_eq!(
+            speed_summary_text(false, true, Some(Mode::Auto), Mode::Off),
+            "Fast start off \u{00B7} Smoothness helper on \u{00B7} Low-end mode automatic"
+        );
+        assert!(speed_summary_text(true, false, None, Mode::On).ends_with("like the launcher (on)"));
     }
 }

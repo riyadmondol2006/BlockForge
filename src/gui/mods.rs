@@ -33,6 +33,9 @@ use crate::snapshots;
 const ROW_H: f32 = 56.0;
 const ICON: f32 = 36.0;
 
+/// Between the parts of the grey line after a mod's name (its version, where it came from).
+const META_SEP: &str = " \u{00B7} ";
+
 /// Which items the list shows.
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 enum Show {
@@ -1118,16 +1121,8 @@ impl App {
         tc.spacing_mut().interact_size.y = 20.0;
         let version =
             if rec.version.is_empty() || rec.version == "Unknown" { String::new() } else { short(&rec.version, 40) };
+        // a tag is for what needs a look; where the mod came from is plain grey text at the end of the version
         let mut tags: Vec<(&str, egui::Color32)> = Vec::new();
-        if files::is_from_modrinth(rec) {
-            tags.push(("Modrinth", c_muted()));
-        }
-        if files::is_from_curseforge(rec) {
-            tags.push(("CurseForge", c_muted()));
-        }
-        if !rec.user_added {
-            tags.push(("Part of the modpack", c_muted()));
-        }
         if !e.exists {
             tags.push(("File missing", c_danger()));
         }
@@ -1135,18 +1130,41 @@ impl App {
         let name_text = RichText::new(&name).semibold().color(if off { c_muted() } else { c_text() });
         let name_nat = tc.painter().layout_no_wrap(name.clone(), super::fonts::semibold(FS_BODY), c_text()).size().x;
         let name_w = name_nat.min((text.width() - tags_w - 6.0).max(text.width() * 0.4));
-        // the version takes what is left on the line, or is left to the details when there is no room
+        // the version and the rest take what is left on the line: a part that does not fit is left out whole, and
+        // all of it is left to the details when there is no room
         let left_over = text.width() - name_w - tags_w - 12.0;
-        let show_version = !version.is_empty() && left_over >= 56.0;
+        let mut meta: Vec<&str> = Vec::new();
+        if !version.is_empty() {
+            meta.push(&version);
+        }
+        if files::is_from_modrinth(rec) {
+            meta.push("Modrinth");
+        }
+        if files::is_from_curseforge(rec) {
+            meta.push("CurseForge");
+        }
+        if !rec.user_added {
+            meta.push("Part of the modpack");
+        }
+        let meta_w = |parts: &[&str]| {
+            let font = egui::FontId::proportional(FS_META);
+            tc.painter().layout_no_wrap(parts.join(META_SEP), font, c_muted()).size().x
+        };
+        while meta.len() > 1 && meta_w(&meta) > left_over {
+            meta.pop();
+        }
+        let show_meta = !meta.is_empty() && meta_w(&meta) <= left_over;
         tc.horizontal(|ui| {
             ui.scope(|ui| {
                 ui.set_max_width(name_w);
                 ui.add(egui::Label::new(name_text).truncate());
             });
-            if show_version {
+            if show_meta {
                 ui.scope(|ui| {
                     ui.set_max_width(left_over);
-                    ui.add(egui::Label::new(RichText::new(version.as_str()).color(c_muted()).size(FS_META)).truncate());
+                    ui.add(
+                        egui::Label::new(RichText::new(meta.join(META_SEP)).color(c_muted()).size(FS_META)).truncate(),
+                    );
                 });
             }
             for (t, c) in &tags {
