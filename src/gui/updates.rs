@@ -235,9 +235,9 @@ impl App {
         let mut action = None;
         egui::Frame::new()
             .fill(c_accent_soft())
-            .stroke(Stroke::new(1.0, c_accent().gamma_multiply(0.4)))
-            .corner_radius(CornerRadius::same(12))
-            .inner_margin(egui::Margin::symmetric(14, 10))
+            .stroke(Stroke::new(1.0, c_accent().gamma_multiply(0.35)))
+            .corner_radius(CornerRadius::same(R_CARD))
+            .inner_margin(egui::Margin::symmetric(16, 12))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 match &self.upd.stage {

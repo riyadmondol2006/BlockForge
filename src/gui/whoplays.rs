@@ -27,32 +27,38 @@ pub fn valid_player_name(n: &str) -> bool {
     (3..=16).contains(&n.len()) && n.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
-fn choice(ui: &mut Ui, width: f32, icon: Icon, title: &str, sub: &str) -> bool {
-    let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, 120.0), Sense::click());
+/// One of the two ways in. The Microsoft one is the filled, main choice; the offline one is plain.
+fn choice(ui: &mut Ui, width: f32, icon: Icon, title: &str, sub: &str, main: bool) -> bool {
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, 96.0), Sense::click());
     let hovered = resp.hovered();
+    let (bg, line, fg, sub_fg) = if main {
+        (if hovered { c_accent_hover() } else { c_accent() }, egui::Color32::TRANSPARENT, c_on_accent(), c_on_accent())
+    } else {
+        (if hovered { c_field_hover() } else { c_field() }, c_control(), c_text(), c_muted())
+    };
     ui.painter().rect(
         rect,
-        egui::CornerRadius::same(16),
-        if hovered { c_card_hover() } else { c_card() },
-        egui::Stroke::new(1.0, if hovered { c_accent() } else { c_border() }),
+        egui::CornerRadius::same(R_CARD),
+        bg,
+        egui::Stroke::new(1.0, line),
         egui::StrokeKind::Inside,
     );
-    icons::paint(ui.painter(), icon, rect.left_top() + egui::vec2(36.0, 36.0), 24.0, c_accent());
+    icons::paint(ui.painter(), icon, rect.left_top() + egui::vec2(34.0, 30.0), 20.0, fg);
     ui.painter().text(
-        rect.left_top() + egui::vec2(22.0, 66.0),
+        rect.left_top() + egui::vec2(20.0, 58.0),
         egui::Align2::LEFT_CENTER,
         title,
-        egui::FontId::proportional(17.0),
-        c_text(),
+        super::fonts::semibold(15.0),
+        fg,
     );
     ui.painter().text(
-        rect.left_top() + egui::vec2(22.0, 90.0),
+        rect.left_top() + egui::vec2(20.0, 77.0),
         egui::Align2::LEFT_CENTER,
         sub,
         egui::FontId::proportional(13.0),
-        c_muted(),
+        sub_fg,
     );
-    focus_ring(ui, &resp, rect, 16);
+    focus_ring(ui, &resp, rect, R_CARD);
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, title));
     resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked()
 }
@@ -74,57 +80,64 @@ impl App {
         let modal = egui::Modal::new(egui::Id::unique("who")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
             ui.set_width(500.0);
             if !st.name_step {
-                heading(ui, "Who's playing?");
+                ui.label(RichText::new("Who's playing?").size(18.0).semibold());
                 muted(ui, "Sign in with your Microsoft account, or play offline with any name.");
-                ui.add_space(14.0);
-                let w = (ui.available_width() - 10.0) / 2.0;
+                ui.add_space(12.0);
+                let w = ((ui.available_width() - 8.0) / 2.0).floor();
                 ui.horizontal(|ui| {
-                    if choice(ui, w, Icon::User, "Sign in", "Use your Microsoft account") {
+                    if choice(ui, w, Icon::User, "Sign in", "Use your Microsoft account", true) {
                         sign_in = true;
                     }
-                    if choice(ui, w, Icon::Play, "Play offline", "Pick any player name") {
+                    if choice(ui, w, Icon::Play, "Play offline", "Pick any player name", false) {
                         st.name_step = true;
                     }
                 });
                 if !accounts.is_empty() {
-                    ui.add_space(10.0);
-                    ui.label(RichText::new("CONTINUE AS").size(11.0).semibold().color(c_muted()));
+                    ui.add_space(16.0);
+                    ui.label(RichText::new("Continue as").size(13.0).color(c_muted()));
                     for (uuid, name, kind, offline) in &accounts {
+                        // the row's fill is put in behind its contents once it is known whether it is pointed at
+                        let fill = ui.painter().add(egui::Shape::Noop);
                         let row = egui::Frame::new()
-                            .fill(c_card())
                             .stroke(egui::Stroke::new(1.0, c_border()))
-                            .corner_radius(egui::CornerRadius::same(14))
-                            .inner_margin(egui::Margin::same(12))
+                            .corner_radius(egui::CornerRadius::same(R_CONTROL))
+                            .inner_margin(egui::Margin::same(10))
                             .show(ui, |ui| {
                                 ui.set_width(ui.available_width());
                                 ui.horizontal(|ui| {
                                     // the player's face, like on the sidebar and the Accounts page
-                                    self.account_avatar(ui, uuid, name, *offline, 34.0);
+                                    self.account_avatar(ui, uuid, name, *offline, 32.0);
                                     ui.vertical(|ui| {
+                                        ui.spacing_mut().item_spacing.y = 0.0;
                                         ui.label(RichText::new(name).semibold());
                                         small_muted(ui, *kind);
                                     });
                                 });
                             });
-                        if row
-                            .response
-                            .interact(Sense::click())
-                            .on_hover_cursor(egui::CursorIcon::PointingHand)
-                            .clicked()
-                        {
+                        let resp =
+                            row.response.interact(Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
+                        ui.painter().set(
+                            fill,
+                            egui::Shape::rect_filled(
+                                resp.rect,
+                                egui::CornerRadius::same(R_CONTROL),
+                                if resp.hovered() { c_field_hover() } else { c_field() },
+                            ),
+                        );
+                        if resp.clicked() {
                             pick = Some(uuid.clone());
                         }
                     }
                 }
             } else {
-                heading(ui, "Play offline");
+                ui.label(RichText::new("Play offline").size(18.0).semibold());
                 muted(ui, "3-16 letters, numbers or underscores. No account needed.");
-                ui.add_space(10.0);
+                ui.add_space(12.0);
                 let r = ui.add_sized(
-                    [ui.available_width(), 40.0],
+                    [ui.available_width(), 36.0],
                     egui::TextEdit::singleline(&mut st.name)
-                        .hint_text("Player name")
-                        .margin(egui::Margin::symmetric(12, 10))
+                        .hint_text(RichText::new("Player name").color(c_faint()))
+                        .margin(egui::Margin::symmetric(12, 9))
                         .background_color(c_field()),
                 );
                 // typing can start at once
@@ -132,7 +145,7 @@ impl App {
                 if st.error {
                     ui.label(RichText::new("Use 3-16 letters, numbers or underscores.").color(c_danger()));
                 }
-                ui.add_space(6.0);
+                ui.add_space(8.0);
                 ui.horizontal(|ui| {
                     let go = primary(ui, "Continue").clicked()
                         || (r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)));

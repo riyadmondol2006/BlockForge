@@ -1,6 +1,6 @@
 //! The Tools page: clean up, diagnose problems and keep things tidy.
 
-use egui::{CornerRadius, RichText, ScrollArea, Stroke, Ui};
+use egui::{Align, Layout, RichText, ScrollArea, Ui};
 
 use super::services::{NetReport, SvcMsg, confirm_modal, modal_scroll_height, modal_width};
 use super::theme::*;
@@ -8,7 +8,8 @@ use super::widgets::*;
 use super::{App, Msg};
 use crate::tools::{self, NetworkCheckOptions, TOOLS, ToolInfo};
 
-const CARD_WIDTH: f32 = 300.0;
+/// The widest the list of tools gets.
+const LIST_WIDTH: f32 = 760.0;
 
 /// Whether this copy runs in a Flatpak; it can't change while the launcher runs, so it is looked up once.
 static FLATPAK: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
@@ -27,47 +28,48 @@ impl App {
     pub(super) fn tools_ui(&mut self, ui: &mut Ui) {
         heading(ui, "Tools");
         muted(ui, "Clean up, diagnose problems and keep things tidy");
-        ui.add_space(10.0);
+        ui.add_space(12.0);
         // the network checker needs `enableLogs`, which is a plain field of the settings (no need to read them all)
         let logs_on = self.settings.enable_logs;
         let flatpak = *FLATPAK.get_or_init(tools::is_flatpak);
-        let per_row = ((ui.available_width() + 12.0) / (CARD_WIDTH + 12.0)).floor().max(1.0) as usize;
         let mut clicked: Option<&'static str> = None;
         #[cfg(feature = "converter")]
         let mut open_convert = false;
         ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
-            // the world converter has a card of its own, first (it opens a page, not a job)
+            // at most 760 wide, but never wider than the window
+            ui.set_max_width((ui.available_width() - 14.0).min(LIST_WIDTH));
+            // the world converter has a row of its own, first (it opens a page, not a job)
             #[allow(unused_mut)]
-            let mut cards: Vec<Option<&ToolInfo>> = Vec::new();
+            let mut tools: Vec<Option<&ToolInfo>> = Vec::new();
             #[cfg(feature = "converter")]
-            cards.push(None);
-            cards.extend(TOOLS.iter().map(Some));
-            for row in cards.chunks(per_row) {
-                ui.horizontal_top(|ui| {
-                    for tool in row {
-                        let Some(tool) = tool else {
-                            #[cfg(feature = "converter")]
-                            if self.convert_tool_card(ui) {
-                                open_convert = true;
-                            }
-                            continue;
-                        };
-                        let (enabled, hint) = match tool.id {
-                            "network_checker" if !logs_on => {
-                                (false, Some("Turn on \"Report pack installs and play time\" in Settings first."))
-                            }
-                            "debug_mode" if flatpak => (false, Some("Not available in a Flatpak.")),
-                            "debug_mode" if tools::is_debug_enabled() => (false, Some("Debug mode is already on.")),
-                            "skin_updater" if self.accounts.is_empty() => (false, Some("Add an account first.")),
-                            _ => (true, None),
-                        };
-                        if tool_card(ui, tool, enabled, hint) {
-                            clicked = Some(tool.id);
+            tools.push(None);
+            tools.extend(TOOLS.iter().map(Some));
+            card(ui, |ui| {
+                let mut rows = super::settings::Rows::new();
+                for tool in tools {
+                    rows.gap(ui);
+                    let Some(tool) = tool else {
+                        #[cfg(feature = "converter")]
+                        if self.convert_tool_card(ui) {
+                            open_convert = true;
                         }
+                        continue;
+                    };
+                    let (enabled, hint) = match tool.id {
+                        "network_checker" if !logs_on => {
+                            (false, Some("Turn on \"Report pack installs and play time\" in Settings first."))
+                        }
+                        "debug_mode" if flatpak => (false, Some("Not available in a Flatpak.")),
+                        "debug_mode" if tools::is_debug_enabled() => (false, Some("Debug mode is already on.")),
+                        "skin_updater" if self.accounts.is_empty() => (false, Some("Add an account first.")),
+                        _ => (true, None),
+                    };
+                    if tool_card(ui, tool, enabled, hint) {
+                        clicked = Some(tool.id);
                     }
-                });
-                ui.add_space(12.0);
-            }
+                }
+            });
+            ui.add_space(16.0);
         });
         if let Some(id) = clicked {
             self.tool_clicked(id);
@@ -194,7 +196,7 @@ impl App {
                     let mut answer = None;
                     egui::Modal::new(egui::Id::unique("tool-confirm")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
                         ui.set_width(modal_width(ctx, 460.0));
-                        ui.label(RichText::new("Network checker").size(19.0).semibold());
+                        ui.label(RichText::new("Network checker").size(18.0).semibold());
                         ui.add_space(4.0);
                         muted(ui, tools::NETWORK_CHECKER_WARNING);
                         ui.add_space(6.0);
@@ -250,7 +252,7 @@ impl App {
             if let Some(report) = &self.svc.net_report {
                 egui::Modal::new(egui::Id::unique("net-report")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
                     ui.set_width(modal_width(ctx, 680.0));
-                    ui.label(RichText::new("Network checker").size(21.0).semibold());
+                    ui.label(RichText::new("Network checker").size(18.0).semibold());
                     match (&report.link, &report.error) {
                         (Some(link), _) => {
                             small_muted(ui, "The result was shared so problems can be diagnosed. Link:");
@@ -304,7 +306,8 @@ fn tool_card(ui: &mut Ui, tool: &ToolInfo, enabled: bool, hint: Option<&str>) ->
     card_frame(ui, tool.name, tool.description, tool.action, enabled, hint)
 }
 
-/// A card with a title, a description and a button, as the grid draws them. Returns whether the button was pressed.
+/// A row of the list: the name, what the tool does and, when it can't be used now, why; then its button on the right.
+/// Returns whether the button was pressed.
 pub(super) fn card_frame(
     ui: &mut Ui,
     name: &str,
@@ -314,26 +317,29 @@ pub(super) fn card_frame(
     hint: Option<&str>,
 ) -> bool {
     let mut clicked = false;
-    egui::Frame::new()
-        .fill(c_card())
-        .stroke(Stroke::new(1.0, c_border()))
-        .corner_radius(CornerRadius::same(16))
-        .inner_margin(egui::Margin::same(16))
-        .show(ui, |ui| {
-            ui.set_width(CARD_WIDTH - 34.0);
-            ui.set_min_height(130.0);
-            ui.vertical(|ui| {
-                ui.label(RichText::new(name).semibold().size(15.5));
-                ui.add(egui::Label::new(RichText::new(description).color(c_muted()).size(12.5)).wrap());
-                if let Some(h) = hint {
-                    ui.add_space(2.0);
-                    ui.add(egui::Label::new(RichText::new(h).color(c_warn()).size(12.0)).wrap());
-                }
-                ui.add_space(8.0);
-                clicked = primary_enabled(ui, action, enabled).clicked();
-            });
+    // the text makes room for the button (as wide as it was on the last frame)
+    let id = ui.scope_id().with(("tool-row", name));
+    let button_w = remembered_width(ui, id, 80.0);
+    ui.horizontal(|ui| {
+        ui.vertical(|ui| {
+            ui.set_max_width((ui.available_width() - button_w - 16.0).max(140.0));
+            ui.spacing_mut().item_spacing.y = 2.0;
+            ui.label(RichText::new(name).semibold());
+            ui.add(egui::Label::new(RichText::new(description).color(c_muted()).size(12.5)).wrap());
+            if let Some(h) = hint {
+                ui.add(egui::Label::new(RichText::new(h).color(c_muted()).size(12.5)).wrap());
+            }
         });
-    ui.add_space(4.0);
+        let used = ui
+            .with_layout(Layout::right_to_left(Align::Center), |ui| {
+                // a tool that can't run now shows its button greyed out, and the reason under its name
+                clicked =
+                    if enabled { secondary(ui, action).clicked() } else { danger_enabled(ui, action, false).clicked() };
+                ui.min_rect().width()
+            })
+            .inner;
+        remember_width(ui, id, used);
+    });
     clicked
 }
 

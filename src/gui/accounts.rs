@@ -28,87 +28,124 @@ impl App {
         let mut change_skin: Option<String> = None;
         let current = self.current_account().map(|a| a.uuid.clone());
         ScrollArea::vertical().id_salt("accounts").auto_shrink(false).show(ui, |ui| {
+            // at most 760 wide, but never wider than the window
+            ui.set_max_width((ui.available_width() - 14.0).min(760.0));
             let accounts = self.accounts.clone();
-            for acc in &accounts {
+            if accounts.is_empty() {
                 card(ui, |ui| {
-                    // the buttons keep their room on the right (as wide as on the last frame)
-                    let buttons_id = ui.scope_id().with(("account-buttons", &acc.uuid));
-                    let buttons_w = remembered_width(ui, buttons_id, 300.0);
-                    let mut used = buttons_w;
-                    ui.horizontal(|ui| {
-                        self.account_avatar(ui, &acc.uuid, acc.name(), acc.offline, 44.0);
-                        ui.vertical(|ui| {
-                            ui.set_max_width((ui.available_width() - buttons_w - 12.0).max(120.0));
-                            ui.horizontal(|ui| {
-                                ui.label(RichText::new(acc.name()).semibold().size(16.0));
-                                tag(ui, acc.kind(), if acc.offline { c_warn() } else { c_accent() });
-                                if acc.must_login {
-                                    tag(ui, "Sign in again", c_danger());
-                                }
+                    ui.label(RichText::new("No accounts yet").semibold());
+                    small_muted(ui, "Add one below.");
+                });
+            } else {
+                card(ui, |ui| {
+                    let mut rows = super::settings::Rows::new();
+                    for acc in &accounts {
+                        rows.gap(ui);
+                        // the buttons keep their room on the right (as wide as on the last frame)
+                        let buttons_id = ui.scope_id().with(("account-buttons", &acc.uuid));
+                        let buttons_w = remembered_width(ui, buttons_id, 260.0);
+                        let mut used = buttons_w;
+                        ui.horizontal(|ui| {
+                            self.account_avatar(ui, &acc.uuid, acc.name(), acc.offline, 40.0);
+                            ui.vertical(|ui| {
+                                ui.set_max_width((ui.available_width() - buttons_w - 12.0).max(120.0));
+                                ui.spacing_mut().item_spacing.y = 2.0;
+                                ui.horizontal_wrapped(|ui| {
+                                    ui.label(RichText::new(acc.name()).semibold().size(15.0));
+                                    tag(ui, acc.kind(), c_muted());
+                                    if current.as_ref() == Some(&acc.uuid) {
+                                        ink_tag(ui, "Playing as");
+                                    }
+                                    if acc.must_login {
+                                        tag(ui, "Sign in again", c_danger());
+                                    }
+                                });
+                                small_muted(ui, &acc.uuid);
                             });
-                            small_muted(ui, &acc.uuid);
-                        });
-                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            // removing asks once more: a Microsoft account has to be signed in again afterwards
-                            if self.acct.confirm_remove.as_deref() == Some(acc.uuid.as_str()) {
-                                if secondary(ui, "Cancel").clicked() {
-                                    self.acct.confirm_remove = None;
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                // removing asks once more: a Microsoft account has to be signed in again afterwards
+                                if self.acct.confirm_remove.as_deref() == Some(acc.uuid.as_str()) {
+                                    if danger(ui, "Yes, remove").clicked() {
+                                        remove = Some(acc.uuid.clone());
+                                    }
+                                    if secondary(ui, "Cancel").clicked() {
+                                        self.acct.confirm_remove = None;
+                                    }
+                                    used = ui.min_rect().width();
+                                    return;
                                 }
-                                if danger(ui, "Yes, remove").clicked() {
-                                    remove = Some(acc.uuid.clone());
+                                kebab_menu(ui, |ui| {
+                                    if ui.button("Remove").clicked() {
+                                        self.acct.confirm_remove = Some(acc.uuid.clone());
+                                        ui.close();
+                                    }
+                                });
+                                if secondary(ui, "Change skin").clicked() {
+                                    change_skin = Some(acc.uuid.clone());
+                                }
+                                if current.as_ref() != Some(&acc.uuid) && secondary(ui, "Use").clicked() {
+                                    select = Some(acc.uuid.clone());
                                 }
                                 used = ui.min_rect().width();
-                                return;
-                            }
-                            if secondary(ui, "Remove").clicked() {
-                                self.acct.confirm_remove = Some(acc.uuid.clone());
-                            }
-                            if secondary(ui, "Change skin").clicked() {
-                                change_skin = Some(acc.uuid.clone());
-                            }
-                            if current.as_ref() == Some(&acc.uuid) {
-                                tag(ui, "Playing as", c_accent());
-                            } else if primary(ui, "Use").clicked() {
-                                select = Some(acc.uuid.clone());
-                            }
-                            used = ui.min_rect().width();
+                            });
                         });
-                    });
-                    remember_width(ui, buttons_id, used);
+                        remember_width(ui, buttons_id, used);
+                    }
                 });
-                ui.add_space(2.0);
-            }
-            if self.accounts.is_empty() {
-                card(ui, |ui| muted(ui, "No accounts yet. Add one below."));
             }
 
-            ui.add_space(8.0);
+            ui.add_space(16.0);
             section(ui, "Add an account");
             card(ui, |ui| {
-                ui.label(RichText::new("Microsoft").semibold());
-                small_muted(ui, "Your browser opens a Microsoft page; enter the code shown here to sign in.");
-                ui.add_space(4.0);
+                super::settings::wide_row(
+                    ui,
+                    "Microsoft",
+                    "Your browser opens a Microsoft page; enter the code shown here to sign in.",
+                    220.0,
+                    |ui| {
+                        if self.acct.device.is_none() && !self.acct.signing_in && primary(ui, "Sign in with Microsoft").clicked()
+                        {
+                            self.start_sign_in();
+                        }
+                    },
+                );
                 match self.acct.device.clone() {
                     Some(code) => {
-                        ui.label(RichText::new(&code.user_code).size(34.0).semibold().monospace().color(c_accent()));
+                        ui.add_space(8.0);
                         ui.horizontal(|ui| {
-                            if secondary(ui, "Copy code").clicked() {
-                                ui.ctx().copy_text(code.user_code.clone());
-                            }
-                            if secondary(ui, "Open the page again").clicked() {
-                                let _ = open::that(&code.verification_uri);
-                            }
-                            if secondary(ui, "Cancel").clicked() {
-                                self.acct.device = None;
-                                self.acct.signing_in = false;
-                            }
+                            // the code, large and in figures of equal width, so it can be read out and typed
+                            egui::Frame::new()
+                                .fill(c_field())
+                                .stroke(egui::Stroke::new(1.0, c_control()))
+                                .corner_radius(egui::CornerRadius::same(R_CONTROL))
+                                .inner_margin(egui::Margin::symmetric(16, 8))
+                                .show(ui, |ui| {
+                                    ui.label(RichText::new(&code.user_code).size(30.0).semibold().monospace());
+                                });
+                            ui.vertical(|ui| {
+                                ui.spacing_mut().item_spacing.y = 6.0;
+                                ui.horizontal(|ui| {
+                                    if secondary(ui, "Copy code").clicked() {
+                                        ui.ctx().copy_text(code.user_code.clone());
+                                    }
+                                    if secondary(ui, "Open the page again").clicked() {
+                                        let _ = open::that(&code.verification_uri);
+                                    }
+                                    if secondary(ui, "Cancel").clicked() {
+                                        self.acct.device = None;
+                                        self.acct.signing_in = false;
+                                    }
+                                });
+                            });
                         });
+                        ui.add_space(4.0);
                         ui.horizontal(|ui| {
                             ui.spinner();
                             muted(ui, format!("Waiting for you to finish at {}", code.verification_uri));
                         });
                     }
                     None if self.acct.signing_in => {
+                        ui.add_space(4.0);
                         ui.horizontal(|ui| {
                             ui.spinner();
                             muted(ui, "Asking Microsoft for a code");
@@ -117,38 +154,49 @@ impl App {
                             }
                         });
                     }
-                    None => {
-                        if primary(ui, "Sign in with Microsoft").clicked() {
-                            self.start_sign_in();
-                        }
-                    }
+                    None => {}
                 }
+                ui.add_space(8.0);
+                super::settings::hairline(ui);
+                ui.add_space(8.0);
+                super::settings::wide_row(
+                    ui,
+                    "Offline player",
+                    "Just a name. Works for single player and offline-mode servers. 3\u{2013}16 letters, numbers or underscores.",
+                    330.0,
+                    |ui| {
+                        let mut name = std::mem::take(&mut self.acct.offline_name);
+                        // the row lays out from the right, so the field and button go in the order that reads right
+                        let reversed = ui.layout().prefer_right_to_left();
+                        let mut r = None;
+                        let mut add_clicked = false;
+                        let valid = super::whoplays::valid_player_name(name.trim());
+                        for step in if reversed { [1, 0] } else { [0, 1] } {
+                            if step == 0 {
+                                r = Some(search_field(ui, &mut name, "Player name", 240.0));
+                            } else {
+                                add_clicked = secondary_enabled(ui, "Add", valid).clicked();
+                            }
+                        }
+                        // the same rule as everywhere else a name is typed (Minecraft's own: 3 to 16 characters)
+                        let valid = super::whoplays::valid_player_name(name.trim());
+                        let add = add_clicked
+                            || (valid && r.is_some_and(|r| r.lost_focus()) && ui.input(|i| i.key_pressed(egui::Key::Enter)));
+                        if add && valid {
+                            let acc = crate::accounts::Account::offline(name.trim());
+                            self.accounts.retain(|a| !(a.offline && a.name() == acc.name()));
+                            self.settings.last_account = Some(acc.uuid.clone());
+                            self.toast(format!("Added {}", acc.name()));
+                            self.accounts.push(acc);
+                            self.save_accounts();
+                            self.save_settings();
+                            name.clear();
+                        }
+                        self.acct.offline_name = name;
+                    },
+                );
             });
-            ui.add_space(4.0);
-            card(ui, |ui| {
-                ui.label(RichText::new("Offline player").semibold());
-                small_muted(ui, "Just a name. Works for single player and offline-mode servers.");
-                ui.horizontal(|ui| {
-                    let mut name = std::mem::take(&mut self.acct.offline_name);
-                    let r = search_field(ui, &mut name, "Player name", 240.0);
-                    // the same rule as everywhere else a name is typed (Minecraft's own: 3 to 16 characters)
-                    let valid = super::whoplays::valid_player_name(name.trim());
-                    let add = primary_enabled(ui, "Add", valid).clicked()
-                        || (valid && r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)));
-                    if add {
-                        let acc = crate::accounts::Account::offline(name.trim());
-                        self.accounts.retain(|a| !(a.offline && a.name() == acc.name()));
-                        self.settings.last_account = Some(acc.uuid.clone());
-                        self.toast(format!("Added {}", acc.name()));
-                        self.accounts.push(acc);
-                        self.save_accounts();
-                        self.save_settings();
-                        name.clear();
-                    }
-                    self.acct.offline_name = name;
-                });
-                small_muted(ui, "3\u{2013}16 letters, numbers or underscores.");
-            });
+            ui.add_space(16.0);
         });
         if let Some(id) = change_skin {
             self.open_skin_dialog(&id);
@@ -167,4 +215,17 @@ impl App {
             self.save_settings();
         }
     }
+}
+
+/// A small filled label in the ink colour: what is true of this one row (the account that is playing).
+fn ink_tag(ui: &mut Ui, text: &str) {
+    let galley = ui.painter().layout_no_wrap(text.to_string(), super::fonts::medium(12.0), c_on_ink());
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(galley.size().x + 14.0, 20.0), egui::Sense::hover());
+    ui.painter().rect_filled(rect, egui::CornerRadius::same(R_TAG), c_ink());
+    ui.painter().galley(rect.center() - galley.size() / 2.0, galley, c_on_ink());
+}
+
+/// A neutral button that can be switched off (greyed, and it does nothing).
+fn secondary_enabled(ui: &mut Ui, text: &str, enabled: bool) -> egui::Response {
+    if enabled { secondary(ui, text) } else { danger_enabled(ui, text, false) }
 }

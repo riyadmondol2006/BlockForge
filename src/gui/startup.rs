@@ -68,7 +68,7 @@ impl App {
         let (mut yes, mut no, mut never) = (false, false, false);
         egui::Modal::new(egui::Id::unique("startup")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
             ui.set_width(460.0);
-            ui.label(RichText::new(w.title()).size(19.0).semibold());
+            ui.label(RichText::new(w.title()).size(18.0).semibold());
             ui.add_space(6.0);
             ui.label(w.text(&folder));
             ui.add_space(10.0);

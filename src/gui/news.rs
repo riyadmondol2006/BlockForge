@@ -97,9 +97,34 @@ pub fn render_spans(ui: &mut Ui, spans: &[Span]) {
     }
 }
 
+/// The article's text on one line, cut at a word (never inside one) with an ellipsis when it is long.
 fn preview(item: &NewsItem) -> String {
     let flat = item.plain_text().split_whitespace().collect::<Vec<_>>().join(" ");
-    if flat.chars().count() > 220 { format!("{}\u{2026}", flat.chars().take(217).collect::<String>()) } else { flat }
+    if flat.chars().count() <= 220 {
+        return flat;
+    }
+    let cut: String = flat.chars().take(217).collect();
+    // back up to the end of the last whole word, unless that would throw most of it away
+    let whole = match cut.rfind(' ') {
+        Some(i) if i > 120 => &cut[..i],
+        _ => cut.as_str(),
+    };
+    format!("{}\u{2026}", whole.trim_end_matches([' ', ',', ';', ':', '.', '-']))
+}
+
+/// `text` as at most two lines of wrapped muted text; what does not fit ends in an ellipsis at the edge.
+fn two_lines(ui: &Ui, text: &str, width: f32) -> std::sync::Arc<egui::Galley> {
+    let mut job = egui::text::LayoutJob::single_section(
+        text.to_string(),
+        egui::TextFormat::simple(egui::FontId::proportional(13.0), c_muted()),
+    );
+    job.wrap = egui::text::TextWrapping {
+        max_width: width,
+        max_rows: 2,
+        break_anywhere: false,
+        overflow_character: Some('\u{2026}'),
+    };
+    ui.painter().layout_job(job)
 }
 
 impl App {
@@ -131,28 +156,40 @@ impl App {
             Status::Loaded => {
                 let mut open = None;
                 for (i, item) in self.svc.news.items.iter().enumerate() {
+                    // the fill is put in behind the contents once it is known whether the row is pointed at
+                    let fill = ui.painter().add(egui::Shape::Noop);
                     let resp = egui::Frame::new()
-                        .fill(c_card())
                         .stroke(Stroke::new(1.0, c_border()))
-                        .corner_radius(CornerRadius::same(14))
-                        .inner_margin(egui::Margin::same(14))
+                        .corner_radius(CornerRadius::same(R_CARD))
+                        .inner_margin(egui::Margin::same(16))
                         .show(ui, |ui| {
                             ui.set_width(ui.available_width());
+                            ui.spacing_mut().item_spacing.y = 4.0;
                             ui.horizontal_wrapped(|ui| {
                                 ui.label(RichText::new(&item.title).semibold().size(15.0));
                                 if !item.date.is_empty() {
                                     small_muted(ui, &item.date);
                                 }
                             });
-                            ui.add(egui::Label::new(RichText::new(&item.preview).color(c_muted()).size(13.0)).wrap());
+                            let galley = two_lines(ui, &item.preview, ui.available_width());
+                            let (rect, _) = ui.allocate_exact_size(galley.size(), Sense::hover());
+                            ui.painter().galley(rect.min, galley, c_muted());
                         })
                         .response
                         .interact(Sense::click())
                         .on_hover_cursor(egui::CursorIcon::PointingHand);
+                    ui.painter().set(
+                        fill,
+                        egui::Shape::rect_filled(
+                            resp.rect,
+                            CornerRadius::same(R_CARD),
+                            if resp.hovered() { c_card_hover() } else { c_card() },
+                        ),
+                    );
                     if resp.clicked() {
                         open = Some(i);
                     }
-                    ui.add_space(6.0);
+                    ui.add_space(8.0);
                 }
                 if open.is_some() {
                     self.svc.news.open = open;
@@ -171,7 +208,7 @@ impl App {
         let mut close = false;
         egui::Modal::new(egui::Id::unique("news-article")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
             ui.set_width(modal_width(ctx, 620.0));
-            ui.add(egui::Label::new(RichText::new(&item.title).size(21.0).semibold()).wrap());
+            ui.add(egui::Label::new(RichText::new(&item.title).size(18.0).semibold()).wrap());
             if !item.date.is_empty() {
                 small_muted(ui, &item.date);
             }

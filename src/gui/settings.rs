@@ -7,12 +7,58 @@ use super::App;
 use super::theme::{self, *};
 use super::widgets::*;
 
-/// A titled card of rows, with the small coloured heading the Java edition uses.
-fn section(ui: &mut Ui, heading: &str, rows: impl FnOnce(&mut Ui)) {
+/// The widest the page's content gets; a wider window leaves the rest empty rather than stretching the rows.
+const PAGE_WIDTH: f32 = 760.0;
+
+/// The title of a block of settings and one muted line about it, above its card.
+pub(super) fn section_head(ui: &mut Ui, title: &str, hint: &str) {
+    ui.add_space(20.0);
+    ui.scope(|ui| {
+        ui.spacing_mut().item_spacing.y = 2.0;
+        ui.label(RichText::new(title).size(15.0).semibold());
+        if !hint.is_empty() {
+            ui.label(RichText::new(hint).size(13.0).color(c_muted()));
+        }
+    });
     ui.add_space(8.0);
+}
+
+/// The hairlines between the rows of one card: call [`Rows::gap`] before each row.
+pub(super) struct Rows {
+    first: bool,
+}
+
+impl Rows {
+    pub(super) fn new() -> Rows {
+        Rows { first: true }
+    }
+
+    /// Nothing before the first row, a hairline before every other.
+    pub(super) fn gap(&mut self, ui: &mut Ui) {
+        if std::mem::take(&mut self.first) {
+            return;
+        }
+        // the same room above and below the line, whatever the spacing of the card is
+        let pad = (10.0 - ui.spacing().item_spacing.y).max(0.0);
+        ui.add_space(pad);
+        hairline(ui);
+        ui.add_space(pad);
+    }
+}
+
+/// A one-pixel line across the width that is left.
+pub(super) fn hairline(ui: &mut Ui) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 1.0), egui::Sense::hover());
+    ui.painter().rect_filled(rect, 0.0, c_border());
+}
+
+/// A titled block: the heading with its hint, then one card holding the rows, divided by hairlines.
+fn section(ui: &mut Ui, title: &str, hint: &str, rows: impl FnOnce(&mut Ui, &mut Rows)) {
+    section_head(ui, title, hint);
     card(ui, |ui| {
-        ui.label(RichText::new(heading.to_uppercase()).size(11.0).semibold().color(c_accent()));
-        rows(ui);
+        // the title of a row sits close to its explanation
+        ui.spacing_mut().item_spacing.y = 2.0;
+        rows(ui, &mut Rows::new());
     });
 }
 
@@ -31,6 +77,7 @@ pub(super) fn wide_row(ui: &mut Ui, title: &str, hint: &str, control_width: f32,
     }
     ui.horizontal(|ui| {
         ui.vertical(|ui| {
+            ui.spacing_mut().item_spacing.y = 2.0;
             ui.set_max_width(room - control_width - 16.0);
             ui.label(RichText::new(title).semibold());
             if !hint.is_empty() {
@@ -116,7 +163,7 @@ fn text_row(ui: &mut Ui, title: &str, hint: &str, placeholder: &str, value: &str
     let mut committed = None;
     wide_row(ui, title, hint, 300.0, |ui| {
         let width = (ui.available_width() - 8.0).clamp(160.0, 300.0);
-        committed = draft_text(ui, title, value, placeholder, [width, 40.0], egui::Margin::symmetric(12, 10));
+        committed = draft_text(ui, title, value, placeholder, [width, 32.0], egui::Margin::symmetric(10, 7));
     });
     committed
 }
@@ -201,10 +248,11 @@ impl App {
         let self_gpus = self.gpus.clone();
         let perf = super::performance::SettingsView::new(self, ui.ctx());
         ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
-            // at most 780 wide, but never wider than the window (set_max_width alone would widen a narrow page)
-            ui.set_max_width(ui.available_width().min(780.0));
+            // at most 760 wide, but never wider than the window (set_max_width alone would widen a narrow page)
+            ui.set_max_width((ui.available_width() - 14.0).min(PAGE_WIDTH));
             let s = &mut self.settings;
-            section(ui, "Appearance", |ui| {
+            section(ui, "Appearance", "How the launcher looks", |ui, r| {
+                r.gap(ui);
                 wide_row(ui, "Theme", "Light and dark looks for the whole launcher", 310.0, |ui| {
                     egui::ComboBox::from_id_salt("theme")
                         .selected_text(theme::theme_label(&s.theme))
@@ -222,7 +270,7 @@ impl App {
                 // no Language row: the window is in English only for now, so a choice there would change nothing.
                 // `language` stays in the settings file for the Java edition.
             });
-            section(ui, "Game", |ui| {
+            section(ui, "Game", "Memory, Java and how games start", |ui, r| {
                 // memory
                 let mut auto = s.automatic_memory != Some(false);
                 let hint = if auto {
@@ -230,6 +278,7 @@ impl App {
                 } else {
                     "Set by hand, for every game without its own setting".to_string()
                 };
+                r.gap(ui);
                 wide_row(ui, "Memory", &hint, if auto { 140.0 } else { 400.0 }, |ui| {
                     if toggle(ui, &mut auto).changed() {
                         s.automatic_memory = Some(auto);
@@ -237,7 +286,7 @@ impl App {
                     }
                     ui.label("Automatic");
                     if !auto {
-                        ui.label(RichText::new(memory_text(s.maximum_memory)).semibold().color(c_accent()));
+                        ui.label(RichText::new(memory_text(s.maximum_memory)).semibold());
                         ui.spacing_mut().slider_width = 200.0;
                         let mut mb = s.maximum_memory.clamp(1024, max_mb);
                         if ui.add(egui::Slider::new(&mut mb, 1024..=max_mb).step_by(256.0).show_value(false)).changed()
@@ -247,6 +296,7 @@ impl App {
                         }
                     }
                 });
+                r.gap(ui);
                 setting_row(
                     ui,
                     "Speed up game start (class cache)",
@@ -256,6 +306,7 @@ impl App {
                     },
                 );
                 let mut warm = s.extras.get("warmUpGameFiles").and_then(|v| v.as_bool()).unwrap_or(true);
+                r.gap(ui);
                 setting_row(
                     ui,
                     "Read game files ahead of Play",
@@ -267,14 +318,16 @@ impl App {
                         }
                     },
                 );
+                r.gap(ui);
                 wide_row(
                     ui,
                     "Java compiler",
                     "Automatic uses the light one on computers with few cores, for much quicker starts. Full performance can give higher frame rates in long sessions.",
-                    300.0,
+                    330.0,
                     |ui| {
+                        // the row lays out from the right, so the choices go in backwards to read left to right
                         for (mode, label) in
-                            [("auto", "Automatic"), ("fast", "Light"), ("full", "Full performance")]
+                            [("full", "Full performance"), ("fast", "Light"), ("auto", "Automatic")]
                         {
                             if chip(ui, label, s.startup_mode == mode).clicked() && s.startup_mode != mode {
                                 s.startup_mode = mode.to_string();
@@ -283,6 +336,7 @@ impl App {
                         }
                     },
                 );
+                r.gap(ui);
                 setting_row(
                     ui,
                     "Pick game settings for this PC on first launch",
@@ -292,11 +346,13 @@ impl App {
                     },
                 );
                 if crate::gpu::supported() {
+                    r.gap(ui);
                     dirty |= graphics_card_row(ui, &mut s.gpu, self_gpus.as_deref());
                 }
                 // an empty path means automatic. The game only falls back to this Java when it doesn't use the one that
                 // comes with Minecraft (an instance's own Java setting), as in the Java edition.
                 let custom = s.using_custom_java_path.then(|| s.java_path.clone()).filter(|p| !p.is_empty());
+                r.gap(ui);
                 if let Some(path) = text_row(
                     ui,
                     "Java path",
@@ -315,6 +371,7 @@ impl App {
                 if let Some(warning) = java_path_warning(custom.as_deref()) {
                     ui.label(RichText::new(warning).color(c_warn()).size(12.0));
                 }
+                r.gap(ui);
                 if let Some(args) =
                     text_row(ui, "Java arguments", "Extra options passed to the Java virtual machine", "", &s.java_parameters)
                 {
@@ -324,6 +381,7 @@ impl App {
                         dirty = true;
                     }
                 }
+                r.gap(ui);
                 setting_row(
                     ui,
                     "Check for BlockForge updates",
@@ -332,15 +390,22 @@ impl App {
                         dirty |= toggle(ui, &mut s.check_for_launcher_updates).changed();
                     },
                 );
+                r.gap(ui);
                 setting_row(ui, "Keep the launcher open", "Leave BlockForge open while Minecraft is running", |ui| {
                     dirty |= toggle(ui, &mut s.keep_launcher_open).changed();
                 });
+                r.gap(ui);
                 setting_row(ui, "Show the console", "Open the log window next to the launcher", |ui| {
                     dirty |= toggle(ui, &mut s.enable_console).changed();
                 });
-                dirty |= perf.rows(ui, s);
+                // its rows are laid out by their own code, with more room between them than the rest of the card
+                ui.scope(|ui| {
+                    ui.spacing_mut().item_spacing.y = 8.0;
+                    dirty |= perf.rows(ui, s);
+                });
             });
-            section(ui, "Privacy", |ui| {
+            section(ui, "Privacy", "Off unless you turn it on", |ui, r| {
+                r.gap(ui);
                 setting_row(
                     ui,
                     "Share anonymous usage statistics",
@@ -349,6 +414,7 @@ impl App {
                         dirty |= toggle(ui, &mut s.enable_analytics).changed();
                     },
                 );
+                r.gap(ui);
                 setting_row(
                     ui,
                     "Report pack installs and play time",
@@ -358,13 +424,14 @@ impl App {
                     },
                 );
             });
-            section(ui, "Launcher", |ui| {
+            section(ui, "Launcher", "The window, the tray and where files are kept", |ui, r| {
                 let low_end = super::low_end_pc();
                 let hint = if low_end {
                     "Fewer animations and a smaller picture cache. On by default for this computer"
                 } else {
                     "Fewer animations and a smaller picture cache, for computers with 4 GB of memory or less"
                 };
+                r.gap(ui);
                 setting_row(ui, "Light mode for slower PCs", hint, |ui| {
                     let mut on = s.light_mode.unwrap_or(low_end);
                     if toggle(ui, &mut on).changed() {
@@ -373,15 +440,15 @@ impl App {
                         dirty = true;
                     }
                 });
+                r.gap(ui);
                 setting_row(ui, "Tray icon", "Show a tray menu while the launcher runs", |ui| {
                     dirty |= toggle(ui, &mut s.enable_tray_menu).changed();
                 });
+                r.gap(ui);
                 setting_row(ui, "Data folder", "Where instances, mods and logs are stored", |ui| {
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if secondary_icon(ui, super::icons::Icon::Folder, "Open").clicked() {
-                            open_data = true;
-                        }
-                    });
+                    if secondary_icon(ui, super::icons::Icon::Folder, "Open").clicked() {
+                        open_data = true;
+                    }
                 });
             });
             self.services_settings_ui(ui);

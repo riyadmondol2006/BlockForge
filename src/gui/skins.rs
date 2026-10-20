@@ -200,7 +200,7 @@ impl App {
 
         egui::Modal::new(egui::Id::unique("skin-dialog")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
             ui.set_width(modal_width(ctx, if d.offline { 460.0 } else { 600.0 }));
-            ui.label(RichText::new("Change skin").size(22.0).semibold());
+            ui.label(RichText::new("Change skin").size(18.0).semibold());
             if d.offline {
                 muted(ui, format!("{} is an offline player", d.name));
                 ui.add_space(8.0);
@@ -227,7 +227,7 @@ impl App {
                 let scale = if ui.available_width() >= 480.0 { 8.0 } else { 5.0 };
                 let size = vec2(16.0 * scale, 32.0 * scale);
                 let (rect, _) = ui.allocate_exact_size(size + vec2(24.0, 24.0), Sense::hover());
-                ui.painter().rect_filled(rect, CornerRadius::same(14), c_field());
+                ui.painter().rect_filled(rect, CornerRadius::same(R_CARD), c_field());
                 if let Some((_, tex)) = &d.preview {
                     egui::Image::from_texture(egui::load::SizedTexture::new(tex.id(), size)).paint_at(ui, egui::Rect::from_center_size(rect.center(), size));
                 }

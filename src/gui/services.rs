@@ -91,7 +91,7 @@ pub fn confirm_modal(ctx: &Context, id: &str, title: &str, body: &str, confirm: 
     let mut answer = None;
     egui::Modal::new(egui::Id::unique(id)).frame(super::modal_frame(ctx)).show(ctx, |ui| {
         ui.set_width(modal_width(ctx, 420.0));
-        ui.label(RichText::new(title).size(19.0).semibold());
+        ui.label(RichText::new(title).size(18.0).semibold());
         ui.add_space(4.0);
         muted(ui, body);
         ui.add_space(12.0);
@@ -265,13 +265,15 @@ impl App {
         let mut s = self.svc_edit();
         let before = s.clone();
         let mut folder_error: Option<String> = None;
-        ui.add_space(8.0);
+        ui.add_space(20.0);
         card(ui, |ui| {
-            egui::CollapsingHeader::new(RichText::new("Network, folders and backups").semibold().size(16.0))
+            let mut rows = super::settings::Rows::new();
+            egui::CollapsingHeader::new(RichText::new("Network, folders and backups").semibold().size(15.0))
                 .default_open(false)
                 .show(ui, |ui| {
                     small_muted(ui, "Connection changes apply the next time BlockForge starts.");
                     ui.add_space(4.0);
+                    rows.gap(ui);
                     setting_row(
                         ui,
                         "Files downloaded at once",
@@ -280,10 +282,12 @@ impl App {
                             ui.add(egui::DragValue::new(&mut s.concurrent_connections).range(1..=100));
                         },
                     );
+                    rows.gap(ui);
                     setting_row(ui, "Connection timeout", "Seconds to wait for a server (1 to 600)", |ui| {
                         ui.add(egui::DragValue::new(&mut s.connection_timeout).range(1..=600).suffix(" s"));
                     });
                     let mut key = s.modrinth_api_key.clone().unwrap_or_default();
+                    rows.gap(ui);
                     super::settings::wide_row(
                         ui,
                         "Modrinth API key",
@@ -291,15 +295,16 @@ impl App {
                         270.0,
                         |ui| {
                             ui.add_sized(
-                                [260.0, 30.0],
+                                [260.0, 32.0],
                                 egui::TextEdit::singleline(&mut key)
                                     .password(true)
-                                    .margin(egui::Margin::symmetric(10, 6))
+                                    .margin(egui::Margin::symmetric(10, 7))
                                     .background_color(c_field()),
                             );
                         },
                     );
                     s.modrinth_api_key = Some(key).filter(|k| !k.trim().is_empty());
+                    rows.gap(ui);
                     setting_row(ui, "Use a proxy", "Send downloads through a proxy server", |ui| {
                         toggle(ui, &mut s.enable_proxy);
                     });
@@ -314,10 +319,10 @@ impl App {
                                     }
                                 });
                             ui.add_sized(
-                                [220.0, 30.0],
+                                [220.0, 32.0],
                                 egui::TextEdit::singleline(&mut s.proxy_host)
                                     .hint_text("Proxy address")
-                                    .margin(egui::Margin::symmetric(10, 6))
+                                    .margin(egui::Margin::symmetric(10, 7))
                                     .background_color(c_field()),
                             );
                             ui.add(egui::DragValue::new(&mut s.proxy_port).range(1..=65535));
@@ -341,10 +346,10 @@ impl App {
                             }
                         });
                     }
-                    ui.add_space(4.0);
                     let width = ui.available_width().min(420.0);
-                    let margin = egui::Margin::symmetric(10, 6);
-                    ui.label("Downloads folder");
+                    let margin = egui::Margin::symmetric(10, 7);
+                    rows.gap(ui);
+                    ui.label(RichText::new("Downloads folder").semibold());
                     small_muted(ui, "Where support bundles are saved. Empty uses your Downloads folder.");
                     let downloads = s.custom_downloads_path.clone().unwrap_or_default();
                     let typed_downloads = super::settings::draft_text(
@@ -362,7 +367,7 @@ impl App {
                     );
                     let backups = s.backups_path.clone().unwrap_or_default();
                     let typed_backups =
-                        super::settings::draft_text(ui, "backups-folder", &backups, "Default", [width, 30.0], margin);
+                        super::settings::draft_text(ui, "backups-folder", &backups, "Default", [width, 32.0], margin);
                     // a typed path is only taken once it names a folder that exists, as the Java edition does
                     for (typed, slot, what) in [
                         (typed_downloads, &mut s.custom_downloads_path, "downloads"),
@@ -376,10 +381,11 @@ impl App {
                             }
                         }
                     }
-                    ui.add_space(4.0);
+                    rows.gap(ui);
                     setting_row(ui, "Back up after playing", "Makes a backup every time a game closes", |ui| {
                         toggle(ui, &mut s.enable_automatic_backup_after_launch);
                     });
+                    rows.gap(ui);
                     setting_row(ui, "Backup contents", "What the automatic backup holds", |ui| {
                         egui::ComboBox::from_id_salt("backup-mode")
                             .selected_text(s.backup_mode.label())

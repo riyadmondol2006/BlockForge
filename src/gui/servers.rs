@@ -68,83 +68,104 @@ impl App {
             self.reload_servers();
         }
         let mut act: Option<Act> = None;
-        ui.horizontal(|ui| {
-            ui.vertical(|ui| {
-                // leave room for the two buttons on the right, so the line wraps instead of running under them
-                ui.set_max_width((ui.available_width() - 300.0).max(160.0));
-                heading(ui, "Servers");
-                muted(ui, "Servers installed from modpacks. They run in their own window.");
-            });
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if secondary(ui, "Refresh").clicked() {
-                    act = Some(Act::Reload);
-                }
-                if secondary_icon(ui, super::icons::Icon::Folder, "Open servers folder").clicked() {
-                    act = Some(Act::Folder(String::new()));
-                }
+        ui.scope(|ui| {
+            ui.set_max_width(ui.available_width().min(760.0));
+            ui.horizontal(|ui| {
+                ui.vertical(|ui| {
+                    // leave room for the two buttons on the right, so the line wraps instead of running under them
+                    ui.set_max_width((ui.available_width() - 300.0).max(160.0));
+                    heading(ui, "Servers");
+                    muted(ui, "Servers installed from modpacks. They run in their own window.");
+                });
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if secondary_icon(ui, super::icons::Icon::Folder, "Open servers folder").clicked() {
+                        act = Some(Act::Folder(String::new()));
+                    }
+                    if secondary(ui, "Refresh").clicked() {
+                        act = Some(Act::Reload);
+                    }
+                });
             });
         });
-        ui.add_space(8.0);
+        ui.add_space(12.0);
         let account = self.current_account().cloned();
         let busy: Vec<bool> = self.svc.servers.iter().map(|s| self.server_busy(&s.name)).collect();
         ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
+            // at most 760 wide, but never wider than the window (the scroll bar floats over the right edge)
+            ui.set_max_width((ui.available_width() - 14.0).min(760.0));
             if self.svc.servers.is_empty() {
                 card(ui, |ui| {
-                    ui.label(RichText::new("No servers yet").size(18.0).semibold());
+                    ui.label(RichText::new("No servers yet").size(15.0).semibold());
                     muted(ui, "Servers are installed from a modpack's server files. Ones the Java edition installed show up here too.");
                 });
             }
             for ((s, row), busy) in self.svc.servers.iter().zip(&self.svc.server_rows).zip(busy) {
                 let collapsed = account.as_ref().is_some_and(|a| servers::is_collapsed(a, s));
                 card(ui, |ui| {
+                    // the buttons keep their room on the right (as wide as on the last frame)
+                    let id = ui.scope_id().with(("server-buttons", &s.name));
+                    let buttons_w = remembered_width(ui, id, 160.0);
+                    let mut used = buttons_w;
                     ui.horizontal(|ui| {
-                        avatar(ui, &s.name, 44.0);
-                        // folding a card away is remembered per account, so it needs one
-                        if account.is_some() {
-                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                if secondary(ui, if collapsed { "Show" } else { "Hide" }).clicked() {
-                                    act = Some(Act::Collapse(s.name.clone(), !collapsed));
+                        avatar(ui, &s.name, 40.0);
+                        ui.vertical(|ui| {
+                            ui.set_max_width((ui.available_width() - buttons_w - 12.0).max(140.0));
+                            server_title(ui, s, row);
+                        });
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            if collapsed {
+                                // folding a card away is remembered per account, so it needs one
+                                if secondary(ui, "Show").clicked() {
+                                    act = Some(Act::Collapse(s.name.clone(), false));
                                 }
-                                ui.with_layout(Layout::top_down(Align::Min), |ui| {
-                                    server_title(ui, s, row);
+                            } else if busy {
+                                ui.horizontal(|ui| {
+                                    ui.spinner();
+                                    muted(ui, "Backing up or deleting\u{2026}");
                                 });
-                            });
-                        } else {
-                            ui.vertical(|ui| server_title(ui, s, row));
-                        }
+                            } else {
+                                kebab_menu(ui, |ui| {
+                                    if ui.button("Open folder").clicked() {
+                                        act = Some(Act::Folder(s.name.clone()));
+                                        ui.close();
+                                    }
+                                    if ui.button("Back up").clicked() {
+                                        act = Some(Act::Backup(s.name.clone()));
+                                        ui.close();
+                                    }
+                                    if account.is_some() && ui.button("Hide").clicked() {
+                                        act = Some(Act::Collapse(s.name.clone(), true));
+                                        ui.close();
+                                    }
+                                    if ui.button(RichText::new("Delete").color(c_danger())).clicked() {
+                                        act = Some(Act::Remove(s.name.clone()));
+                                        ui.close();
+                                    }
+                                });
+                                let launch = if row.has_script {
+                                    secondary_icon(ui, super::icons::Icon::Play, "Launch")
+                                } else {
+                                    danger_enabled(ui, "Launch", false)
+                                };
+                                if launch.clicked() {
+                                    act = Some(Act::Launch(s.name.clone()));
+                                }
+                            }
+                            used = ui.min_rect().width();
+                        });
                     });
+                    remember_width(ui, id, used);
                     if !collapsed {
-                        ui.add_space(2.0);
+                        ui.add_space(4.0);
                         if !row.details.is_empty() {
                             small_muted(ui, &row.details);
                         }
-                        small_muted(ui, &row.folder);
-                        ui.add_space(4.0);
-                        if busy {
-                            ui.horizontal(|ui| {
-                                ui.spinner();
-                                muted(ui, "This server is being backed up or deleted\u{2026}");
-                            });
-                            return;
-                        }
-                        ui.horizontal_wrapped(|ui| {
-                            if primary_enabled(ui, "Launch", row.has_script).clicked() {
-                                act = Some(Act::Launch(s.name.clone()));
-                            }
-                            if secondary_icon(ui, super::icons::Icon::Folder, "Open folder").clicked() {
-                                act = Some(Act::Folder(s.name.clone()));
-                            }
-                            if secondary(ui, "Back up").clicked() {
-                                act = Some(Act::Backup(s.name.clone()));
-                            }
-                            if danger(ui, "Delete").clicked() {
-                                act = Some(Act::Remove(s.name.clone()));
-                            }
-                        });
+                        ui.label(RichText::new(&row.folder).size(12.0).color(c_faint()));
                     }
                 });
-                ui.add_space(4.0);
+                ui.add_space(8.0);
             }
+            ui.add_space(8.0);
         });
         if let Some(a) = act {
             self.server_action(a);
@@ -250,7 +271,8 @@ impl App {
 
 /// A server's name and its tags.
 fn server_title(ui: &mut Ui, s: &Server, row: &ServerRow) {
-    ui.add(egui::Label::new(RichText::new(&s.name).semibold().size(16.0)).wrap());
+    ui.spacing_mut().item_spacing.y = 4.0;
+    ui.add(egui::Label::new(RichText::new(&s.name).semibold().size(15.0)).wrap());
     ui.horizontal_wrapped(|ui| {
         match s.loader_label() {
             Some(l) => tag(ui, &l, widgets_loader(&l)),
