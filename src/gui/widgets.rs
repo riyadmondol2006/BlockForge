@@ -477,7 +477,7 @@ pub fn segmented(ui: &mut Ui, labels: &[&str], selected: usize) -> Option<usize>
 /// more rows.
 pub fn facts(ui: &mut Ui, cells: &[(&str, String)]) {
     let w = ui.available_width();
-    let cols = ((w / 150.0).floor() as usize).clamp(1, cells.len().max(1));
+    let cols = ((w / 128.0).floor() as usize).clamp(1, cells.len().max(1));
     let cw = (w / cols as f32).floor();
     for row in cells.chunks(cols) {
         let (rect, _) = ui.allocate_exact_size(vec2(w, 52.0), Sense::hover());
