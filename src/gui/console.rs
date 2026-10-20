@@ -65,14 +65,19 @@ impl App {
                 }
             });
             egui::Panel::bottom("console-bar")
-                .frame(egui::Frame::new().fill(c_card()).inner_margin(egui::Margin::same(10)))
+                .frame(
+                    egui::Frame::new()
+                        .fill(c_bg())
+                        .stroke(egui::Stroke::new(1.0, c_border()))
+                        .inner_margin(egui::Margin::same(12)),
+                )
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        if secondary(ui, "Clear").clicked() {
-                            action = ConsoleAction::Clear;
-                        }
                         if secondary(ui, "Copy log").clicked() {
                             action = ConsoleAction::Copy;
+                        }
+                        if secondary(ui, "Clear").clicked() {
+                            action = ConsoleAction::Clear;
                         }
                         if uploading {
                             ui.spinner();
@@ -104,7 +109,7 @@ impl App {
                     });
                 });
             egui::CentralPanel::default()
-                .frame(egui::Frame::new().fill(c_field()).inner_margin(egui::Margin::same(8)))
+                .frame(egui::Frame::new().fill(c_field()).inner_margin(egui::Margin::same(12)))
                 .show(ui, |ui| {
                     ui.spacing_mut().item_spacing.y = 2.0;
                     let row_h = ui.text_style_height(&egui::TextStyle::Monospace);
