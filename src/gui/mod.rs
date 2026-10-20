@@ -1165,7 +1165,7 @@ impl App {
                     c_faint(),
                 );
                 focus_ring(ui, &resp, rect, R_CONTROL);
-                resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &format!("Playing {name}")));
+                resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, format!("Playing {name}")));
                 if resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
                     let f = folder.clone();
                     self.open_instance(&f);
@@ -1441,7 +1441,12 @@ impl eframe::App for App {
         let edge = nav.response.rect.right();
         ui.painter().vline(edge - 0.5, nav.response.rect.y_range(), Stroke::new(1.0, c_border()));
         egui::CentralPanel::default()
-            .frame(egui::Frame::new().fill(c_bg()).inner_margin(egui::Margin { left: 32, right: 22, top: 24, bottom: 24 }))
+            .frame(egui::Frame::new().fill(c_bg()).inner_margin(egui::Margin {
+                left: 32,
+                right: 22,
+                top: 24,
+                bottom: 24,
+            }))
             .show(ui, |ui| {
                 self.update_banner(ui);
                 match self.page {

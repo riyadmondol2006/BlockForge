@@ -114,10 +114,6 @@ pub fn primary_enabled_icon(ui: &mut Ui, icon: Icon, text: &str, enabled: bool) 
     styled_button(ui, text, Some(icon), c_ink(), c_ink_hover(), c_on_ink(), Stroke::NONE, Vec2::ZERO, enabled)
 }
 
-pub fn primary_big(ui: &mut Ui, icon: Icon, text: &str) -> Response {
-    styled_button(ui, text, Some(icon), c_ink(), c_ink_hover(), c_on_ink(), Stroke::NONE, vec2(120.0, 40.0), true)
-}
-
 /// The one green button: anything that starts Minecraft. `big` is the 40px version of Home and an instance's page.
 pub fn play_button(ui: &mut Ui, big: bool) -> Response {
     let min = if big { vec2(120.0, 40.0) } else { Vec2::ZERO };
