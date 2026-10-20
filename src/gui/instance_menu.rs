@@ -3,7 +3,7 @@
 
 use std::path::PathBuf;
 
-use egui::{Color32, CornerRadius, Response, RichText, Sense, Stroke, Ui, vec2};
+use egui::{Align, Color32, CornerRadius, Layout, Response, RichText, Sense, Stroke, Ui, UiBuilder, vec2};
 
 use super::theme::*;
 use super::widgets::*;
@@ -72,15 +72,15 @@ pub(super) fn ghost_button(
     visible: bool,
 ) -> Response {
     let rest = color.unwrap_or_else(c_muted);
-    let w = ui.painter().layout_no_wrap(text.to_string(), super::fonts::medium(13.0), rest).size().x;
+    let w = ui.painter().layout_no_wrap(text.to_string(), super::fonts::medium(FS_BODY), rest).size().x;
     let (rect, resp) = ui.allocate_exact_size(vec2(w + 20.0, 28.0), Sense::click());
     let pointed = resp.hovered() || resp.is_pointer_button_down_on();
     if ui.is_rect_visible(rect) && (visible || resp.has_focus() || pointed) {
         if pointed {
-            ui.painter().rect_filled(rect, CornerRadius::same(R_CONTROL), c_field_hover());
+            ui.painter().rect_filled(rect, CornerRadius::same(R_CONTROL), c_hover());
         }
         let fg = if pointed { hot.unwrap_or_else(c_text) } else { rest };
-        let galley = ui.painter().layout_no_wrap(text.to_string(), super::fonts::medium(13.0), fg);
+        let galley = ui.painter().layout_no_wrap(text.to_string(), super::fonts::medium(FS_BODY), fg);
         ui.painter().galley(rect.center() - galley.size() / 2.0, galley, fg);
     }
     focus_ring(ui, &resp, rect, R_CONTROL);
@@ -101,7 +101,7 @@ fn menu_frame(ctx: &egui::Context) -> egui::Frame {
     egui::Frame::new()
         .fill(c_raised())
         .stroke(Stroke::new(1.0, c_control()))
-        .corner_radius(CornerRadius::same(R_CONTROL + 2))
+        .corner_radius(CornerRadius::same(R_CARD))
         .shadow(style.visuals.popup_shadow)
         .inner_margin(egui::Margin::same(8))
 }
@@ -129,12 +129,12 @@ pub(super) fn open_menu<R>(resp: &Response, add: impl FnOnce(&mut Ui) -> R) -> O
 /// A neutral button with a chevron that opens a menu (the "Play as" of the header). Returns what the menu returned
 /// while it is open.
 pub(super) fn secondary_menu<R>(ui: &mut Ui, text: &str, add: impl FnOnce(&mut Ui) -> R) -> (Response, Option<R>) {
-    let font = super::fonts::medium(14.0);
+    let font = super::fonts::medium(FS_BODY);
     let w = ui.painter().layout_no_wrap(text.to_string(), font.clone(), c_text()).size().x;
     let (rect, resp) = ui.allocate_exact_size(vec2(w + 28.0 + 18.0, 32.0), Sense::click());
     let open = egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&resp));
     if ui.is_rect_visible(rect) {
-        let bg = if resp.hovered() || open { c_field_hover() } else { c_field() };
+        let bg = if resp.hovered() || open { c_hover() } else { c_field() };
         ui.painter().rect(
             rect,
             CornerRadius::same(R_CONTROL),
@@ -154,84 +154,110 @@ pub(super) fn secondary_menu<R>(ui: &mut Ui, text: &str, add: impl FnOnce(&mut U
     (resp, out)
 }
 
-/// A line of muted text with a chevron that opens a menu (the "Low-end: off" of the header).
-pub(super) fn ghost_menu<R>(ui: &mut Ui, text: &str, add: impl FnOnce(&mut Ui) -> R) -> (Response, Option<R>) {
-    let font = super::fonts::medium(12.0);
-    let w = ui.painter().layout_no_wrap(text.to_string(), font.clone(), c_muted()).size().x;
-    let (rect, resp) = ui.allocate_exact_size(vec2(w + 8.0 + 18.0, 28.0), Sense::click());
-    let open = egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&resp));
-    if ui.is_rect_visible(rect) {
-        let pointed = resp.hovered() || open;
-        if pointed {
-            ui.painter().rect_filled(rect, CornerRadius::same(R_CONTROL), c_field_hover());
-        }
-        let fg = if pointed { c_text() } else { c_muted() };
-        let galley = ui.painter().layout_no_wrap(text.to_string(), font, fg);
-        ui.painter().galley(egui::pos2(rect.left() + 6.0, rect.center().y - galley.size().y / 2.0), galley, fg);
-        chevron_down(ui, egui::pos2(rect.right() - 12.0, rect.center().y), fg);
-    }
-    focus_ring(ui, &resp, rect, R_CONTROL);
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, text));
-    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
-    let out = open_menu(&resp, add);
-    (resp, out)
-}
-
-/// The "Library" link above an instance's page: small, no frame.
-pub(super) fn back_link(ui: &mut Ui, text: &str) -> Response {
-    let font = super::fonts::medium(13.0);
-    let w = ui.painter().layout_no_wrap(text.to_string(), font.clone(), c_muted()).size().x;
-    let (rect, resp) = ui.allocate_exact_size(vec2(w + 12.0 + 14.0, 28.0), Sense::click());
-    let fg = if resp.hovered() { c_text() } else { c_muted() };
-    if ui.is_rect_visible(rect) {
-        super::icons::paint(
-            ui.painter(),
-            super::icons::Icon::Back,
-            egui::pos2(rect.left() + 8.0, rect.center().y),
-            13.0,
-            fg,
-        );
-        let galley = ui.painter().layout_no_wrap(text.to_string(), font, fg);
-        ui.painter().galley(egui::pos2(rect.left() + 18.0, rect.center().y - galley.size().y / 2.0), galley, fg);
-    }
-    focus_ring(ui, &resp, rect, R_CONTROL);
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, text));
-    resp.on_hover_cursor(egui::CursorIcon::PointingHand)
-}
-
-/// One line across the page between two blocks, with air on both sides.
-pub(super) fn hairline(ui: &mut Ui) {
+/// One line across the page between two blocks, with the same air on both sides.
+pub(super) fn section_break(ui: &mut Ui) {
     ui.add_space(12.0);
-    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 1.0), Sense::hover());
-    ui.painter().rect_filled(rect, 0.0, c_border());
-    ui.add_space(8.0);
+    rule(ui);
+    ui.add_space(12.0);
 }
 
-/// A row of small facts, each a grey label over its value, divided by hairlines. It fills the width; in a narrow
-/// window the facts go on more rows.
-pub(super) fn facts_strip(ui: &mut Ui, facts: &[(&str, String)]) {
-    let w = ui.available_width();
-    let cols = ((w / 150.0).floor() as usize).clamp(1, facts.len().max(1));
-    let cw = (w / cols as f32).floor();
-    for row in facts.chunks(cols) {
-        let (rect, _) = ui.allocate_exact_size(vec2(w, 46.0), Sense::hover());
-        for (i, (label, value)) in row.iter().enumerate() {
-            let left = rect.left() + i as f32 * cw;
-            let pad = if i == 0 { 0.0 } else { 16.0 };
-            if i > 0 {
-                let x = left;
-                ui.painter().vline(x, rect.top() + 4.0..=rect.bottom() - 4.0, Stroke::new(1.0, c_border()));
-            }
-            let cell = egui::Rect::from_min_max(
-                egui::pos2(left + pad, rect.top()),
-                egui::pos2(left + cw - 8.0, rect.bottom()),
-            );
-            ui.scope_builder(egui::UiBuilder::new().max_rect(cell), |ui| {
-                ui.spacing_mut().item_spacing.y = 3.0;
-                small_muted(ui, label.to_string());
-                ui.add(egui::Label::new(RichText::new(value.as_str()).size(14.0)).truncate());
-            });
+/// A row with something at each end. The part on the right is laid out left to right in the width it had on the last
+/// frame (see [`remember_width`]), so the keyboard (Tab) visits it in the order it is read; the part on the left gets
+/// what is left. Call `left`, then `right`, then `finish`.
+pub(super) struct SplitRow {
+    id: Option<egui::Id>,
+    row: egui::Rect,
+    right_w: f32,
+    used: f32,
+}
+
+impl SplitRow {
+    /// The right part is as wide as it was on the last frame.
+    pub(super) fn new(ui: &mut Ui, id: egui::Id, height: f32) -> SplitRow {
+        let right_w = remembered_width(ui, id, 240.0);
+        let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
+        SplitRow { id: Some(id), row, right_w, used: right_w }
+    }
+
+    /// The right part has a width that is known (a column of the same buttons in every row).
+    pub(super) fn fixed(ui: &mut Ui, height: f32, right_w: f32) -> SplitRow {
+        let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
+        SplitRow { id: None, row, right_w, used: right_w }
+    }
+
+    /// How wide the right part turned out this frame.
+    pub(super) fn used(&self) -> f32 {
+        self.used
+    }
+
+    /// How wide the left part is.
+    pub(super) fn left_width(&self) -> f32 {
+        (self.row.width() - self.right_w - 16.0).max(120.0)
+    }
+
+    pub(super) fn left<R>(&self, ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
+        let rect = egui::Rect::from_min_size(self.row.min, vec2(self.left_width(), self.row.height()));
+        let layout = Layout::left_to_right(Align::Center);
+        ui.scope_builder(UiBuilder::new().max_rect(rect).layout(layout), add).inner
+    }
+
+    pub(super) fn right<R>(&mut self, ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
+        let rect = egui::Rect::from_min_max(egui::pos2(self.row.right() - self.right_w, self.row.top()), self.row.max);
+        let layout = Layout::left_to_right(Align::Center);
+        let (out, used) = ui
+            .scope_builder(UiBuilder::new().max_rect(rect).layout(layout), |ui| {
+                let out = add(ui);
+                (out, ui.min_rect().width())
+            })
+            .inner;
+        self.used = used;
+        out
+    }
+
+    pub(super) fn finish(self, ui: &Ui) {
+        if let Some(id) = self.id {
+            remember_width(ui, id, self.used);
         }
+    }
+}
+
+/// A [`SplitRow`] when both parts fit on one line, otherwise the left part on a line and the right part on the next.
+/// What the closures share (`state`) is handed to whichever runs, so both can change it.
+pub(super) fn split_or_stack<S>(
+    ui: &mut Ui,
+    id: egui::Id,
+    height: f32,
+    state: &mut S,
+    left: impl FnOnce(&mut Ui, &mut S),
+    right: impl FnOnce(&mut Ui, &mut S),
+) {
+    let left_id = id.with("left");
+    let left_w = remembered_width(ui, left_id, 0.0);
+    let right_w = remembered_width(ui, id, 240.0);
+    if ui.available_width() >= left_w + right_w + 24.0 {
+        let mut row = SplitRow::new(ui, id, height);
+        let used = row.left(ui, |ui| {
+            left(ui, state);
+            ui.min_rect().width()
+        });
+        row.right(ui, |ui| right(ui, state));
+        row.finish(ui);
+        remember_width(ui, left_id, used);
+    } else {
+        let used = ui
+            .horizontal(|ui| {
+                left(ui, state);
+                ui.min_rect().width()
+            })
+            .inner;
+        let right_used = ui
+            .horizontal(|ui| {
+                right(ui, state);
+                ui.min_rect().width()
+            })
+            .inner;
+        remember_width(ui, left_id, used);
+        remember_width(ui, id, right_used);
     }
 }
 
@@ -368,7 +394,7 @@ impl App {
         act
     }
 
-    /// The items of the "more" menu, in the Java edition's order. Returns what was clicked.
+    /// The items of the "more" menu, grouped by what they are about. Returns what was clicked.
     pub(super) fn instance_menu(&self, ui: &mut Ui, inst: &Instance) -> Option<Act> {
         let f = inst.folder.clone();
         let mut act = None;
@@ -378,9 +404,6 @@ impl App {
                 act = Some(a);
             }
         });
-        if let Some(a) = self.helpers_menu(ui, inst) {
-            act = Some(a);
-        }
         ui.separator();
         let mut item = |ui: &mut Ui, label: &str, make: fn(String) -> Act| {
             if ui.button(label).clicked() {
@@ -388,24 +411,24 @@ impl App {
                 ui.close();
             }
         };
-        item(ui, "Settings", Act::Settings);
+        item(ui, "Open folder", Act::Folder);
         item(ui, "Rename", Act::Rename);
-        item(ui, "Clone", Act::Duplicate);
-        item(ui, "Export", Act::Export);
         item(ui, "Change image", Act::ChangeImage);
         item(ui, "Change description", Act::ChangeDescription);
+        item(ui, "Clone", Act::Duplicate);
+        item(ui, "Export", Act::Export);
         ui.separator();
         item(ui, "Mod loader", Act::ChangeLoader);
         item(ui, "Add mods", Act::AddMods);
         item(ui, "Edit mods", Act::Mods);
+        let helpers = self.helpers_menu(ui, inst);
+        item(ui, "Settings", Act::Settings);
         ui.separator();
-        item(ui, "Open folder", Act::Folder);
-        ui.separator();
-        if ui.button(RichText::new("Delete instance").color(c_danger())).clicked() {
-            act = Some(Act::Delete(inst.folder.clone()));
+        let delete = ui.button(RichText::new("Delete instance").color(c_danger())).clicked();
+        if delete {
             ui.close();
         }
-        act
+        helpers.or(act).or(delete.then(|| Act::Delete(inst.folder.clone())))
     }
 
     /// Open a file (or folder) chooser without freezing the window.
@@ -510,7 +533,7 @@ impl App {
             let (mut save, mut close) = (false, false);
             let modal = egui::Modal::new(egui::Id::unique("desc")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
                 ui.set_width(440.0);
-                ui.label(RichText::new("Change description").size(19.0).semibold());
+                ui.label(RichText::new("Change description").size(FS_SECTION).semibold());
                 ui.add_space(6.0);
                 ui.add_sized(
                     [ui.available_width(), 90.0],
@@ -549,7 +572,7 @@ impl App {
             let (mut go, mut close) = (false, false);
             let modal = egui::Modal::new(egui::Id::unique("offline")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
                 ui.set_width(400.0);
-                ui.label(RichText::new("Play offline with another name").size(19.0).semibold());
+                ui.label(RichText::new("Play offline with another name").size(FS_SECTION).semibold());
                 muted(ui, "3-16 letters, numbers or underscores. No account needed.");
                 ui.add_space(6.0);
                 let r = ui.add_sized(
@@ -565,7 +588,7 @@ impl App {
                 }
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
-                    if primary(ui, "Play").clicked()
+                    if play_button(ui, false).clicked()
                         || (r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
                     {
                         go = true;
@@ -603,23 +626,23 @@ impl App {
             let current = self.instance(&d.folder).and_then(|i| i.loader().map(|(k, v)| format!("{k} {v}")));
             let modal = egui::Modal::new(egui::Id::unique("loader")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
                 ui.set_width(440.0);
-                ui.label(RichText::new("Mod loader").size(19.0).semibold());
+                ui.label(RichText::new("Mod loader").size(FS_SECTION).semibold());
                 muted(ui, format!("Now: {}", current.clone().unwrap_or_else(|| "None (vanilla)".into())));
                 ui.add_space(6.0);
-                ui.horizontal(|ui| {
-                    for l in Loader::ALL {
-                        let label = if l == Loader::Vanilla { "None" } else { l.label() };
-                        if chip(ui, label, d.loader == l).clicked() && d.loader != l {
-                            d.loader = l;
-                            changed = true;
-                        }
+                let labels: Vec<&str> =
+                    Loader::ALL.iter().map(|l| if *l == Loader::Vanilla { "None" } else { l.label() }).collect();
+                let chosen = Loader::ALL.iter().position(|l| *l == d.loader).unwrap_or(0);
+                if let Some(i) = segmented(ui, &labels, chosen) {
+                    if Loader::ALL[i] != d.loader {
+                        d.loader = Loader::ALL[i];
+                        changed = true;
                     }
-                });
+                }
                 if d.loader != Loader::Vanilla {
                     ui.horizontal(|ui| {
                         muted(ui, "Version");
                         if d.loading {
-                            ui.spinner();
+                            ui.add(egui::Spinner::new().size(14.0));
                         } else if let Some(e) = &d.error {
                             ui.label(RichText::new(e).color(c_danger()));
                         } else if d.versions.is_empty() {

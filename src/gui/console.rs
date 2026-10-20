@@ -76,11 +76,8 @@ impl App {
                         if secondary(ui, "Copy log").clicked() {
                             action = ConsoleAction::Copy;
                         }
-                        if secondary(ui, "Clear").clicked() {
-                            action = ConsoleAction::Clear;
-                        }
                         if uploading {
-                            ui.spinner();
+                            ui.add(egui::Spinner::new().size(14.0));
                             muted(ui, "Uploading the log");
                         } else if secondary(ui, "Upload log")
                             .on_hover_text(
@@ -90,24 +87,38 @@ impl App {
                         {
                             action = ConsoleAction::Upload;
                         }
-                        if playing {
-                            if kill_confirm {
-                                ui.label(
-                                    RichText::new("Stop Minecraft at once? A world that wasn't saved can be damaged.")
-                                        .color(c_warn()),
-                                );
-                                if danger(ui, "Stop Minecraft").clicked() {
-                                    action = ConsoleAction::Kill;
-                                }
-                                if secondary(ui, "Cancel").clicked() {
-                                    action = ConsoleAction::CancelKill;
-                                }
-                            } else if danger(ui, "Stop Minecraft").clicked() {
-                                action = ConsoleAction::AskKill;
-                            }
+                        if ghost(ui, "Clear").clicked() {
+                            action = ConsoleAction::Clear;
+                        }
+                        if playing && danger(ui, "Stop Minecraft").clicked() {
+                            action = ConsoleAction::AskKill;
                         }
                     });
                 });
+            // the question is a dialog over the log, not a toolbar that grows
+            if playing && kill_confirm {
+                let modal = egui::Modal::new(egui::Id::unique("console-kill")).frame(super::modal_frame(&ctx)).show(
+                    &ctx,
+                    |ui| {
+                        ui.set_width(380.0);
+                        ui.label(RichText::new("Stop Minecraft?").size(FS_SECTION).semibold());
+                        ui.add_space(4.0);
+                        muted(ui, "Minecraft is stopped at once. A world that wasn't saved can be damaged.");
+                        ui.add_space(12.0);
+                        ui.horizontal(|ui| {
+                            if danger(ui, "Stop Minecraft").clicked() {
+                                action = ConsoleAction::Kill;
+                            }
+                            if secondary(ui, "Cancel").clicked() {
+                                action = ConsoleAction::CancelKill;
+                            }
+                        });
+                    },
+                );
+                if modal.should_close() {
+                    action = ConsoleAction::CancelKill;
+                }
+            }
             egui::CentralPanel::default()
                 .frame(egui::Frame::new().fill(c_field()).inner_margin(egui::Margin::same(12)))
                 .show(ui, |ui| {
