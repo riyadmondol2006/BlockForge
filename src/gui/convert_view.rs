@@ -17,10 +17,25 @@ use crate::tr;
 const PAGE_WIDTH: f32 = 720.0;
 /// The footer's height, kept free below the scrolling part.
 const FOOTER: f32 = 30.0;
-/// The height of the bar with the Convert button.
-const START_BAR: f32 = 52.0;
+/// The height the pinned bar takes under the scrolling part: the gap, the room above the button, the button.
+const START_BAR: f32 = 46.0;
+/// The gap between the last block and the Convert button when the button follows the blocks.
+const BAR_GAP: f32 = 24.0;
+/// The height of the Convert button.
+const BUTTON_H: f32 = 32.0;
+/// The room below the blocks inside the scrolling part.
+const TAIL: f32 = 8.0;
 /// The height of the dashed area that waits for a world.
 const ZONE_HEIGHT: f32 = 112.0;
+
+/// A text of a button or a wait with its closing "..." typeset as one ellipsis character. The text in `tr!` stays the
+/// key of the translations as it was written; a translation that ends in three dots is shown the same way.
+fn ellipsis(text: String) -> String {
+    match text.strip_suffix("...") {
+        Some(head) => format!("{head}\u{2026}"),
+        None => text,
+    }
+}
 
 /// A block's label in sentence case. The texts are written in capitals in the source (they are the keys of the
 /// translations), so a text that is all capitals is read as a sentence: "BEDROCK WORLD" -> "Bedrock world".
@@ -95,21 +110,46 @@ impl ConvertState {
             }
         });
         ui.add_space(12.0);
-        // the Convert button stays in view under the scrolling blocks
-        let bar = self.screen == Screen::Setup && self.found().is_some();
-        let height = (ui.available_height() - FOOTER - if bar { START_BAR } else { 0.0 }).max(120.0);
-        ScrollArea::vertical().id_salt("convert-page").max_height(height).auto_shrink([false, false]).show(ui, |ui| {
-            ui.set_max_width((ui.available_width() - 12.0).min(PAGE_WIDTH));
-            match self.screen {
-                Screen::Setup => self.setup(ui, &mut acts),
-                Screen::Running => self.running(ui),
-                Screen::Done => self.done(ui, &mut acts),
-                Screen::Failed => self.failed(ui, &mut acts),
-            }
-            ui.add_space(8.0);
-        });
-        if bar {
-            self.start_bar(ui, &mut acts);
+        // The Convert button follows the last block. Only when the blocks do not fit the panel does it stay in view
+        // under the scrolling part, with a hairline over it so the clipped edge of the blocks shows.
+        let has_bar = self.screen == Screen::Setup && self.found().is_some();
+        let room = (ui.available_height() - FOOTER).max(120.0);
+        let pinned = has_bar && self.bar_pinned;
+        let height = if pinned { (room - START_BAR).max(120.0) } else { room };
+        let mut needs_pin = false;
+        let page = ScrollArea::vertical().id_salt("convert-page").max_height(height).auto_shrink([false, false]).show(
+            ui,
+            |ui| {
+                ui.set_max_width((ui.available_width() - 12.0).min(PAGE_WIDTH));
+                match self.screen {
+                    Screen::Setup => self.setup(ui, &mut acts),
+                    Screen::Running => self.running(ui),
+                    Screen::Done => self.done(ui, &mut acts),
+                    Screen::Failed => self.failed(ui, &mut acts),
+                }
+                if has_bar {
+                    // the last block ends at the min rect; the layout adds its item spacing under it
+                    needs_pin = ui.min_rect().height() + BAR_GAP + BUTTON_H > room;
+                }
+                if has_bar && !needs_pin {
+                    ui.add_space(BAR_GAP - ui.spacing().item_spacing.y);
+                    self.start_bar(ui, &mut acts, false);
+                } else {
+                    ui.add_space(TAIL);
+                }
+            },
+        );
+        if has_bar && needs_pin != self.bar_pinned {
+            // the page learned how it fits: draw it again at once with the button where it belongs
+            self.bar_pinned = needs_pin;
+            ui.ctx().request_discard("the Convert button moved under or into the blocks");
+            ui.ctx().request_repaint();
+        }
+        if needs_pin {
+            // a hairline where the blocks are cut off, so the clipped edge reads as an edge
+            let y = page.inner_rect.bottom() + 0.5;
+            ui.painter().hline(ui.max_rect().x_range(), y, Stroke::new(1.0, c_border()));
+            self.start_bar(ui, &mut acts, true);
         }
         self.footer(ui, &mut acts);
         if self.screen == Screen::Setup && !matches!(self.look, Look::Nothing) {
@@ -149,10 +189,13 @@ impl ConvertState {
         self.output_block(ui, acts);
     }
 
-    /// The Convert button, and why it cannot be pressed yet when that is so.
-    fn start_bar(&mut self, ui: &mut Ui, acts: &mut Vec<Act>) {
+    /// The Convert button, and why it cannot be pressed yet when that is so. `pinned`: it sits under the scrolling
+    /// part, with a little more room above it.
+    fn start_bar(&mut self, ui: &mut Ui, acts: &mut Vec<Act>, pinned: bool) {
         let blocked = self.blocked();
-        ui.add_space(10.0);
+        if pinned {
+            ui.add_space(4.0);
+        }
         ui.horizontal(|ui| {
             if primary_enabled_icon(ui, Icon::Convert, &tr!("Convert"), blocked.is_none()).clicked() {
                 acts.push(Act::Start);
@@ -174,7 +217,7 @@ impl ConvertState {
                 card(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.spinner();
-                        ui.label(tr!("Looking at the world..."));
+                        ui.label(ellipsis(tr!("Looking at the world...")));
                     });
                     self.source_path(ui);
                 });
@@ -205,14 +248,14 @@ impl ConvertState {
                             self.source_path(ui);
                         });
                         ui.with_layout(Layout::right_to_left(Align::TOP), |ui| {
-                            let change = secondary(ui, &tr!("Change..."));
+                            let change = secondary(ui, &ellipsis(tr!("Change...")));
                             egui::Popup::menu(&change).show(|ui| {
                                 ui.set_min_width(150.0);
-                                if ui.button(tr!("A world folder...")).clicked() {
+                                if ui.button(ellipsis(tr!("A world folder..."))).clicked() {
                                     acts.push(Act::Pick(Pick::SourceFolder));
                                     ui.close();
                                 }
-                                if ui.button(tr!("A packed world...")).clicked() {
+                                if ui.button(ellipsis(tr!("A packed world..."))).clicked() {
                                     acts.push(Act::Pick(Pick::SourceFile));
                                     ui.close();
                                 }
@@ -226,10 +269,10 @@ impl ConvertState {
         ui.add_space(8.0);
         ui.horizontal(|ui| {
             ui.add_enabled_ui(!self.picking, |ui| {
-                if secondary_icon(ui, Icon::Folder, &tr!("Another folder...")).clicked() {
+                if secondary_icon(ui, Icon::Folder, &ellipsis(tr!("Another folder..."))).clicked() {
                     acts.push(Act::Pick(Pick::SourceFolder));
                 }
-                if secondary(ui, &tr!("Another file...")).clicked() {
+                if secondary(ui, &ellipsis(tr!("Another file..."))).clicked() {
                     acts.push(Act::Pick(Pick::SourceFile));
                 }
             });
@@ -270,8 +313,8 @@ impl ConvertState {
         inner.add_space(8.0);
         inner.add_enabled_ui(!self.picking, |ui| {
             // two buttons, centred as a pair
-            let folder = tr!("Choose a folder...");
-            let file = tr!("Choose a file...");
+            let folder = ellipsis(tr!("Choose a folder..."));
+            let file = ellipsis(tr!("Choose a file..."));
             let est = |t: &str| {
                 ui.painter().layout_no_wrap(t.to_string(), super::fonts::medium(FS_BODY), c_text()).size().x + 28.0
             };
@@ -366,7 +409,7 @@ impl ConvertState {
                     self.output_edited();
                 }
                 ui.add_enabled_ui(!self.picking, |ui| {
-                    if secondary_icon(ui, Icon::Folder, &tr!("Choose...")).clicked() {
+                    if secondary_icon(ui, Icon::Folder, &ellipsis(tr!("Choose..."))).clicked() {
                         acts.push(Act::Pick(Pick::OutputParent));
                     }
                 });
@@ -436,7 +479,7 @@ impl ConvertState {
             ui.add(egui::Label::new(RichText::new(&name).size(FS_SECTION).semibold()).truncate());
             small_muted(ui, format!("{} {}", run.job.target.edition.label(), run.job.target.version));
             ui.add_space(12.0);
-            let stage = if run.stopping { tr!("Stopping...") } else { run.stage.clone() };
+            let stage = if run.stopping { ellipsis(tr!("Stopping...")) } else { run.stage.clone() };
             ui.add(egui::Label::new(RichText::new(stage).color(c_muted())).truncate());
             ui.add_space(2.0);
             progress_bar(ui, (run.progress > 0.0).then_some(run.progress), 6.0);
@@ -717,4 +760,16 @@ fn rounded_outline(rect: egui::Rect, radius: f32) -> Vec<egui::Pos2> {
     }
     points.push(points[0]);
     points
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ellipsis;
+
+    #[test]
+    fn a_closing_three_dots_becomes_one_ellipsis() {
+        assert_eq!(ellipsis("Choose...".to_string()), "Choose\u{2026}");
+        assert_eq!(ellipsis("Change".to_string()), "Change");
+        assert_eq!(ellipsis("A... b".to_string()), "A... b");
+    }
 }

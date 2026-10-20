@@ -154,6 +154,9 @@ pub struct ConvertState {
     /// What the failed run was, for the details.
     pub(super) last_job: Option<ConvertJob>,
     pub(super) last_warnings: Vec<String>,
+    /// The blocks of the set-up do not fit the panel, so the Convert bar is pinned under the scrolling part. Learned
+    /// while drawing; with room to spare the button follows the last block instead.
+    pub(super) bar_pinned: bool,
 }
 
 impl ConvertState {
@@ -180,6 +183,7 @@ impl ConvertState {
             error: None,
             last_job: None,
             last_warnings: Vec::new(),
+            bar_pinned: false,
         }
     }
 
