@@ -994,6 +994,8 @@ impl App {
     }
 
     fn sidebar(&mut self, ui: &mut Ui) {
+        // in a short window the group names go, so every destination still fits without scrolling
+        let compact = ui.available_height() < 610.0;
         ui.horizontal(|ui| {
             ui.add_space(4.0);
             ui.add(egui::Image::from_texture(&self.logo).fit_to_exact_size(vec2(28.0, 28.0)).corner_radius(7));
@@ -1045,13 +1047,15 @@ impl App {
                 ui.spacing_mut().item_spacing.y = 2.0;
                 for (n, (group, items)) in groups.into_iter().enumerate() {
                     if n > 0 {
-                        ui.add_space(10.0);
+                        ui.add_space(if compact { 6.0 } else { 10.0 });
                     }
-                    ui.add_space(2.0);
-                    ui.horizontal(|ui| {
-                        ui.add_space(10.0);
-                        ui.label(RichText::new(group).size(12.0).color(c_faint()));
-                    });
+                    if !compact {
+                        ui.add_space(2.0);
+                        ui.horizontal(|ui| {
+                            ui.add_space(10.0);
+                            ui.label(RichText::new(group).size(FS_META).color(c_faint()));
+                        });
+                    }
                     for (page, label, icon) in items {
                         let active = self.page == page || (page == Page::Library && self.page == Page::Instance);
                         if self.nav_button(ui, icon, label, active).clicked() {

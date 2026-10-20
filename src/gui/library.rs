@@ -133,8 +133,11 @@ impl App {
                     let days = self.play_days(h, 28);
                     let played = days.iter().filter(|d| **d > 0).count();
                     super::strip::play_strip(ui, &days, Self::strip_hue(h), 10.0, 3.0);
+                    // the words "Last played" go when the line is too short for them
+                    let room = ui.available_width() - 361.0 - 12.0;
                     let when = if h.last_played() > 0 {
-                        format!("Last played {}", time_ago(h.last_played()).to_lowercase())
+                        let ago = time_ago(h.last_played()).to_lowercase();
+                        if room >= 150.0 { format!("Last played {ago}") } else { ago }
                     } else {
                         super::strip::caption(played, 28)
                     };
@@ -196,7 +199,7 @@ impl App {
                             // go on a row of their own, and a long name is cut short (all of it shows on hover)
                             let buttons_id = egui::Id::unique("home-hero-buttons");
                             let buttons_w = remembered_width(ui, buttons_id, 330.0);
-                            let narrow = ui.available_width() - 80.0 - buttons_w < 240.0;
+                            let narrow = ui.available_width() - 80.0 - buttons_w < 400.0;
                             let mut used = buttons_w;
                             if narrow {
                                 self.hero_title(ui, h, None);
