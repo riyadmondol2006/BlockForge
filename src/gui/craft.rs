@@ -856,7 +856,7 @@ impl CraftState {
     /// No game is on this computer: explain, and offer to fetch one.
     fn no_game(&mut self, ui: &mut Ui, env: &Env, acts: &mut Vec<Act>) {
         card(ui, |ui| {
-            ui.label(RichText::new("The recipes come from your game files").size(19.0).semibold());
+            ui.label(RichText::new("The recipes come from your game files").size(17.0).semibold());
             ui.add_space(2.0);
             muted(
                 ui,
@@ -873,7 +873,7 @@ impl CraftState {
     fn failed(&mut self, ui: &mut Ui, error: &str, acts: &mut Vec<Act>) {
         let version = self.version.clone().unwrap_or_default();
         card(ui, |ui| {
-            ui.label(RichText::new(format!("Couldn't read the recipes of Minecraft {version}")).size(19.0).semibold());
+            ui.label(RichText::new(format!("Couldn't read the recipes of Minecraft {version}")).size(17.0).semibold());
             ui.add_space(2.0);
             ui.label(RichText::new(error).color(c_danger()));
             ui.add_space(6.0);
@@ -914,41 +914,36 @@ impl CraftState {
             m.versions.iter().filter(|v| v.kind == "release" && supported(&v.id)).collect();
         small_muted(ui, "Releases from 1.13 on. Older versions keep their recipes in a form this page can't read.");
         ui.add_space(4.0);
-        egui::Frame::new()
-            .fill(c_field())
-            .stroke(Stroke::new(1.0, c_border()))
-            .corner_radius(CornerRadius::same(10))
-            .inner_margin(egui::Margin::same(6))
-            .show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                egui::ScrollArea::vertical()
-                    .id_salt("craft-get-versions")
-                    .max_height(height)
-                    .auto_shrink([false, true])
-                    .show_rows(ui, 46.0, list.len(), |ui, range| {
-                        for v in &list[range] {
-                            let have = self.has_version(&v.id);
-                            let busy = self.downloading.contains(&v.id);
-                            ui.horizontal(|ui| {
-                                ui.set_height(40.0);
-                                ui.label(RichText::new(&v.id).semibold());
-                                if v.id == latest {
-                                    tag(ui, "Latest", c_accent());
-                                }
-                                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                    if have {
-                                        small_muted(ui, "On this computer");
-                                    } else if busy {
-                                        small_muted(ui, "Downloading\u{2026}");
-                                        ui.spinner();
-                                    } else if secondary(ui, "Download").clicked() {
-                                        self.downloading.insert(v.id.clone());
-                                        acts.push(Act::Download(v.id.clone()));
-                                    }
-                                });
-                            });
+        egui::ScrollArea::vertical()
+            .id_salt("craft-get-versions")
+            .max_height(height)
+            .auto_shrink([false, true])
+            .show_rows(ui, 46.0, list.len(), |ui, range| {
+                ui.spacing_mut().item_spacing.y = 0.0;
+                for v in &list[range] {
+                    let have = self.has_version(&v.id);
+                    let busy = self.downloading.contains(&v.id);
+                    ui.horizontal(|ui| {
+                        ui.set_height(45.0);
+                        ui.label(RichText::new(&v.id).semibold());
+                        if v.id == latest {
+                            tag(ui, "Latest", c_accent());
                         }
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            if have {
+                                small_muted(ui, "On this computer");
+                            } else if busy {
+                                small_muted(ui, "Downloading\u{2026}");
+                                ui.spinner();
+                            } else if secondary(ui, "Download").clicked() {
+                                self.downloading.insert(v.id.clone());
+                                acts.push(Act::Download(v.id.clone()));
+                            }
+                        });
                     });
+                    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 1.0), Sense::hover());
+                    ui.painter().hline(rect.x_range(), rect.center().y, Stroke::new(1.0, c_border()));
+                }
             });
     }
 }
