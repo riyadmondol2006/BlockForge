@@ -27,7 +27,7 @@ pub fn heading(ui: &mut Ui, text: &str) {
 /// The title of a block on a page.
 pub fn section(ui: &mut Ui, text: &str) {
     ui.add_space(4.0);
-    ui.label(RichText::new(text).size(15.0).semibold());
+    ui.label(RichText::new(text).size(FS_SECTION).semibold());
 }
 
 pub fn muted(ui: &mut Ui, text: impl Into<String>) {
