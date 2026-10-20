@@ -597,7 +597,7 @@ mod tests {
         let ctx = egui::Context::default();
         let texts = |ctx: &egui::Context| {
             let mut found = Vec::new();
-            let mut out = ctx.run_ui(egui::RawInput::default(), |ui| saved_stamp(ui));
+            let mut out = ctx.run_ui(egui::RawInput::default(), saved_stamp);
             for clipped in &out.shapes {
                 if let egui::Shape::Text(t) = &clipped.shape {
                     found.push(t.galley.text().to_string());
