@@ -110,6 +110,7 @@ pub fn primary_enabled(ui: &mut Ui, text: &str, enabled: bool) -> Response {
     styled_button(ui, text, None, c_ink(), c_ink_hover(), c_on_ink(), Stroke::NONE, Vec2::ZERO, enabled)
 }
 
+#[cfg_attr(not(feature = "converter"), allow(dead_code))]
 pub fn primary_enabled_icon(ui: &mut Ui, icon: Icon, text: &str, enabled: bool) -> Response {
     styled_button(ui, text, Some(icon), c_ink(), c_ink_hover(), c_on_ink(), Stroke::NONE, Vec2::ZERO, enabled)
 }

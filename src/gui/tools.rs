@@ -434,6 +434,7 @@ fn tool_row(
     out
 }
 
+#[cfg_attr(not(feature = "converter"), allow(dead_code))]
 /// A row of the list, as the world converter's entry uses it. Returns whether its button was pressed.
 pub(super) fn card_frame(
     ui: &mut Ui,

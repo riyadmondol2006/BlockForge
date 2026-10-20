@@ -20,6 +20,7 @@ pub enum Icon {
     Layers,
     Server,
     Wrench,
+    #[cfg_attr(not(feature = "converter"), allow(dead_code))]
     Convert,
     Kebab,
 }
