@@ -10,53 +10,43 @@ use super::{App, InstTab, Page, Phase};
 use crate::instances::Instance;
 use crate::launch::{LaunchOptions, Level};
 
+/// "12 min" or "1 h 05 min": how long a game has been running.
+fn elapsed_text(t: std::time::Duration) -> String {
+    let mins = t.as_secs() / 60;
+    if mins < 60 { format!("{mins} min") } else { format!("{} h {:02} min", mins / 60, mins % 60) }
+}
+
 impl App {
     /// One instance as a card. Returns what the player asked for, if anything.
     fn instance_card(&self, ui: &mut Ui, inst: &Instance, width: f32) -> Option<Act> {
         let mut act = None;
-        let (rect, resp) = ui.allocate_exact_size(vec2(width, 116.0), Sense::click());
+        let (rect, resp) = ui.allocate_exact_size(vec2(width, 104.0), Sense::click());
         let hovered = resp.hovered();
-        ui.painter().rect(
-            rect,
-            CornerRadius::same(R_CARD),
-            if hovered { c_card_hover() } else { c_card() },
-            Stroke::new(1.0, if hovered { c_control() } else { c_border() }),
-            egui::StrokeKind::Inside,
-        );
+        let folder = inst.folder.clone();
+        let playing = self.is_playing(&folder);
+        // the card never changes its fill under the pointer, only its edge; a running instance has a green edge
+        let edge = if playing {
+            c_accent()
+        } else if hovered {
+            c_control()
+        } else {
+            c_border()
+        };
+        ui.painter().rect(rect, CornerRadius::same(R_CARD), c_card(), Stroke::new(1.0, edge), egui::StrokeKind::Inside);
         // Tab reaches the card too (Enter opens it)
         focus_ring(ui, &resp, rect, R_CARD);
         resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, inst.name()));
-        let inner = rect.shrink(14.0);
-        let folder = inst.folder.clone();
-        let playing = self.is_playing(&folder);
+        let inner = rect.shrink(16.0);
 
         // the picture, the name and the details
         let mut top = ui.new_child(UiBuilder::new().max_rect(inner).layout(Layout::left_to_right(Align::Min)));
-        top.spacing_mut().item_spacing = vec2(10.0, 2.0);
+        top.spacing_mut().item_spacing = vec2(12.0, 2.0);
         self.instance_icon(&mut top, inst, 40.0);
         top.vertical(|ui| {
-            ui.spacing_mut().item_spacing.y = 1.0;
-            ui.set_max_width(inner.width() - 40.0 - 10.0 - 30.0);
-            ui.add(egui::Label::new(RichText::new(inst.name()).semibold().size(14.5)).truncate());
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 5.0;
-                ui.label(RichText::new(inst.mc_version().to_string()).size(12.5).color(c_muted()));
-                match inst.loader() {
-                    Some((kind, ver)) => {
-                        ui.label(RichText::new("\u{00B7}").size(12.5).color(c_faint()));
-                        ui.add(
-                            egui::Label::new(
-                                RichText::new(format!("{kind} {ver}")).size(12.5).color(loader_color(kind)),
-                            )
-                            .truncate(),
-                        );
-                    }
-                    None => {
-                        ui.label(RichText::new("\u{00B7}").size(12.5).color(c_faint()));
-                        ui.label(RichText::new("Vanilla").size(12.5).color(c_muted()));
-                    }
-                }
-            });
+            ui.spacing_mut().item_spacing.y = 2.0;
+            ui.set_max_width(inner.width() - 40.0 - 12.0 - 28.0);
+            ui.add(egui::Label::new(RichText::new(inst.name()).semibold().size(FS_BODY)).truncate());
+            self.loader_line(ui, inst);
         });
         let mut menu = ui.new_child(
             UiBuilder::new()
@@ -70,19 +60,24 @@ impl App {
             act = Some(a);
         }
 
-        // when it was played, and the quiet Play button
-        let foot = egui::Rect::from_min_max(egui::pos2(inner.left(), inner.bottom() - 34.0), inner.right_bottom());
+        // how much it has been played, and the quiet Play button
+        let foot = egui::Rect::from_min_max(egui::pos2(inner.left(), inner.bottom() - 32.0), inner.right_bottom());
         let mut bottom = ui.new_child(UiBuilder::new().max_rect(foot).layout(Layout::right_to_left(Align::Center)));
         if play_chip(&mut bottom, playing, hovered).clicked() {
             act = Some(if playing { Act::Stop(folder.clone()) } else { Act::Play(folder.clone()) });
         }
-        let mut note = if playing { "Playing now".to_string() } else { time_ago(inst.last_played()) };
-        if inst.mod_count > 0 && !playing {
-            note = format!("{} mods  \u{00B7}  {note}", inst.mod_count);
-        }
+        let started = self.games.values().find(|g| g.folder == folder && g.active()).map(|g| g.started.elapsed());
+        let (note, color) = match started {
+            Some(t) => (format!("Playing  \u{00B7}  {}", elapsed_text(t)), c_accent()),
+            None => {
+                let when =
+                    if inst.last_played() > 0 { time_ago(inst.last_played()) } else { "Not played yet".to_string() };
+                let note = if inst.mod_count > 0 { format!("{} mods  \u{00B7}  {when}", inst.mod_count) } else { when };
+                (note, c_faint())
+            }
+        };
         bottom.with_layout(Layout::left_to_right(Align::Center), |ui| {
-            let color = if playing { c_accent() } else { c_faint() };
-            ui.add(egui::Label::new(RichText::new(note).size(12.0).color(color)).truncate());
+            ui.add(egui::Label::new(RichText::new(note).size(FS_META).color(color)).truncate());
         });
         if act.is_none() && resp.clicked() {
             act = Some(Act::Open(inst.folder.clone()));
@@ -90,34 +85,60 @@ impl App {
         act
     }
 
-    /// The picture, name and details of the instance on Home. With `beside` (the width of the buttons on its right)
-    /// it leaves them their room, cutting a long name short.
+    /// "1.21.1 · Fabric 0.20.0": the version in grey and the loader in its own colour.
+    fn loader_line(&self, ui: &mut Ui, inst: &Instance) {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 5.0;
+            ui.label(RichText::new(inst.mc_version().to_string()).size(FS_META).color(c_muted()));
+            ui.label(RichText::new("\u{00B7}").size(FS_META).color(c_faint()));
+            match inst.loader() {
+                Some((kind, ver)) => {
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(format!("{kind} {ver}")).size(FS_META).color(loader_color(kind)),
+                        )
+                        .truncate(),
+                    );
+                }
+                None => {
+                    ui.label(RichText::new("Vanilla").size(FS_META).color(c_muted()));
+                }
+            }
+        });
+    }
+
+    /// The picture, name and details of the instance on Home, with the strip of the days it was played. With `beside`
+    /// (the width of the buttons on its right) it leaves them their room, cutting a long name short.
     fn hero_title(&self, ui: &mut Ui, h: &Instance, beside: Option<f32>) {
         ui.horizontal(|ui| {
-            self.instance_icon(ui, h, 64.0);
+            ui.spacing_mut().item_spacing.x = 16.0;
+            self.instance_icon(ui, h, 80.0);
             ui.vertical(|ui| {
                 if let Some(w) = beside {
                     ui.set_max_width(ui.available_width() - w - 16.0);
                 }
-                ui.spacing_mut().item_spacing.y = 3.0;
-                ui.add_space(2.0);
-                let when = if h.last_played() > 0 {
-                    format!("Last played {}", time_ago(h.last_played()).to_lowercase())
-                } else {
-                    "Ready to play".to_string()
-                };
-                ui.label(RichText::new(when).size(12.5).color(c_muted()));
-                ui.add(egui::Label::new(RichText::new(h.name()).size(20.0).semibold()).truncate());
+                ui.spacing_mut().item_spacing.y = 4.0;
+                ui.add(egui::Label::new(RichText::new(h.name()).size(FS_TITLE).semibold()).truncate());
+                let mut meta = format!("Minecraft {}", h.mc_version());
+                if let Some((kind, ver)) = h.loader() {
+                    meta.push_str(&format!("  \u{00B7}  {kind} {ver}"));
+                }
+                if h.mod_count > 0 {
+                    meta.push_str(&format!("  \u{00B7}  {} mods", h.mod_count));
+                }
+                ui.add(egui::Label::new(RichText::new(meta).color(c_muted())).truncate());
+                ui.add_space(6.0);
                 ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 6.0;
-                    match h.loader() {
-                        Some((kind, ver)) => tag(ui, &format!("{kind} {ver}"), loader_color(kind)),
-                        None => tag(ui, "Vanilla", c_muted()),
-                    }
-                    tag(ui, &format!("Minecraft {}", h.mc_version()), c_muted());
-                    if h.mod_count > 0 {
-                        tag(ui, &format!("{} mods", h.mod_count), c_muted());
-                    }
+                    ui.spacing_mut().item_spacing.x = 12.0;
+                    let days = self.play_days(h, 28);
+                    let played = days.iter().filter(|d| **d > 0).count();
+                    super::strip::play_strip(ui, &days, Self::strip_hue(h), 10.0, 3.0);
+                    let when = if h.last_played() > 0 {
+                        format!("Last played {}", time_ago(h.last_played()).to_lowercase())
+                    } else {
+                        super::strip::caption(played, 28)
+                    };
+                    ui.add(egui::Label::new(RichText::new(when).size(FS_META).color(c_faint())).truncate());
                 });
             });
         });
@@ -157,18 +178,6 @@ impl App {
             self.instances.iter().position(|i| i.last_played() > 0).or((!self.instances.is_empty()).then_some(0));
         let mut action = None;
         ScrollArea::vertical().id_salt("home").auto_shrink(false).show(ui, |ui| {
-            ui.horizontal(|ui| {
-                heading(ui, "Home");
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if secondary_icon(ui, Icon::Search, "Find mods").clicked() {
-                        self.page = Page::Discover;
-                    }
-                    if secondary_icon(ui, Icon::Plus, "New instance").clicked() {
-                        self.page = Page::Create;
-                    }
-                });
-            });
-            ui.add_space(12.0);
             self.low_end_hint(ui);
             if self.accounts.is_empty() {
                 card(ui, |ui| {
@@ -196,7 +205,7 @@ impl App {
                     egui::Frame::new()
                         .fill(c_card())
                         .stroke(Stroke::new(1.0, c_border()))
-                        .corner_radius(CornerRadius::same(R_CARD + 2))
+                        .corner_radius(CornerRadius::same(R_CARD))
                         .inner_margin(egui::Margin::same(20))
                         .show(ui, |ui| {
                             ui.set_width(ui.available_width());
@@ -204,7 +213,7 @@ impl App {
                             // go on a row of their own, and a long name is cut short (all of it shows on hover)
                             let buttons_id = egui::Id::unique("home-hero-buttons");
                             let buttons_w = remembered_width(ui, buttons_id, 330.0);
-                            let narrow = ui.available_width() - 64.0 - buttons_w < 240.0;
+                            let narrow = ui.available_width() - 80.0 - buttons_w < 240.0;
                             let mut used = buttons_w;
                             if narrow {
                                 self.hero_title(ui, h, None);
@@ -223,9 +232,6 @@ impl App {
                                         }
                                     } else if play_button(ui, true).clicked() {
                                         action = Some(Act::Play(h.folder.clone()));
-                                    }
-                                    if secondary(ui, "Details").clicked() {
-                                        action = Some(Act::Open(h.folder.clone()));
                                     }
                                     used = ui.min_rect().width();
                                 });
@@ -254,21 +260,25 @@ impl App {
 
             if self.instances.len() > 1 {
                 ui.add_space(18.0);
-                let (cols, width) = grid_columns(ui.available_width(), 250.0, 12.0);
+                let (cols, width) = grid_columns(ui.available_width(), 248.0, 16.0);
                 let shown = self.instances.len().min(cols * 2);
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("Your instances").size(15.0).semibold());
-                    ui.label(RichText::new(self.instances.len().to_string()).size(13.0).color(c_faint()));
-                    if self.instances.len() > shown {
-                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            if secondary(ui, "View all").clicked() {
-                                self.page = Page::Library;
-                            }
-                        });
-                    }
+                    ui.label(RichText::new("Instances").size(FS_SECTION).semibold());
+                    ui.label(RichText::new(self.instances.len().to_string()).size(FS_META).color(c_faint()));
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if self.instances.len() > shown && ghost(ui, "View all").clicked() {
+                            self.page = Page::Library;
+                        }
+                        if ghost(ui, "Find mods").clicked() {
+                            self.page = Page::Discover;
+                        }
+                        if ghost(ui, "New instance").clicked() {
+                            self.page = Page::Create;
+                        }
+                    });
                 });
                 ui.add_space(4.0);
-                ui.spacing_mut().item_spacing = vec2(12.0, 12.0);
+                ui.spacing_mut().item_spacing = vec2(16.0, 16.0);
                 for row in (0..shown).collect::<Vec<_>>().chunks(cols) {
                     ui.horizontal(|ui| {
                         for &i in row {
@@ -361,8 +371,8 @@ impl App {
             return None;
         }
         ScrollArea::vertical().id_salt("library").auto_shrink(false).show(ui, |ui| {
-            let (per_row, width) = grid_columns(ui.available_width(), 250.0, 12.0);
-            ui.spacing_mut().item_spacing = vec2(12.0, 12.0);
+            let (per_row, width) = grid_columns(ui.available_width(), 248.0, 16.0);
+            ui.spacing_mut().item_spacing = vec2(16.0, 16.0);
             for row in list.chunks(per_row) {
                 ui.horizontal(|ui| {
                     for inst in row {

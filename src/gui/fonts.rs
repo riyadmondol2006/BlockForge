@@ -36,11 +36,15 @@ pub fn install(ctx: &egui::Context) {
 /// `text.semibold()` for the weight that stands in for `strong()`: real Inter SemiBold, not just a brighter colour.
 pub trait TextExt {
     fn semibold(self) -> RichText;
+    fn medium_weight(self) -> RichText;
 }
 
 impl TextExt for RichText {
     fn semibold(self) -> RichText {
         self.family(FontFamily::Name(SEMIBOLD_FAMILY.into()))
+    }
+    fn medium_weight(self) -> RichText {
+        self.family(FontFamily::Name(MEDIUM_FAMILY.into()))
     }
 }
 

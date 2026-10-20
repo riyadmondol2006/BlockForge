@@ -234,6 +234,7 @@ pub struct App {
     manifest_error: Option<String>,
     icons: HashMap<String, IconState>,
     local_pictures: instance_icon::LocalPictures,
+    play_cache: strip::PlayCache,
     java_list: Vec<JavaInstall>,
     /// The graphics cards of this computer, once looked for.
     gpus: Option<Vec<crate::gpu::Gpu>>,
@@ -372,6 +373,7 @@ impl App {
             manifest_error: None,
             icons: HashMap::new(),
             local_pictures: Default::default(),
+            play_cache: Default::default(),
             java_list: Vec::new(),
             gpus: None,
             logo,
@@ -869,6 +871,7 @@ impl App {
                 }
             }
             Msg::GameExit(f, code) => {
+                self.play_cache.forget();
                 if let Some(g) = self.games.get_mut(&f) {
                     g.phase = Phase::Exited(code);
                     g.kill = None;
@@ -994,32 +997,25 @@ impl App {
         ui.horizontal(|ui| {
             ui.add_space(4.0);
             ui.add(egui::Image::from_texture(&self.logo).fit_to_exact_size(vec2(28.0, 28.0)).corner_radius(7));
-            ui.label(RichText::new(crate::NAME).size(15.0).semibold());
+            ui.label(RichText::new(crate::NAME).size(FS_BODY).semibold());
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                ui.label(RichText::new(format!("v{}", crate::VERSION)).size(11.5).color(c_faint()));
+                ui.label(RichText::new(format!("v{}", crate::VERSION)).size(FS_META).color(c_faint()));
             });
         });
         ui.add_space(14.0);
         // Three groups of destinations, then Settings and About pinned to the bottom with the account. Who plays is the
         // account row at the bottom, so Accounts is not repeated in the list.
         let groups: Vec<(&str, Vec<(Page, &str, Icon)>)> = vec![
+            ("Play", vec![(Page::Home, "Home", Icon::Home), (Page::Library, "Library", Icon::Library)]),
             (
-                "Play",
-                vec![
-                    (Page::Home, "Home", Icon::Home),
-                    (Page::Library, "Library", Icon::Library),
-                    (Page::Create, "New instance", Icon::Plus),
-                ],
-            ),
-            (
-                "Find",
+                "Mods and modpacks",
                 vec![
                     (Page::Discover, "Discover", Icon::Search),
-                    (Page::Packs, "Modpacks", Icon::Package),
+                    (Page::Packs, "ATLauncher & Technic", Icon::Package),
                     (Page::Ftb, "FTB", Icon::Layers),
                 ],
             ),
-            ("Workshop", {
+            ("Utilities", {
                 #[allow(unused_mut)]
                 let mut tools = vec![(Page::Craft, "Crafting", Icon::Craft)];
                 #[cfg(feature = "converter")]
@@ -1029,9 +1025,17 @@ impl App {
                 tools
             }),
         ];
+        // games that are starting or running, and what is being downloaded, show from every page
+        let playing: Vec<(String, String, std::time::Duration)> = self
+            .games
+            .values()
+            .filter(|g| g.active())
+            .filter_map(|g| Some((g.folder.clone(), self.instance(&g.folder)?.name().to_string(), g.started.elapsed())))
+            .collect();
         // the account row and the running downloads need their room at the bottom; the list scrolls if the window is
         // too short for all the items
-        let reserve = 52.0 + 2.0 * 34.0 + 24.0 + self.tasks.len().min(3) as f32 * 100.0;
+        let reserve =
+            52.0 + 2.0 * 34.0 + 24.0 + self.tasks.len().min(2) as f32 * 52.0 + playing.len().min(2) as f32 * 30.0;
         let mut go = None;
         egui::ScrollArea::vertical()
             .id_salt("nav")
@@ -1112,34 +1116,63 @@ impl App {
                 }
             }
             ui.add_space(8.0);
-            // running downloads
-            for t in self.tasks.iter().take(3) {
-                card(ui, |ui| {
-                    ui.label(RichText::new(&t.label).semibold().size(13.0));
+            // downloads in progress, as bare rows
+            for t in self.tasks.iter().take(2) {
+                ui.add(egui::Label::new(RichText::new(&t.label).size(FS_META).medium_weight()).truncate());
+                let (d, total) =
+                    (t.progress.files_done.load(Ordering::Relaxed), t.progress.files_total.load(Ordering::Relaxed));
+                if total > 0 {
+                    progress_bar(ui, Some(t.progress.fraction()), 4.0);
+                    let note = format!(
+                        "{d} / {total} files  \u{00B7}  {}",
+                        human_size(t.progress.bytes_done.load(Ordering::Relaxed))
+                    );
+                    ui.label(RichText::new(note).size(FS_META).color(c_faint()));
+                } else {
+                    progress_bar(ui, None, 4.0);
                     let stage = t.progress.stage_text();
                     if !stage.is_empty() {
-                        small_muted(ui, stage);
+                        ui.add(egui::Label::new(RichText::new(stage).size(FS_META).color(c_faint())).truncate());
                     }
-                    let (d, total) =
-                        (t.progress.files_done.load(Ordering::Relaxed), t.progress.files_total.load(Ordering::Relaxed));
-                    let bar = egui::ProgressBar::new(t.progress.fraction())
-                        .desired_height(6.0)
-                        .corner_radius(3)
-                        .fill(c_accent());
-                    if total > 0 {
-                        ui.add(bar);
-                        small_muted(
-                            ui,
-                            format!(
-                                "{d} / {total} files  \u{00B7}  {}",
-                                human_size(t.progress.bytes_done.load(Ordering::Relaxed))
-                            ),
-                        );
-                    } else {
-                        ui.add(bar.animate(true));
-                    }
-                });
-                ui.add_space(6.0);
+                }
+                ui.add_space(8.0);
+            }
+            if self.tasks.len() > 2 {
+                ui.label(RichText::new(format!("+{} more", self.tasks.len() - 2)).size(FS_META).color(c_faint()));
+            }
+            // games that are running: one row each, a click opens the instance
+            for (folder, name, t) in playing.iter().take(2) {
+                let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 28.0), egui::Sense::click());
+                if resp.hovered() {
+                    ui.painter().rect_filled(rect, CornerRadius::same(R_CONTROL), c_hover());
+                }
+                ui.painter().circle_filled(rect.left_center() + vec2(14.0, 0.0), 3.5, c_accent());
+                let when = elapsed_short(*t);
+                let when_galley = ui.painter().layout_no_wrap(when, egui::FontId::proportional(FS_META), c_faint());
+                let name_w = rect.width() - 28.0 - when_galley.size().x - 18.0;
+                let name_galley = ui.painter().layout(name.clone(), fonts::medium(FS_META), c_text(), name_w.max(20.0));
+                ui.painter().with_clip_rect(rect).galley(
+                    egui::pos2(rect.left() + 28.0, rect.center().y - name_galley.size().y / 2.0),
+                    name_galley,
+                    c_text(),
+                );
+                ui.painter().galley(
+                    egui::pos2(
+                        rect.right() - 10.0 - when_galley.size().x,
+                        rect.center().y - when_galley.size().y / 2.0,
+                    ),
+                    when_galley,
+                    c_faint(),
+                );
+                focus_ring(ui, &resp, rect, R_CONTROL);
+                resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &format!("Playing {name}")));
+                if resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                    let f = folder.clone();
+                    self.open_instance(&f);
+                }
+            }
+            if playing.len() > 2 {
+                ui.label(RichText::new(format!("+{} more playing", playing.len() - 2)).size(FS_META).color(c_faint()));
             }
         });
     }
@@ -1148,9 +1181,9 @@ impl App {
         let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 32.0), egui::Sense::click());
         // the open page is a neutral pill and brighter text, not a colour: the green is kept for Play
         let bg = if active {
-            c_card_hover()
+            c_active()
         } else if resp.hovered() {
-            c_card()
+            c_hover()
         } else {
             egui::Color32::TRANSPARENT
         };
@@ -1259,6 +1292,12 @@ impl App {
             self.confirm_delete = None;
         }
     }
+}
+
+/// "12 min" or "1 h 05": how long a game has been running, short enough for the sidebar.
+fn elapsed_short(t: Duration) -> String {
+    let mins = t.as_secs() / 60;
+    if mins < 60 { format!("{mins} min") } else { format!("{} h {:02}", mins / 60, mins % 60) }
 }
 
 /// The zoom to go back to when the smallest window at `zoom` would not fit on a screen of `monitor` points (measured at
@@ -1402,7 +1441,7 @@ impl eframe::App for App {
         let edge = nav.response.rect.right();
         ui.painter().vline(edge - 0.5, nav.response.rect.y_range(), Stroke::new(1.0, c_border()));
         egui::CentralPanel::default()
-            .frame(egui::Frame::new().fill(c_bg()).inner_margin(egui::Margin::symmetric(32, 24)))
+            .frame(egui::Frame::new().fill(c_bg()).inner_margin(egui::Margin { left: 32, right: 22, top: 24, bottom: 24 }))
             .show(ui, |ui| {
                 self.update_banner(ui);
                 match self.page {

@@ -219,6 +219,8 @@ pub fn apply(ctx: &egui::Context, reduced_motion: bool) {
         s.spacing.button_padding = egui::vec2(12.0, 6.0);
         s.spacing.interact_size.y = 32.0;
         s.spacing.scroll.bar_width = 8.0;
+        // the floating scroll bar gets its own strip so it never sits on the edge of a card
+        s.spacing.scroll.floating_allocated_width = 10.0;
         s.animation_time = if reduced_motion { 0.0 } else { 1.0 / 10.0 };
         s.text_styles = [
             (TextStyle::Heading, FontId::new(22.0, FontFamily::Proportional)),
