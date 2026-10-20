@@ -989,78 +989,126 @@ impl App {
 
     fn sidebar(&mut self, ui: &mut Ui) {
         ui.horizontal(|ui| {
-            ui.add(egui::Image::from_texture(&self.logo).fit_to_exact_size(vec2(38.0, 38.0)));
-            ui.vertical(|ui| {
-                ui.add_space(1.0);
-                ui.label(RichText::new(crate::NAME).size(19.0).strong());
-                small_muted(ui, format!("v{}", crate::VERSION));
+            ui.add_space(4.0);
+            ui.add(egui::Image::from_texture(&self.logo).fit_to_exact_size(vec2(28.0, 28.0)).corner_radius(7));
+            ui.label(RichText::new(crate::NAME).size(15.0).strong());
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                ui.label(RichText::new(format!("v{}", crate::VERSION)).size(11.5).color(c_faint()));
             });
         });
         ui.add_space(14.0);
-        let items = [
-            (Page::Home, "Home", Icon::Home),
-            (Page::Library, "Library", Icon::Library),
-            (Page::Discover, "Discover", Icon::Search),
-            (Page::Packs, "Packs", Icon::Library),
-            (Page::Ftb, "FTB", Icon::Library),
-            (Page::Create, "Create", Icon::Plus),
-            (Page::Accounts, "Accounts", Icon::User),
-            (Page::Tools, "Tools", Icon::Sliders),
-            (Page::Craft, "Crafting", Icon::Craft),
-            (Page::Servers, "Servers", Icon::Folder),
-            (Page::Settings, "Settings", Icon::Sliders),
-            (Page::About, "About", Icon::Info),
+        // Three groups of destinations, then Settings and About pinned to the bottom with the account. Who plays is the
+        // account row at the bottom, so Accounts is not repeated in the list.
+        let groups: Vec<(&str, Vec<(Page, &str, Icon)>)> = vec![
+            (
+                "Play",
+                vec![
+                    (Page::Home, "Home", Icon::Home),
+                    (Page::Library, "Library", Icon::Library),
+                    (Page::Create, "New instance", Icon::Plus),
+                ],
+            ),
+            (
+                "Find",
+                vec![
+                    (Page::Discover, "Discover", Icon::Search),
+                    (Page::Packs, "Modpacks", Icon::Package),
+                    (Page::Ftb, "FTB", Icon::Layers),
+                ],
+            ),
+            ("Workshop", {
+                #[allow(unused_mut)]
+                let mut tools = vec![(Page::Craft, "Crafting", Icon::Craft)];
+                #[cfg(feature = "converter")]
+                tools.push((Page::Convert, "World converter", Icon::Convert));
+                tools.push((Page::Servers, "Servers", Icon::Server));
+                tools.push((Page::Tools, "Tools", Icon::Wrench));
+                tools
+            }),
         ];
-        // the account card and the running downloads need their room at the bottom; the list scrolls if the window
-        // is too short for all the items
-        let reserve = 84.0 + self.tasks.len().min(3) as f32 * 100.0;
+        // the account row and the running downloads need their room at the bottom; the list scrolls if the window is
+        // too short for all the items
+        let reserve = 52.0 + 2.0 * 34.0 + 24.0 + self.tasks.len().min(3) as f32 * 100.0;
+        let mut go = None;
         egui::ScrollArea::vertical()
             .id_salt("nav")
             .max_height((ui.available_height() - reserve).max(120.0))
             .auto_shrink([false, true])
             .show(ui, |ui| {
-                ui.spacing_mut().item_spacing.y = 4.0;
-                for (page, label, icon) in items {
-                    let active = self.page == page || (page == Page::Library && self.page == Page::Instance);
-                    #[cfg(feature = "converter")]
-                    let active = active || (page == self.convert_nav_page() && self.page == Page::Convert);
-                    if self.nav_button(ui, icon, label, active).clicked() {
-                        self.page = page;
+                ui.spacing_mut().item_spacing.y = 2.0;
+                for (n, (group, items)) in groups.into_iter().enumerate() {
+                    if n > 0 {
+                        ui.add_space(10.0);
+                    }
+                    ui.add_space(2.0);
+                    ui.horizontal(|ui| {
+                        ui.add_space(10.0);
+                        ui.label(RichText::new(group).size(12.0).color(c_faint()));
+                    });
+                    for (page, label, icon) in items {
+                        let active = self.page == page || (page == Page::Library && self.page == Page::Instance);
+                        if self.nav_button(ui, icon, label, active).clicked() {
+                            go = Some(page);
+                        }
                     }
                 }
             });
+        match go {
+            #[cfg(feature = "converter")]
+            Some(Page::Convert) => self.open_convert(None),
+            Some(page) => self.page = page,
+            None => {}
+        }
 
         ui.with_layout(Layout::bottom_up(Align::Min), |ui| {
+            ui.spacing_mut().item_spacing.y = 2.0;
             // who is playing
             let account = self.current_account().map(|a| (a.name().to_string(), a.kind(), a.uuid.clone(), a.offline));
-            let resp = egui::Frame::new()
-                .fill(c_card())
-                .stroke(Stroke::new(1.0, c_border()))
-                .corner_radius(CornerRadius::same(14))
-                .inner_margin(egui::Margin::same(12))
-                .show(ui, |ui| {
-                    ui.set_width(ui.available_width());
-                    ui.horizontal(|ui| match &account {
-                        Some((name, kind, uuid, offline)) => {
-                            self.account_avatar(ui, uuid, name, *offline, 34.0);
-                            ui.vertical(|ui| {
-                                ui.label(RichText::new(name).strong());
-                                small_muted(ui, *kind);
-                            });
-                        }
-                        None => {
-                            avatar(ui, "?", 34.0);
-                            ui.vertical(|ui| {
-                                ui.label(RichText::new("No account").strong());
-                                small_muted(ui, "Click to add one");
-                            });
-                        }
+            let on_accounts = self.page == Page::Accounts;
+            let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 48.0), egui::Sense::click());
+            if on_accounts || resp.hovered() {
+                ui.painter().rect_filled(
+                    rect,
+                    CornerRadius::same(R_CONTROL),
+                    if on_accounts { c_card_hover() } else { c_card() },
+                );
+            }
+            let mut inner = ui.new_child(
+                egui::UiBuilder::new()
+                    .max_rect(rect.shrink2(vec2(8.0, 0.0)))
+                    .layout(Layout::left_to_right(Align::Center)),
+            );
+            match &account {
+                Some((name, kind, uuid, offline)) => {
+                    self.account_avatar(&mut inner, uuid, name, *offline, 30.0);
+                    inner.vertical(|ui| {
+                        ui.spacing_mut().item_spacing.y = 0.0;
+                        ui.add(egui::Label::new(RichText::new(name).strong()).truncate());
+                        ui.label(RichText::new(*kind).size(12.0).color(c_muted()));
                     });
-                });
-            if resp.response.interact(egui::Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                }
+                None => {
+                    avatar(&mut inner, "?", 30.0);
+                    inner.vertical(|ui| {
+                        ui.spacing_mut().item_spacing.y = 0.0;
+                        ui.label(RichText::new("No account").strong());
+                        ui.label(RichText::new("Choose who plays").size(12.0).color(c_muted()));
+                    });
+                }
+            }
+            focus_ring(ui, &resp, rect, R_CONTROL);
+            resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Accounts"));
+            if resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
                 self.page = Page::Accounts;
             }
             ui.add_space(6.0);
+            for (page, label, icon) in [(Page::About, "About", Icon::Info), (Page::Settings, "Settings", Icon::Sliders)]
+            {
+                if self.nav_button(ui, icon, label, self.page == page).clicked() {
+                    self.page = page;
+                }
+            }
+            ui.add_space(8.0);
             // running downloads
             for t in self.tasks.iter().take(3) {
                 card(ui, |ui| {
@@ -1072,8 +1120,8 @@ impl App {
                     let (d, total) =
                         (t.progress.files_done.load(Ordering::Relaxed), t.progress.files_total.load(Ordering::Relaxed));
                     let bar = egui::ProgressBar::new(t.progress.fraction())
-                        .desired_height(8.0)
-                        .corner_radius(4)
+                        .desired_height(6.0)
+                        .corner_radius(3)
                         .fill(c_accent());
                     if total > 0 {
                         ui.add(bar);
@@ -1094,32 +1142,26 @@ impl App {
     }
 
     fn nav_button(&self, ui: &mut Ui, icon: Icon, label: &str, active: bool) -> egui::Response {
-        let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 40.0), egui::Sense::click());
+        let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 32.0), egui::Sense::click());
+        // the open page is a neutral pill and brighter text, not a colour: the green is kept for Play
         let bg = if active {
-            c_accent_soft()
+            c_card_hover()
         } else if resp.hovered() {
             c_card()
         } else {
             egui::Color32::TRANSPARENT
         };
-        ui.painter().rect_filled(rect, CornerRadius::same(11), bg);
-        if active {
-            ui.painter().rect_filled(
-                egui::Rect::from_min_size(rect.left_top() + vec2(0.0, 10.0), vec2(3.0, 22.0)),
-                CornerRadius::same(2),
-                c_accent(),
-            );
-        }
-        let color = if active { c_accent() } else { c_text() };
-        icons::paint(ui.painter(), icon, rect.left_center() + vec2(28.0, 0.0), 18.0, color);
+        ui.painter().rect_filled(rect, CornerRadius::same(R_CONTROL), bg);
+        let color = if active || resp.hovered() { c_text() } else { c_muted() };
+        icons::paint(ui.painter(), icon, rect.left_center() + vec2(20.0, 0.0), 16.0, color);
         ui.painter().text(
-            rect.left_center() + vec2(46.0, 0.0),
+            rect.left_center() + vec2(40.0, 0.0),
             egui::Align2::LEFT_CENTER,
             label,
-            egui::FontId::proportional(15.0),
+            egui::FontId::proportional(14.0),
             color,
         );
-        focus_ring(ui, &resp, rect, 11);
+        focus_ring(ui, &resp, rect, R_CONTROL);
         resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Tab, true, active, label));
         resp.on_hover_cursor(egui::CursorIcon::PointingHand)
     }
@@ -1136,17 +1178,17 @@ impl App {
             .order(egui::Order::Tooltip)
             .show(ctx, |ui| {
                 for t in self.toasts.iter().rev().take(3) {
-                    let (bg, fg) = if t.error { (c_danger_bg(), c_danger()) } else { (c_card_hover(), c_text()) };
+                    let (bg, fg) = if t.error { (c_danger_bg(), c_danger()) } else { (c_raised(), c_text()) };
                     egui::Frame::new()
                         .fill(bg)
-                        .stroke(Stroke::new(1.0, if t.error { c_danger().gamma_multiply(0.5) } else { c_border() }))
-                        .corner_radius(CornerRadius::same(12))
-                        .inner_margin(egui::Margin::symmetric(16, 10))
+                        .stroke(Stroke::new(1.0, if t.error { c_danger_line() } else { c_control() }))
+                        .corner_radius(CornerRadius::same(R_CONTROL + 2))
+                        .inner_margin(egui::Margin::symmetric(14, 9))
                         .shadow(egui::Shadow {
                             offset: [0, 6],
                             blur: 18,
                             spread: 0,
-                            color: egui::Color32::from_black_alpha(110),
+                            color: egui::Color32::from_black_alpha(if is_dark() { 110 } else { 30 }),
                         })
                         .show(ui, |ui| {
                             ui.set_max_width(560.0);
@@ -1348,18 +1390,16 @@ impl eframe::App for App {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
-        egui::Panel::left("nav")
-            .exact_size(236.0)
+        let nav = egui::Panel::left("nav")
+            .exact_size(224.0)
             .resizable(false)
-            .frame(
-                egui::Frame::new()
-                    .fill(c_surface())
-                    .inner_margin(egui::Margin::same(16))
-                    .stroke(Stroke::new(1.0, c_border())),
-            )
+            .frame(egui::Frame::new().fill(c_surface()).inner_margin(egui::Margin::symmetric(12, 16)))
             .show(ui, |ui| self.sidebar(ui));
+        // one line divides the sidebar from the page
+        let edge = nav.response.rect.right();
+        ui.painter().vline(edge - 0.5, nav.response.rect.y_range(), Stroke::new(1.0, c_border()));
         egui::CentralPanel::default()
-            .frame(egui::Frame::new().fill(c_bg()).inner_margin(egui::Margin::symmetric(30, 24)))
+            .frame(egui::Frame::new().fill(c_bg()).inner_margin(egui::Margin::symmetric(32, 24)))
             .show(ui, |ui| {
                 self.update_banner(ui);
                 match self.page {

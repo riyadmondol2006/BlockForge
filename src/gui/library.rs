@@ -10,71 +10,79 @@ use super::{App, InstTab, Page, Phase};
 use crate::instances::Instance;
 use crate::launch::{LaunchOptions, Level};
 
-fn meta_line(i: &Instance) -> String {
-    format!("Minecraft {}", i.mc_version())
-}
-
 impl App {
     /// One instance as a card. Returns what the player asked for, if anything.
     fn instance_card(&self, ui: &mut Ui, inst: &Instance, width: f32) -> Option<Act> {
         let mut act = None;
-        let (rect, resp) = ui.allocate_exact_size(vec2(width, 178.0), Sense::click());
+        let (rect, resp) = ui.allocate_exact_size(vec2(width, 116.0), Sense::click());
         let hovered = resp.hovered();
         ui.painter().rect(
             rect,
-            CornerRadius::same(16),
+            CornerRadius::same(R_CARD),
             if hovered { c_card_hover() } else { c_card() },
-            Stroke::new(1.0, if hovered { c_accent().gamma_multiply(0.7) } else { c_border() }),
+            Stroke::new(1.0, if hovered { c_control() } else { c_border() }),
             egui::StrokeKind::Inside,
         );
         // Tab reaches the card too (Enter opens it)
-        focus_ring(ui, &resp, rect, 16);
+        focus_ring(ui, &resp, rect, R_CARD);
         resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, inst.name()));
-        let mut child = ui.new_child(UiBuilder::new().max_rect(rect.shrink(14.0)).layout(Layout::top_down(Align::Min)));
-        child.spacing_mut().item_spacing = vec2(8.0, 6.0);
-        child.horizontal(|ui| {
-            self.instance_icon(ui, inst, 46.0);
-            ui.vertical(|ui| {
-                ui.add(egui::Label::new(RichText::new(inst.name()).strong().size(15.5)).truncate());
-                small_muted(ui, meta_line(inst));
+        let inner = rect.shrink(14.0);
+        let folder = inst.folder.clone();
+        let playing = self.is_playing(&folder);
+
+        // the picture, the name and the details
+        let mut top = ui.new_child(UiBuilder::new().max_rect(inner).layout(Layout::left_to_right(Align::Min)));
+        top.spacing_mut().item_spacing = vec2(10.0, 2.0);
+        self.instance_icon(&mut top, inst, 40.0);
+        top.vertical(|ui| {
+            ui.spacing_mut().item_spacing.y = 1.0;
+            ui.set_max_width(inner.width() - 40.0 - 10.0 - 30.0);
+            ui.add(egui::Label::new(RichText::new(inst.name()).strong().size(14.5)).truncate());
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 5.0;
+                ui.label(RichText::new(inst.mc_version().to_string()).size(12.5).color(c_muted()));
+                match inst.loader() {
+                    Some((kind, ver)) => {
+                        ui.label(RichText::new("\u{00B7}").size(12.5).color(c_faint()));
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(format!("{kind} {ver}")).size(12.5).color(loader_color(kind)),
+                            )
+                            .truncate(),
+                        );
+                    }
+                    None => {
+                        ui.label(RichText::new("\u{00B7}").size(12.5).color(c_faint()));
+                        ui.label(RichText::new("Vanilla").size(12.5).color(c_muted()));
+                    }
+                }
             });
         });
-        child.horizontal(|ui| {
-            match inst.loader() {
-                Some((kind, ver)) => {
-                    tag(ui, &format!("{kind} {ver}"), loader_color(kind));
-                }
-                None => {
-                    tag(ui, "Vanilla", c_muted());
-                }
-            }
-            if inst.mod_count > 0 {
-                tag(ui, &format!("{} mods", inst.mod_count), c_muted());
-            }
-        });
-        child.add_space(2.0);
-        child.horizontal(|ui| {
-            let folder = inst.folder.clone();
-            if self.is_playing(&folder) {
-                if danger_icon(ui, Icon::Stop, "Stop").clicked() {
-                    act = Some(Act::Stop(folder.clone()));
-                }
-            } else if primary_icon(ui, Icon::Play, "Play").clicked() {
-                act = Some(Act::Play(folder.clone()));
-            }
-            ui.menu_button("\u{00B7}\u{00B7}\u{00B7}", |ui| {
-                if let Some(a) = self.instance_menu(ui, inst) {
-                    act = Some(a);
-                }
-            })
-            .response
-            .on_hover_text("More");
-        });
-        // the helper switches get a row of their own: the card is too narrow for them beside the buttons
-        child.horizontal(|ui| {
-            if let Some(a) = self.card_switches(ui, inst) {
-                act = Some(a);
-            }
+        let mut menu = ui.new_child(
+            UiBuilder::new()
+                .max_rect(egui::Rect::from_min_size(
+                    egui::pos2(inner.right() - 28.0, inner.top() - 4.0),
+                    vec2(28.0, 28.0),
+                ))
+                .layout(Layout::top_down(Align::Min)),
+        );
+        if let Some(Some(a)) = kebab_menu(&mut menu, |ui| self.instance_menu(ui, inst)) {
+            act = Some(a);
+        }
+
+        // when it was played, and the quiet Play button
+        let foot = egui::Rect::from_min_max(egui::pos2(inner.left(), inner.bottom() - 34.0), inner.right_bottom());
+        let mut bottom = ui.new_child(UiBuilder::new().max_rect(foot).layout(Layout::right_to_left(Align::Center)));
+        if play_chip(&mut bottom, playing).clicked() {
+            act = Some(if playing { Act::Stop(folder.clone()) } else { Act::Play(folder.clone()) });
+        }
+        let mut note = if playing { "Playing now".to_string() } else { time_ago(inst.last_played()) };
+        if inst.mod_count > 0 && !playing {
+            note = format!("{} mods  \u{00B7}  {note}", inst.mod_count);
+        }
+        bottom.with_layout(Layout::left_to_right(Align::Center), |ui| {
+            let color = if playing { c_accent() } else { c_faint() };
+            ui.add(egui::Label::new(RichText::new(note).size(12.0).color(color)).truncate());
         });
         if act.is_none() && resp.clicked() {
             act = Some(Act::Open(inst.folder.clone()));
@@ -86,24 +94,31 @@ impl App {
     /// it leaves them their room, cutting a long name short.
     fn hero_title(&self, ui: &mut Ui, h: &Instance, beside: Option<f32>) {
         ui.horizontal(|ui| {
-            self.instance_icon(ui, h, 76.0);
+            self.instance_icon(ui, h, 64.0);
             ui.vertical(|ui| {
                 if let Some(w) = beside {
                     ui.set_max_width(ui.available_width() - w - 16.0);
                 }
-                ui.add_space(4.0);
-                small_muted(ui, if h.last_played() > 0 { "CONTINUE PLAYING" } else { "READY TO PLAY" });
-                ui.add(egui::Label::new(RichText::new(h.name()).size(24.0).strong()).truncate());
-                let loader = h.loader().map(|(k, v)| format!("{k} {v}")).unwrap_or_else(|| "Vanilla".into());
-                muted(
-                    ui,
-                    format!(
-                        "Minecraft {}  \u{00B7}  {}  \u{00B7}  {}",
-                        h.mc_version(),
-                        loader,
-                        time_ago(h.last_played())
-                    ),
-                );
+                ui.spacing_mut().item_spacing.y = 3.0;
+                ui.add_space(2.0);
+                let when = if h.last_played() > 0 {
+                    format!("Last played {}", time_ago(h.last_played()).to_lowercase())
+                } else {
+                    "Ready to play".to_string()
+                };
+                ui.label(RichText::new(when).size(12.5).color(c_muted()));
+                ui.add(egui::Label::new(RichText::new(h.name()).size(20.0).strong()).truncate());
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    match h.loader() {
+                        Some((kind, ver)) => tag(ui, &format!("{kind} {ver}"), loader_color(kind)),
+                        None => tag(ui, "Vanilla", c_muted()),
+                    }
+                    tag(ui, &format!("Minecraft {}", h.mc_version()), c_muted());
+                    if h.mod_count > 0 {
+                        tag(ui, &format!("{} mods", h.mod_count), c_muted());
+                    }
+                });
             });
         });
     }
@@ -111,13 +126,13 @@ impl App {
     /// The picture, name and tags at the top of an instance's page; `beside` as for [`App::hero_title`].
     fn instance_title(&self, ui: &mut Ui, inst: &Instance, beside: Option<f32>) {
         ui.horizontal(|ui| {
-            self.instance_icon(ui, inst, 68.0);
+            self.instance_icon(ui, inst, 56.0);
             ui.vertical(|ui| {
                 if let Some(w) = beside {
                     ui.set_max_width(ui.available_width() - w - 16.0);
                 }
                 ui.add_space(2.0);
-                ui.add(egui::Label::new(RichText::new(inst.name()).size(26.0).strong()).truncate());
+                ui.add(egui::Label::new(RichText::new(inst.name()).size(22.0).strong()).truncate());
                 ui.horizontal(|ui| {
                     match inst.loader() {
                         Some((kind, ver)) => tag(ui, &format!("{kind} {ver}"), loader_color(kind)),
@@ -133,18 +148,23 @@ impl App {
     }
 
     pub(super) fn home_ui(&mut self, ui: &mut Ui) {
-        let name = self.current_account().map(|a| a.name().to_string());
         // the instances are looked up by position, not copied: an instance carries its whole version file
         let hero =
             self.instances.iter().position(|i| i.last_played() > 0).or((!self.instances.is_empty()).then_some(0));
         let mut action = None;
         ScrollArea::vertical().id_salt("home").auto_shrink(false).show(ui, |ui| {
-            match &name {
-                Some(n) => heading(ui, &format!("Welcome back, {n}")),
-                None => heading(ui, "Welcome to BlockForge"),
-            }
-            muted(ui, "Pick up where you left off, or start something new.");
-            ui.add_space(14.0);
+            ui.horizontal(|ui| {
+                heading(ui, "Home");
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if secondary_icon(ui, Icon::Search, "Find mods").clicked() {
+                        self.page = Page::Discover;
+                    }
+                    if secondary_icon(ui, Icon::Plus, "New instance").clicked() {
+                        self.page = Page::Create;
+                    }
+                });
+            });
+            ui.add_space(12.0);
             self.low_end_hint(ui);
             if self.accounts.is_empty() {
                 card(ui, |ui| {
@@ -170,9 +190,9 @@ impl App {
                 Some(h) => {
                     let h = &self.instances[h];
                     egui::Frame::new()
-                        .fill(c_accent_soft())
-                        .stroke(Stroke::new(1.0, c_accent().gamma_multiply(0.35)))
-                        .corner_radius(CornerRadius::same(18))
+                        .fill(c_card())
+                        .stroke(Stroke::new(1.0, c_border()))
+                        .corner_radius(CornerRadius::same(R_CARD + 2))
                         .inner_margin(egui::Margin::same(20))
                         .show(ui, |ui| {
                             ui.set_width(ui.available_width());
@@ -180,7 +200,7 @@ impl App {
                             // go on a row of their own, and a long name is cut short (all of it shows on hover)
                             let buttons_id = egui::Id::unique("home-hero-buttons");
                             let buttons_w = remembered_width(ui, buttons_id, 330.0);
-                            let narrow = ui.available_width() - 76.0 - buttons_w < 240.0;
+                            let narrow = ui.available_width() - 64.0 - buttons_w < 240.0;
                             let mut used = buttons_w;
                             if narrow {
                                 self.hero_title(ui, h, None);
@@ -229,12 +249,23 @@ impl App {
             }
 
             if self.instances.len() > 1 {
-                ui.add_space(12.0);
-                section(ui, "Your instances");
-                let width = 262.0;
-                let per_row = ((ui.available_width() + 12.0) / (width + 12.0)).floor().max(1.0) as usize;
-                let shown = self.instances.len().min(per_row * 2);
-                for row in (0..shown).collect::<Vec<_>>().chunks(per_row) {
+                ui.add_space(18.0);
+                let (cols, width) = grid_columns(ui.available_width(), 250.0, 12.0);
+                let shown = self.instances.len().min(cols * 2);
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Your instances").size(15.0).strong());
+                    ui.label(RichText::new(self.instances.len().to_string()).size(13.0).color(c_faint()));
+                    if self.instances.len() > shown {
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            if secondary(ui, "View all").clicked() {
+                                self.page = Page::Library;
+                            }
+                        });
+                    }
+                });
+                ui.add_space(4.0);
+                ui.spacing_mut().item_spacing = vec2(12.0, 12.0);
+                for row in (0..shown).collect::<Vec<_>>().chunks(cols) {
                     ui.horizontal(|ui| {
                         for &i in row {
                             if let Some(a) = self.instance_card(ui, &self.instances[i], width) {
@@ -244,16 +275,6 @@ impl App {
                     });
                 }
             }
-
-            ui.add_space(12.0);
-            ui.horizontal(|ui| {
-                if secondary_icon(ui, Icon::Plus, "New instance").clicked() {
-                    self.page = Page::Create;
-                }
-                if secondary_icon(ui, Icon::Search, "Find mods").clicked() {
-                    self.page = Page::Discover;
-                }
-            });
             self.news_section(ui);
         });
         if let Some(a) = action {
@@ -266,6 +287,7 @@ impl App {
         let narrow = ui.available_width() < 780.0;
         ui.horizontal(|ui| {
             heading(ui, "Library");
+            ui.label(RichText::new(self.instances.len().to_string()).size(13.0).color(c_faint()));
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if primary_icon(ui, Icon::Plus, "New instance").clicked() {
                     self.page = Page::Create;
@@ -335,8 +357,8 @@ impl App {
             return None;
         }
         ScrollArea::vertical().id_salt("library").auto_shrink(false).show(ui, |ui| {
-            let width = 262.0;
-            let per_row = ((ui.available_width() + 12.0) / (width + 12.0)).floor().max(1.0) as usize;
+            let (per_row, width) = grid_columns(ui.available_width(), 250.0, 12.0);
+            ui.spacing_mut().item_spacing = vec2(12.0, 12.0);
             for row in list.chunks(per_row) {
                 ui.horizontal(|ui| {
                     for inst in row {
@@ -369,7 +391,7 @@ impl App {
         // as on Home: the buttons keep their room, or get a row of their own in a narrow window
         let buttons_id = egui::Id::unique("instance-header-buttons");
         let buttons_w = remembered_width(ui, buttons_id, 420.0);
-        let narrow = ui.available_width() - 68.0 - buttons_w < 260.0;
+        let narrow = ui.available_width() - 56.0 - buttons_w < 260.0;
         let mut used = buttons_w;
         if narrow {
             self.instance_title(ui, &inst, None);
@@ -395,13 +417,9 @@ impl App {
                 } else if primary_big(ui, Icon::Play, "Play").clicked() {
                     action = Some(Act::Play(folder.clone()));
                 }
-                ui.menu_button("\u{00B7}\u{00B7}\u{00B7}", |ui| {
-                    if let Some(a) = self.instance_menu(ui, &inst) {
-                        action = Some(a);
-                    }
-                })
-                .response
-                .on_hover_text("More");
+                if let Some(Some(a)) = kebab_menu(ui, |ui| self.instance_menu(ui, &inst)) {
+                    action = Some(a);
+                }
                 match self.games.get(&folder).map(|g| g.phase) {
                     Some(Phase::Preparing) => {
                         ui.spinner();
@@ -417,14 +435,14 @@ impl App {
         });
         remember_width(ui, buttons_id, used);
         ui.add_space(8.0);
-        ui.horizontal(|ui| {
+        tab_bar(ui, |ui| {
             for (t, label) in [
                 (InstTab::Overview, "Overview"),
                 (InstTab::Mods, "Mods"),
                 (InstTab::Logs, "Logs"),
                 (InstTab::Settings, "Settings"),
             ] {
-                if chip(ui, label, self.tab == t).clicked() {
+                if tab(ui, label, self.tab == t).clicked() {
                     self.tab = t;
                     if t == InstTab::Mods {
                         self.mods_cache = None;
@@ -432,7 +450,7 @@ impl App {
                 }
             }
         });
-        ui.add_space(6.0);
+        ui.add_space(10.0);
         match self.tab {
             InstTab::Overview => self.tab_overview(ui, &inst),
             InstTab::Mods => self.mods_tab(ui, &inst),

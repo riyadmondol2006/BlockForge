@@ -725,11 +725,6 @@ impl App {
         }
     }
 
-    /// The item of the side menu the page belongs to: the Library for an instance's world, else Tools.
-    pub(super) fn convert_nav_page(&self) -> Page {
-        if self.convert.as_ref().is_some_and(|s| s.dest.is_some()) { Page::Library } else { Page::Tools }
-    }
-
     /// The entry on the Tools page. Returns whether its button was pressed.
     pub(super) fn convert_tool_card(&mut self, ui: &mut Ui) -> bool {
         super::tools::card_frame(

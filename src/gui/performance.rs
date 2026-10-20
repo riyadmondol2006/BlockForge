@@ -227,32 +227,6 @@ impl App {
         act
     }
 
-    /// The two helper switches on an instance's card, side by side on a row of their own (the explanations are in the
-    /// tooltips, and the instance's menu has "Performance" with Low-end mode too).
-    pub(super) fn card_switches(&self, ui: &mut Ui, inst: &Instance) -> Option<Act> {
-        let mut act = None;
-        ui.spacing_mut().item_spacing.x = 6.0;
-        let mut fast = crate::launch::fast_start_enabled(&self.settings, inst);
-        let fast_before = fast;
-        toggle(ui, &mut fast).on_hover_text(
-            "Fast start: a tiny helper that loads Minecraft's classes ahead of time so the game opens sooner. \
-             Works with every version and mod loader. Turn it off if the game fails to start.",
-        );
-        small_muted(ui, "Fast start");
-        if fast != fast_before {
-            act = Some(Act::FastStart(inst.folder.clone(), fast));
-        }
-        ui.add_space(10.0);
-        let mut smooth = lite::enabled(&self.settings, inst);
-        let smooth_before = smooth;
-        toggle(ui, &mut smooth).on_hover_text(format!("Smoothness helper: {LITE_HINT}."));
-        small_muted(ui, "Smooth");
-        if smooth != smooth_before {
-            act = Some(Act::Helper(inst.folder.clone(), HelperChange::Lite(Some(smooth))));
-        }
-        act
-    }
-
     /// The Low-end choices of an instance, as menu items.
     fn low_end_choices(&self, ui: &mut Ui, inst: &Instance) -> Option<Act> {
         let mut act = None;

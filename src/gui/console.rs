@@ -65,7 +65,7 @@ impl App {
                 }
             });
             egui::Panel::bottom("console-bar")
-                .frame(egui::Frame::new().fill(c_surface()).inner_margin(egui::Margin::same(10)))
+                .frame(egui::Frame::new().fill(c_card()).inner_margin(egui::Margin::same(10)))
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
                         if secondary(ui, "Clear").clicked() {

@@ -16,6 +16,12 @@ pub enum Icon {
     Folder,
     Info,
     Craft,
+    Package,
+    Layers,
+    Server,
+    Wrench,
+    Convert,
+    Kebab,
 }
 
 /// Draw `icon` centred on `c`, fitting a square of side `size`.
@@ -94,6 +100,49 @@ pub fn paint(p: &Painter, icon: Icon, c: Pos2, size: f32, color: Color32) {
                         egui::StrokeKind::Inside,
                     );
                 }
+            }
+        }
+        Icon::Package => {
+            line(&[
+                (0.0, -0.95),
+                (0.85, -0.48),
+                (0.85, 0.48),
+                (0.0, 0.95),
+                (-0.85, 0.48),
+                (-0.85, -0.48),
+                (0.0, -0.95),
+            ]);
+            line(&[(-0.85, -0.48), (0.0, 0.0), (0.85, -0.48)]);
+            line(&[(0.0, 0.0), (0.0, 0.95)]);
+        }
+        Icon::Layers => {
+            line(&[(-0.92, -0.35), (0.0, -0.85), (0.92, -0.35), (0.0, 0.15), (-0.92, -0.35)]);
+            line(&[(-0.92, 0.18), (0.0, 0.68), (0.92, 0.18)]);
+        }
+        Icon::Server => {
+            for (top, bottom) in [(-0.85, -0.12), (0.12, 0.85)] {
+                p.rect_stroke(
+                    Rect::from_min_max(at(-0.9, top), at(0.9, bottom)),
+                    3.0,
+                    stroke,
+                    egui::StrokeKind::Inside,
+                );
+                p.circle_filled(at(-0.55, (top + bottom) / 2.0), 0.08 * s + 0.5, color);
+            }
+        }
+        Icon::Wrench => {
+            line(&[(-0.85, 0.85), (0.1, -0.1)]);
+            p.circle_stroke(at(0.38, -0.38), 0.52 * s, stroke);
+        }
+        Icon::Convert => {
+            line(&[(-0.9, -0.38), (0.9, -0.38)]);
+            line(&[(0.35, -0.85), (0.9, -0.38), (0.35, 0.09)]);
+            line(&[(0.9, 0.38), (-0.9, 0.38)]);
+            line(&[(-0.35, -0.09), (-0.9, 0.38), (-0.35, 0.85)]);
+        }
+        Icon::Kebab => {
+            for x in [-0.6, 0.0, 0.6] {
+                p.circle_filled(at(x, 0.0), 0.12 * s + 0.6, color);
             }
         }
         Icon::Folder => {

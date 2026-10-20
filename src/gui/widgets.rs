@@ -9,7 +9,7 @@ pub fn card<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
     egui::Frame::new()
         .fill(c_card())
         .stroke(Stroke::new(1.0, c_border()))
-        .corner_radius(CornerRadius::same(14))
+        .corner_radius(CornerRadius::same(R_CARD))
         .inner_margin(egui::Margin::same(16))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
@@ -18,13 +18,15 @@ pub fn card<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
         .inner
 }
 
+/// The title of a page: a noun, 22px, no greeting.
 pub fn heading(ui: &mut Ui, text: &str) {
-    ui.label(RichText::new(text).size(26.0).strong());
+    ui.label(RichText::new(text).size(22.0).strong());
 }
 
+/// The title of a block on a page.
 pub fn section(ui: &mut Ui, text: &str) {
-    ui.add_space(6.0);
-    ui.label(RichText::new(text).size(17.0).strong());
+    ui.add_space(4.0);
+    ui.label(RichText::new(text).size(15.0).strong());
 }
 
 pub fn muted(ui: &mut Ui, text: impl Into<String>) {
@@ -46,34 +48,36 @@ fn styled_button(
     min: Vec2,
     enabled: bool,
 ) -> Response {
-    let galley = ui.painter().layout_no_wrap(text.to_string(), FontId::proportional(14.5), fg);
-    let icon_w = if icon.is_some() { 24.0 } else { 0.0 };
-    let size = vec2((galley.size().x + icon_w + 32.0).max(min.x), min.y.max(36.0));
+    let galley = ui.painter().layout_no_wrap(text.to_string(), FontId::proportional(14.0), fg);
+    let icon_w = if icon.is_some() { 22.0 } else { 0.0 };
+    let size = vec2((galley.size().x + icon_w + 28.0).max(min.x), min.y.max(32.0));
     let sense = if enabled { Sense::click() } else { Sense::hover() };
     let (rect, resp) = ui.allocate_exact_size(size, sense);
     if ui.is_rect_visible(rect) {
         let (bg, fg) = if !enabled {
-            (c_card(), c_muted())
-        } else if resp.hovered() || resp.is_pointer_button_down_on() {
+            (c_field(), c_faint())
+        } else if resp.is_pointer_button_down_on() {
+            (hover, fg)
+        } else if resp.hovered() {
             (hover, fg)
         } else {
             (fill, fg)
         };
         ui.painter().rect(
             rect,
-            CornerRadius::same(10),
+            CornerRadius::same(R_CONTROL),
             bg,
-            if enabled { stroke } else { Stroke::new(1.0, c_border()) },
+            if enabled { stroke } else { Stroke::NONE },
             egui::StrokeKind::Inside,
         );
-        let galley = ui.painter().layout_no_wrap(text.to_string(), FontId::proportional(14.5), fg);
+        let galley = ui.painter().layout_no_wrap(text.to_string(), FontId::proportional(14.0), fg);
         let content_w = galley.size().x + icon_w;
         let left = rect.center().x - content_w / 2.0;
         if let Some(icon) = icon {
-            icons::paint(ui.painter(), icon, egui::pos2(left + 8.0, rect.center().y), 16.0, fg);
+            icons::paint(ui.painter(), icon, egui::pos2(left + 7.0, rect.center().y), 15.0, fg);
         }
         ui.painter().galley(egui::pos2(left + icon_w, rect.center().y - galley.size().y / 2.0), galley, fg);
-        focus_ring(ui, &resp, rect, 10);
+        focus_ring(ui, &resp, rect, R_CONTROL);
     }
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, text));
     if enabled { resp.on_hover_cursor(egui::CursorIcon::PointingHand) } else { resp }
@@ -117,23 +121,13 @@ pub fn primary_big(ui: &mut Ui, icon: Icon, text: &str) -> Response {
         c_accent_hover(),
         c_on_accent(),
         Stroke::NONE,
-        vec2(132.0, 44.0),
+        vec2(120.0, 40.0),
         true,
     )
 }
 
 pub fn secondary(ui: &mut Ui, text: &str) -> Response {
-    styled_button(
-        ui,
-        text,
-        None,
-        c_card_hover(),
-        c_field_hover(),
-        c_text(),
-        Stroke::new(1.0, c_border()),
-        Vec2::ZERO,
-        true,
-    )
+    styled_button(ui, text, None, c_field(), c_field_hover(), c_text(), Stroke::new(1.0, c_control()), Vec2::ZERO, true)
 }
 
 pub fn secondary_icon(ui: &mut Ui, icon: Icon, text: &str) -> Response {
@@ -141,10 +135,10 @@ pub fn secondary_icon(ui: &mut Ui, icon: Icon, text: &str) -> Response {
         ui,
         text,
         Some(icon),
-        c_card_hover(),
+        c_field(),
         c_field_hover(),
         c_text(),
-        Stroke::new(1.0, c_border()),
+        Stroke::new(1.0, c_control()),
         Vec2::ZERO,
         true,
     )
@@ -201,50 +195,120 @@ pub fn danger_big(ui: &mut Ui, icon: Icon, text: &str) -> Response {
         c_danger_hover(),
         c_danger(),
         Stroke::new(1.0, c_danger_line()),
-        vec2(132.0, 44.0),
+        vec2(120.0, 40.0),
         true,
     )
 }
 
-/// A pill that can be switched on, used for filters and choices.
+/// A filter or a choice that can be switched on. Selected is ink on the ground, not colour.
 pub fn chip(ui: &mut Ui, text: &str, selected: bool) -> Response {
-    let fg = if selected { c_on_accent() } else { c_text() };
-    let galley = ui.painter().layout_no_wrap(text.to_string(), FontId::proportional(13.5), fg);
-    let size = vec2(galley.size().x + 26.0, 30.0);
+    let fg = if selected { c_on_ink() } else { c_text() };
+    let galley = ui.painter().layout_no_wrap(text.to_string(), FontId::proportional(13.0), fg);
+    let size = vec2(galley.size().x + 24.0, 28.0);
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
     let bg = if selected {
-        c_accent()
+        c_ink()
     } else if resp.hovered() {
         c_field_hover()
     } else {
-        c_card_hover()
+        c_field()
     };
     ui.painter().rect(
         rect,
-        CornerRadius::same(15),
+        CornerRadius::same(R_CONTROL),
         bg,
         if selected { Stroke::NONE } else { Stroke::new(1.0, c_border()) },
         egui::StrokeKind::Inside,
     );
     ui.painter().galley(rect.center() - galley.size() / 2.0, galley, fg);
-    focus_ring(ui, &resp, rect, 15);
+    focus_ring(ui, &resp, rect, R_CONTROL);
     resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, text));
     resp.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
-/// A small non-interactive label pill (loader name, account kind).
+/// A row of tabs: the labels sit on one line with a hairline under them, and the open one is underlined in ink. Fill
+/// it with [`tab`] calls.
+pub fn tab_bar<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
+    let width = ui.available_width();
+    let top = ui.cursor().min;
+    let out = ui
+        .horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 22.0;
+            add(ui)
+        })
+        .inner;
+    let y = ui.min_rect().bottom().max(top.y);
+    ui.painter().hline(top.x..=top.x + width, y, Stroke::new(1.0, c_border()));
+    out
+}
+
+/// One tab of a [`tab_bar`].
+pub fn tab(ui: &mut Ui, text: &str, selected: bool) -> Response {
+    let color = if selected { c_text() } else { c_muted() };
+    let galley = ui.painter().layout_no_wrap(text.to_string(), FontId::proportional(14.0), color);
+    let (rect, resp) = ui.allocate_exact_size(vec2(galley.size().x, 34.0), Sense::click());
+    let color = if selected || resp.hovered() { c_text() } else { c_muted() };
+    ui.painter().galley(egui::pos2(rect.left(), rect.center().y - galley.size().y / 2.0 - 1.0), galley, color);
+    if selected {
+        ui.painter().rect_filled(
+            egui::Rect::from_min_max(egui::pos2(rect.left(), rect.bottom() - 2.0), rect.right_bottom()),
+            1.0,
+            c_ink(),
+        );
+    }
+    focus_ring(ui, &resp, rect.expand2(vec2(4.0, -2.0)), 6);
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Tab, true, selected, text));
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+/// The three dots of a card or a row: a small square that opens a menu. Returns what the menu's closure returned when
+/// the menu is open this frame.
+pub fn kebab_menu<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> Option<R> {
+    let (rect, resp) = ui.allocate_exact_size(vec2(28.0, 28.0), Sense::click());
+    let open = egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&resp));
+    if resp.hovered() || open {
+        ui.painter().rect_filled(rect, CornerRadius::same(R_CONTROL), c_field_hover());
+    }
+    let color = if resp.hovered() || open { c_text() } else { c_muted() };
+    icons::paint(ui.painter(), Icon::Kebab, rect.center(), 16.0, color);
+    focus_ring(ui, &resp, rect, R_CONTROL);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "More"));
+    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text("More");
+    egui::Popup::menu(&resp).show(add).map(|r| r.inner)
+}
+
+/// How many cards of at least `min` width fit in `avail` with `gap` between them, and the width each then gets so
+/// the row ends exactly at the edge instead of leaving a ragged strip.
+pub fn grid_columns(avail: f32, min: f32, gap: f32) -> (usize, f32) {
+    let cols = (((avail + gap) / (min + gap)).floor() as usize).max(1);
+    (cols, ((avail - gap * (cols as f32 - 1.0)) / cols as f32).floor())
+}
+
+/// A small non-interactive label (loader name, account kind): a pale tint of its colour, no outline.
 pub fn tag(ui: &mut Ui, text: &str, color: Color32) {
     let galley = ui.painter().layout_no_wrap(text.to_string(), FontId::proportional(12.0), color);
-    let size = vec2(galley.size().x + 16.0, 22.0);
+    let size = vec2(galley.size().x + 14.0, 20.0);
     let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
-    ui.painter().rect(
-        rect,
-        CornerRadius::same(11),
-        color.gamma_multiply(0.16),
-        Stroke::new(1.0, color.gamma_multiply(0.35)),
-        egui::StrokeKind::Inside,
-    );
+    ui.painter().rect_filled(rect, CornerRadius::same(R_TAG), color.gamma_multiply(0.14));
     ui.painter().galley(rect.center() - galley.size() / 2.0, galley, color);
+}
+
+/// The quiet Play button of a card: a plain square that turns green when it is pointed at, so a screen of instances is
+/// not a screen of green buttons.
+pub fn play_chip(ui: &mut Ui, playing: bool) -> Response {
+    let (rect, resp) = ui.allocate_exact_size(vec2(34.0, 34.0), Sense::click());
+    let (bg, fg) = match (playing, resp.hovered() || resp.is_pointer_button_down_on()) {
+        (true, true) => (c_danger_hover(), c_danger()),
+        (true, false) => (c_danger_bg(), c_danger()),
+        (false, true) => (c_accent(), c_on_accent()),
+        (false, false) => (c_field(), c_text()),
+    };
+    ui.painter().rect_filled(rect, CornerRadius::same(R_CONTROL), bg);
+    icons::paint(ui.painter(), if playing { Icon::Stop } else { Icon::Play }, rect.center(), 14.0, fg);
+    focus_ring(ui, &resp, rect, R_CONTROL);
+    let label = if playing { "Stop" } else { "Play" };
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(label)
 }
 
 pub fn loader_color(name: &str) -> Color32 {
@@ -269,50 +333,60 @@ pub fn avatar(ui: &mut Ui, name: &str, size: f32) -> Response {
 }
 
 pub fn paint_avatar(ui: &Ui, rect: egui::Rect, name: &str) {
-    const COLORS: [(u8, u8, u8); 6] = [
-        (0x2E, 0x7D, 0x4F),
-        (0x2F, 0x6F, 0x8F),
-        (0x8A, 0x5A, 0x2B),
-        (0x6B, 0x4F, 0x9A),
-        (0x8F, 0x3F, 0x5A),
-        (0x4F, 0x7A, 0x2F),
+    // each name gets a stable hue; the square is a pale tint of it with the letter in the hue itself, so a list of
+    // instances is told apart without being a wall of saturated blocks
+    const HUES: [(u8, u8, u8); 8] = [
+        (0x4A, 0xC9, 0x7D),
+        (0x4F, 0xA8, 0xE0),
+        (0xE0, 0x9A, 0x4F),
+        (0xA8, 0x86, 0xE8),
+        (0xE0, 0x6F, 0x8F),
+        (0x8F, 0xC8, 0x4A),
+        (0x3F, 0xC4, 0xC0),
+        (0xD9, 0xB5, 0x4A),
     ];
     let h = name.bytes().fold(7u32, |a, b| a.wrapping_mul(31).wrapping_add(b as u32));
-    let (r, g, b) = COLORS[(h % COLORS.len() as u32) as usize];
-    let base = Color32::from_rgb(r, g, b);
-    let radius = (rect.width() * 0.24).round() as u8;
-    ui.painter().rect_filled(rect, CornerRadius::same(radius), base);
-    ui.painter().rect_stroke(
-        rect,
-        CornerRadius::same(radius),
-        Stroke::new(1.0, Color32::from_white_alpha(28)),
-        egui::StrokeKind::Inside,
-    );
+    let (r, g, b) = HUES[(h % HUES.len() as u32) as usize];
+    let hue = Color32::from_rgb(r, g, b);
+    let (bg, ink) = if is_dark() {
+        (hue.gamma_multiply(0.20), hue)
+    } else {
+        // darker letter on a pale tint keeps 4.5:1 on white
+        (hue.gamma_multiply(0.22), Color32::from_rgb(r / 2, g / 2, b / 2))
+    };
+    let radius = (rect.width() * 0.26).round() as u8;
+    // the tint is laid over the card colour so it does not change with what is behind it
+    ui.painter().rect_filled(rect, CornerRadius::same(radius), c_card_hover());
+    ui.painter().rect_filled(rect, CornerRadius::same(radius), bg);
     let letter: String =
         name.chars().find(|c| c.is_alphanumeric()).map(|c| c.to_uppercase().collect()).unwrap_or_else(|| "?".into());
     ui.painter().text(
         rect.center(),
         egui::Align2::CENTER_CENTER,
         letter,
-        FontId::proportional(rect.width() * 0.46),
-        Color32::WHITE,
+        FontId::proportional(rect.width() * 0.44),
+        ink,
     );
 }
 
 /// An on/off switch.
 pub fn toggle(ui: &mut Ui, on: &mut bool) -> Response {
-    let size = vec2(42.0, 24.0);
+    let size = vec2(36.0, 20.0);
     let (rect, mut resp) = ui.allocate_exact_size(size, Sense::click());
     if resp.clicked() {
         *on = !*on;
         resp.mark_changed();
     }
     let t = ui.ctx().animate_bool_responsive(resp.id, *on);
-    let bg = if *on { c_accent() } else { c_field_hover() };
-    ui.painter().rect_filled(rect, CornerRadius::same(12), bg);
-    let cx = rect.left() + 12.0 + t * (size.x - 24.0);
-    ui.painter().circle_filled(egui::pos2(cx, rect.center().y), 9.0, if *on { c_on_accent() } else { c_muted() });
-    focus_ring(ui, &resp, rect, 12);
+    let off = c_field_hover();
+    let bg = if *on { c_accent() } else { off };
+    ui.painter().rect_filled(rect, CornerRadius::same(10), bg);
+    if !*on {
+        ui.painter().rect_stroke(rect, CornerRadius::same(10), Stroke::new(1.0, c_control()), egui::StrokeKind::Inside);
+    }
+    let cx = rect.left() + 10.0 + t * (size.x - 20.0);
+    ui.painter().circle_filled(egui::pos2(cx, rect.center().y), 7.0, if *on { c_on_accent() } else { c_muted() });
+    focus_ring(ui, &resp, rect, 10);
     let state = *on;
     resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Switch, true, state, ""));
     resp.on_hover_cursor(egui::CursorIcon::PointingHand)
@@ -370,10 +444,10 @@ pub fn focus_when_shown(ui: &Ui, field: &Response) {
 
 pub fn search_field(ui: &mut Ui, text: &mut String, hint: &str, width: f32) -> Response {
     ui.add_sized(
-        [width, 36.0],
+        [width, 32.0],
         egui::TextEdit::singleline(text)
-            .hint_text(hint)
-            .margin(egui::Margin::symmetric(12, 8))
+            .hint_text(RichText::new(hint).color(c_faint()))
+            .margin(egui::Margin::symmetric(10, 7))
             .background_color(c_field()),
     )
 }
