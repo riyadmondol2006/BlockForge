@@ -234,17 +234,17 @@ impl App {
         let version = update::display_version(&release.tag_name).to_string();
         let mut action = None;
         egui::Frame::new()
-            .fill(c_accent_soft())
-            .stroke(Stroke::new(1.0, c_accent().gamma_multiply(0.4)))
-            .corner_radius(CornerRadius::same(12))
-            .inner_margin(egui::Margin::symmetric(14, 10))
+            .fill(c_card())
+            .stroke(Stroke::new(1.0, c_border()))
+            .corner_radius(CornerRadius::same(R_CARD))
+            .inner_margin(egui::Margin::symmetric(16, 12))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 match &self.upd.stage {
                     Stage::Offer => {
                         let can_install = self.can_install_update();
                         ui.horizontal_wrapped(|ui| {
-                            ui.label(RichText::new(format!("BlockForge {version} is available")).strong());
+                            ui.label(RichText::new(format!("BlockForge {version} is available")).semibold());
                             small_muted(ui, format!("You have {}", crate::VERSION));
                         });
                         ui.add_space(6.0);
@@ -259,10 +259,10 @@ impl App {
                             } else if primary(ui, "Get the update").clicked() {
                                 action = Some(Action::OpenPage);
                             }
-                            if secondary(ui, "Skip this version").clicked() {
+                            if ghost(ui, "Skip this version").clicked() {
                                 action = Some(Action::Skip);
                             }
-                            if secondary(ui, "Later").clicked() {
+                            if ghost(ui, "Later").clicked() {
                                 action = Some(Action::Later);
                             }
                         });
@@ -270,13 +270,9 @@ impl App {
                     Stage::Downloading { progress, .. } => {
                         let (done, total) =
                             (progress.done.load(Ordering::Relaxed), progress.total.load(Ordering::Relaxed));
-                        ui.label(RichText::new(format!("Downloading BlockForge {version}")).strong());
+                        ui.label(RichText::new(format!("Downloading BlockForge {version}")).semibold());
                         ui.add_space(4.0);
-                        let bar = egui::ProgressBar::new(progress.fraction())
-                            .desired_height(8.0)
-                            .corner_radius(4)
-                            .fill(c_accent());
-                        ui.add(if total == 0 { bar.animate(true) } else { bar });
+                        progress_bar(ui, (total > 0).then(|| progress.fraction()), 6.0);
                         ui.horizontal(|ui| {
                             let text = if total > 0 {
                                 format!("{} of {}", human_size(done), human_size(total))
@@ -284,29 +280,25 @@ impl App {
                                 human_size(done)
                             };
                             small_muted(ui, text);
-                            if secondary(ui, "Cancel").clicked() {
-                                action = Some(Action::Cancel);
-                            }
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if ghost(ui, "Cancel").clicked() {
+                                    action = Some(Action::Cancel);
+                                }
+                            });
                         });
                         ui.ctx().request_repaint_after(Duration::from_millis(100));
                     }
                     Stage::Installing => {
-                        ui.label(RichText::new(installing_text(self.upd.kind, &version)).strong());
+                        ui.label(RichText::new(installing_text(self.upd.kind, &version)).semibold());
                         ui.add_space(4.0);
-                        ui.add(
-                            egui::ProgressBar::new(0.0)
-                                .desired_height(8.0)
-                                .corner_radius(4)
-                                .fill(c_accent())
-                                .animate(true),
-                        );
+                        progress_bar(ui, None, 6.0);
                         ui.ctx().request_repaint_after(Duration::from_millis(100));
                     }
                     Stage::Restarting => {
-                        ui.label(RichText::new(closing_text(self.upd.kind, &version)).strong());
+                        ui.label(RichText::new(closing_text(self.upd.kind, &version)).semibold());
                     }
                     Stage::Note { message, command } => {
-                        ui.label(RichText::new(message).strong());
+                        ui.label(RichText::new(message).semibold());
                         if let Some(command) = command {
                             ui.add_space(4.0);
                             ui.add(egui::Label::new(RichText::new(command).monospace().color(c_text())).wrap());
@@ -326,10 +318,10 @@ impl App {
                     Stage::Failed(error) => {
                         ui.label(
                             RichText::new(format!("Couldn't update to BlockForge {version}"))
-                                .strong()
+                                .semibold()
                                 .color(c_danger()),
                         );
-                        ui.label(RichText::new(error).color(c_muted()).size(12.5));
+                        ui.add(egui::Label::new(RichText::new(error).color(c_muted()).size(FS_META)).wrap());
                         ui.add_space(6.0);
                         ui.horizontal_wrapped(|ui| {
                             if primary(ui, "Try again").clicked() {
@@ -338,7 +330,7 @@ impl App {
                             if secondary(ui, "Download from the website").clicked() {
                                 action = Some(Action::OpenPage);
                             }
-                            if secondary(ui, "Later").clicked() {
+                            if ghost(ui, "Later").clicked() {
                                 action = Some(Action::Later);
                             }
                         });

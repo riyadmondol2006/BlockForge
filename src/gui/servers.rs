@@ -4,11 +4,15 @@
 use egui::{Align, Layout, RichText, ScrollArea, Ui};
 
 use super::App;
+use super::icons::Icon;
 use super::services::confirm_modal;
 use super::theme::*;
 use super::widgets::*;
 use crate::servers::{self, Server};
 use crate::svcsettings::ServiceSettings;
+
+/// The widest the list gets.
+const COLUMN: f32 = 1040.0;
 
 enum Act {
     Launch(String),
@@ -23,14 +27,15 @@ enum Act {
 pub struct ServerRow {
     /// One of the usual start scripts is in the folder.
     has_script: bool,
-    /// The line under the name: pack, number of mods, description.
+    /// The line under the name: loader, Minecraft version, pack, number of mods, description.
     details: String,
     folder: String,
 }
 
 impl ServerRow {
     fn of(s: &Server) -> ServerRow {
-        let mut details = Vec::new();
+        let mut details = vec![s.loader_label().unwrap_or_else(|| "Vanilla".to_string())];
+        details.push(format!("Minecraft {}", s.minecraft_version));
         if !s.pack.is_empty() && s.pack != "Minecraft" {
             details.push(format!("Pack {} {}", s.pack, s.version));
         }
@@ -43,7 +48,7 @@ impl ServerRow {
         }
         ServerRow {
             has_script: s.script().is_some(),
-            details: details.join("  \u{00B7}  "),
+            details: details.join(" \u{00B7} "),
             folder: s.root.display().to_string(),
         }
     }
@@ -68,83 +73,128 @@ impl App {
             self.reload_servers();
         }
         let mut act: Option<Act> = None;
-        ui.horizontal(|ui| {
-            ui.vertical(|ui| {
-                // leave room for the two buttons on the right, so the line wraps instead of running under them
-                ui.set_max_width((ui.available_width() - 300.0).max(160.0));
-                heading(ui, "Servers");
+        // one width for the header and the list, so their right edges (the folder button and the card) line up; at most
+        // as wide as the list gets, but never wider than the window (the scroll bar floats over the edge)
+        let width = (ui.available_width() - 14.0).min(COLUMN);
+        ui.scope(|ui| {
+            ui.set_max_width(width);
+            let title = |ui: &mut Ui| {
+                ui.horizontal(|ui| {
+                    heading(ui, "Servers");
+                    if !self.svc.servers.is_empty() {
+                        ui.label(RichText::new(self.svc.servers.len().to_string()).color(c_faint()));
+                    }
+                });
                 muted(ui, "Servers installed from modpacks. They run in their own window.");
-            });
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if secondary(ui, "Refresh").clicked() {
-                    act = Some(Act::Reload);
-                }
-                if secondary_icon(ui, super::icons::Icon::Folder, "Open servers folder").clicked() {
-                    act = Some(Act::Folder(String::new()));
-                }
-            });
+            };
+            if ui.available_width() < 600.0 {
+                // no room beside the title: the buttons go under it
+                title(ui);
+                ui.horizontal(|ui| {
+                    if ghost(ui, "Refresh").clicked() {
+                        act = Some(Act::Reload);
+                    }
+                    if secondary_icon(ui, Icon::Folder, "Open servers folder").clicked() {
+                        act = Some(Act::Folder(String::new()));
+                    }
+                });
+            } else {
+                ui.horizontal(|ui| {
+                    ui.vertical(|ui| {
+                        // leave room for the two buttons on the right, so the line wraps instead of running under them
+                        ui.set_max_width((ui.available_width() - 300.0).max(160.0));
+                        title(ui);
+                    });
+                    // the buttons stay level with the title, whatever the help line does
+                    ui.with_layout(Layout::right_to_left(Align::TOP), |ui| {
+                        if secondary_icon(ui, Icon::Folder, "Open servers folder").clicked() {
+                            act = Some(Act::Folder(String::new()));
+                        }
+                        if ghost(ui, "Refresh").clicked() {
+                            act = Some(Act::Reload);
+                        }
+                    });
+                });
+            }
         });
-        ui.add_space(8.0);
+        ui.add_space(12.0);
         let account = self.current_account().cloned();
         let busy: Vec<bool> = self.svc.servers.iter().map(|s| self.server_busy(&s.name)).collect();
         ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
+            ui.set_max_width(width);
             if self.svc.servers.is_empty() {
                 card(ui, |ui| {
-                    ui.label(RichText::new("No servers yet").size(18.0).strong());
+                    ui.label(RichText::new("No servers yet").semibold());
                     muted(ui, "Servers are installed from a modpack's server files. Ones the Java edition installed show up here too.");
                 });
-            }
-            for ((s, row), busy) in self.svc.servers.iter().zip(&self.svc.server_rows).zip(busy) {
-                let collapsed = account.as_ref().is_some_and(|a| servers::is_collapsed(a, s));
+            } else {
                 card(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        avatar(ui, &s.name, 44.0);
-                        // folding a card away is remembered per account, so it needs one
-                        if account.is_some() {
+                    // the title of a row sits close to its line of facts
+                    ui.spacing_mut().item_spacing.y = 2.0;
+                    let mut rows = super::settings::Rows::new();
+                    for ((s, row), busy) in self.svc.servers.iter().zip(&self.svc.server_rows).zip(busy) {
+                        rows.gap(ui);
+                        let collapsed = account.as_ref().is_some_and(|a| servers::is_collapsed(a, s));
+                        // the buttons keep their room on the right (as wide as on the last frame)
+                        let id = ui.scope_id().with(("server-buttons", &s.name));
+                        let buttons_w = remembered_width(ui, id, 160.0);
+                        let mut used = buttons_w;
+                        ui.horizontal(|ui| {
+                            ui.set_min_height(40.0);
+                            avatar(ui, &s.name, 32.0);
+                            ui.vertical(|ui| {
+                                ui.set_max_width((ui.available_width() - buttons_w - 12.0).max(80.0));
+                                server_title(ui, s, row, collapsed);
+                            });
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                if secondary(ui, if collapsed { "Show" } else { "Hide" }).clicked() {
-                                    act = Some(Act::Collapse(s.name.clone(), !collapsed));
+                                if collapsed {
+                                    // folding a row away is remembered per account, so it needs one
+                                    if secondary(ui, "Show").clicked() {
+                                        act = Some(Act::Collapse(s.name.clone(), false));
+                                    }
+                                } else if busy {
+                                    ui.horizontal(|ui| {
+                                        ui.spinner();
+                                        muted(ui, "Backing up or deleting\u{2026}");
+                                    });
+                                } else {
+                                    kebab_menu(ui, |ui| {
+                                        if ui.button("Open folder").clicked() {
+                                            act = Some(Act::Folder(s.name.clone()));
+                                            ui.close();
+                                        }
+                                        if ui.button("Back up").clicked() {
+                                            act = Some(Act::Backup(s.name.clone()));
+                                            ui.close();
+                                        }
+                                        if account.is_some() && ui.button("Hide").clicked() {
+                                            act = Some(Act::Collapse(s.name.clone(), true));
+                                            ui.close();
+                                        }
+                                        ui.separator();
+                                        if ui.button(RichText::new("Delete").color(c_danger())).clicked() {
+                                            act = Some(Act::Remove(s.name.clone()));
+                                            ui.close();
+                                        }
+                                    });
+                                    let launch = if row.has_script {
+                                        secondary_icon(ui, Icon::Play, "Launch")
+                                    } else {
+                                        danger_enabled(ui, "Launch", false)
+                                            .on_hover_text("This server has no start script, so there is nothing to launch")
+                                    };
+                                    if launch.clicked() {
+                                        act = Some(Act::Launch(s.name.clone()));
+                                    }
                                 }
-                                ui.with_layout(Layout::top_down(Align::Min), |ui| {
-                                    server_title(ui, s, row);
-                                });
+                                used = ui.min_rect().width();
                             });
-                        } else {
-                            ui.vertical(|ui| server_title(ui, s, row));
-                        }
-                    });
-                    if !collapsed {
-                        ui.add_space(2.0);
-                        if !row.details.is_empty() {
-                            small_muted(ui, &row.details);
-                        }
-                        small_muted(ui, &row.folder);
-                        ui.add_space(4.0);
-                        if busy {
-                            ui.horizontal(|ui| {
-                                ui.spinner();
-                                muted(ui, "This server is being backed up or deleted\u{2026}");
-                            });
-                            return;
-                        }
-                        ui.horizontal_wrapped(|ui| {
-                            if primary_enabled(ui, "Launch", row.has_script).clicked() {
-                                act = Some(Act::Launch(s.name.clone()));
-                            }
-                            if secondary_icon(ui, super::icons::Icon::Folder, "Open folder").clicked() {
-                                act = Some(Act::Folder(s.name.clone()));
-                            }
-                            if secondary(ui, "Back up").clicked() {
-                                act = Some(Act::Backup(s.name.clone()));
-                            }
-                            if danger(ui, "Delete").clicked() {
-                                act = Some(Act::Remove(s.name.clone()));
-                            }
                         });
+                        remember_width(ui, id, used);
                     }
                 });
-                ui.add_space(4.0);
             }
+            ui.add_space(16.0);
         });
         if let Some(a) = act {
             self.server_action(a);
@@ -248,15 +298,14 @@ impl App {
     }
 }
 
-/// A server's name and its tags.
-fn server_title(ui: &mut Ui, s: &Server, row: &ServerRow) {
-    ui.add(egui::Label::new(RichText::new(&s.name).strong().size(16.0)).wrap());
+/// A server's name, what is wrong with it if anything, and under it the line of facts (the folder in its tooltip).
+fn server_title(ui: &mut Ui, s: &Server, row: &ServerRow, collapsed: bool) {
+    ui.spacing_mut().item_spacing.y = 2.0;
+    // as tall as a tag, so the line of facts sits right under the name
+    ui.spacing_mut().interact_size.y = 20.0;
     ui.horizontal_wrapped(|ui| {
-        match s.loader_label() {
-            Some(l) => tag(ui, &l, widgets_loader(&l)),
-            None => tag(ui, "Vanilla", c_muted()),
-        }
-        tag(ui, &format!("Minecraft {}", s.minecraft_version), c_muted());
+        ui.add(egui::Label::new(RichText::new(&s.name).semibold()).wrap());
+        // red and amber are for what is actually wrong; nothing else here has a colour
         if !s.is_patched_for_log4_shell {
             tag(ui, "Not patched for Log4Shell", c_danger());
         }
@@ -264,9 +313,8 @@ fn server_title(ui: &mut Ui, s: &Server, row: &ServerRow) {
             tag(ui, "No start script", c_warn());
         }
     });
-}
-
-/// The colour of a loader's tag, taken from its name (`Fabric 0.18.4` -> Fabric).
-fn widgets_loader(label: &str) -> egui::Color32 {
-    loader_color(label.split_whitespace().next().unwrap_or(""))
+    if !collapsed {
+        ui.add(egui::Label::new(RichText::new(&row.details).size(FS_META).color(c_muted())).truncate())
+            .on_hover_text(format!("{}\n{}", row.details, row.folder));
+    }
 }

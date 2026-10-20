@@ -2,6 +2,7 @@
 
 use egui::{CornerRadius, RichText, ScrollArea, Stroke, Ui};
 
+use super::discover::filter_label;
 use super::theme::*;
 use super::widgets::*;
 use super::{App, Msg, Page};
@@ -25,6 +26,27 @@ pub struct CreateState {
     pub performance: bool,
 }
 
+/// The widest the form gets.
+const FORM_W: f32 = 720.0;
+
+/// One version in the grid of versions: plain until pointed at, a tone step up when it is the chosen one.
+fn version_cell(ui: &mut Ui, text: &str, selected: bool, width: f32) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, 28.0), egui::Sense::click());
+    let bg = if selected {
+        c_selection()
+    } else if resp.hovered() {
+        c_hover()
+    } else {
+        egui::Color32::TRANSPARENT
+    };
+    ui.painter().rect_filled(rect, CornerRadius::same(R_CONTROL), bg);
+    let font = if selected { super::fonts::medium(FS_BODY) } else { egui::FontId::proportional(FS_BODY) };
+    ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, text, font, c_text());
+    focus_ring(ui, &resp, rect, R_CONTROL);
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, text));
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
 /// What the finished task says when performance mods were asked for.
 fn performance_note(ready: String, installed: &[String], skipped: &[String]) -> String {
     let mut text = ready;
@@ -42,6 +64,21 @@ fn default_name(mc: &str, loader: Loader) -> String {
     match loader {
         Loader::Vanilla => format!("Minecraft {mc}"),
         l => format!("Minecraft {mc} with {}", l.label()),
+    }
+}
+
+/// What is about to be made, in a line: "Minecraft 1.21.1 with Fabric 0.16.5".
+fn summary(c: &CreateState) -> String {
+    if c.mc.is_empty() {
+        return String::new();
+    }
+    if c.loader == Loader::Vanilla {
+        return format!("Minecraft {}", c.mc);
+    }
+    let version = if c.loader_version.is_empty() { c.loader_versions.first() } else { Some(&c.loader_version) };
+    match version {
+        Some(v) => format!("Minecraft {} with {} {v}", c.mc, c.loader.label()),
+        None => format!("Minecraft {} with {}", c.mc, c.loader.label()),
     }
 }
 
@@ -107,178 +144,215 @@ impl App {
     }
 
     pub(super) fn create_ui(&mut self, ui: &mut Ui) {
-        heading(ui, "Create an instance");
-        muted(ui, "A separate copy of Minecraft with its own worlds, mods and settings.");
+        heading(ui, "New instance");
         ui.add_space(8.0);
         let mut changed_version = false;
         let mut create = false;
-        ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
-            card(ui, |ui| {
-                ui.label(RichText::new("Name").strong());
-                let c = &mut self.create;
-                // the hint is the name the instance gets when the field is left empty
-                let hint = if c.mc.is_empty() { "My instance".to_string() } else { default_name(&c.mc, c.loader) };
-                ui.add_sized(
-                    [360.0f32.min(ui.available_width()), 36.0],
-                    egui::TextEdit::singleline(&mut c.name)
-                        .hint_text(hint)
-                        .margin(egui::Margin::symmetric(12, 8))
-                        .background_color(c_field()),
-                );
-            });
-            ui.add_space(6.0);
-            card(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new("Minecraft version").strong());
-                    ui.label(RichText::new(&self.create.mc).color(c_accent()).strong());
-                });
-                match (&self.manifest, &self.manifest_error) {
-                    (Some(m), _) => {
-                        ui.horizontal(|ui| {
-                            let mut f = std::mem::take(&mut self.create.filter);
-                            search_field(ui, &mut f, "Filter versions", 200.0);
-                            self.create.filter = f;
-                            ui.checkbox(&mut self.create.show_snapshots, "Show snapshots");
-                        });
-                        let filter = self.create.filter.to_lowercase();
-                        let versions: Vec<&str> = m
-                            .versions
-                            .iter()
-                            .filter(|v| self.create.show_snapshots || v.kind == "release")
-                            .filter(|v| filter.is_empty() || v.id.to_lowercase().contains(&filter))
-                            .map(|v| v.id.as_str())
-                            .collect();
-                        egui::Frame::new()
-                            .fill(c_field())
-                            .stroke(Stroke::new(1.0, c_border()))
-                            .corner_radius(CornerRadius::same(10))
-                            .inner_margin(egui::Margin::same(6))
-                            .show(ui, |ui| {
-                                ui.set_width(ui.available_width());
-                                ScrollArea::vertical()
-                                    .id_salt("versions")
-                                    .max_height(190.0)
-                                    .auto_shrink([false, true])
-                                    .show_rows(ui, 28.0, versions.len(), |ui, range| {
-                                        for v in &versions[range] {
-                                            let selected = self.create.mc == *v;
-                                            if ui.selectable_label(selected, *v).clicked() && !selected {
-                                                self.create.mc = v.to_string();
-                                                changed_version = true;
-                                            }
-                                        }
-                                    });
-                            });
-                    }
-                    (None, Some(e)) => {
-                        ui.label(RichText::new(format!("Couldn't load the version list: {e}")).color(c_danger()));
-                        if secondary(ui, "Try again").clicked() {
-                            self.manifest_error = None;
-                            self.refresh_manifest();
-                        }
-                    }
-                    (None, None) => {
-                        ui.horizontal(|ui| {
-                            ui.spinner();
-                            muted(ui, "Loading versions");
-                        });
-                    }
+        // the button stays in view under the form: the form scrolls when the window is short
+        let form_h = (ui.available_height() - 64.0).max(160.0);
+        ScrollArea::vertical().auto_shrink([false, true]).max_height(form_h).show(ui, |ui| {
+            // a form reads best in a column of its own, not stretched across a wide window
+            ui.set_max_width((ui.available_width() - 14.0).min(FORM_W));
+            ui.spacing_mut().item_spacing.y = 8.0;
+
+            // name
+            section(ui, "Name");
+            let c = &mut self.create;
+            // the hint is the name the instance gets when the field is left empty
+            let hint = if c.mc.is_empty() { "My instance".to_string() } else { default_name(&c.mc, c.loader) };
+            ui.add_sized(
+                [ui.available_width().min(360.0), 32.0],
+                egui::TextEdit::singleline(&mut c.name)
+                    .hint_text(RichText::new(hint).color(c_faint()))
+                    .margin(egui::Margin::symmetric(10, 7))
+                    .background_color(c_field()),
+            );
+
+            // Minecraft version
+            ui.add_space(16.0);
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Minecraft version").size(FS_SECTION).semibold());
+                if !self.create.mc.is_empty() {
+                    ui.label(RichText::new(&self.create.mc).color(c_muted()));
                 }
             });
-            ui.add_space(6.0);
-            card(ui, |ui| {
-                ui.label(RichText::new("Mod loader").strong());
+            match (&self.manifest, &self.manifest_error) {
+                (Some(m), _) => {
+                    ui.horizontal(|ui| {
+                        if let Some(i) = segmented(ui, &["Releases", "Snapshots too"], usize::from(self.create.show_snapshots)) {
+                            self.create.show_snapshots = i == 1;
+                        }
+                        ui.add_space(8.0);
+                        let mut f = std::mem::take(&mut self.create.filter);
+                        search_field(ui, &mut f, "Filter versions", 180.0);
+                        self.create.filter = f;
+                    });
+                    let filter = self.create.filter.to_lowercase();
+                    let versions: Vec<&str> = m
+                        .versions
+                        .iter()
+                        .filter(|v| self.create.show_snapshots || v.kind == "release")
+                        .filter(|v| filter.is_empty() || v.id.to_lowercase().contains(&filter))
+                        .map(|v| v.id.as_str())
+                        .collect();
+                    egui::Frame::new()
+                        .fill(c_field())
+                        .stroke(Stroke::new(1.0, c_border()))
+                        .corner_radius(CornerRadius::same(R_CONTROL))
+                        .inner_margin(egui::Margin::same(6))
+                        .show(ui, |ui| {
+                            ui.set_width(ui.available_width());
+                            if versions.is_empty() {
+                                ui.add_space(4.0);
+                                small_muted(ui, format!("No version matches \u{201C}{}\u{201D}.", self.create.filter.trim()));
+                                ui.add_space(4.0);
+                                return;
+                            }
+                            ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
+                            // the versions fill the width in a grid, a few columns of short names
+                            let (cols, cell) = grid_columns(ui.available_width() - 12.0, 84.0, 4.0);
+                            ScrollArea::vertical()
+                                .id_salt("versions")
+                                .max_height(176.0)
+                                .auto_shrink([false, true])
+                                .show_rows(ui, 28.0, versions.len().div_ceil(cols), |ui, range| {
+                                    for r in range {
+                                        ui.horizontal(|ui| {
+                                            for v in versions.iter().skip(r * cols).take(cols) {
+                                                let selected = self.create.mc == *v;
+                                                if version_cell(ui, v, selected, cell).clicked() && !selected {
+                                                    self.create.mc = v.to_string();
+                                                    changed_version = true;
+                                                }
+                                            }
+                                        });
+                                    }
+                                });
+                        });
+                }
+                (None, Some(e)) => {
+                    let text = format!("Couldn't load the version list: {e}");
+                    if notice(ui, NoticeKind::Error, &text, Some("Try again")).is_some_and(|r| r.clicked()) {
+                        self.manifest_error = None;
+                        self.refresh_manifest();
+                    }
+                }
+                (None, None) => {
+                    skeleton_rows(ui, 4, 36.0);
+                }
+            }
+
+            // loader
+            ui.add_space(16.0);
+            section(ui, "Mod loader");
+            let labels: Vec<&str> = Loader::ALL.iter().map(|l| l.label()).collect();
+            let current = Loader::ALL.iter().position(|l| *l == self.create.loader).unwrap_or(0);
+            if let Some(i) = segmented(ui, &labels, current) {
+                if Loader::ALL[i] != self.create.loader {
+                    self.create.loader = Loader::ALL[i];
+                    changed_version = true;
+                }
+            }
+            if self.create.loader != Loader::Vanilla {
+                ui.add_space(4.0);
                 ui.horizontal(|ui| {
-                    for l in Loader::ALL {
-                        if chip(ui, l.label(), self.create.loader == l).clicked() && self.create.loader != l {
-                            self.create.loader = l;
+                    filter_label(ui, &format!("{} version", self.create.loader.label()));
+                    if self.create.loading {
+                        ui.spinner();
+                    } else if !self.create.loader_versions.is_empty() {
+                        let newest = self.create.loader_versions[0].clone();
+                        let shown = if self.create.loader_version.is_empty() {
+                            format!("Latest ({newest})")
+                        } else {
+                            self.create.loader_version.clone()
+                        };
+                        egui::ComboBox::from_id_salt("loader-version").selected_text(shown).width(240.0).show_ui(
+                            ui,
+                            |ui| {
+                                if ui
+                                    .selectable_label(
+                                        self.create.loader_version.is_empty(),
+                                        format!("Latest ({newest})"),
+                                    )
+                                    .clicked()
+                                {
+                                    self.create.loader_version.clear();
+                                }
+                                for v in self.create.loader_versions.iter().take(60) {
+                                    if ui.selectable_label(&self.create.loader_version == v, v).clicked() {
+                                        self.create.loader_version = v.clone();
+                                    }
+                                }
+                            },
+                        );
+                    }
+                });
+                if !self.create.loading {
+                    if let Some(e) = self.create.error.clone() {
+                        let text = format!("Couldn't get the versions: {e}");
+                        if notice(ui, NoticeKind::Error, &text, Some("Try again")).is_some_and(|r| r.clicked()) {
+                            // forget the failed request so it is made again
+                            self.create.requested = None;
+                            self.create.error = None;
                             changed_version = true;
                         }
+                    } else if self.create.loader_versions.is_empty() {
+                        let text = format!(
+                            "{} isn't available for Minecraft {}.",
+                            self.create.loader.label(),
+                            self.create.mc
+                        );
+                        notice(ui, NoticeKind::Warn, &text, None);
                     }
-                });
-                if self.create.loader != Loader::Vanilla {
-                    ui.horizontal(|ui| {
-                        muted(ui, "Version");
-                        if self.create.loading {
-                            ui.spinner();
-                        } else if let Some(e) = self.create.error.clone() {
-                            ui.label(RichText::new(format!("Couldn't get the versions: {e}")).color(c_danger()));
-                            if secondary(ui, "Try again").clicked() {
-                                // forget the failed request so it is made again
-                                self.create.requested = None;
-                                self.create.error = None;
-                                changed_version = true;
-                            }
-                        } else if self.create.loader_versions.is_empty() {
-                            ui.label(
-                                RichText::new(format!(
-                                    "{} isn't available for Minecraft {}",
-                                    self.create.loader.label(),
-                                    self.create.mc
-                                ))
-                                .color(c_warn()),
-                            );
-                        } else {
-                            let newest = self.create.loader_versions[0].clone();
-                            let shown = if self.create.loader_version.is_empty() {
-                                format!("Latest ({newest})")
-                            } else {
-                                self.create.loader_version.clone()
-                            };
-                            egui::ComboBox::from_id_salt("loader-version").selected_text(shown).width(220.0).show_ui(
-                                ui,
-                                |ui| {
-                                    if ui
-                                        .selectable_label(
-                                            self.create.loader_version.is_empty(),
-                                            format!("Latest ({newest})"),
-                                        )
-                                        .clicked()
-                                    {
-                                        self.create.loader_version.clear();
-                                    }
-                                    for v in self.create.loader_versions.iter().take(60) {
-                                        if ui.selectable_label(&self.create.loader_version == v, v).clicked() {
-                                            self.create.loader_version = v.clone();
-                                        }
-                                    }
-                                },
-                            );
-                        }
+                }
+                if matches!(self.create.loader, Loader::Forge | Loader::NeoForge) {
+                    small_muted(
+                        ui,
+                        "Forge and NeoForge run their own installer, so this takes a little longer the first time.",
+                    );
+                }
+                let key = self.create.loader.modrinth_name();
+                if performance::offered_for(key) {
+                    ui.add_space(8.0);
+                    let hint = format!(
+                        "{} from Modrinth, for a smoother game. Anything not made for this Minecraft version yet is left out.",
+                        performance::describe(key)
+                    );
+                    setting_row(ui, "Add performance mods", &hint, |ui| {
+                        toggle(ui, &mut self.create.performance);
                     });
-                    if matches!(self.create.loader, Loader::Forge | Loader::NeoForge) {
-                        small_muted(
-                            ui,
-                            "Forge and NeoForge run their own installer, so this takes a little longer the first time.",
-                        );
-                    }
-                    let key = self.create.loader.modrinth_name();
-                    if performance::offered_for(key) {
-                        ui.add_space(4.0);
-                        ui.checkbox(&mut self.create.performance, "Add performance mods");
-                        small_muted(
-                            ui,
-                            format!(
-                                "{} from Modrinth, for a smoother game. Anything not made for this Minecraft version yet is left out.",
-                                performance::describe(key)
-                            ),
-                        );
-                    }
                 }
-            });
+            }
+
             ui.add_space(8.0);
-            let ready = !self.create.mc.is_empty()
-                && !self.tasks.iter().any(|t| t.label.starts_with("Creating"))
-                && (self.create.loader == Loader::Vanilla || !self.create.loader_versions.is_empty());
-            ui.horizontal(|ui| {
-                if primary_enabled(ui, "Create instance", ready).clicked() {
-                    create = true;
-                }
-                if self.tasks.iter().any(|t| t.label.starts_with("Creating")) {
-                    ui.spinner();
-                    muted(ui, "Working on it, you can follow along in the sidebar");
-                }
-            });
+        });
+        let creating = self.tasks.iter().any(|t| t.label.starts_with("Creating"));
+        let ready = !self.create.mc.is_empty()
+            && !creating
+            && (self.create.loader == Loader::Vanilla || !self.create.loader_versions.is_empty());
+        let summary = summary(&self.create);
+        ui.scope(|ui| {
+            // the button sits under the form, not at the far edge of a wide window
+            ui.set_max_width(ui.available_width().min(FORM_W));
+            rule(ui);
+            ui.add_space(8.0);
+            super::discover::dialog_footer(
+                ui,
+                "create",
+                |ui| {
+                    if creating {
+                        ui.spinner();
+                        muted(ui, "Working on it, you can follow along in the sidebar");
+                    } else {
+                        small_muted(ui, summary);
+                    }
+                },
+                |ui| {
+                    if primary_enabled(ui, "Create instance", ready).clicked() {
+                        create = true;
+                    }
+                },
+            );
         });
         if changed_version {
             self.request_loader_versions();
@@ -322,6 +396,17 @@ mod tests {
             performance_note(ready, &["Sodium".into(), "Lithium".into()], &["ModernFix".into()]),
             "\"A\" is ready, with Sodium, Lithium. Not made for this version yet: ModernFix"
         );
+        // the line above the button says what is about to be made
+        let mut c = CreateState::default();
+        assert_eq!(summary(&c), "");
+        c.mc = "1.21.1".into();
+        assert_eq!(summary(&c), "Minecraft 1.21.1");
+        c.loader = Loader::Fabric;
+        assert_eq!(summary(&c), "Minecraft 1.21.1 with Fabric");
+        c.loader_versions = vec!["0.16.5".into(), "0.16.4".into()];
+        assert_eq!(summary(&c), "Minecraft 1.21.1 with Fabric 0.16.5");
+        c.loader_version = "0.16.4".into();
+        assert_eq!(summary(&c), "Minecraft 1.21.1 with Fabric 0.16.4");
         // performance mods are offered where they exist, not for plain Minecraft
         assert!(performance::offered_for(Loader::Fabric.modrinth_name()));
         assert!(!performance::offered_for(Loader::Vanilla.modrinth_name()));

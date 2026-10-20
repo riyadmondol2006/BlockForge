@@ -3,13 +3,13 @@
 
 use std::path::PathBuf;
 
-use egui::{RichText, Ui};
+use egui::{Align, Color32, CornerRadius, Layout, Response, RichText, Sense, Stroke, Ui, UiBuilder, vec2};
 
 use super::theme::*;
 use super::widgets::*;
 use super::{App, InstTab, Msg, Page};
 use crate::instances::{self, Instance};
-use crate::launch::{self, LaunchOptions};
+use crate::launch::LaunchOptions;
 use crate::loaders::{self, Loader};
 
 /// What the player asked an instance to do.
@@ -56,6 +56,209 @@ pub struct LoaderDialog {
     loading: bool,
     requested: Option<(Loader, String)>,
     error: Option<String>,
+}
+
+// ---- quiet controls shared by the instance page (header, Overview, Mods, Backups)
+
+/// A text button with no frame until it is pointed at: for the small actions of a row. `color` is the resting colour
+/// (muted when `None`) and `hot` the colour while pointed at (the text colour when `None`). With `visible` false
+/// nothing is drawn (a row that shows its actions on hover) unless the keyboard is on it, but it can still be
+/// reached.
+pub(super) fn ghost_button(
+    ui: &mut Ui,
+    text: &str,
+    color: Option<Color32>,
+    hot: Option<Color32>,
+    visible: bool,
+) -> Response {
+    let rest = color.unwrap_or_else(c_muted);
+    let w = ui.painter().layout_no_wrap(text.to_string(), super::fonts::medium(FS_BODY), rest).size().x;
+    let (rect, resp) = ui.allocate_exact_size(vec2(w + 20.0, 28.0), Sense::click());
+    let pointed = resp.hovered() || resp.is_pointer_button_down_on();
+    if ui.is_rect_visible(rect) && (visible || resp.has_focus() || pointed) {
+        if pointed {
+            ui.painter().rect_filled(rect, CornerRadius::same(R_CONTROL), c_hover());
+        }
+        let fg = if pointed { hot.unwrap_or_else(c_text) } else { rest };
+        let galley = ui.painter().layout_no_wrap(text.to_string(), super::fonts::medium(FS_BODY), fg);
+        ui.painter().galley(rect.center() - galley.size() / 2.0, galley, fg);
+    }
+    focus_ring(ui, &resp, rect, R_CONTROL);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, text));
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+/// The small chevron of a button that opens a menu.
+fn chevron_down(ui: &Ui, c: egui::Pos2, color: Color32) {
+    let s = Stroke::new(1.5, color);
+    ui.painter().line_segment([c + vec2(-3.5, -1.5), c + vec2(0.0, 2.0)], s);
+    ui.painter().line_segment([c + vec2(0.0, 2.0), c + vec2(3.5, -1.5)], s);
+}
+
+/// The frame of a menu that floats: the raised surface, one line, padding 8.
+fn menu_frame(ctx: &egui::Context) -> egui::Frame {
+    let style = ctx.global_style();
+    egui::Frame::new()
+        .fill(c_raised())
+        .stroke(Stroke::new(1.0, c_control()))
+        .corner_radius(CornerRadius::same(R_CARD))
+        .shadow(style.visuals.popup_shadow)
+        .inner_margin(egui::Margin::same(8))
+}
+
+/// Items of a menu 32 high with a little air between them.
+pub(super) fn menu_items(ui: &mut Ui) {
+    let s = ui.spacing_mut();
+    s.item_spacing.y = 2.0;
+    s.button_padding = vec2(10.0, 6.0);
+    s.interact_size.y = 32.0;
+}
+
+/// Opens `add` as a menu under `resp` when it is clicked, in the look of the app.
+pub(super) fn open_menu<R>(resp: &Response, add: impl FnOnce(&mut Ui) -> R) -> Option<R> {
+    egui::Popup::menu(resp)
+        .gap(4.0)
+        .frame(menu_frame(&resp.ctx))
+        .show(|ui| {
+            menu_items(ui);
+            add(ui)
+        })
+        .map(|r| r.inner)
+}
+
+/// A neutral button with a chevron that opens a menu (the "Play as" of the header). Returns what the menu returned
+/// while it is open.
+pub(super) fn secondary_menu<R>(ui: &mut Ui, text: &str, add: impl FnOnce(&mut Ui) -> R) -> (Response, Option<R>) {
+    let font = super::fonts::medium(FS_BODY);
+    let w = ui.painter().layout_no_wrap(text.to_string(), font.clone(), c_text()).size().x;
+    let (rect, resp) = ui.allocate_exact_size(vec2(w + 28.0 + 18.0, 32.0), Sense::click());
+    let open = egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&resp));
+    if ui.is_rect_visible(rect) {
+        let bg = if resp.hovered() || open { c_hover() } else { c_field() };
+        ui.painter().rect(
+            rect,
+            CornerRadius::same(R_CONTROL),
+            bg,
+            Stroke::new(1.0, c_control()),
+            egui::StrokeKind::Inside,
+        );
+        let galley = ui.painter().layout_no_wrap(text.to_string(), font, c_text());
+        let left = rect.left() + 14.0;
+        ui.painter().galley(egui::pos2(left, rect.center().y - galley.size().y / 2.0), galley, c_text());
+        chevron_down(ui, egui::pos2(rect.right() - 16.0, rect.center().y), c_muted());
+    }
+    focus_ring(ui, &resp, rect, R_CONTROL);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, text));
+    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+    let out = open_menu(&resp, add);
+    (resp, out)
+}
+
+/// One line across the page between two blocks, with the same air on both sides.
+pub(super) fn section_break(ui: &mut Ui) {
+    ui.add_space(12.0);
+    rule(ui);
+    ui.add_space(12.0);
+}
+
+/// A row with something at each end. The part on the right is laid out left to right in the width it had on the last
+/// frame (see [`remember_width`]), so the keyboard (Tab) visits it in the order it is read; the part on the left gets
+/// what is left. Call `left`, then `right`, then `finish`.
+pub(super) struct SplitRow {
+    id: Option<egui::Id>,
+    row: egui::Rect,
+    right_w: f32,
+    used: f32,
+}
+
+impl SplitRow {
+    /// The right part is as wide as it was on the last frame.
+    pub(super) fn new(ui: &mut Ui, id: egui::Id, height: f32) -> SplitRow {
+        let right_w = remembered_width(ui, id, 240.0);
+        let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
+        SplitRow { id: Some(id), row, right_w, used: right_w }
+    }
+
+    /// The right part has a width that is known (a column of the same buttons in every row).
+    pub(super) fn fixed(ui: &mut Ui, height: f32, right_w: f32) -> SplitRow {
+        let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
+        SplitRow { id: None, row, right_w, used: right_w }
+    }
+
+    /// How wide the right part turned out this frame.
+    pub(super) fn used(&self) -> f32 {
+        self.used
+    }
+
+    /// How wide the left part is.
+    pub(super) fn left_width(&self) -> f32 {
+        (self.row.width() - self.right_w - 16.0).max(120.0)
+    }
+
+    pub(super) fn left<R>(&self, ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
+        let rect = egui::Rect::from_min_size(self.row.min, vec2(self.left_width(), self.row.height()));
+        let layout = Layout::left_to_right(Align::Center);
+        ui.scope_builder(UiBuilder::new().max_rect(rect).layout(layout), add).inner
+    }
+
+    pub(super) fn right<R>(&mut self, ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
+        let rect = egui::Rect::from_min_max(egui::pos2(self.row.right() - self.right_w, self.row.top()), self.row.max);
+        let layout = Layout::left_to_right(Align::Center);
+        let (out, used) = ui
+            .scope_builder(UiBuilder::new().max_rect(rect).layout(layout), |ui| {
+                let out = add(ui);
+                (out, ui.min_rect().width())
+            })
+            .inner;
+        self.used = used;
+        out
+    }
+
+    pub(super) fn finish(self, ui: &Ui) {
+        if let Some(id) = self.id {
+            remember_width(ui, id, self.used);
+        }
+    }
+}
+
+/// A [`SplitRow`] when both parts fit on one line, otherwise the left part on a line and the right part on the next.
+/// What the closures share (`state`) is handed to whichever runs, so both can change it.
+pub(super) fn split_or_stack<S>(
+    ui: &mut Ui,
+    id: egui::Id,
+    height: f32,
+    state: &mut S,
+    left: impl FnOnce(&mut Ui, &mut S),
+    right: impl FnOnce(&mut Ui, &mut S),
+) {
+    let left_id = id.with("left");
+    let left_w = remembered_width(ui, left_id, 0.0);
+    let right_w = remembered_width(ui, id, 240.0);
+    if ui.available_width() >= left_w + right_w + 24.0 {
+        let mut row = SplitRow::new(ui, id, height);
+        let used = row.left(ui, |ui| {
+            left(ui, state);
+            ui.min_rect().width()
+        });
+        row.right(ui, |ui| right(ui, state));
+        row.finish(ui);
+        remember_width(ui, left_id, used);
+    } else {
+        let used = ui
+            .horizontal(|ui| {
+                left(ui, state);
+                ui.min_rect().width()
+            })
+            .inner;
+        let right_used = ui
+            .horizontal(|ui| {
+                right(ui, state);
+                ui.min_rect().width()
+            })
+            .inner;
+        remember_width(ui, left_id, used);
+        remember_width(ui, id, right_used);
+    }
 }
 
 impl App {
@@ -134,35 +337,15 @@ impl App {
         }
     }
 
-    /// The "Fast start" switch of an instance: on by default, and the player's choice is kept for this instance.
-    pub(super) fn fast_start_switch(&self, ui: &mut Ui, inst: &Instance) -> Option<Act> {
-        let mut on = launch::fast_start_enabled(&self.settings, inst);
-        let before = on;
-        ui.horizontal(|ui| {
-            toggle(ui, &mut on).on_hover_text(
-                "Fast start: a tiny helper that loads Minecraft's classes ahead of time so the game opens sooner. \
-                 Works with every version and mod loader. Turn it off if the game fails to start.",
-            );
-            small_muted(ui, "Fast start");
-        });
-        (on != before).then(|| Act::FastStart(inst.folder.clone(), on))
-    }
-
-    /// The small arrow next to the big Play button, opening the "play as" menu. Under a right-to-left layout it is
-    /// added before the button so it ends up on its right.
+    /// The "Play as" button next to the big Play button, opening the menu for playing as somebody else. Under a
+    /// right-to-left layout it is added after the button so it ends up on its left.
     pub(super) fn play_as_menu(&self, ui: &mut Ui, folder: &str) -> Option<Act> {
-        let mut act = None;
         let running =
             self.sessions_of(folder).iter().filter(|k| self.games.get(*k).is_some_and(|g| g.active())).count();
-        ui.menu_button(
-            if running > 0 { format!("Play as ({running} running)") } else { "Play as".to_string() },
-            |ui| {
-                act = self.account_menu(ui, folder);
-            },
-        )
-        .response
-        .on_hover_text("Play as another account, or start another game at the same time");
-        act
+        let label = if running > 0 { format!("Play as ({running} running)") } else { "Play as".to_string() };
+        let (resp, act) = secondary_menu(ui, &label, |ui| self.account_menu(ui, folder));
+        resp.on_hover_text("Play as another account, or start another game at the same time");
+        act.flatten()
     }
 
     /// The menu for playing as somebody else: every account, a new offline name, a new Microsoft account, and a way to
@@ -171,6 +354,7 @@ impl App {
         let mut act = None;
         ui.set_min_width(240.0);
         let current = self.current_account().map(|a| a.uuid.clone());
+        ui.add_space(2.0);
         if self.accounts.is_empty() {
             small_muted(ui, "No accounts yet");
         } else {
@@ -210,7 +394,7 @@ impl App {
         act
     }
 
-    /// The items of the "more" menu, in the Java edition's order. Returns what was clicked.
+    /// The items of the "more" menu, grouped by what they are about. Returns what was clicked.
     pub(super) fn instance_menu(&self, ui: &mut Ui, inst: &Instance) -> Option<Act> {
         let f = inst.folder.clone();
         let mut act = None;
@@ -220,9 +404,6 @@ impl App {
                 act = Some(a);
             }
         });
-        if let Some(a) = self.helpers_menu(ui, inst) {
-            act = Some(a);
-        }
         ui.separator();
         let mut item = |ui: &mut Ui, label: &str, make: fn(String) -> Act| {
             if ui.button(label).clicked() {
@@ -230,24 +411,24 @@ impl App {
                 ui.close();
             }
         };
-        item(ui, "Settings", Act::Settings);
+        item(ui, "Open folder", Act::Folder);
         item(ui, "Rename", Act::Rename);
-        item(ui, "Clone", Act::Duplicate);
-        item(ui, "Export", Act::Export);
         item(ui, "Change image", Act::ChangeImage);
         item(ui, "Change description", Act::ChangeDescription);
+        item(ui, "Clone", Act::Duplicate);
+        item(ui, "Export", Act::Export);
         ui.separator();
         item(ui, "Mod loader", Act::ChangeLoader);
         item(ui, "Add mods", Act::AddMods);
         item(ui, "Edit mods", Act::Mods);
+        let helpers = self.helpers_menu(ui, inst);
+        item(ui, "Settings", Act::Settings);
         ui.separator();
-        item(ui, "Open folder", Act::Folder);
-        ui.separator();
-        if ui.button(RichText::new("Delete instance").color(c_danger())).clicked() {
-            act = Some(Act::Delete(inst.folder.clone()));
+        let delete = ui.button(RichText::new("Delete instance").color(c_danger())).clicked();
+        if delete {
             ui.close();
         }
-        act
+        helpers.or(act).or(delete.then(|| Act::Delete(inst.folder.clone())))
     }
 
     /// Open a file (or folder) chooser without freezing the window.
@@ -352,7 +533,7 @@ impl App {
             let (mut save, mut close) = (false, false);
             let modal = egui::Modal::new(egui::Id::unique("desc")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
                 ui.set_width(440.0);
-                ui.label(RichText::new("Change description").size(19.0).strong());
+                ui.label(RichText::new("Change description").size(FS_SECTION).semibold());
                 ui.add_space(6.0);
                 ui.add_sized(
                     [ui.available_width(), 90.0],
@@ -391,7 +572,7 @@ impl App {
             let (mut go, mut close) = (false, false);
             let modal = egui::Modal::new(egui::Id::unique("offline")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
                 ui.set_width(400.0);
-                ui.label(RichText::new("Play offline with another name").size(19.0).strong());
+                ui.label(RichText::new("Play offline with another name").size(FS_SECTION).semibold());
                 muted(ui, "3-16 letters, numbers or underscores. No account needed.");
                 ui.add_space(6.0);
                 let r = ui.add_sized(
@@ -407,7 +588,7 @@ impl App {
                 }
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
-                    if primary(ui, "Play").clicked()
+                    if play_button(ui, false).clicked()
                         || (r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
                     {
                         go = true;
@@ -445,23 +626,23 @@ impl App {
             let current = self.instance(&d.folder).and_then(|i| i.loader().map(|(k, v)| format!("{k} {v}")));
             let modal = egui::Modal::new(egui::Id::unique("loader")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
                 ui.set_width(440.0);
-                ui.label(RichText::new("Mod loader").size(19.0).strong());
+                ui.label(RichText::new("Mod loader").size(FS_SECTION).semibold());
                 muted(ui, format!("Now: {}", current.clone().unwrap_or_else(|| "None (vanilla)".into())));
                 ui.add_space(6.0);
-                ui.horizontal(|ui| {
-                    for l in Loader::ALL {
-                        let label = if l == Loader::Vanilla { "None" } else { l.label() };
-                        if chip(ui, label, d.loader == l).clicked() && d.loader != l {
-                            d.loader = l;
-                            changed = true;
-                        }
+                let labels: Vec<&str> =
+                    Loader::ALL.iter().map(|l| if *l == Loader::Vanilla { "None" } else { l.label() }).collect();
+                let chosen = Loader::ALL.iter().position(|l| *l == d.loader).unwrap_or(0);
+                if let Some(i) = segmented(ui, &labels, chosen) {
+                    if Loader::ALL[i] != d.loader {
+                        d.loader = Loader::ALL[i];
+                        changed = true;
                     }
-                });
+                }
                 if d.loader != Loader::Vanilla {
                     ui.horizontal(|ui| {
                         muted(ui, "Version");
                         if d.loading {
-                            ui.spinner();
+                            ui.add(egui::Spinner::new().size(14.0));
                         } else if let Some(e) = &d.error {
                             ui.label(RichText::new(e).color(c_danger()));
                         } else if d.versions.is_empty() {

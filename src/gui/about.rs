@@ -11,6 +11,12 @@ use crate::update::{self, Kind};
 
 const REPO: &str = "https://github.com/riyadmondol2006/BlockForge";
 
+/// The widest the page's content gets, and the widest a paragraph gets.
+const COLUMN: f32 = 720.0;
+const PROSE_WIDTH: f32 = 640.0;
+/// The column of names in the "This copy" card.
+const KEY_WIDTH: f32 = 120.0;
+
 /// How this copy was installed, in words for the page.
 fn install_label(kind: Kind) -> &'static str {
     match kind {
@@ -121,183 +127,177 @@ impl App {
         let (total_mb, _) = super::settings::memory_now();
         let mut link: Option<String> = None;
         ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
-            // at most 780 wide, but never wider than the window (set_max_width alone would widen a narrow page)
-            ui.set_max_width(ui.available_width().min(780.0));
+            // at most 720 wide, but never wider than the window (set_max_width alone would widen a narrow page)
+            ui.set_max_width((ui.available_width() - 14.0).min(COLUMN));
+            // the name and version; the update button is at the right, and its answer is the line under it
+            let button_id = ui.scope_id().with("about-update-button");
+            let button_w = remembered_width(ui, button_id, 150.0);
             ui.horizontal(|ui| {
-                ui.add(egui::Image::from_texture(&self.logo).fit_to_exact_size(vec2(84.0, 84.0)));
+                ui.add(egui::Image::from_texture(&self.logo).fit_to_exact_size(vec2(48.0, 48.0)));
                 ui.vertical(|ui| {
-                    ui.add_space(6.0);
-                    ui.label(RichText::new(crate::NAME).size(30.0).strong());
-                    muted(ui, "A fast, modern Minecraft launcher, written in Rust.");
-                    ui.horizontal(|ui| {
-                        tag(ui, &format!("Version {}", version_text()), c_accent());
-                        tag(ui, install_label(kind), c_muted());
-                    });
+                    // the version wraps rather than run under the button in a narrow window
+                    ui.set_max_width((ui.available_width() - button_w - 16.0).max(140.0));
+                    ui.spacing_mut().item_spacing.y = 2.0;
+                    ui.label(RichText::new(crate::NAME).size(FS_TITLE).semibold());
+                    muted(ui, format!("Version {} \u{00B7} {}", version_text(), install_label(kind)));
                 });
-            });
-            ui.add_space(8.0);
-
-            card(ui, |ui| {
-                ui.label(RichText::new("UPDATES").size(11.0).strong().color(c_accent()));
-                ui.horizontal(|ui| {
-                    if busy {
-                        ui.spinner();
-                    }
-                    let color = if is_error { c_danger() } else { c_text() };
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                let used = ui
+                    .with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if available.is_some() {
                             // the banner's words: a copy that can't update itself gets the download page
                             if primary(ui, if can_install { "Update now" } else { "Get the update" }).clicked() {
                                 show_offer = true;
                             }
-                        } else if primary_enabled(ui, "Check for updates", !busy).clicked() {
+                        } else if secondary_enabled(ui, "Check for updates", !busy).clicked() {
                             check = true;
                         }
-                        // a failed check can say a lot: it wraps beside the button instead of pushing it away
-                        ui.with_layout(Layout::left_to_right(Align::Center).with_main_wrap(true), |ui| {
-                            ui.add(egui::Label::new(RichText::new(&status_text).color(color)).wrap());
-                        });
-                    });
-                });
-                if !self.settings.check_for_launcher_updates {
-                    small_muted(ui, "Automatic update checks are off in Settings.");
+                        ui.min_rect().width()
+                    })
+                    .inner;
+                remember_width(ui, button_id, used);
+            });
+            ui.add_space(4.0);
+            ui.horizontal_wrapped(|ui| {
+                if busy {
+                    ui.spinner();
                 }
-            });
-            ui.add_space(6.0);
-
-            card(ui, |ui| {
-                ui.label(RichText::new("BUILT ON ATLAUNCHER").size(11.0).strong().color(c_accent()));
-                ui.label(
-                    "BlockForge is a fork of ATLauncher, rewritten in Rust. The way instances, accounts and modpacks \
-                     are stored, and how games are launched, follow ATLauncher's, so your existing instances keep \
-                     working. ATLauncher's authors and contributors made that foundation, and their copyright \
-                     notices are kept.",
-                );
-                small_muted(ui, "BlockForge is free software under the GNU General Public License v3.");
-                ui.horizontal(|ui| {
-                    if secondary(ui, "ATLauncher on GitHub").clicked() {
-                        link = Some("https://github.com/ATLauncher/ATLauncher".to_string());
-                    }
-                    if secondary(ui, "License").clicked() {
-                        link = Some(format!("{REPO}/blob/main/LICENSE"));
-                    }
-                    if secondary(ui, "Notices").clicked() {
-                        link = Some(format!("{REPO}/blob/main/NOTICE.md"));
-                    }
-                });
-            });
-            ui.add_space(6.0);
-
-            card(ui, |ui| {
-                ui.label(RichText::new(crate::tr!("CREDITS")).size(11.0).strong().color(c_accent()));
-                ui.horizontal_top(|ui| {
-                    ui.label(RichText::new("\u{2022}").color(c_accent()));
-                    ui.add(
-                        egui::Label::new(crate::tr!(
-                            "ATLauncher, by the ATLauncher team and its contributors (GPL-3.0): the foundation BlockForge is built on."
-                        ))
-                        .wrap(),
-                    );
-                });
-                #[cfg(feature = "converter")]
-                {
-                    ui.horizontal_top(|ui| {
-                        ui.label(RichText::new("\u{2022}").color(c_accent()));
-                        ui.add(
-                            egui::Label::new(crate::tr!(
-                                "Chunker, by Hive Games (MIT License): the world converter is a Rust port of it."
-                            ))
-                            .wrap(),
-                        );
-                    });
-                    small_muted(
-                        ui,
-                        crate::tr!("BlockForge is not affiliated with or endorsed by Hive Games, the makers of Chunker."),
-                    );
-                    ui.horizontal(|ui| {
-                        if secondary(ui, &crate::tr!("Chunker on GitHub")).clicked() {
-                            link = Some("https://github.com/HiveGamesOSS/Chunker".to_string());
-                        }
-                        if secondary(ui, &crate::tr!("Chunker license")).clicked() {
-                            link = Some(format!("{REPO}/blob/main/NOTICE.md"));
-                        }
-                    });
+                let (color, size) = match (is_error, available.is_some()) {
+                    (true, _) => (c_danger(), FS_META),
+                    (false, true) => (c_text(), FS_BODY),
+                    (false, false) => (c_faint(), FS_META),
+                };
+                let mut line = status_text.clone();
+                if !is_error && !self.settings.check_for_launcher_updates {
+                    line.push_str(" \u{00B7} Automatic update checks are off in Settings.");
                 }
+                ui.add(egui::Label::new(RichText::new(line).color(color).size(size)).wrap());
             });
-            ui.add_space(6.0);
 
-            card(ui, |ui| {
-                ui.label(RichText::new("WHAT IT DOES").size(11.0).strong().color(c_accent()));
-                for line in [
-                    "Play offline with any name, or sign in with Microsoft.",
-                    "ATLauncher, CurseForge, Modrinth, FTB and Technic modpacks in one place, or any version with \
-                     Fabric, Forge, NeoForge or Quilt.",
-                    "Mods, resource packs and shaders with updates, dependencies and a safety scan.",
-                    "Brings in instances from Prism, MultiMC, CurseForge and more, and exports them again.",
-                    "Fast to open, with memory picked for your PC and light mode for older computers.",
-                    "Private: no statistics and no crash reports are sent unless you turn that on in Settings.",
-                ] {
-                    ui.horizontal_top(|ui| {
-                        ui.label(RichText::new("\u{2022}").color(c_accent()));
-                        ui.add(egui::Label::new(line).wrap());
-                    });
-                }
-            });
-            ui.add_space(6.0);
-
-            card(ui, |ui| {
-                ui.label(RichText::new("THIS COPY").size(11.0).strong().color(c_accent()));
-                egui::Grid::new("about-grid").num_columns(2).spacing([24.0, 8.0]).show(ui, |ui| {
-                    for (k, v) in [
-                        ("Installed as", install_label(kind).to_string()),
-                        ("System", format!("{} ({})", os_text_cached(), std::env::consts::ARCH)),
-                        ("Memory", format!("{total_mb} MB")),
-                    ] {
-                        muted(ui, k);
-                        ui.label(v);
-                        ui.end_row();
-                    }
-                });
-                muted(ui, "Data folder");
-                ui.add(egui::Label::new(self.dirs.base.display().to_string()).truncate());
-                ui.horizontal(|ui| {
-                    if secondary_icon(ui, Icon::Folder, "Open data folder").clicked() {
-                        open_data = true;
-                    }
-                    if secondary(ui, "Copy details").clicked() {
+            ui.add_space(16.0);
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("This copy").size(FS_SECTION).semibold());
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if ghost(ui, "Copy details").clicked() {
                         copy = true;
                     }
                 });
             });
-            ui.add_space(6.0);
-
             card(ui, |ui| {
-                ui.label(RichText::new("HELP").size(11.0).strong().color(c_accent()));
-                ui.horizontal(|ui| {
-                    if secondary(ui, "GitHub").clicked() {
-                        link = Some(REPO.to_string());
-                    }
-                    if secondary(ui, "Report a problem").clicked() {
-                        link = Some(format!("{REPO}/issues/new/choose"));
-                    }
-                    if secondary(ui, "Releases").clicked() {
-                        link = Some(format!("{REPO}/releases"));
-                    }
-                    if secondary(ui, "Privacy").clicked() {
-                        link = Some(format!("{REPO}/blob/main/PRIVACY.md"));
-                    }
-                });
-                ui.horizontal(|ui| {
-                    small_muted(ui, "Game crashed?");
-                    if ui.link("Make a support bundle").clicked() {
-                        self.page = Page::Tools;
-                    }
+                // the name of a row sits close to its value
+                ui.spacing_mut().item_spacing.y = 2.0;
+                let mut rows = super::settings::Rows::new();
+                for (k, v) in [
+                    ("Installed as", install_label(kind).to_string()),
+                    ("System", format!("{} ({})", os_text_cached(), std::env::consts::ARCH)),
+                    ("Memory", format!("{total_mb} MB")),
+                ] {
+                    rows.gap(ui);
+                    key_value(ui, k, |ui| {
+                        ui.add(egui::Label::new(v).truncate());
+                    });
+                }
+                rows.gap(ui);
+                key_value(ui, "Data folder", |ui| {
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if secondary_icon(ui, Icon::Folder, "Open").clicked() {
+                            open_data = true;
+                        }
+                        ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                            ui.add(egui::Label::new(self.dirs.base.display().to_string()).truncate());
+                        });
+                    });
                 });
             });
-            ui.add_space(8.0);
-            small_muted(
+
+            about_title(ui, "Help");
+            if let Some(url) = links(
                 ui,
-                "\"Minecraft\" is a trademark of Mojang AB. BlockForge is not made by or approved by Mojang or Microsoft.",
+                &[
+                    ("GitHub", REPO.to_string()),
+                    ("Report a problem", format!("{REPO}/issues/new/choose")),
+                    ("Releases", format!("{REPO}/releases")),
+                    ("Privacy", format!("{REPO}/blob/main/PRIVACY.md")),
+                ],
+            ) {
+                link = Some(url);
+            }
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                muted(ui, "Game crashed?");
+                if ui.link(RichText::new("Make a support bundle").underline()).clicked() {
+                    self.page = Page::Tools;
+                }
+            });
+
+            about_title(ui, "Built on ATLauncher");
+            prose(ui, |ui| {
+                ui.add(egui::Label::new(
+                    "BlockForge is a fork of ATLauncher, rewritten in Rust. The way instances, accounts and modpacks \
+                     are stored, and how games are launched, follow ATLauncher's, so your existing instances keep \
+                     working. ATLauncher's authors and contributors made that foundation, and their copyright \
+                     notices are kept.",
+                ));
+            });
+            if let Some(url) = links(ui, &[("ATLauncher on GitHub", "https://github.com/ATLauncher/ATLauncher".to_string())]) {
+                link = Some(url);
+            }
+
+            // the translation key is upper case; without a translation it is shown in sentence case
+            let credits = crate::tr!("CREDITS");
+            about_title(ui, if credits == "CREDITS" { "Credits" } else { &credits });
+            prose(ui, |ui| {
+                bullet(
+                    ui,
+                    &crate::tr!(
+                        "ATLauncher, by the ATLauncher team and its contributors (GPL-3.0): the foundation BlockForge is built on."
+                    ),
+                );
+                bullet(
+                    ui,
+                    &crate::tr!("Inter, by The Inter Project Authors (SIL Open Font License 1.1): the typeface of the window."),
+                );
+                #[cfg(feature = "converter")]
+                {
+                    bullet(
+                        ui,
+                        &crate::tr!("Chunker, by Hive Games (MIT License): the world converter is a Rust port of it."),
+                    );
+                    small_muted(
+                        ui,
+                        crate::tr!("BlockForge is not affiliated with or endorsed by Hive Games, the makers of Chunker."),
+                    );
+                }
+            });
+            #[cfg(feature = "converter")]
+            if let Some(url) = links(
+                ui,
+                &[
+                    (&crate::tr!("Chunker on GitHub"), "https://github.com/HiveGamesOSS/Chunker".to_string()),
+                    (&crate::tr!("Chunker license"), format!("{REPO}/blob/main/NOTICE.md")),
+                ],
+            ) {
+                link = Some(url);
+            }
+
+            about_title(ui, "License");
+            muted(ui, "BlockForge is free software under the GNU General Public License v3.");
+            if let Some(url) = links(
+                ui,
+                &[("License", format!("{REPO}/blob/main/LICENSE")), ("Notices", format!("{REPO}/blob/main/NOTICE.md"))],
+            ) {
+                link = Some(url);
+            }
+
+            ui.add_space(24.0);
+            ui.add(
+                egui::Label::new(
+                    RichText::new(
+                        "\"Minecraft\" is a trademark of Mojang AB. BlockForge is not made by or approved by Mojang or Microsoft.",
+                    )
+                    .size(FS_META)
+                    .color(c_faint()),
+                )
+                .wrap(),
             );
             ui.add_space(16.0);
         });
@@ -320,6 +320,57 @@ impl App {
             self.page = Page::Home;
         }
     }
+}
+
+/// The title of a block of the page, with room above it.
+fn about_title(ui: &mut Ui, text: &str) {
+    ui.add_space(16.0);
+    ui.label(RichText::new(text).size(FS_SECTION).semibold());
+}
+
+/// Text that reads at a comfortable line length, not the whole width of the page.
+fn prose(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
+    ui.scope(|ui| {
+        ui.set_max_width(ui.available_width().min(PROSE_WIDTH));
+        add(ui);
+    });
+}
+
+/// A row of the "This copy" card: the name of the fact in a column of its own, then its value.
+fn key_value(ui: &mut Ui, key: &str, value: impl FnOnce(&mut Ui)) {
+    ui.horizontal(|ui| {
+        let (rect, _) = ui.allocate_exact_size(vec2(KEY_WIDTH, 32.0), egui::Sense::hover());
+        ui.painter().text(
+            rect.left_center(),
+            egui::Align2::LEFT_CENTER,
+            key,
+            egui::FontId::proportional(FS_BODY),
+            c_muted(),
+        );
+        value(ui);
+    });
+}
+
+/// A row of text links, underlined in the text colour. Returns the address of the one that was clicked.
+fn links(ui: &mut Ui, items: &[(&str, String)]) -> Option<String> {
+    let mut clicked = None;
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing.x = 16.0;
+        for (label, url) in items {
+            if ui.link(RichText::new(*label).underline()).clicked() {
+                clicked = Some(url.clone());
+            }
+        }
+    });
+    clicked
+}
+
+/// One line of a quiet list: a small dash and the text, wrapped.
+fn bullet(ui: &mut Ui, text: &str) {
+    ui.horizontal_top(|ui| {
+        ui.label(RichText::new("\u{2013}").color(c_faint()));
+        ui.add(egui::Label::new(text).wrap());
+    });
 }
 
 #[cfg(test)]

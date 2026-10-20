@@ -3,6 +3,52 @@
 The section for a version is used as the text of its release on GitHub. Older releases (the Java versions, up to
 3.4.42.x) are on the [releases page](https://github.com/riyadmondol2006/BlockForge/releases).
 
+## 4.5.0
+
+A new look for the whole launcher: calmer, flatter and easier to scan, with one rule at its heart: green means Play.
+
+### What is new
+
+- **A redesigned window.** Every page was reworked with one set of colours, shapes and type: a neutral dark look and
+  a clean light look, flat surfaces with a single fine line instead of boxes inside boxes, 32 px controls, and Inter as
+  the typeface (with real medium and semibold weights and aligned digits). Green is now only for Play, a running game
+  and the progress of getting one started; every other main action is white on dark (near-black on light), switches and
+  selections are neutral, and each mod loader keeps its own colour wherever it is named.
+- **A sidebar that groups things.** Play (Home, Library), Mods and modpacks (Discover, ATLauncher and Technic, FTB)
+  and Utilities (Crafting, World converter, Servers, Tools), with Settings, About and the account at the bottom. The
+  **World converter** now has its own entry. In a short window the group names fold away so everything still fits. A
+  **Now playing** row shows a running game (and how long) from every page; a click opens it.
+- **Instance cards and Home.** Home opens with a Continue block for the instance you played last, with a **play
+  strip**: one small square for each of the last 28 days, filled in the instance's loader colour on the days it was
+  played. The instance's Overview has the same strip for 56 days (from the sessions BlockForge records and the dated
+  logs Minecraft keeps). Cards in the Library and on Home fill the row evenly, show the version and loader, how long
+  ago it was played, and a quiet Play button that turns green when the card is pointed at.
+- **The instance page.** A quiet back link, one meta line, Play as and Play on the right, and a four-figure facts
+  strip. Fast start and the smoothness helper moved from the header to a Speed and smoothness section of the
+  Overview. The Mods tab has calm 56 px rows with Details and Remove showing on hover, and a designed empty, loading
+  and error state.
+- **Discover and Create.** Modrinth and CurseForge are a segmented switch; search runs as you type (and on Enter);
+  result rows show the downloads in a column and the loaders in their colours. The New instance page is a single form
+  with the Minecraft versions as a grid, the loader as a segmented choice and Create pinned under it.
+- **Settings, Tools, Accounts and About.** Settings are grouped cards with fine row lines, a 760 px reading width and
+  a quiet Saved stamp. The Java compiler choice is a segmented control. Tools are grouped into Diagnose and Clean up.
+  Accounts are rows with a Playing as mark. About has one status line and a Check for updates button, then the
+  details of this copy and the credits (ATLauncher, Chunker, Inter).
+- **Crafting and the world converter.** Both use the same facts strip, rows and tick boxes; the converter is a single
+  column with a drop zone, the chosen world as a row, a progress bar and a result summary.
+- **Small windows and zoom.** The smallest window (860 by 560) shows every sidebar entry without scrolling, and the
+  Home block moves its buttons under the title when there is not room beside it.
+
+### Behind the scenes
+
+- One place defines the look: `src/gui/theme.rs` (colours, radii 8/6/4 and 12 for dialogs, the type scale 12/14/16/20/22)
+  and `src/gui/widgets.rs` (buttons, tabs, segmented control, facts strip, notices, skeleton rows, progress bar).
+- Inter Regular, Medium and SemiBold are built into the program as small Latin subsets with aligned digits (about 135 KB,
+  SIL Open Font License, see NOTICE.md).
+- Each instance now remembers the days it was played in its `instance.json` (`playDays`, the last 120 days).
+- `tools/screenshots/` makes a throwaway sample data folder and takes the screenshots of every page on a private virtual
+  display, so the pictures in `docs/` can be remade without touching a real desktop.
+
 ## 4.4.0
 
 World conversion, powered by a Rust port of Chunker by Hive Games. This version converts Bedrock Edition worlds to

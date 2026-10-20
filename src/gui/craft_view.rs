@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use egui::{Align, CornerRadius, Layout, RichText, Stroke, Ui, vec2};
+use egui::{Align, Layout, RichText, Ui, vec2};
 
 use super::craft::{Act, Book, CraftState, Dialog, Env, LEFT_W, Load, PlanView, TWO_COLUMNS, Tab};
 use super::craft_fmt::*;
@@ -12,6 +12,9 @@ use super::theme::*;
 use super::widgets::*;
 use crate::craft::saved;
 use crate::craft::{self, Kind, Node, Recipe, Stop, Storage};
+
+/// How wide the plan gets on a wide window: past this the amounts are too far from their names.
+const PLAN_WIDTH: f32 = 780.0;
 
 impl CraftState {
     /// Both columns (or one under the other when the window is narrow).
@@ -24,11 +27,12 @@ impl CraftState {
         let h = ui.available_height();
         if total_w >= TWO_COLUMNS {
             let right_w = total_w - LEFT_W - 16.0;
-            let list_h = (h - 460.0).clamp(150.0, 340.0);
+            let list_h = (h - 420.0).clamp(160.0, 420.0);
             ui.horizontal_top(|ui| {
                 ui.spacing_mut().item_spacing.x = 16.0;
                 ui.allocate_ui_with_layout(vec2(LEFT_W, h), Layout::top_down(Align::Min), |ui| {
                     egui::ScrollArea::vertical().id_salt("craft-left").auto_shrink([false, false]).show(ui, |ui| {
+                        ui.set_max_width(ui.available_width() - 12.0);
                         ui.spacing_mut().item_spacing.y = 12.0;
                         self.left_pick(ui, &book, list_h);
                         self.left_stock(ui, &book);
@@ -38,6 +42,7 @@ impl CraftState {
                 });
                 ui.allocate_ui_with_layout(vec2(right_w, h), Layout::top_down(Align::Min), |ui| {
                     egui::ScrollArea::vertical().id_salt("craft-right").auto_shrink([false, false]).show(ui, |ui| {
+                        ui.set_max_width((ui.available_width() - 12.0).min(PLAN_WIDTH));
                         ui.spacing_mut().item_spacing.y = 12.0;
                         self.right(ui, &book, acts);
                         ui.add_space(8.0);
@@ -46,9 +51,10 @@ impl CraftState {
             });
         } else {
             egui::ScrollArea::vertical().id_salt("craft-one").auto_shrink([false, false]).show(ui, |ui| {
+                ui.set_max_width(ui.available_width() - 12.0);
                 ui.spacing_mut().item_spacing.y = 12.0;
                 if self.target.is_some() && !self.picking {
-                    card(ui, |ui| self.quantity_block(ui, &book, true));
+                    panel(ui, |ui| self.quantity_block(ui, &book, true));
                 } else {
                     self.left_pick(ui, &book, 230.0);
                 }
@@ -63,31 +69,34 @@ impl CraftState {
     fn right(&mut self, ui: &mut Ui, book: &Arc<Book>, acts: &mut Vec<Act>) {
         match self.plan.clone() {
             None => {
-                card(ui, |ui| {
-                    ui.add_space(18.0);
-                    ui.vertical_centered(|ui| {
-                        let bad = self.target.is_some() && parse_qty(&self.qty_text).is_err();
-                        ui.label(
-                            RichText::new(if bad { "Check the amount" } else { "Pick something to build" })
-                                .size(19.0)
-                                .strong(),
-                        );
-                        ui.add_space(2.0);
-                        muted(
-                            ui,
-                            if bad {
-                                "The plan appears as soon as the amount is a whole number."
-                            } else {
-                                "Search for an item on the left. The materials, the steps and the storage it needs show up here."
-                            },
+                let bad = self.target.is_some() && parse_qty(&self.qty_text).is_err();
+                ui.add_space(72.0);
+                ui.vertical_centered(|ui| {
+                    ui.label(
+                        RichText::new(if bad { "Check the amount" } else { "Pick something to build" })
+                            .size(FS_SECTION)
+                            .semibold(),
+                    );
+                    ui.add_space(2.0);
+                    ui.scope(|ui| {
+                        ui.set_max_width(380.0);
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(if bad {
+                                    "The plan appears as soon as the amount is a whole number."
+                                } else {
+                                    "Search for an item on the left. The materials, the steps and the storage it needs show up here."
+                                })
+                                .color(c_muted()),
+                            )
+                            .wrap(),
                         );
                     });
-                    ui.add_space(18.0);
                 });
             }
             Some(Err(e)) => {
-                note_box(ui, c_danger(), |ui| {
-                    ui.label(RichText::new("This can't be worked out").strong().color(c_danger()));
+                note_box(ui, NoticeKind::Error, |ui| {
+                    ui.label(RichText::new("This can't be worked out").semibold().color(c_danger()));
                     ui.label(e);
                 });
             }
@@ -98,8 +107,8 @@ impl CraftState {
     fn result(&mut self, ui: &mut Ui, book: &Arc<Book>, v: &Arc<PlanView>, acts: &mut Vec<Act>) {
         self.result_header(ui, book, v, acts);
         if !v.plan.warnings.is_empty() || !v.plan.complete {
-            note_box(ui, c_warn(), |ui| {
-                ui.label(RichText::new("Worth a look").strong().color(c_warn()));
+            note_box(ui, NoticeKind::Warn, |ui| {
+                ui.label(RichText::new("Worth a look").semibold().color(c_warn()));
                 for w in &v.plan.warnings {
                     ui.label(w);
                 }
@@ -108,13 +117,12 @@ impl CraftState {
                 }
             });
         }
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 6.0;
-            for (tab, label) in
+        tab_bar(ui, |ui| {
+            for (tab_id, label) in
                 [(Tab::Materials, "Materials"), (Tab::Steps, "Steps"), (Tab::Tree, "Tree"), (Tab::Storage, "Storage")]
             {
-                if chip(ui, label, self.tab == tab).clicked() {
-                    self.tab = tab;
+                if tab(ui, label, self.tab == tab_id).clicked() {
+                    self.tab = tab_id;
                 }
             }
         });
@@ -126,90 +134,90 @@ impl CraftState {
         }
     }
 
+    /// The item and amount as the title of the plan, the totals as type, and what can be done with the plan.
     fn result_header(&mut self, ui: &mut Ui, book: &Arc<Book>, v: &Arc<PlanView>, acts: &mut Vec<Act>) {
         let plan = &v.plan;
         let name = book.ds.name(&plan.request.item);
-        card(ui, |ui| {
-            ui.horizontal(|ui| {
-                self.icon(ui, &plan.request.item, &name, 48.0);
-                ui.vertical(|ui| {
-                    ui.spacing_mut().item_spacing.y = 3.0;
-                    ui.label(
-                        RichText::new(format!("{} x {}", thousands(plan.request.quantity), name)).size(22.0).strong(),
-                    );
-                    ui.horizontal_wrapped(|ui| {
-                        if plan.complete && plan.warnings.is_empty() {
-                            tag(ui, "Complete plan", c_accent());
-                        } else {
-                            tag(ui, "Needs a look", c_warn());
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 12.0;
+            self.icon(ui, &plan.request.item, &name, 44.0);
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = 3.0;
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(format!("{} \u{00D7} {}", thousands(plan.request.quantity), name))
+                            .size(FS_TITLE)
+                            .semibold(),
+                    )
+                    .truncate(),
+                );
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing.x = 14.0;
+                    let good = plan.complete && plan.warnings.is_empty();
+                    status_text(ui, good, if good { "Complete plan" } else { "Needs a look" });
+                    if let Some(p) = self.active.and_then(|id| self.store.get(id)) {
+                        small_muted(ui, format!("Saved: {}", clip(&p.name, 24)));
+                        if self.unsaved {
+                            small_muted(ui, "Changed since saved");
                         }
-                        if let Some(p) = self.active.and_then(|id| self.store.get(id)) {
-                            tag(ui, &format!("Saved: {}", clip(&p.name, 24)), c_muted());
-                            if self.unsaved {
-                                tag(ui, "Changed since saved", c_warn());
-                            }
-                        }
+                    }
+                });
+            });
+        });
+        ui.add_space(4.0);
+        let gather: u64 = plan.materials.iter().map(|(_, n)| *n).sum();
+        facts_rows(
+            ui,
+            &[
+                ("Operations", thousands(plan.operations)),
+                ("Items to gather", thousands(gather)),
+                ("Steps", thousands(plan.steps.len() as u64)),
+                ("Storage slots", thousands(v.storage[0].slots)),
+            ],
+        );
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = vec2(8.0, 8.0);
+            if secondary(ui, "Copy shopping list").clicked() {
+                acts.push(Act::Copy(saved::clipboard_list(&book.ds, plan)));
+            }
+            let export = secondary(ui, "Export");
+            let slug = file_name(&name, plan.request.quantity);
+            egui::Popup::menu(&export).show(|ui| {
+                ui.set_min_width(180.0);
+                if ui.button("Text file (.txt)").clicked() {
+                    acts.push(Act::Export {
+                        name: format!("{slug}.txt"),
+                        content: saved::to_text(&book.ds, plan),
+                        ext: "txt",
                     });
-                });
-            });
-            ui.add_space(8.0);
-            let gap = 8.0;
-            let w = ((ui.available_width() - gap * 3.0) / 4.0).floor();
-            let gather: u64 = plan.materials.iter().map(|(_, n)| *n).sum();
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = gap;
-                stat_tile(ui, w, &thousands(plan.operations), "Operations");
-                stat_tile(ui, w, &thousands(gather), "Items to gather");
-                stat_tile(ui, w, &thousands(plan.steps.len() as u64), "Steps");
-                stat_tile(ui, w, &thousands(v.storage[0].slots), "Storage slots");
-            });
-            ui.add_space(8.0);
-            ui.horizontal_wrapped(|ui| {
-                ui.spacing_mut().item_spacing = vec2(8.0, 8.0);
-                if secondary(ui, "Copy shopping list").clicked() {
-                    acts.push(Act::Copy(saved::clipboard_list(&book.ds, plan)));
+                    ui.close();
                 }
-                let export = secondary(ui, "Export");
-                let slug = file_name(&name, plan.request.quantity);
-                egui::Popup::menu(&export).show(|ui| {
-                    ui.set_min_width(180.0);
-                    if ui.button("Text file (.txt)").clicked() {
-                        acts.push(Act::Export {
-                            name: format!("{slug}.txt"),
-                            content: saved::to_text(&book.ds, plan),
-                            ext: "txt",
-                        });
-                        ui.close();
-                    }
-                    if ui.button("JSON file (.json)").clicked() {
-                        acts.push(Act::Export {
-                            name: format!("{slug}.json"),
-                            content: saved::to_json(&book.ds, plan),
-                            ext: "json",
-                        });
-                        ui.close();
-                    }
-                });
-                let label = if self.active.is_some() { "Update plan" } else { "Save plan" };
-                if secondary(ui, label).clicked() {
-                    let fallback = format!("{} x {}", thousands(plan.request.quantity), name);
-                    let current = self.active.and_then(|id| self.store.get(id)).map(|p| p.name.clone());
-                    self.dialog = Some(Dialog::Save(current.unwrap_or(fallback)));
-                }
-                let n = self.store.plans.len();
-                if secondary(ui, &if n > 0 { format!("Saved plans ({n})") } else { "Saved plans".to_string() })
-                    .clicked()
-                {
-                    self.dialog = Some(Dialog::Saved);
-                }
-                if (!self.recipe_choices.is_empty() || !self.ingredient_choices.is_empty())
-                    && secondary(ui, "Reset my recipe choices").clicked()
-                {
-                    self.recipe_choices.clear();
-                    self.ingredient_choices.clear();
-                    self.touch_plan();
+                if ui.button("JSON file (.json)").clicked() {
+                    acts.push(Act::Export {
+                        name: format!("{slug}.json"),
+                        content: saved::to_json(&book.ds, plan),
+                        ext: "json",
+                    });
+                    ui.close();
                 }
             });
+            let label = if self.active.is_some() { "Update plan" } else { "Save plan" };
+            if secondary(ui, label).clicked() {
+                let fallback = format!("{} \u{00D7} {}", thousands(plan.request.quantity), name);
+                let current = self.active.and_then(|id| self.store.get(id)).map(|p| p.name.clone());
+                self.dialog = Some(Dialog::Save(current.unwrap_or(fallback)));
+            }
+            let n = self.store.plans.len();
+            if secondary(ui, &if n > 0 { format!("Saved plans ({n})") } else { "Saved plans".to_string() }).clicked() {
+                self.dialog = Some(Dialog::Saved);
+            }
+            if (!self.recipe_choices.is_empty() || !self.ingredient_choices.is_empty())
+                && secondary(ui, "Reset my recipe choices").clicked()
+            {
+                self.recipe_choices.clear();
+                self.ingredient_choices.clear();
+                self.touch_plan();
+            }
         });
     }
 
@@ -219,7 +227,7 @@ impl CraftState {
     fn tab_materials(&mut self, ui: &mut Ui, book: &Arc<Book>, v: &Arc<PlanView>) {
         let plan = &v.plan;
         // what to gather
-        card(ui, |ui| {
+        panel(ui, |ui| {
             let total = plan.materials.len();
             let ticked = plan.materials.iter().filter(|(i, _)| self.done.contains(&format!("gather:{i}"))).count();
             ui.horizontal(|ui| {
@@ -234,20 +242,20 @@ impl CraftState {
                 muted(ui, "Nothing to gather: everything comes from your items or from what you bring.");
                 return;
             }
-            progress_bar(ui, ticked as f32 / total as f32);
-            ui.add_space(2.0);
-            for (id, qty) in &plan.materials {
+            progress_bar(ui, Some(ticked as f32 / total as f32), 4.0);
+            ui.add_space(4.0);
+            for (k, (id, qty)) in plan.materials.iter().enumerate() {
                 let key = format!("gather:{id}");
                 let mut on = self.done.contains(&key);
                 let before = on;
                 let supplied = self.supplied.contains(id);
                 let mut unbring = false;
-                self.list_row(ui, book, id, *qty, Some(&mut on), before, |ui| {
+                self.list_row(ui, book, id, *qty, Some(&mut on), before, k + 1 == total, |ui| {
                     if supplied {
                         if x_button(ui, "No longer bringing this") {
                             unbring = true;
                         }
-                        tag(ui, "you bring", c_muted());
+                        small_faint(ui, "you bring");
                     }
                 });
                 if on != before {
@@ -266,22 +274,19 @@ impl CraftState {
         });
         // what is made on the way
         if !plan.intermediates.is_empty() {
-            card(ui, |ui| {
+            panel(ui, |ui| {
                 card_title(ui, "Made on the way");
                 small_muted(ui, "Crafted or smelted from the list above. Bring one yourself to skip making it.");
-                ui.add_space(2.0);
-                for (id, qty) in &plan.intermediates {
+                ui.add_space(4.0);
+                let total = plan.intermediates.len();
+                for (k, (id, qty)) in plan.intermediates.iter().enumerate() {
                     let mut bring = false;
-                    let mut dummy = false;
-                    self.list_row(ui, book, id, *qty, None::<&mut bool>, false, |ui| {
-                        let r = ui.add(
-                            egui::Button::new(RichText::new("I'll bring this").size(12.5)).min_size(vec2(0.0, 26.0)),
-                        );
+                    self.list_row(ui, book, id, *qty, None::<&mut bool>, false, k + 1 == total, |ui| {
+                        let r = secondary(ui, "I'll bring this");
                         if r.on_hover_text("Skip making it: it moves to the list of things to gather").clicked() {
                             bring = true;
                         }
                     });
-                    let _ = &mut dummy;
                     if bring {
                         self.supplied.insert(id.clone());
                         self.touch_plan();
@@ -293,26 +298,31 @@ impl CraftState {
         let spare: Vec<(&str, u64)> =
             plan.ledger.iter().filter(|r| r.surplus > 0).map(|r| (r.item.as_str(), r.surplus)).collect();
         if !spare.is_empty() {
-            card(ui, |ui| {
+            panel(ui, |ui| {
                 card_title(ui, "Left over");
                 small_muted(ui, "Made by whole batches, so a little more than needed.");
-                ui.add_space(2.0);
-                for (id, qty) in spare {
-                    self.list_row(ui, book, id, qty, None::<&mut bool>, false, |_| {});
+                ui.add_space(4.0);
+                let total = spare.len();
+                for (k, (id, qty)) in spare.into_iter().enumerate() {
+                    self.list_row(ui, book, id, qty, None::<&mut bool>, false, k + 1 == total, |_| {});
                 }
             });
         }
         // fuel
         if !plan.fuel.is_empty() {
-            card(ui, |ui| {
+            panel(ui, |ui| {
                 card_title(ui, "Fuel for the furnaces");
-                ui.label(format!(
-                    "The smelting takes about {} in one furnace. That burns about one of these:",
-                    ticks_text(plan.cook_ticks)
-                ));
-                ui.add_space(2.0);
-                for f in &plan.fuel {
-                    self.list_row(ui, book, &f.item, f.count, None::<&mut bool>, false, |_| {});
+                ui.label(
+                    RichText::new(format!(
+                        "The smelting takes about {} in one furnace. That burns about one of these:",
+                        ticks_text(plan.cook_ticks)
+                    ))
+                    .color(c_muted()),
+                );
+                ui.add_space(4.0);
+                let total = plan.fuel.len();
+                for (k, f) in plan.fuel.iter().enumerate() {
+                    self.list_row(ui, book, &f.item, f.count, None::<&mut bool>, false, k + 1 == total, |_| {});
                 }
                 small_muted(
                     ui,
@@ -328,18 +338,20 @@ impl CraftState {
             }
         }
         if !back.is_empty() {
-            card(ui, |ui| {
+            panel(ui, |ui| {
                 card_title(ui, "Containers that come back");
                 small_muted(ui, "Empty buckets and bottles you get back while crafting. They are not counted above.");
-                ui.add_space(2.0);
-                for (id, n) in back {
-                    self.list_row(ui, book, id, n, None::<&mut bool>, false, |_| {});
+                ui.add_space(4.0);
+                let total = back.len();
+                for (k, (id, n)) in back.into_iter().enumerate() {
+                    self.list_row(ui, book, id, n, None::<&mut bool>, false, k + 1 == total, |_| {});
                 }
             });
         }
     }
 
-    /// One line of a list of items: [checkbox] picture, name and stacks, the amount on the right, and `tail` before it.
+    /// One line of a list of items: [tick box] picture, name, and on the right the amount over its stacks; `tail`
+    /// sits before the amount. A hairline divides it from the next line unless it is the `last`.
     fn list_row(
         &mut self,
         ui: &mut Ui,
@@ -348,39 +360,45 @@ impl CraftState {
         qty: u64,
         check: Option<&mut bool>,
         struck: bool,
+        last: bool,
         tail: impl FnOnce(&mut Ui),
     ) {
         let name = book.ds.name(id);
         let sub = stack_note(qty, book.ds.stack(id));
-        ui.horizontal(|ui| {
-            ui.set_min_height(38.0);
-            if let Some(on) = check {
-                ui.add(egui::Checkbox::without_text(on));
-            }
-            self.icon(ui, id, &name, 32.0);
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                let (qr, _) = ui.allocate_exact_size(vec2(92.0, 20.0), egui::Sense::hover());
-                ui.painter().text(
-                    qr.right_center(),
-                    egui::Align2::RIGHT_CENTER,
-                    thousands(qty),
-                    egui::FontId::proportional(15.0),
-                    if struck { c_muted() } else { c_text() },
-                );
-                tail(ui);
-                ui.vertical(|ui| {
-                    ui.set_width(ui.available_width());
-                    ui.spacing_mut().item_spacing.y = 0.0;
-                    let mut t = RichText::new(&name);
-                    if struck {
-                        t = t.strikethrough().color(c_muted());
-                    }
-                    ui.add(egui::Label::new(t).truncate());
-                    if !sub.is_empty() {
-                        small_muted(ui, sub.as_str());
-                    }
+        ui.scope(|ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            ui.horizontal(|ui| {
+                ui.set_min_height(44.0);
+                if let Some(on) = check {
+                    check_box(ui, on, true, &name);
+                }
+                self.icon(ui, id, &name, 28.0);
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    ui.allocate_ui_with_layout(vec2(104.0, 38.0), Layout::top_down(Align::Max), |ui| {
+                        ui.spacing_mut().item_spacing.y = 0.0;
+                        if sub.is_empty() {
+                            // one line: centre it on the row
+                            ui.add_space(9.0);
+                        }
+                        let color = if struck { c_muted() } else { c_text() };
+                        ui.label(RichText::new(thousands(qty)).font(super::fonts::medium(FS_BODY)).color(color));
+                        if !sub.is_empty() {
+                            small_muted(ui, sub.as_str());
+                        }
+                    });
+                    tail(ui);
+                    ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                        let mut t = RichText::new(&name);
+                        if struck {
+                            t = t.strikethrough().color(c_muted());
+                        }
+                        ui.add(egui::Label::new(t).truncate());
+                    });
                 });
             });
+            if !last {
+                rule(ui);
+            }
         });
     }
 
@@ -390,7 +408,7 @@ impl CraftState {
     fn tab_steps(&mut self, ui: &mut Ui, book: &Arc<Book>, v: &Arc<PlanView>) {
         let plan = &v.plan;
         if plan.steps.is_empty() {
-            card(ui, |ui| {
+            panel(ui, |ui| {
                 card_title(ui, "Steps");
                 muted(ui, "Nothing to craft: everything is gathered or comes from your items.");
             });
@@ -398,7 +416,7 @@ impl CraftState {
         }
         let n = plan.steps.len();
         let ticked = plan.steps.iter().filter(|s| self.done.contains(&format!("step:{}", s.recipe))).count();
-        card(ui, |ui| {
+        panel(ui, |ui| {
             ui.horizontal(|ui| {
                 card_title(ui, "Steps in order");
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -406,13 +424,18 @@ impl CraftState {
                 });
             });
             small_muted(ui, "Each step needs the ones that make its ingredients to be ticked first.");
-            progress_bar(ui, ticked as f32 / n as f32);
+            ui.add_space(2.0);
+            progress_bar(ui, Some(ticked as f32 / n as f32), 4.0);
+            for i in 0..n {
+                ui.add_space(10.0);
+                rule(ui);
+                ui.add_space(10.0);
+                self.step_card(ui, book, v, i);
+            }
         });
-        for i in 0..n {
-            self.step_card(ui, book, v, i);
-        }
     }
 
+    /// One step of the plan, drawn straight into the list of steps.
     fn step_card(&mut self, ui: &mut Ui, book: &Arc<Book>, v: &Arc<PlanView>, i: usize) {
         let step = &v.plan.steps[i];
         let key = format!("step:{}", step.recipe);
@@ -420,118 +443,112 @@ impl CraftState {
         let ready = v.deps[i].iter().all(|&j| self.done.contains(&format!("step:{}", v.plan.steps[j].recipe)));
         let recipe = book.ds.recipe(&step.recipe);
         let out_name = book.ds.name(&step.item);
-        egui::Frame::new()
-            .fill(c_card())
-            .stroke(Stroke::new(1.0, c_border()))
-            .corner_radius(CornerRadius::same(14))
-            .inner_margin(egui::Margin::same(14))
-            .show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                ui.spacing_mut().item_spacing.y = 6.0;
+        ui.spacing_mut().item_spacing.y = 6.0;
+        ui.horizontal(|ui| {
+            let mut on = ticked;
+            let r = check_box(ui, &mut on, ready || ticked, &format!("Step {}", i + 1));
+            if !ready && !ticked {
+                r.on_hover_text("Tick the steps that make its ingredients first");
+            }
+            if on != ticked {
+                if on {
+                    self.done.insert(key.clone());
+                } else {
+                    // taking a step back takes back everything built on it
+                    let mut stack = vec![i];
+                    while let Some(k) = stack.pop() {
+                        if self.done.remove(&format!("step:{}", v.plan.steps[k].recipe)) {
+                            stack.extend(v.dependants[k].iter().copied());
+                        }
+                    }
+                }
+                self.done_changed();
+            }
+            let station = station_item(step.kind);
+            self.icon(ui, station, step.kind.station(), 28.0);
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = 1.0;
+                let title = RichText::new(format!("{} {} \u{00D7}", step.kind.verb(), thousands(step.operations)))
+                    .font(super::fonts::medium(FS_BODY));
                 ui.horizontal(|ui| {
-                    let mut on = ticked;
-                    let r = ui.add_enabled(ready || ticked, egui::Checkbox::without_text(&mut on));
-                    if !ready && !ticked {
-                        r.on_disabled_hover_text("Tick the steps that make its ingredients first");
-                    }
-                    if on != ticked {
-                        if on {
-                            self.done.insert(key.clone());
-                        } else {
-                            // taking a step back takes back everything built on it
-                            let mut stack = vec![i];
-                            while let Some(k) = stack.pop() {
-                                if self.done.remove(&format!("step:{}", v.plan.steps[k].recipe)) {
-                                    stack.extend(v.dependants[k].iter().copied());
-                                }
-                            }
-                        }
-                        self.done_changed();
-                    }
-                    let station = station_item(step.kind);
-                    self.icon(ui, station, step.kind.station(), 32.0);
-                    ui.vertical(|ui| {
-                        ui.spacing_mut().item_spacing.y = 1.0;
-                        let title = RichText::new(format!("{} {}x", step.kind.verb(), thousands(step.operations)))
-                            .size(16.0)
-                            .strong();
-                        ui.horizontal(|ui| {
-                            ui.label(if ticked { title.color(c_muted()) } else { title });
-                            ui.label(RichText::new(format!("at {}", step.kind.station())).color(c_muted()));
-                        });
-                        small_muted(ui, format!("Makes {} {}", thousands(step.output), out_name));
-                    });
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        small_muted(ui, format!("Step {}", i + 1));
-                    });
+                    ui.label(if ticked { title.color(c_muted()) } else { title });
+                    ui.label(RichText::new(format!("at {}", step.kind.station())).color(c_muted()));
                 });
-                ui.add_space(6.0);
-                // what goes in and what comes out
-                ui.horizontal_wrapped(|ui| {
-                    ui.spacing_mut().item_spacing = vec2(8.0, 6.0);
-                    for (k, (id, qty)) in step.inputs.iter().enumerate() {
-                        if k > 0 {
-                            ui.label(RichText::new("+").color(c_muted()));
-                        }
-                        let name = book.ds.name(id);
-                        self.icon(ui, id, &name, 24.0);
-                        ui.label(format!("{} {}", thousands(*qty), name));
-                    }
-                    arrow(ui);
-                    self.icon(ui, &step.item, &out_name, 24.0);
-                    ui.label(RichText::new(format!("{} {}", thousands(step.output), out_name)).strong());
-                });
-                // notes
-                ui.horizontal_wrapped(|ui| {
-                    if recipe.is_some_and(|r| r.small_grid && matches!(r.kind, Kind::Shaped | Kind::Shapeless)) {
-                        tag(ui, "Fits the inventory grid", c_accent());
-                    }
-                    if let Some(t) = step.ticks {
-                        small_muted(
-                            ui,
-                            format!("About {} in one {}", ticks_text(t), step.kind.station().to_lowercase()),
-                        );
-                    }
-                    if let Some(m) = recipe.and_then(|r| r.manual.as_ref()) {
-                        ui.label(RichText::new(m).color(c_warn()).size(12.5));
-                    }
-                });
-                if !step.byproducts.is_empty() {
-                    let text: Vec<String> = step
-                        .byproducts
-                        .iter()
-                        .map(|(id, n)| format!("{} {}", thousands(*n), book.ds.name(id)))
-                        .collect();
-                    small_muted(ui, format!("You get back: {}", text.join(", ")));
+                small_muted(ui, format!("Makes {} {}", thousands(step.output), out_name));
+            });
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                small_muted(ui, format!("Step {}", i + 1));
+            });
+        });
+        // what goes in and what comes out, lined up under the name
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = vec2(8.0, 6.0);
+            ui.add_space(36.0);
+            for (k, (id, qty)) in step.inputs.iter().enumerate() {
+                if k > 0 {
+                    ui.label(RichText::new("+").color(c_muted()));
                 }
-                // the choices
-                let mut any = false;
-                if book.ds.recipes_for(&step.item).nth(1).is_some() {
-                    any = true;
+                let name = book.ds.name(id);
+                self.icon(ui, id, &name, 24.0);
+                ui.label(format!("{} {}", thousands(*qty), name));
+            }
+            arrow(ui);
+            self.icon(ui, &step.item, &out_name, 24.0);
+            ui.label(RichText::new(format!("{} {}", thousands(step.output), out_name)).semibold());
+        });
+        // notes
+        let has_notes = recipe.is_some_and(|r| r.small_grid && matches!(r.kind, Kind::Shaped | Kind::Shapeless))
+            || step.ticks.is_some()
+            || recipe.and_then(|r| r.manual.as_ref()).is_some();
+        if has_notes {
+            ui.horizontal_wrapped(|ui| {
+                ui.add_space(36.0);
+                if recipe.is_some_and(|r| r.small_grid && matches!(r.kind, Kind::Shaped | Kind::Shapeless)) {
+                    small_faint(ui, "Fits the inventory grid");
                 }
-                if let Some(r) = recipe {
-                    if r.ingredients.iter().any(|g| g.alternatives.len() > 1) {
-                        any = true;
-                    }
+                if let Some(t) = step.ticks {
+                    small_muted(ui, format!("About {} in one {}", ticks_text(t), step.kind.station().to_lowercase()));
                 }
-                if any {
-                    ui.add_space(2.0);
-                    ui.horizontal_wrapped(|ui| {
-                        ui.spacing_mut().item_spacing = vec2(8.0, 6.0);
-                        self.recipe_combo(ui, book, &step.item, &step.recipe, i as u64);
-                        if let Some(r) = recipe {
-                            for (key, current) in &step.choices {
-                                let Some(g) = r.ingredients.iter().find(|g| &g.key == key) else { continue };
-                                if g.alternatives.len() < 2 {
-                                    continue;
-                                }
-                                small_muted(ui, "Use");
-                                self.alternative_combo(ui, book, &r.id, key, current, &g.alternatives);
-                            }
-                        }
-                    });
+                if let Some(m) = recipe.and_then(|r| r.manual.as_ref()) {
+                    ui.label(RichText::new(m).color(c_warn()).size(FS_META));
                 }
             });
+        }
+        if !step.byproducts.is_empty() {
+            let text: Vec<String> =
+                step.byproducts.iter().map(|(id, n)| format!("{} {}", thousands(*n), book.ds.name(id))).collect();
+            ui.horizontal(|ui| {
+                ui.add_space(36.0);
+                small_muted(ui, format!("You get back: {}", text.join(", ")));
+            });
+        }
+        // the choices
+        let mut any = false;
+        if book.ds.recipes_for(&step.item).nth(1).is_some() {
+            any = true;
+        }
+        if let Some(r) = recipe {
+            if r.ingredients.iter().any(|g| g.alternatives.len() > 1) {
+                any = true;
+            }
+        }
+        if any {
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = vec2(8.0, 6.0);
+                ui.add_space(36.0);
+                self.recipe_combo(ui, book, &step.item, &step.recipe, i as u64);
+                if let Some(r) = recipe {
+                    for (key, current) in &step.choices {
+                        let Some(g) = r.ingredients.iter().find(|g| &g.key == key) else { continue };
+                        if g.alternatives.len() < 2 {
+                            continue;
+                        }
+                        small_muted(ui, "Use");
+                        self.alternative_combo(ui, book, &r.id, key, current, &g.alternatives);
+                    }
+                }
+            });
+        }
     }
 
     /// A drop-down that picks how an item is made, when the game has more than one way.
@@ -543,9 +560,10 @@ impl CraftState {
         let shown =
             list.iter().find(|r| r.id == current).map_or_else(|| "Recipe".to_string(), |r| recipe_label(&book.ds, r));
         let mut pick: Option<String> = None;
+        let width = ui.available_width().clamp(120.0, 300.0);
         egui::ComboBox::from_id_salt(("craft-recipe", item, salt))
-            .selected_text(clip(&shown, 44))
-            .width(300.0)
+            .selected_text(clip(&shown, ((width - 44.0) / 6.5) as usize))
+            .width(width)
             .show_ui(ui, |ui| {
                 ui.set_min_width(340.0);
                 for r in &list {
@@ -596,16 +614,16 @@ impl CraftState {
     // Tree
 
     fn tab_tree(&mut self, ui: &mut Ui, book: &Arc<Book>, v: &Arc<PlanView>) {
-        card(ui, |ui| {
+        panel(ui, |ui| {
             ui.horizontal(|ui| {
                 card_title(ui, "Everything it is made of");
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if v.nodes <= 400 {
-                        if ui.button("Collapse all").clicked() {
+                        if secondary(ui, "Collapse all").clicked() {
                             self.tree_epoch += 1;
                             self.tree_all = false;
                         }
-                        if ui.button("Expand all").clicked() {
+                        if secondary(ui, "Expand all").clicked() {
                             self.tree_epoch += 1;
                             self.tree_all = true;
                         }
@@ -640,12 +658,12 @@ impl CraftState {
         let name = book.ds.name(&n.item);
         ui.set_min_height(30.0);
         self.icon(ui, &n.item, &name, 24.0);
-        ui.label(RichText::new(&name).strong());
+        ui.label(RichText::new(&name).semibold());
         small_muted(ui, format!("need {}", thousands(n.required)));
         match n.stop {
-            Some(Stop::Inventory) => tag(ui, "from your items", c_accent()),
-            Some(Stop::Raw) => tag(ui, "gather", c_accent()),
-            Some(Stop::Supplied) => tag(ui, "you bring", c_muted()),
+            Some(Stop::Inventory) => small_faint(ui, "from your items"),
+            Some(Stop::Raw) => small_faint(ui, "gather"),
+            Some(Stop::Supplied) => small_faint(ui, "you bring"),
             Some(Stop::NoRecipe) => tag(ui, "no recipe", c_warn()),
             Some(Stop::Manual) => tag(ui, "manual", c_warn()),
             Some(Stop::Cycle) => tag(ui, "cycle", c_danger()),
@@ -683,7 +701,7 @@ impl CraftState {
     }
 
     fn storage_card(&mut self, ui: &mut Ui, book: &Arc<Book>, title: &str, blurb: &str, s: &Storage) {
-        card(ui, |ui| {
+        panel(ui, |ui| {
             ui.horizontal(|ui| {
                 card_title(ui, title);
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -697,48 +715,59 @@ impl CraftState {
                 return;
             }
             ui.add_space(4.0);
-            let gap = 8.0;
-            let w = ((ui.available_width() - gap * 3.0) / 4.0).floor();
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = gap;
-                for (c, label) in [
-                    (&s.single_chests, "Single chests"),
-                    (&s.double_chests, "Double chests"),
-                    (&s.shulker_boxes, "Shulker boxes"),
-                    (&s.player_inventories, "Inventories"),
-                ] {
-                    stat_tile(ui, w, &thousands(c.count), label);
+            facts_rows(
+                ui,
+                &[
+                    ("Single chests", thousands(s.single_chests.count)),
+                    ("Double chests", thousands(s.double_chests.count)),
+                    ("Shulker boxes", thousands(s.shulker_boxes.count)),
+                    ("Inventories", thousands(s.player_inventories.count)),
+                ],
+            );
+            small_muted(ui, "A chest holds 27 stacks, a double chest 54, a shulker box 27, an inventory 36.");
+            ui.add_space(6.0);
+            ui.scope(|ui| {
+                ui.spacing_mut().item_spacing.y = 0.0;
+                let total = s.rows.len();
+                for (k, r) in s.rows.iter().enumerate() {
+                    let name = book.ds.name(&r.item);
+                    let text = if r.stack <= 1 {
+                        format!("{} slot{}", thousands(r.slots), if r.slots == 1 { "" } else { "s" })
+                    } else if r.partial > 0 {
+                        format!("{} full + {} spare, {} slots", thousands(r.full_stacks), r.partial, thousands(r.slots))
+                    } else {
+                        format!("{} full stacks, {} slots", thousands(r.full_stacks), thousands(r.slots))
+                    };
+                    ui.horizontal(|ui| {
+                        ui.set_min_height(38.0);
+                        self.icon(ui, &r.item, &name, 24.0);
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            let (dr, _) = ui.allocate_exact_size(vec2(190.0, 20.0), egui::Sense::hover());
+                            ui.painter().text(
+                                dr.right_center(),
+                                egui::Align2::RIGHT_CENTER,
+                                text,
+                                egui::FontId::proportional(FS_META),
+                                c_muted(),
+                            );
+                            let (qr, _) = ui.allocate_exact_size(vec2(72.0, 20.0), egui::Sense::hover());
+                            ui.painter().text(
+                                qr.right_center(),
+                                egui::Align2::RIGHT_CENTER,
+                                thousands(r.quantity),
+                                super::fonts::medium(FS_BODY),
+                                c_text(),
+                            );
+                            ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                                ui.add(egui::Label::new(name.as_str()).truncate());
+                            });
+                        });
+                    });
+                    if k + 1 < total {
+                        rule(ui);
+                    }
                 }
             });
-            small_muted(ui, "A chest holds 27 stacks, a double chest 54, a shulker box 27, an inventory 36.");
-            ui.add_space(4.0);
-            egui::Grid::new(("craft-storage", title)).num_columns(3).spacing([14.0, 6.0]).striped(true).show(
-                ui,
-                |ui| {
-                    for r in &s.rows {
-                        let name = book.ds.name(&r.item);
-                        ui.horizontal(|ui| {
-                            self.icon(ui, &r.item, &name, 24.0);
-                            ui.label(name);
-                        });
-                        ui.label(RichText::new(thousands(r.quantity)).strong());
-                        let text = if r.stack <= 1 {
-                            format!("{} slot{}", thousands(r.slots), if r.slots == 1 { "" } else { "s" })
-                        } else if r.partial > 0 {
-                            format!(
-                                "{} full + {} spare, {} slots",
-                                thousands(r.full_stacks),
-                                r.partial,
-                                thousands(r.slots)
-                            )
-                        } else {
-                            format!("{} full stacks, {} slots", thousands(r.full_stacks), thousands(r.slots))
-                        };
-                        ui.label(RichText::new(text).color(c_muted()).size(12.5));
-                        ui.end_row();
-                    }
-                },
-            );
         });
     }
 
@@ -806,7 +835,7 @@ impl CraftState {
         let mut open = true;
         let m = egui::Modal::new(egui::Id::unique("craft-get")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
             ui.set_width(modal_width(ctx, 460.0));
-            ui.label(RichText::new("Get another version").size(19.0).strong());
+            ui.label(RichText::new("Get another version").size(FS_SECTION).semibold());
             ui.add_space(2.0);
             muted(ui, "Only the game file is downloaded, to read its recipes. You can play it later or never.");
             ui.add_space(8.0);
@@ -826,7 +855,9 @@ impl CraftState {
         let m = egui::Modal::new(egui::Id::unique("craft-save")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
             ui.set_width(modal_width(ctx, 420.0));
             ui.label(
-                RichText::new(if existing { "Update your saved plan" } else { "Save this plan" }).size(19.0).strong(),
+                RichText::new(if existing { "Update your saved plan" } else { "Save this plan" })
+                    .size(FS_SECTION)
+                    .semibold(),
             );
             ui.add_space(2.0);
             muted(ui, "It keeps the item, the amount, your choices and what you ticked.");
@@ -866,7 +897,7 @@ impl CraftState {
         let mut done = false;
         let m = egui::Modal::new(egui::Id::unique("craft-rename")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
             ui.set_width(modal_width(ctx, 420.0));
-            ui.label(RichText::new("Rename the plan").size(19.0).strong());
+            ui.label(RichText::new("Rename the plan").size(FS_SECTION).semibold());
             ui.add_space(8.0);
             let r = ui.add_sized(
                 [ui.available_width(), 36.0],
@@ -907,10 +938,10 @@ impl CraftState {
         let book = self.book.clone();
         let m = egui::Modal::new(egui::Id::unique("craft-saved")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
             ui.set_width(modal_width(ctx, 600.0));
-            ui.label(RichText::new("Saved plans").size(19.0).strong());
+            ui.label(RichText::new("Saved plans").size(FS_SECTION).semibold());
             ui.add_space(2.0);
             muted(ui, "Plans live on this computer. Open one to carry on where you stopped.");
-            ui.add_space(8.0);
+            ui.add_space(12.0);
             if self.store.plans.is_empty() {
                 ui.add_space(8.0);
                 muted(ui, "No saved plans yet. Make a plan, then press Save plan.");
@@ -929,53 +960,51 @@ impl CraftState {
                                 .filter(|b| b.ds.version == p.version)
                                 .map_or_else(|| craft::pretty_name(&p.request.item), |b| b.ds.name(&p.request.item));
                             let active = self.active == Some(p.id);
-                            egui::Frame::new()
-                                .fill(if active { c_accent_soft() } else { c_field() })
-                                .corner_radius(CornerRadius::same(10))
-                                .inner_margin(egui::Margin::symmetric(12, 8))
-                                .show(ui, |ui| {
-                                    ui.set_width(ui.available_width());
-                                    ui.horizontal(|ui| {
-                                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                            ui.menu_button("\u{00B7}\u{00B7}\u{00B7}", |ui| {
-                                                if ui.button("Rename").clicked() {
-                                                    row = Some(Row::Rename(k));
-                                                    ui.close();
-                                                }
-                                                if ui.button("Duplicate").clicked() {
-                                                    row = Some(Row::Copy(k));
-                                                    ui.close();
-                                                }
-                                                if ui.button("Export to a file").clicked() {
-                                                    row = Some(Row::Export(k));
-                                                    ui.close();
-                                                }
-                                                if ui.button(RichText::new("Delete").color(c_danger())).clicked() {
-                                                    row = Some(Row::Delete(k));
-                                                    ui.close();
-                                                }
-                                            });
-                                            if ui.button("Open").clicked() {
-                                                row = Some(Row::Open(k));
-                                            }
-                                            ui.vertical(|ui| {
-                                                ui.set_width(ui.available_width());
-                                                ui.spacing_mut().item_spacing.y = 1.0;
-                                                ui.add(egui::Label::new(RichText::new(&p.name).strong()).truncate());
-                                                small_muted(
-                                                    ui,
-                                                    format!(
-                                                        "{} x {} \u{00B7} Minecraft {} \u{00B7} {}",
-                                                        thousands(p.request.quantity),
-                                                        item,
-                                                        p.version,
-                                                        changed_text(p.updated_ms)
-                                                    ),
-                                                );
-                                            });
-                                        });
+                            ui.horizontal(|ui| {
+                                ui.set_min_height(52.0);
+                                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                    kebab_menu(ui, |ui| {
+                                        if ui.button("Rename").clicked() {
+                                            row = Some(Row::Rename(k));
+                                            ui.close();
+                                        }
+                                        if ui.button("Duplicate").clicked() {
+                                            row = Some(Row::Copy(k));
+                                            ui.close();
+                                        }
+                                        if ui.button("Export to a file").clicked() {
+                                            row = Some(Row::Export(k));
+                                            ui.close();
+                                        }
+                                        if ui.button(RichText::new("Delete").color(c_danger())).clicked() {
+                                            row = Some(Row::Delete(k));
+                                            ui.close();
+                                        }
+                                    });
+                                    if secondary(ui, "Open").clicked() {
+                                        row = Some(Row::Open(k));
+                                    }
+                                    if active {
+                                        small_muted(ui, "Open now");
+                                    }
+                                    ui.vertical(|ui| {
+                                        ui.set_width(ui.available_width());
+                                        ui.spacing_mut().item_spacing.y = 1.0;
+                                        ui.add(egui::Label::new(RichText::new(&p.name).semibold()).truncate());
+                                        small_muted(
+                                            ui,
+                                            format!(
+                                                "{} \u{00D7} {} \u{00B7} Minecraft {} \u{00B7} {}",
+                                                thousands(p.request.quantity),
+                                                item,
+                                                p.version,
+                                                changed_text(p.updated_ms)
+                                            ),
+                                        );
                                     });
                                 });
+                            });
+                            rule(ui);
                         }
                     });
             }
@@ -1031,7 +1060,7 @@ impl CraftState {
     }
 }
 
-/// How an item's recipe reads in a list: "Crafting table: 2 Wheat + 1 Cocoa Beans -> 8 Cookie".
+/// How an item's recipe reads in a list: "Crafting table: 2 Wheat + 1 Cocoa Beans → 8 Cookie".
 fn recipe_label(ds: &craft::Dataset, r: &Recipe) -> String {
     let inputs: Vec<String> = r
         .ingredients
@@ -1053,7 +1082,7 @@ fn recipe_label(ds: &craft::Dataset, r: &Recipe) -> String {
         })
         .collect();
     let inputs = if inputs.is_empty() { "by hand".to_string() } else { inputs.join(" + ") };
-    format!("{}: {} -> {} {}", r.kind.station(), inputs, r.count, ds.name(&r.output))
+    format!("{}: {} \u{2192} {} {}", r.kind.station(), inputs, r.count, ds.name(&r.output))
 }
 
 /// The block or item that stands for the station of a step.
@@ -1078,17 +1107,6 @@ fn file_name(name: &str, quantity: u64) -> String {
     let s = s.trim_matches('-').to_string();
     let s = if s.is_empty() { "crafting-plan".to_string() } else { s };
     if quantity > 0 { format!("{s}-{quantity}") } else { s }
-}
-
-/// A thin bar showing how much is done.
-fn progress_bar(ui: &mut Ui, fraction: f32) {
-    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 8.0), egui::Sense::hover());
-    ui.painter().rect_filled(rect, CornerRadius::same(4), c_field());
-    if fraction > 0.0 {
-        let mut fill = rect;
-        fill.set_width((rect.width() * fraction.clamp(0.0, 1.0)).max(8.0));
-        ui.painter().rect_filled(fill, CornerRadius::same(4), c_accent());
-    }
 }
 
 #[cfg(test)]

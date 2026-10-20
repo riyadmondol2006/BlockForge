@@ -53,7 +53,6 @@ pub(super) enum Act {
     Open(PathBuf),
     Copy(String),
     Link(&'static str),
-    BackToTools,
     BackToInstance(String),
 }
 
@@ -155,6 +154,9 @@ pub struct ConvertState {
     /// What the failed run was, for the details.
     pub(super) last_job: Option<ConvertJob>,
     pub(super) last_warnings: Vec<String>,
+    /// The blocks of the set-up do not fit the panel, so the Convert bar is pinned under the scrolling part. Learned
+    /// while drawing; with room to spare the button follows the last block instead.
+    pub(super) bar_pinned: bool,
 }
 
 impl ConvertState {
@@ -181,6 +183,7 @@ impl ConvertState {
             error: None,
             last_job: None,
             last_warnings: Vec::new(),
+            bar_pinned: false,
         }
     }
 
@@ -630,7 +633,6 @@ impl App {
                 self.toast(tr!("Copied"));
             }
             Act::Link(url) => self.open_link(url),
-            Act::BackToTools => self.page = Page::Tools,
             Act::BackToInstance(folder) => self.open_instance(&folder),
         }
     }
@@ -723,11 +725,6 @@ impl App {
         if super::widgets::secondary(ui, &tr!("Add a Bedrock world")).on_hover_text(hint).clicked() {
             self.open_convert(Some(inst));
         }
-    }
-
-    /// The item of the side menu the page belongs to: the Library for an instance's world, else Tools.
-    pub(super) fn convert_nav_page(&self) -> Page {
-        if self.convert.as_ref().is_some_and(|s| s.dest.is_some()) { Page::Library } else { Page::Tools }
     }
 
     /// The entry on the Tools page. Returns whether its button was pressed.

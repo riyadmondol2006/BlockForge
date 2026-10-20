@@ -1,5 +1,7 @@
 //! Settings: the same sections, options, wording and defaults as the Java edition's Settings page. Every change is
-//! saved as it is made.
+//! saved as it is made, and a small "Saved" says so for a moment.
+
+use std::time::{Duration, Instant};
 
 use egui::{Align, Layout, RichText, ScrollArea, Ui};
 
@@ -7,21 +9,102 @@ use super::App;
 use super::theme::{self, *};
 use super::widgets::*;
 
-/// A titled card of rows, with the small coloured heading the Java edition uses.
-fn section(ui: &mut Ui, heading: &str, rows: impl FnOnce(&mut Ui)) {
+/// The widest the page's content gets; a wider window leaves the rest empty rather than stretching the rows.
+const PAGE_WIDTH: f32 = 720.0;
+
+/// How long "Saved" stays on the title row after a setting was saved, and how much of that it takes to fade out.
+const SAVED_FOR: Duration = Duration::from_millis(2000);
+const SAVED_FADE: Duration = Duration::from_millis(400);
+/// The room "Saved" always takes, shown or not, so nothing on the title row moves.
+const SAVED_WIDTH: f32 = 56.0;
+
+fn saved_at_id() -> egui::Id {
+    egui::Id::unique("settings-saved-at")
+}
+
+/// Note that the settings were just saved: the title row of the Settings page shows "Saved" for a moment.
+pub(super) fn mark_saved(ctx: &egui::Context) {
+    ctx.data_mut(|d| d.insert_temp(saved_at_id(), Instant::now()));
+    ctx.request_repaint();
+}
+
+/// How much of "Saved" shows `since` it was saved: all of it for the first part of its time, then fading out, then
+/// nothing (`None`).
+fn saved_alpha(since: Duration) -> Option<f32> {
+    if since >= SAVED_FOR {
+        return None;
+    }
+    let left = SAVED_FOR - since;
+    Some((left.as_secs_f32() / SAVED_FADE.as_secs_f32()).min(1.0))
+}
+
+/// "Saved" in a fixed slot at the right of the title row, there for two seconds after a save and then gone.
+fn saved_stamp(ui: &mut Ui) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(SAVED_WIDTH, 20.0), egui::Sense::hover());
+    let Some(at) = ui.data(|d| d.get_temp::<Instant>(saved_at_id())) else { return };
+    let Some(alpha) = saved_alpha(at.elapsed()) else { return };
+    ui.painter().text(
+        rect.right_center(),
+        egui::Align2::RIGHT_CENTER,
+        "Saved",
+        egui::FontId::proportional(FS_META),
+        c_faint().gamma_multiply(alpha),
+    );
+    ui.ctx().request_repaint_after(Duration::from_millis(50));
+}
+
+/// The title of a block of settings and one muted line about it, above its card.
+pub(super) fn section_head(ui: &mut Ui, title: &str, hint: &str) {
+    ui.add_space(20.0);
+    ui.scope(|ui| {
+        ui.spacing_mut().item_spacing.y = 2.0;
+        ui.label(RichText::new(title).size(FS_SECTION).semibold());
+        if !hint.is_empty() {
+            ui.label(RichText::new(hint).size(FS_META).color(c_muted()));
+        }
+    });
     ui.add_space(8.0);
+}
+
+/// The rules between the rows of one card: call [`Rows::gap`] before each row.
+pub(super) struct Rows {
+    first: bool,
+}
+
+impl Rows {
+    pub(super) fn new() -> Rows {
+        Rows { first: true }
+    }
+
+    /// Nothing before the first row, a rule before every other.
+    pub(super) fn gap(&mut self, ui: &mut Ui) {
+        if std::mem::take(&mut self.first) {
+            return;
+        }
+        // the same room above and below the line, whatever the spacing of the card is
+        let pad = (10.0 - ui.spacing().item_spacing.y).max(0.0);
+        ui.add_space(pad);
+        rule(ui);
+        ui.add_space(pad);
+    }
+}
+
+/// A titled block: the heading with its hint, then one card holding the rows, divided by rules.
+fn section(ui: &mut Ui, title: &str, hint: &str, rows: impl FnOnce(&mut Ui, &mut Rows)) {
+    section_head(ui, title, hint);
     card(ui, |ui| {
-        ui.label(RichText::new(heading.to_uppercase()).size(11.0).strong().color(c_accent()));
-        rows(ui);
+        // the title of a row sits close to its explanation
+        ui.spacing_mut().item_spacing.y = 2.0;
+        rows(ui, &mut Rows::new());
     });
 }
 
-/// A setting row for a control wider than [`setting_row`] leaves room for (a drop-down, a text field, a row of
-/// chips): the explanation keeps clear of the control, and on a narrow page the control goes under the text.
+/// A setting row for a control wider than [`setting_row`] leaves room for (a drop-down, a text field, a segmented
+/// control): the explanation keeps clear of the control, and on a narrow page the control goes under the text.
 pub(super) fn wide_row(ui: &mut Ui, title: &str, hint: &str, control_width: f32, control: impl FnOnce(&mut Ui)) {
     let room = ui.available_width();
     if room < control_width + 240.0 {
-        ui.label(RichText::new(title).strong());
+        ui.label(RichText::new(title).semibold());
         if !hint.is_empty() {
             small_muted(ui, hint);
         }
@@ -31,8 +114,9 @@ pub(super) fn wide_row(ui: &mut Ui, title: &str, hint: &str, control_width: f32,
     }
     ui.horizontal(|ui| {
         ui.vertical(|ui| {
+            ui.spacing_mut().item_spacing.y = 2.0;
             ui.set_max_width(room - control_width - 16.0);
-            ui.label(RichText::new(title).strong());
+            ui.label(RichText::new(title).semibold());
             if !hint.is_empty() {
                 small_muted(ui, hint);
             }
@@ -48,7 +132,6 @@ fn memory_text(mb: u32) -> String {
 /// The computer's memory (total, free) in MB, read again at most every few seconds rather than on every frame.
 pub(super) fn memory_now() -> (u64, u64) {
     use std::sync::Mutex;
-    use std::time::{Duration, Instant};
     static LAST: Mutex<Option<(Instant, (u64, u64))>> = Mutex::new(None);
     let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
     match *last {
@@ -116,7 +199,7 @@ fn text_row(ui: &mut Ui, title: &str, hint: &str, placeholder: &str, value: &str
     let mut committed = None;
     wide_row(ui, title, hint, 300.0, |ui| {
         let width = (ui.available_width() - 8.0).clamp(160.0, 300.0);
-        committed = draft_text(ui, title, value, placeholder, [width, 40.0], egui::Margin::symmetric(12, 10));
+        committed = draft_text(ui, title, value, placeholder, [width, 32.0], egui::Margin::symmetric(10, 7));
     });
     committed
 }
@@ -190,8 +273,16 @@ fn memory_slider_max(total_mb: u64) -> u32 {
 
 impl App {
     pub(super) fn settings_ui(&mut self, ui: &mut Ui) {
-        heading(ui, "Settings");
-        muted(ui, "Changes are saved as you make them.");
+        // the title, and at the right of the same row a "Saved" that shows for a moment after each save
+        ui.scope(|ui| {
+            ui.set_max_width((ui.available_width() - 14.0).min(PAGE_WIDTH));
+            // as tall as the title, like the title row of every other page
+            ui.spacing_mut().interact_size.y = 0.0;
+            ui.horizontal(|ui| {
+                heading(ui, "Settings");
+                ui.with_layout(Layout::right_to_left(Align::Center), saved_stamp);
+            });
+        });
         let mut dirty = false;
         let mut theme_changed = false;
         let mut open_data = false;
@@ -201,10 +292,11 @@ impl App {
         let self_gpus = self.gpus.clone();
         let perf = super::performance::SettingsView::new(self, ui.ctx());
         ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
-            // at most 780 wide, but never wider than the window (set_max_width alone would widen a narrow page)
-            ui.set_max_width(ui.available_width().min(780.0));
+            // at most 760 wide, but never wider than the window (set_max_width alone would widen a narrow page)
+            ui.set_max_width((ui.available_width() - 14.0).min(PAGE_WIDTH));
             let s = &mut self.settings;
-            section(ui, "Appearance", |ui| {
+            section(ui, "Appearance", "How the launcher looks", |ui, r| {
+                r.gap(ui);
                 wide_row(ui, "Theme", "Light and dark looks for the whole launcher", 310.0, |ui| {
                     egui::ComboBox::from_id_salt("theme")
                         .selected_text(theme::theme_label(&s.theme))
@@ -222,7 +314,7 @@ impl App {
                 // no Language row: the window is in English only for now, so a choice there would change nothing.
                 // `language` stays in the settings file for the Java edition.
             });
-            section(ui, "Game", |ui| {
+            section(ui, "Game", "Memory, Java and how games start", |ui, r| {
                 // memory
                 let mut auto = s.automatic_memory != Some(false);
                 let hint = if auto {
@@ -230,6 +322,7 @@ impl App {
                 } else {
                     "Set by hand, for every game without its own setting".to_string()
                 };
+                r.gap(ui);
                 wide_row(ui, "Memory", &hint, if auto { 140.0 } else { 400.0 }, |ui| {
                     if toggle(ui, &mut auto).changed() {
                         s.automatic_memory = Some(auto);
@@ -237,16 +330,27 @@ impl App {
                     }
                     ui.label("Automatic");
                     if !auto {
-                        ui.label(RichText::new(memory_text(s.maximum_memory)).strong().color(c_accent()));
-                        ui.spacing_mut().slider_width = 200.0;
-                        let mut mb = s.maximum_memory.clamp(1024, max_mb);
-                        if ui.add(egui::Slider::new(&mut mb, 1024..=max_mb).step_by(256.0).show_value(false)).changed()
-                        {
-                            s.maximum_memory = mb;
-                            dirty = true;
-                        }
+                        // the row lays out from the right: the amount, then the slider to its left
+                        ui.add_space(16.0);
+                        ui.label(RichText::new(memory_text(s.maximum_memory)).font(super::fonts::medium(FS_BODY)));
+                        ui.scope(|ui| {
+                            // a rail that can be seen, filled in ink up to the handle (like a switch that is on)
+                            ui.visuals_mut().widgets.inactive.bg_fill = c_active();
+                            ui.visuals_mut().selection.bg_fill = c_ink();
+                            ui.spacing_mut().slider_width = 200.0;
+                            let mut mb = s.maximum_memory.clamp(1024, max_mb);
+                            let slider = egui::Slider::new(&mut mb, 1024..=max_mb)
+                                .step_by(256.0)
+                                .show_value(false)
+                                .trailing_fill(true);
+                            if ui.add(slider).changed() {
+                                s.maximum_memory = mb;
+                                dirty = true;
+                            }
+                        });
                     }
                 });
+                r.gap(ui);
                 setting_row(
                     ui,
                     "Speed up game start (class cache)",
@@ -256,6 +360,7 @@ impl App {
                     },
                 );
                 let mut warm = s.extras.get("warmUpGameFiles").and_then(|v| v.as_bool()).unwrap_or(true);
+                r.gap(ui);
                 setting_row(
                     ui,
                     "Read game files ahead of Play",
@@ -267,22 +372,24 @@ impl App {
                         }
                     },
                 );
+                r.gap(ui);
                 wide_row(
                     ui,
                     "Java compiler",
                     "Automatic uses the light one on computers with few cores, for much quicker starts. Full performance can give higher frame rates in long sessions.",
                     300.0,
                     |ui| {
-                        for (mode, label) in
-                            [("auto", "Automatic"), ("fast", "Light"), ("full", "Full performance")]
-                        {
-                            if chip(ui, label, s.startup_mode == mode).clicked() && s.startup_mode != mode {
-                                s.startup_mode = mode.to_string();
-                                dirty = true;
-                            }
+                        const MODES: [(&str, &str); 3] =
+                            [("auto", "Automatic"), ("fast", "Light"), ("full", "Full performance")];
+                        let labels = MODES.map(|(_, label)| label);
+                        let now = MODES.iter().position(|(mode, _)| *mode == s.startup_mode).unwrap_or(usize::MAX);
+                        if let Some(i) = segmented(ui, &labels, now).filter(|&i| i != now) {
+                            s.startup_mode = MODES[i].0.to_string();
+                            dirty = true;
                         }
                     },
                 );
+                r.gap(ui);
                 setting_row(
                     ui,
                     "Pick game settings for this PC on first launch",
@@ -292,11 +399,13 @@ impl App {
                     },
                 );
                 if crate::gpu::supported() {
+                    r.gap(ui);
                     dirty |= graphics_card_row(ui, &mut s.gpu, self_gpus.as_deref());
                 }
                 // an empty path means automatic. The game only falls back to this Java when it doesn't use the one that
                 // comes with Minecraft (an instance's own Java setting), as in the Java edition.
                 let custom = s.using_custom_java_path.then(|| s.java_path.clone()).filter(|p| !p.is_empty());
+                r.gap(ui);
                 if let Some(path) = text_row(
                     ui,
                     "Java path",
@@ -313,8 +422,9 @@ impl App {
                     }
                 }
                 if let Some(warning) = java_path_warning(custom.as_deref()) {
-                    ui.label(RichText::new(warning).color(c_warn()).size(12.0));
+                    ui.add(egui::Label::new(RichText::new(warning).color(c_warn()).size(FS_META)).wrap());
                 }
+                r.gap(ui);
                 if let Some(args) =
                     text_row(ui, "Java arguments", "Extra options passed to the Java virtual machine", "", &s.java_parameters)
                 {
@@ -324,6 +434,7 @@ impl App {
                         dirty = true;
                     }
                 }
+                r.gap(ui);
                 setting_row(
                     ui,
                     "Check for BlockForge updates",
@@ -332,15 +443,22 @@ impl App {
                         dirty |= toggle(ui, &mut s.check_for_launcher_updates).changed();
                     },
                 );
+                r.gap(ui);
                 setting_row(ui, "Keep the launcher open", "Leave BlockForge open while Minecraft is running", |ui| {
                     dirty |= toggle(ui, &mut s.keep_launcher_open).changed();
                 });
+                r.gap(ui);
                 setting_row(ui, "Show the console", "Open the log window next to the launcher", |ui| {
                     dirty |= toggle(ui, &mut s.enable_console).changed();
                 });
-                dirty |= perf.rows(ui, s);
+                // its rows are laid out by their own code, with more room between them than the rest of the card
+                ui.scope(|ui| {
+                    ui.spacing_mut().item_spacing.y = 8.0;
+                    dirty |= perf.rows(ui, s);
+                });
             });
-            section(ui, "Privacy", |ui| {
+            section(ui, "Privacy", "Off unless you turn it on", |ui, r| {
+                r.gap(ui);
                 setting_row(
                     ui,
                     "Share anonymous usage statistics",
@@ -349,6 +467,7 @@ impl App {
                         dirty |= toggle(ui, &mut s.enable_analytics).changed();
                     },
                 );
+                r.gap(ui);
                 setting_row(
                     ui,
                     "Report pack installs and play time",
@@ -358,13 +477,14 @@ impl App {
                     },
                 );
             });
-            section(ui, "Launcher", |ui| {
+            section(ui, "Launcher", "The window, the tray and where files are kept", |ui, r| {
                 let low_end = super::low_end_pc();
                 let hint = if low_end {
                     "Fewer animations and a smaller picture cache. On by default for this computer"
                 } else {
                     "Fewer animations and a smaller picture cache, for computers with 4 GB of memory or less"
                 };
+                r.gap(ui);
                 setting_row(ui, "Light mode for slower PCs", hint, |ui| {
                     let mut on = s.light_mode.unwrap_or(low_end);
                     if toggle(ui, &mut on).changed() {
@@ -373,15 +493,15 @@ impl App {
                         dirty = true;
                     }
                 });
+                r.gap(ui);
                 setting_row(ui, "Tray icon", "Show a tray menu while the launcher runs", |ui| {
                     dirty |= toggle(ui, &mut s.enable_tray_menu).changed();
                 });
+                r.gap(ui);
                 setting_row(ui, "Data folder", "Where instances, mods and logs are stored", |ui| {
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if secondary_icon(ui, super::icons::Icon::Folder, "Open").clicked() {
-                            open_data = true;
-                        }
-                    });
+                    if secondary_icon(ui, super::icons::Icon::Folder, "Open").clicked() {
+                        open_data = true;
+                    }
                 });
             });
             self.services_settings_ui(ui);
@@ -397,6 +517,7 @@ impl App {
         if dirty {
             self.save_settings();
             self.sync_tray();
+            mark_saved(ui.ctx());
         }
     }
 
@@ -459,6 +580,35 @@ mod tests {
         assert_eq!(entered.as_deref(), Some("/opt/jdk"), "Enter hands the typed text back");
         // once left, the field shows the saved value again
         assert_eq!(frame(&ctx, vec![], "saved").0, None);
+    }
+
+    #[test]
+    fn saved_shows_for_two_seconds_and_fades_out() {
+        assert_eq!(saved_alpha(Duration::ZERO), Some(1.0));
+        assert_eq!(saved_alpha(Duration::from_millis(1500)), Some(1.0));
+        let fading = saved_alpha(Duration::from_millis(1800)).unwrap();
+        assert!(fading > 0.0 && fading < 1.0, "fading at 1.8 s: {fading}");
+        assert_eq!(saved_alpha(Duration::from_millis(2000)), None);
+        assert_eq!(saved_alpha(Duration::from_secs(60)), None);
+    }
+
+    #[test]
+    fn the_stamp_is_painted_once_settings_were_saved() {
+        let ctx = egui::Context::default();
+        let texts = |ctx: &egui::Context| {
+            let mut found = Vec::new();
+            let mut out = ctx.run_ui(egui::RawInput::default(), saved_stamp);
+            for clipped in &out.shapes {
+                if let egui::Shape::Text(t) = &clipped.shape {
+                    found.push(t.galley.text().to_string());
+                }
+            }
+            out.textures_delta.clear();
+            found
+        };
+        assert!(!texts(&ctx).iter().any(|t| t == "Saved"), "nothing was saved yet");
+        mark_saved(&ctx);
+        assert!(texts(&ctx).iter().any(|t| t == "Saved"), "shown right after a save");
     }
 
     #[test]

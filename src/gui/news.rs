@@ -1,6 +1,6 @@
 //! The launcher news on the home page, and the window that shows one article in full.
 
-use egui::{Context, CornerRadius, RichText, ScrollArea, Sense, Stroke, Ui};
+use egui::{Align, Context, CornerRadius, Layout, RichText, ScrollArea, Sense, Stroke, Ui};
 
 use super::services::{SvcMsg, modal_scroll_height, modal_width};
 use super::theme::*;
@@ -79,12 +79,12 @@ pub fn render_spans(ui: &mut Ui, spans: &[Span]) {
             for (text, span) in line {
                 match &span.link {
                     Some(url) => {
-                        ui.hyperlink_to(text, url);
+                        ui.add(egui::Hyperlink::from_label_and_url(RichText::new(text).underline(), url));
                     }
                     None => {
                         let mut t = RichText::new(text).color(c_text());
                         if span.bold {
-                            t = t.strong();
+                            t = t.semibold();
                         }
                         if span.italic {
                             t = t.italics();
@@ -97,9 +97,34 @@ pub fn render_spans(ui: &mut Ui, spans: &[Span]) {
     }
 }
 
+/// The article's text on one line, cut at a word (never inside one) with an ellipsis when it is long.
 fn preview(item: &NewsItem) -> String {
     let flat = item.plain_text().split_whitespace().collect::<Vec<_>>().join(" ");
-    if flat.chars().count() > 220 { format!("{}\u{2026}", flat.chars().take(217).collect::<String>()) } else { flat }
+    if flat.chars().count() <= 220 {
+        return flat;
+    }
+    let cut: String = flat.chars().take(217).collect();
+    // back up to the end of the last whole word, unless that would throw most of it away
+    let whole = match cut.rfind(' ') {
+        Some(i) if i > 120 => &cut[..i],
+        _ => cut.as_str(),
+    };
+    format!("{}\u{2026}", whole.trim_end_matches([' ', ',', ';', ':', '.', '-']))
+}
+
+/// `text` as at most two lines of wrapped muted text; what does not fit ends in an ellipsis at the edge.
+fn two_lines(ui: &Ui, text: &str, width: f32) -> std::sync::Arc<egui::Galley> {
+    let mut job = egui::text::LayoutJob::single_section(
+        text.to_string(),
+        egui::TextFormat::simple(egui::FontId::proportional(FS_META), c_muted()),
+    );
+    job.wrap = egui::text::TextWrapping {
+        max_width: width,
+        max_rows: 2,
+        break_anywhere: false,
+        overflow_character: Some('\u{2026}'),
+    };
+    ui.painter().layout_job(job)
 }
 
 impl App {
@@ -115,45 +140,70 @@ impl App {
         ui.add_space(12.0);
         section(ui, "News");
         match &self.svc.news.status {
-            Status::Idle | Status::Loading => {
-                ui.horizontal(|ui| {
-                    ui.spinner();
-                    muted(ui, "Loading the news");
-                });
-            }
+            Status::Idle | Status::Loading => skeleton_rows(ui, 3, 52.0),
             Status::Failed(e) => {
-                small_muted(ui, format!("Couldn't load the news: {e}"));
-                if secondary(ui, "Try again").clicked() {
+                let message = format!("Couldn't load the news: {e}");
+                if notice(ui, NoticeKind::Error, &message, Some("Try again")).is_some_and(|r| r.clicked()) {
                     self.svc.news.status = Status::Idle;
                 }
             }
             Status::Loaded if self.svc.news.items.is_empty() => muted(ui, "No news right now."),
             Status::Loaded => {
                 let mut open = None;
-                for (i, item) in self.svc.news.items.iter().enumerate() {
-                    let resp = egui::Frame::new()
-                        .fill(c_card())
-                        .stroke(Stroke::new(1.0, c_border()))
-                        .corner_radius(CornerRadius::same(14))
-                        .inner_margin(egui::Margin::same(14))
-                        .show(ui, |ui| {
-                            ui.set_width(ui.available_width());
-                            ui.horizontal_wrapped(|ui| {
-                                ui.label(RichText::new(&item.title).strong().size(15.0));
-                                if !item.date.is_empty() {
-                                    small_muted(ui, &item.date);
-                                }
-                            });
-                            ui.add(egui::Label::new(RichText::new(&item.preview).color(c_muted()).size(13.0)).wrap());
-                        })
-                        .response
-                        .interact(Sense::click())
-                        .on_hover_cursor(egui::CursorIcon::PointingHand);
-                    if resp.clicked() {
-                        open = Some(i);
-                    }
-                    ui.add_space(6.0);
-                }
+                // one panel, a rule between the articles; the one under the pointer gets a tone step
+                egui::Frame::new()
+                    .fill(c_card())
+                    .stroke(Stroke::new(1.0, c_border()))
+                    .corner_radius(CornerRadius::same(R_CARD))
+                    .inner_margin(egui::Margin::same(4))
+                    .show(ui, |ui| {
+                        ui.spacing_mut().item_spacing.y = 0.0;
+                        for (i, item) in self.svc.news.items.iter().enumerate() {
+                            if i > 0 {
+                                rule(ui);
+                            }
+                            // the fill is put in behind the contents once it is known whether the row is pointed at
+                            let fill = ui.painter().add(egui::Shape::Noop);
+                            let resp = egui::Frame::new()
+                                .inner_margin(egui::Margin::symmetric(12, 10))
+                                .show(ui, |ui| {
+                                    ui.set_width(ui.available_width());
+                                    ui.spacing_mut().item_spacing.y = 2.0;
+                                    ui.spacing_mut().interact_size.y = 20.0;
+                                    ui.horizontal(|ui| {
+                                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                            if !item.date.is_empty() {
+                                                ui.label(RichText::new(&item.date).size(FS_META).color(c_faint()));
+                                            }
+                                            ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                                                ui.add(
+                                                    egui::Label::new(
+                                                        RichText::new(&item.title).font(super::fonts::medium(FS_BODY)),
+                                                    )
+                                                    .truncate(),
+                                                );
+                                            });
+                                        });
+                                    });
+                                    let galley = two_lines(ui, &item.preview, ui.available_width());
+                                    let (rect, _) = ui.allocate_exact_size(galley.size(), Sense::hover());
+                                    ui.painter().galley(rect.min, galley, c_muted());
+                                })
+                                .response
+                                .interact(Sense::click())
+                                .on_hover_cursor(egui::CursorIcon::PointingHand);
+                            if resp.hovered() {
+                                ui.painter().set(
+                                    fill,
+                                    egui::Shape::rect_filled(resp.rect, CornerRadius::same(R_CONTROL), c_hover()),
+                                );
+                            }
+                            resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &item.title));
+                            if resp.clicked() {
+                                open = Some(i);
+                            }
+                        }
+                    });
                 if open.is_some() {
                     self.svc.news.open = open;
                 }
@@ -171,7 +221,7 @@ impl App {
         let mut close = false;
         egui::Modal::new(egui::Id::unique("news-article")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
             ui.set_width(modal_width(ctx, 620.0));
-            ui.add(egui::Label::new(RichText::new(&item.title).size(21.0).strong()).wrap());
+            ui.add(egui::Label::new(RichText::new(&item.title).size(FS_SECTION).semibold()).wrap());
             if !item.date.is_empty() {
                 small_muted(ui, &item.date);
             }

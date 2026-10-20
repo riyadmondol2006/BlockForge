@@ -6,6 +6,7 @@ use super::convert::{
     Act, CHUNKER_URL, ConvertState, Look, MAX_UNMAPPED, OutputCheck, Pick, Screen, dimension_label, format_elapsed,
     free_name, number,
 };
+use super::craft_fmt::{check_labeled, small_faint};
 use super::icons::Icon;
 use super::theme::*;
 use super::widgets::*;
@@ -16,76 +17,161 @@ use crate::tr;
 const PAGE_WIDTH: f32 = 720.0;
 /// The footer's height, kept free below the scrolling part.
 const FOOTER: f32 = 30.0;
-/// The height of the bar with the Convert button.
-const START_BAR: f32 = 50.0;
+/// The height the pinned bar takes under the scrolling part: the gap, the room above the button, the button.
+const START_BAR: f32 = 46.0;
+/// The gap between the last block and the Convert button when the button follows the blocks.
+const BAR_GAP: f32 = 24.0;
+/// The height of the Convert button.
+const BUTTON_H: f32 = 32.0;
+/// The room below the blocks inside the scrolling part.
+const TAIL: f32 = 8.0;
+/// The height of the dashed area that waits for a world.
+const ZONE_HEIGHT: f32 = 112.0;
 
-/// The small capitals over a card.
-fn label_over(ui: &mut Ui, text: &str) {
-    ui.label(RichText::new(text).size(11.0).strong().color(c_accent()));
+/// A text of a button or a wait with its closing "..." typeset as one ellipsis character. The text in `tr!` stays the
+/// key of the translations as it was written; a translation that ends in three dots is shown the same way.
+fn ellipsis(text: String) -> String {
+    match text.strip_suffix("...") {
+        Some(head) => format!("{head}\u{2026}"),
+        None => text,
+    }
+}
+
+/// A block's label in sentence case. The texts are written in capitals in the source (they are the keys of the
+/// translations), so a text that is all capitals is read as a sentence: "BEDROCK WORLD" -> "Bedrock world".
+fn sentence(text: &str) -> String {
+    let all_caps = text.chars().any(|c| c.is_alphabetic()) && !text.chars().any(|c| c.is_lowercase());
+    if !all_caps {
+        return text.to_string();
+    }
+    let lower = text.to_lowercase();
+    let mut chars = lower.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => String::new(),
+    }
+}
+
+/// The title of a block of the page, with the room under it.
+fn block_title(ui: &mut Ui, text: &str) {
+    ui.label(RichText::new(sentence(text)).size(FS_SECTION).semibold());
     ui.add_space(2.0);
+}
+
+/// One option of a card: its name on the left, its control on the right, both centred on the row. (The shared
+/// `setting_row` puts a title without a hint at the top of the row, so it is not used here.)
+fn option_row(ui: &mut Ui, title: &str, control: impl FnOnce(&mut Ui)) {
+    ui.horizontal(|ui| {
+        ui.set_min_height(32.0);
+        ui.label(RichText::new(title).semibold());
+        ui.with_layout(Layout::right_to_left(Align::Center), control);
+    });
+}
+
+/// The tick boxes of the dimensions in a row, first to last, so Tab visits them in the order they are read. The group
+/// is measured first, as it sits at the right of its row.
+fn dimension_checks(ui: &mut Ui, dims: &mut [(String, bool)]) {
+    let spacing = ui.spacing().item_spacing.x;
+    let labels: Vec<String> = dims.iter().map(|(name, _)| dimension_label(name)).collect();
+    let width: f32 = labels
+        .iter()
+        .map(|l| ui.painter().layout_no_wrap(l.clone(), egui::FontId::proportional(FS_BODY), c_text()).size().x + 28.0)
+        .sum::<f32>()
+        + spacing * labels.len().saturating_sub(1) as f32;
+    ui.allocate_ui_with_layout(vec2(width, 32.0), Layout::left_to_right(Align::Center), |ui| {
+        for ((_, on), label) in dims.iter_mut().zip(&labels) {
+            check_labeled(ui, on, label);
+        }
+    });
 }
 
 impl ConvertState {
     /// Draws the page; returns what it asks the window to do.
     pub(super) fn show(&mut self, ui: &mut Ui) -> Vec<Act> {
         let mut acts = Vec::new();
-        ui.horizontal(|ui| {
-            heading(ui, &if self.dest.is_some() { tr!("Add a Bedrock world") } else { tr!("Convert a Bedrock world") });
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if self.screen != Screen::Running {
-                    match &self.dest {
-                        Some(d) => {
-                            if ui.link(tr!("Back to {0}", &d.name)).clicked() {
+        ui.scope(|ui| {
+            ui.set_max_width((ui.available_width() - 12.0).min(PAGE_WIDTH));
+            ui.horizontal(|ui| {
+                heading(ui, &if self.dest.is_some() { tr!("Add a Bedrock world") } else { tr!("World converter") });
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if self.screen != Screen::Running {
+                        // the standalone converter is a page of its own in the sidebar: nowhere to go back to
+                        if let Some(d) = &self.dest {
+                            if ui.link(RichText::new(tr!("Back to {0}", &d.name)).color(c_muted())).clicked() {
                                 acts.push(Act::BackToInstance(d.folder.clone()));
                             }
                         }
-                        None => {
-                            if ui.link(tr!("Back to Tools")).clicked() {
-                                acts.push(Act::BackToTools);
-                            }
-                        }
                     }
-                }
+                });
             });
-        });
-        match &self.dest {
-            Some(dest) => muted(ui, tr!("Bring a Bedrock world to Java Edition and add it to {0}", &dest.name)),
-            None => muted(ui, tr!("Turn a Bedrock Edition world into a Java Edition world")),
-        }
-        ui.add_space(10.0);
-        // the Convert button stays in view under the scrolling cards
-        let bar = self.screen == Screen::Setup && self.found().is_some();
-        let height = (ui.available_height() - FOOTER - if bar { START_BAR } else { 0.0 }).max(120.0);
-        ScrollArea::vertical().id_salt("convert-page").max_height(height).auto_shrink([false, false]).show(ui, |ui| {
-            ui.set_max_width(ui.available_width().min(PAGE_WIDTH));
-            match self.screen {
-                Screen::Setup => self.setup(ui, &mut acts),
-                Screen::Running => self.running(ui),
-                Screen::Done => self.done(ui, &mut acts),
-                Screen::Failed => self.failed(ui, &mut acts),
+            match &self.dest {
+                Some(dest) => muted(ui, tr!("Bring a Bedrock world to Java Edition and add it to {0}", &dest.name)),
+                None => muted(ui, tr!("Turn a Bedrock Edition world into a Java Edition world")),
             }
-            ui.add_space(8.0);
         });
-        if bar {
-            self.start_bar(ui, &mut acts);
+        ui.add_space(12.0);
+        // The Convert button follows the last block. Only when the blocks do not fit the panel does it stay in view
+        // under the scrolling part, with a hairline over it so the clipped edge of the blocks shows.
+        let has_bar = self.screen == Screen::Setup && self.found().is_some();
+        let room = (ui.available_height() - FOOTER).max(120.0);
+        let pinned = has_bar && self.bar_pinned;
+        let height = if pinned { (room - START_BAR).max(120.0) } else { room };
+        let mut needs_pin = false;
+        let page = ScrollArea::vertical().id_salt("convert-page").max_height(height).auto_shrink([false, false]).show(
+            ui,
+            |ui| {
+                ui.set_max_width((ui.available_width() - 12.0).min(PAGE_WIDTH));
+                match self.screen {
+                    Screen::Setup => self.setup(ui, &mut acts),
+                    Screen::Running => self.running(ui),
+                    Screen::Done => self.done(ui, &mut acts),
+                    Screen::Failed => self.failed(ui, &mut acts),
+                }
+                if has_bar {
+                    // the last block ends at the min rect; the layout adds its item spacing under it
+                    needs_pin = ui.min_rect().height() + BAR_GAP + BUTTON_H > room;
+                }
+                if has_bar && !needs_pin {
+                    ui.add_space(BAR_GAP - ui.spacing().item_spacing.y);
+                    self.start_bar(ui, &mut acts, false);
+                } else {
+                    ui.add_space(TAIL);
+                }
+            },
+        );
+        if has_bar && needs_pin != self.bar_pinned {
+            // the page learned how it fits: draw it again at once with the button where it belongs
+            self.bar_pinned = needs_pin;
+            ui.ctx().request_discard("the Convert button moved under or into the blocks");
+            ui.ctx().request_repaint();
+        }
+        if needs_pin {
+            // a hairline where the blocks are cut off, so the clipped edge reads as an edge
+            let y = page.inner_rect.bottom() + 0.5;
+            ui.painter().hline(ui.max_rect().x_range(), y, Stroke::new(1.0, c_border()));
+            self.start_bar(ui, &mut acts, true);
         }
         self.footer(ui, &mut acts);
-        if self.screen == Screen::Setup {
+        if self.screen == Screen::Setup && !matches!(self.look, Look::Nothing) {
             drop_hint(ui);
         }
         acts
     }
 
-    /// "Powered by Chunker by Hive Games (MIT)", the credit the converter owes its origin.
+    /// "Powered by Chunker by Hive Games (MIT)", the credit the converter owes its origin: one quiet line.
     fn footer(&self, ui: &mut Ui, acts: &mut Vec<Act>) {
-        ui.add_space(6.0);
+        ui.add_space(8.0);
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
-            small_muted(ui, tr!("Powered by"));
-            if ui.link(RichText::new(tr!("Chunker by Hive Games")).size(12.0)).on_hover_text(CHUNKER_URL).clicked() {
+            small_faint(ui, tr!("Powered by"));
+            if ui
+                .link(RichText::new(tr!("Chunker by Hive Games")).size(FS_META).color(c_faint()).underline())
+                .on_hover_text(CHUNKER_URL)
+                .clicked()
+            {
                 acts.push(Act::Link(CHUNKER_URL));
             }
-            small_muted(ui, "(MIT)");
+            small_faint(ui, "(MIT)");
         });
     }
 
@@ -93,142 +179,192 @@ impl ConvertState {
     // Set up
 
     fn setup(&mut self, ui: &mut Ui, acts: &mut Vec<Act>) {
-        self.world_card(ui, acts);
+        self.world_block(ui, acts);
         if self.found().is_none() {
             return;
         }
-        ui.add_space(8.0);
-        self.target_card(ui);
-        ui.add_space(8.0);
-        self.output_card(ui, acts);
+        ui.add_space(16.0);
+        self.target_block(ui);
+        ui.add_space(16.0);
+        self.output_block(ui, acts);
     }
 
-    /// The Convert button, and why it cannot be pressed yet when that is so.
-    fn start_bar(&mut self, ui: &mut Ui, acts: &mut Vec<Act>) {
+    /// The Convert button, and why it cannot be pressed yet when that is so. `pinned`: it sits under the scrolling
+    /// part, with a little more room above it.
+    fn start_bar(&mut self, ui: &mut Ui, acts: &mut Vec<Act>, pinned: bool) {
         let blocked = self.blocked();
-        ui.add_space(8.0);
+        if pinned {
+            ui.add_space(4.0);
+        }
         ui.horizontal(|ui| {
-            if primary_enabled_icon(ui, Icon::Play, &tr!("Convert"), blocked.is_none()).clicked() {
+            if primary_enabled_icon(ui, Icon::Convert, &tr!("Convert"), blocked.is_none()).clicked() {
                 acts.push(Act::Start);
             }
             if let Some(why) = &blocked {
-                ui.add(egui::Label::new(RichText::new(why).color(c_muted()).size(12.5)).wrap());
+                ui.add(egui::Label::new(RichText::new(why).color(c_faint()).size(FS_META)).wrap());
             }
         });
     }
 
-    fn world_card(&mut self, ui: &mut Ui, acts: &mut Vec<Act>) {
-        card(ui, |ui| {
-            label_over(ui, &tr!("BEDROCK WORLD"));
-            match &self.look {
-                Look::Nothing => {
-                    drop_zone(ui);
-                    ui.add_space(8.0);
-                }
-                Look::Busy => {
+    fn world_block(&mut self, ui: &mut Ui, acts: &mut Vec<Act>) {
+        block_title(ui, &tr!("BEDROCK WORLD"));
+        match &self.look {
+            Look::Nothing => {
+                self.drop_zone(ui, acts);
+                return;
+            }
+            Look::Busy => {
+                card(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.spinner();
-                        ui.label(tr!("Looking at the world..."));
+                        ui.label(ellipsis(tr!("Looking at the world...")));
                     });
                     self.source_path(ui);
-                    ui.add_space(4.0);
-                }
-                Look::Unknown(why) => {
+                });
+            }
+            Look::Unknown(why) => {
+                card(ui, |ui| {
                     self.source_path(ui);
-                    ui.add_space(2.0);
-                    ui.add(egui::Label::new(RichText::new(why).color(c_danger())).wrap());
-                    ui.add_space(6.0);
-                }
-                Look::Found(d) => {
+                    ui.add_space(4.0);
+                    notice(ui, NoticeKind::Error, why, None);
+                });
+            }
+            Look::Found(d) => {
+                card(ui, |ui| {
                     ui.horizontal_top(|ui| {
                         ui.vertical(|ui| {
                             ui.set_max_width((ui.available_width() - 120.0).max(160.0));
-                            ui.add(egui::Label::new(RichText::new(&d.name).size(17.0).strong()).truncate());
-                            ui.horizontal(|ui| {
-                                tag(ui, d.edition.label(), edition_color(d.edition));
-                                tag(ui, &d.version, c_muted());
-                                small_muted(ui, human_size(d.size_bytes));
-                            });
-                            ui.add_space(2.0);
+                            ui.spacing_mut().item_spacing.y = 2.0;
+                            ui.add(egui::Label::new(RichText::new(&d.name).size(FS_SECTION).semibold()).truncate());
+                            small_muted(
+                                ui,
+                                format!(
+                                    "{} \u{00B7} {} \u{00B7} {}",
+                                    d.edition.label(),
+                                    d.version,
+                                    human_size(d.size_bytes)
+                                ),
+                            );
                             self.source_path(ui);
                         });
                         ui.with_layout(Layout::right_to_left(Align::TOP), |ui| {
-                            let change = secondary(ui, &tr!("Change..."));
+                            let change = secondary(ui, &ellipsis(tr!("Change...")));
                             egui::Popup::menu(&change).show(|ui| {
                                 ui.set_min_width(150.0);
-                                if ui.button(tr!("A world folder...")).clicked() {
+                                if ui.button(ellipsis(tr!("A world folder..."))).clicked() {
                                     acts.push(Act::Pick(Pick::SourceFolder));
                                     ui.close();
                                 }
-                                if ui.button(tr!("A packed world...")).clicked() {
+                                if ui.button(ellipsis(tr!("A packed world..."))).clicked() {
                                     acts.push(Act::Pick(Pick::SourceFile));
                                     ui.close();
                                 }
                             });
                         });
                     });
-                    return;
-                }
-            }
-            ui.horizontal(|ui| {
-                ui.add_enabled_ui(!self.picking, |ui| {
-                    let (folder, file) = match self.look {
-                        Look::Nothing => (tr!("Choose a folder..."), tr!("Choose a file...")),
-                        _ => (tr!("Another folder..."), tr!("Another file...")),
-                    };
-                    if secondary_icon(ui, Icon::Folder, &folder).clicked() {
-                        acts.push(Act::Pick(Pick::SourceFolder));
-                    }
-                    if secondary(ui, &file).clicked() {
-                        acts.push(Act::Pick(Pick::SourceFile));
-                    }
                 });
+                return;
+            }
+        }
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            ui.add_enabled_ui(!self.picking, |ui| {
+                if secondary_icon(ui, Icon::Folder, &ellipsis(tr!("Another folder..."))).clicked() {
+                    acts.push(Act::Pick(Pick::SourceFolder));
+                }
+                if secondary(ui, &ellipsis(tr!("Another file..."))).clicked() {
+                    acts.push(Act::Pick(Pick::SourceFile));
+                }
+            });
+        });
+    }
+
+    /// The calm dashed area that waits for a world: one sentence, and the two ways to choose one. It takes the hover
+    /// fill under the pointer and the selection fill while a file is dragged over the window.
+    fn drop_zone(&self, ui: &mut Ui, acts: &mut Vec<Act>) {
+        let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), ZONE_HEIGHT), Sense::hover());
+        let dragging = ui.ctx().input(|i| !i.raw.hovered_files.is_empty());
+        let (fill, edge) = if dragging {
+            (Some(c_selection()), c_text())
+        } else if ui.rect_contains_pointer(rect) {
+            (Some(c_hover()), c_control())
+        } else {
+            (None, c_control())
+        };
+        if let Some(fill) = fill {
+            ui.painter().rect_filled(rect, CornerRadius::same(R_CARD), fill);
+        }
+        let outline = rounded_outline(rect.shrink(0.5), f32::from(R_CARD));
+        ui.painter().extend(egui::Shape::dashed_line(&outline, Stroke::new(1.0, edge), 5.0, 4.0));
+        let mut inner = ui.new_child(
+            egui::UiBuilder::new().max_rect(rect.shrink2(vec2(16.0, 0.0))).layout(Layout::top_down(Align::Center)),
+        );
+        inner.spacing_mut().item_spacing.y = 4.0;
+        inner.add_space(14.0);
+        inner.label(RichText::new(tr!("Drop a world here")).font(super::fonts::medium(FS_BODY)));
+        inner.add(
+            egui::Label::new(
+                RichText::new(tr!("A Bedrock world folder, or a world packed as .mcworld or .zip"))
+                    .color(c_muted())
+                    .size(FS_META),
+            )
+            .wrap(),
+        );
+        inner.add_space(8.0);
+        inner.add_enabled_ui(!self.picking, |ui| {
+            // two buttons, centred as a pair
+            let folder = ellipsis(tr!("Choose a folder..."));
+            let file = ellipsis(tr!("Choose a file..."));
+            let est = |t: &str| {
+                ui.painter().layout_no_wrap(t.to_string(), super::fonts::medium(FS_BODY), c_text()).size().x + 28.0
+            };
+            let pair = est(&folder) + 22.0 + est(&file) + ui.spacing().item_spacing.x;
+            ui.horizontal(|ui| {
+                ui.add_space(((ui.available_width() - pair) / 2.0).max(0.0));
+                if secondary_icon(ui, Icon::Folder, &folder).clicked() {
+                    acts.push(Act::Pick(Pick::SourceFolder));
+                }
+                if secondary(ui, &file).clicked() {
+                    acts.push(Act::Pick(Pick::SourceFile));
+                }
             });
         });
     }
 
     fn source_path(&self, ui: &mut Ui) {
         if let Some(src) = &self.source {
-            ui.add(egui::Label::new(RichText::new(src.display().to_string()).color(c_muted()).size(12.5)).truncate());
+            ui.add(
+                egui::Label::new(RichText::new(src.display().to_string()).color(c_faint()).size(FS_META)).truncate(),
+            );
         }
     }
 
-    fn target_card(&mut self, ui: &mut Ui) {
+    fn target_block(&mut self, ui: &mut Ui) {
+        block_title(ui, &tr!("CONVERT TO"));
         card(ui, |ui| {
-            label_over(ui, &tr!("CONVERT TO"));
-            egui::Grid::new("convert-target").num_columns(2).spacing([20.0, 10.0]).show(ui, |ui| {
-                muted(ui, tr!("Game"));
-                // the target is always Java Edition: there is nothing to choose
-                ui.label(RichText::new(Edition::Java.label()).strong());
-                ui.end_row();
-
-                muted(ui, tr!("Version"));
-                ui.horizontal(|ui| {
-                    if self.versions.is_empty() {
-                        small_muted(ui, tr!("No versions are available yet."));
-                    } else {
-                        egui::ComboBox::from_id_salt("convert-version")
-                            .selected_text(&self.version)
-                            .width(180.0)
-                            .show_ui(ui, |ui| {
-                                for v in &self.versions {
-                                    ui.selectable_value(&mut self.version, v.clone(), v);
-                                }
-                            });
-                    }
-                });
-                ui.end_row();
-
-                muted(ui, tr!("Dimensions"));
-                ui.horizontal_wrapped(|ui| {
-                    for (name, on) in &mut self.dims {
-                        ui.checkbox(on, dimension_label(name));
-                    }
-                });
-                ui.end_row();
+            // the target is always Java Edition: there is nothing to choose
+            option_row(ui, &tr!("Game"), |ui| {
+                ui.label(RichText::new(Edition::Java.label()).semibold());
             });
+            rule(ui);
+            option_row(ui, &tr!("Version"), |ui| {
+                if self.versions.is_empty() {
+                    small_muted(ui, tr!("No versions are available yet."));
+                } else {
+                    egui::ComboBox::from_id_salt("convert-version").selected_text(&self.version).width(160.0).show_ui(
+                        ui,
+                        |ui| {
+                            for v in &self.versions {
+                                ui.selectable_value(&mut self.version, v.clone(), v);
+                            }
+                        },
+                    );
+                }
+            });
+            rule(ui);
+            option_row(ui, &tr!("Dimensions"), |ui| dimension_checks(ui, &mut self.dims));
             if let Some(dest) = &self.dest {
-                ui.add_space(4.0);
+                ui.add_space(6.0);
                 if self.version == dest.mc_version {
                     small_muted(ui, tr!("The same version as {0}.", &dest.name));
                 } else if self.versions.contains(&dest.mc_version) {
@@ -256,24 +392,24 @@ impl ConvertState {
         });
     }
 
-    fn output_card(&mut self, ui: &mut Ui, acts: &mut Vec<Act>) {
+    fn output_block(&mut self, ui: &mut Ui, acts: &mut Vec<Act>) {
         let check = self.output_check();
+        block_title(ui, &if self.dest.is_some() { tr!("ADD TO THE INSTANCE AS") } else { tr!("SAVE AS") });
         card(ui, |ui| {
-            label_over(ui, &if self.dest.is_some() { tr!("ADD TO THE INSTANCE AS") } else { tr!("SAVE AS") });
             ui.horizontal(|ui| {
-                let button_w = 150.0;
-                let field = ui.add(
+                let button_w = 130.0;
+                let field = ui.add_sized(
+                    [(ui.available_width() - button_w - 8.0).max(120.0), 32.0],
                     egui::TextEdit::singleline(&mut self.output)
-                        .desired_width((ui.available_width() - button_w - 8.0).max(120.0))
-                        .hint_text(tr!("A folder for the converted world"))
-                        .margin(egui::Margin::symmetric(12, 8))
+                        .hint_text(RichText::new(tr!("A folder for the converted world")).color(c_faint()))
+                        .margin(egui::Margin::symmetric(10, 7))
                         .background_color(c_field()),
                 );
                 if field.changed() {
                     self.output_edited();
                 }
                 ui.add_enabled_ui(!self.picking, |ui| {
-                    if secondary_icon(ui, Icon::Folder, &tr!("Choose...")).clicked() {
+                    if secondary_icon(ui, Icon::Folder, &ellipsis(tr!("Choose..."))).clicked() {
                         acts.push(Act::Pick(Pick::OutputParent));
                     }
                 });
@@ -291,7 +427,7 @@ impl ConvertState {
                     None => small_muted(ui, tr!("The original world is not changed.")),
                 },
                 OutputCheck::Empty => {
-                    ui.label(RichText::new(tr!("Choose where to save the converted world.")).color(c_warn()));
+                    wrapped(ui, tr!("Choose where to save the converted world."), c_warn());
                 }
                 OutputCheck::IsSource => {
                     wrapped(
@@ -316,6 +452,7 @@ impl ConvertState {
                         ),
                         c_warn(),
                     );
+                    ui.add_space(4.0);
                     let free = free_name(std::path::Path::new(self.output.trim()));
                     let name = free.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
                     if secondary(ui, &tr!("Use {0}", name)).clicked() {
@@ -337,29 +474,36 @@ impl ConvertState {
         ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
         let mut stop = false;
         let mut confirmed = false;
+        block_title(ui, &tr!("CONVERTING"));
         card(ui, |ui| {
-            label_over(ui, &tr!("CONVERTING"));
-            ui.add(egui::Label::new(RichText::new(&name).size(17.0).strong()).truncate());
-            ui.horizontal(|ui| {
-                tag(ui, &format!("{} {}", run.job.target.edition.label(), run.job.target.version), c_accent());
-            });
-            ui.add_space(8.0);
-            let stage = if run.stopping { tr!("Stopping...") } else { run.stage.clone() };
-            ui.add(egui::Label::new(stage).truncate());
-            ui.add_space(4.0);
-            let bar = egui::ProgressBar::new(run.progress).desired_height(14.0).animate(run.progress <= 0.0);
-            ui.add(if run.progress > 0.0 { bar.show_percentage() } else { bar });
-            ui.add_space(6.0);
-            ui.horizontal(|ui| {
-                small_muted(ui, tr!("Time passed: {0}", format_elapsed(run.started.elapsed())));
-                let warnings = run.warnings.len() + run.more_warnings;
-                if warnings > 0 {
-                    small_muted(ui, tr_n_warnings(warnings));
-                }
-            });
-            ui.add_space(8.0);
+            ui.add(egui::Label::new(RichText::new(&name).size(FS_SECTION).semibold()).truncate());
+            small_muted(ui, format!("{} {}", run.job.target.edition.label(), run.job.target.version));
+            ui.add_space(12.0);
+            let stage = if run.stopping { ellipsis(tr!("Stopping...")) } else { run.stage.clone() };
+            ui.add(egui::Label::new(RichText::new(stage).color(c_muted())).truncate());
+            ui.add_space(2.0);
+            progress_bar(ui, (run.progress > 0.0).then_some(run.progress), 6.0);
+            ui.add_space(12.0);
+            // "Time passed: 0:42" is one text in the translations; its label and value are told apart again here
+            let passed = tr!("Time passed: {0}", format_elapsed(run.started.elapsed()));
+            let (passed_label, passed_value) = match passed.split_once(": ") {
+                Some((l, v)) => (l.to_string(), v.to_string()),
+                None => (tr!("Time passed"), passed.clone()),
+            };
+            let warnings = run.warnings.len() + run.more_warnings;
+            let progress = if run.progress > 0.0 { format!("{:.0}%", run.progress * 100.0) } else { "\u{2013}".into() };
+            let (progress_label, warnings_label) = (tr!("Progress"), tr!("Warnings"));
+            facts(
+                ui,
+                &[
+                    (progress_label.as_str(), progress),
+                    (passed_label.as_str(), passed_value),
+                    (warnings_label.as_str(), number(warnings as u64)),
+                ],
+            );
+            ui.add_space(12.0);
             ui.add_enabled_ui(!run.stopping, |ui| {
-                if danger_icon(ui, Icon::Stop, &tr!("Cancel")).clicked() {
+                if secondary(ui, &tr!("Cancel")).clicked() {
                     stop = true;
                 }
             });
@@ -389,38 +533,41 @@ impl ConvertState {
         let mut again = false;
         let dest = self.dest.clone();
         card(ui, |ui| {
-            label_over(ui, &tr!("DONE"));
             match &dest {
                 Some(d) => {
-                    ui.label(RichText::new(tr!("Your world was added to {0}", &d.name)).size(19.0).strong());
-                    ui.add_space(2.0);
-                    muted(ui, tr!("It is in the instance's saves folder and shows up in Singleplayer."));
+                    ui.label(RichText::new(tr!("Your world was added to {0}", &d.name)).size(FS_SECTION).semibold());
+                    small_muted(ui, tr!("It is in the instance's saves folder and shows up in Singleplayer."));
                 }
                 None => {
-                    ui.label(RichText::new(tr!("Your world was converted")).size(19.0).strong());
+                    ui.label(RichText::new(tr!("Your world was converted")).size(FS_SECTION).semibold());
                 }
             }
-            ui.add_space(6.0);
-            egui::Grid::new("convert-summary").num_columns(2).spacing([24.0, 8.0]).show(ui, |ui| {
-                muted(ui, tr!("Columns converted"));
-                ui.label(number(s.columns));
-                ui.end_row();
-                muted(ui, tr!("Time taken"));
-                ui.label(format_elapsed(s.elapsed));
-                ui.end_row();
-                muted(ui, tr!("Blocks without a match"));
-                let kinds = s.unmapped_blocks.len();
-                ui.label(if kinds == 0 {
-                    tr!("None")
-                } else {
-                    crate::i18n::tr_n("{0} kind", "{0} kinds", kinds as u64, &[kinds.into()])
-                });
-                ui.end_row();
-                muted(ui, tr!("Saved in"));
-                ui.add(egui::Label::new(s.output.display().to_string()).truncate());
-                ui.end_row();
-            });
+            ui.add_space(12.0);
+            let kinds = s.unmapped_blocks.len();
+            let (columns_label, time_label, unmatched_label) =
+                (tr!("Columns converted"), tr!("Time taken"), tr!("Blocks without a match"));
+            facts(
+                ui,
+                &[
+                    (columns_label.as_str(), number(s.columns)),
+                    (time_label.as_str(), format_elapsed(s.elapsed)),
+                    (
+                        unmatched_label.as_str(),
+                        if kinds == 0 {
+                            tr!("None")
+                        } else {
+                            crate::i18n::tr_n("{0} kind", "{0} kinds", kinds as u64, &[kinds.into()])
+                        },
+                    ),
+                ],
+            );
             ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                small_muted(ui, tr!("Saved in"));
+                ui.add(egui::Label::new(RichText::new(s.output.display().to_string()).size(FS_META)).truncate());
+            });
+            ui.add_space(12.0);
             ui.horizontal(|ui| {
                 match &dest {
                     Some(d) => {
@@ -441,17 +588,17 @@ impl ConvertState {
             });
         });
         if !s.warnings.is_empty() {
-            ui.add_space(8.0);
+            ui.add_space(12.0);
             card(ui, |ui| {
-                egui::CollapsingHeader::new(RichText::new(tr_n_warnings(s.warnings.len())).strong())
+                egui::CollapsingHeader::new(RichText::new(tr_n_warnings(s.warnings.len())).semibold())
                     .id_salt("convert-warnings")
                     .default_open(false)
                     .show(ui, |ui| {
                         ScrollArea::vertical().max_height(180.0).auto_shrink([false, true]).show(ui, |ui| {
                             for w in &s.warnings {
                                 ui.horizontal_top(|ui| {
-                                    ui.label(RichText::new("\u{2022}").color(c_warn()));
-                                    ui.add(egui::Label::new(w).wrap());
+                                    ui.label(RichText::new("\u{2022}").color(c_muted()));
+                                    ui.add(egui::Label::new(RichText::new(w).color(c_muted())).wrap());
                                 });
                             }
                         });
@@ -459,17 +606,18 @@ impl ConvertState {
             });
         }
         if !s.unmapped_blocks.is_empty() {
-            ui.add_space(8.0);
+            ui.add_space(12.0);
             card(ui, |ui| {
-                ui.label(RichText::new(tr!("Blocks without an exact match")).strong());
+                ui.label(RichText::new(tr!("Blocks without an exact match")).semibold());
                 small_muted(ui, tr!("These blocks have no exact equivalent in the new version."));
-                ui.add_space(4.0);
-                unmapped_row(ui, &tr!("Block"), &tr!("Count"), true, false);
-                for (i, (block, count)) in s.unmapped_blocks.iter().take(MAX_UNMAPPED).enumerate() {
-                    unmapped_row(ui, block, &number(*count), false, i % 2 == 0);
+                ui.add_space(6.0);
+                unmapped_row(ui, &tr!("Block"), &tr!("Count"), true);
+                for (block, count) in s.unmapped_blocks.iter().take(MAX_UNMAPPED) {
+                    unmapped_row(ui, block, &number(*count), false);
                 }
                 let more = s.unmapped_blocks.len().saturating_sub(MAX_UNMAPPED);
                 if more > 0 {
+                    ui.add_space(4.0);
                     small_muted(ui, tr!("and {0} more", more));
                 }
             });
@@ -480,29 +628,37 @@ impl ConvertState {
     }
 
     fn failed(&mut self, ui: &mut Ui, acts: &mut Vec<Act>) {
-        card(ui, |ui| {
-            ui.label(RichText::new(tr!("THE WORLD COULD NOT BE CONVERTED")).size(11.0).strong().color(c_danger()));
-            ui.add_space(2.0);
-            let message = self.error.clone().unwrap_or_default();
-            ui.add(egui::Label::new(RichText::new(message).size(15.0)).wrap());
-            ui.add_space(4.0);
-            small_muted(
-                ui,
-                tr!("The original world is not changed. \"Copy details\" copies what to send when you ask for help."),
-            );
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                if primary(ui, &tr!("Try again")).clicked() {
-                    self.screen = Screen::Setup;
-                    self.error = None;
-                }
-                if secondary(ui, &tr!("Copy details")).clicked() {
-                    acts.push(Act::Copy(self.details()));
-                }
-                if secondary(ui, &tr!("Choose another world")).clicked() {
-                    self.start_over();
-                }
-            });
+        let message = self.error.clone().unwrap_or_default();
+        let details = self.details();
+        notice(ui, NoticeKind::Error, &sentence(&tr!("THE WORLD COULD NOT BE CONVERTED")), None);
+        ui.add_space(8.0);
+        ui.add(egui::Label::new(RichText::new(message).size(FS_BODY).color(c_text())).wrap());
+        ui.add_space(8.0);
+        small_muted(
+            ui,
+            tr!("The original world is not changed. \"Copy details\" copies what to send when you ask for help."),
+        );
+        ui.add_space(4.0);
+        egui::CollapsingHeader::new(RichText::new(tr!("Details")).color(c_muted())).id_salt("convert-details").show(
+            ui,
+            |ui| {
+                ScrollArea::vertical().max_height(160.0).auto_shrink([false, true]).show(ui, |ui| {
+                    ui.add(egui::Label::new(RichText::new(details).monospace().size(FS_META).color(c_muted())).wrap());
+                });
+            },
+        );
+        ui.add_space(12.0);
+        ui.horizontal(|ui| {
+            if secondary(ui, &tr!("Try again")).clicked() {
+                self.screen = Screen::Setup;
+                self.error = None;
+            }
+            if ghost(ui, &tr!("Copy details")).clicked() {
+                acts.push(Act::Copy(self.details()));
+            }
+            if ghost(ui, &tr!("Choose another world")).clicked() {
+                self.start_over();
+            }
         });
     }
 }
@@ -512,7 +668,7 @@ fn stop_modal(ctx: &egui::Context) -> Option<bool> {
     let mut answer = None;
     egui::Modal::new(egui::Id::unique("convert-stop")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
         ui.set_width(super::services::modal_width(ctx, 420.0));
-        ui.label(RichText::new(tr!("Cancel the conversion?")).size(19.0).strong());
+        ui.label(RichText::new(tr!("Cancel the conversion?")).size(FS_SECTION).semibold());
         ui.add_space(4.0);
         muted(ui, tr!("The new world is not finished and will not work properly. The original world is not changed."));
         ui.add_space(12.0);
@@ -531,73 +687,38 @@ fn stop_modal(ctx: &egui::Context) -> Option<bool> {
     answer
 }
 
-/// A row of the table of blocks without a match: the name on the left, the count on the right.
-fn unmapped_row(ui: &mut Ui, name: &str, count: &str, header: bool, shaded: bool) {
-    let fill = if shaded { c_field() } else { Color32::TRANSPARENT };
-    egui::Frame::new()
-        .fill(fill)
-        .corner_radius(CornerRadius::same(6))
-        .inner_margin(egui::Margin::symmetric(8, 3))
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            let size = vec2(ui.available_width(), 18.0);
-            ui.allocate_ui_with_layout(size, Layout::right_to_left(Align::Center), |ui| {
-                if header {
-                    ui.label(RichText::new(count).color(c_muted()).size(12.0));
-                } else {
-                    ui.label(RichText::new(count).monospace().size(12.5));
-                }
-                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                    if header {
-                        ui.label(RichText::new(name).color(c_muted()).size(12.0));
-                    } else {
-                        ui.add(egui::Label::new(RichText::new(name).monospace().size(12.5)).truncate());
-                    }
-                });
-            });
-        });
+/// A row of the table of blocks without a match: the name on the left, the count on the right, a hairline under it.
+fn unmapped_row(ui: &mut Ui, name: &str, count: &str, header: bool) {
+    let height = if header { 22.0 } else { 28.0 };
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
+    let painter = ui.painter();
+    let (color, font_name, font_count) = if header {
+        (c_muted(), egui::FontId::proportional(FS_META), egui::FontId::proportional(FS_META))
+    } else {
+        (c_text(), egui::FontId::monospace(FS_META), egui::FontId::proportional(FS_BODY))
+    };
+    painter.with_clip_rect(rect.shrink2(vec2(0.0, 0.0)).with_max_x(rect.right() - 80.0)).text(
+        rect.left_center(),
+        egui::Align2::LEFT_CENTER,
+        name,
+        font_name,
+        color,
+    );
+    painter.text(rect.right_center(), egui::Align2::RIGHT_CENTER, count, font_count, color);
+    painter.hline(rect.x_range(), rect.bottom(), Stroke::new(1.0, c_rule()));
 }
 
 fn tr_n_warnings(n: usize) -> String {
     crate::i18n::tr_n("{0} warning", "{0} warnings", n as u64, &[n.into()])
 }
 
-fn edition_color(e: Edition) -> Color32 {
-    match e {
-        Edition::Java => c_accent(),
-        Edition::Bedrock => c_warn(),
-    }
-}
-
-/// A wrapped line of coloured text.
+/// A wrapped line of coloured small text, for what is said under a field.
 fn wrapped(ui: &mut Ui, text: String, color: Color32) {
-    ui.add(egui::Label::new(RichText::new(text).color(color)).wrap());
+    ui.add(egui::Label::new(RichText::new(text).color(color).size(FS_META)).wrap());
 }
 
-/// The dashed box a world can be dropped on.
-fn drop_zone(ui: &mut Ui) {
-    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 100.0), Sense::hover());
-    ui.painter().rect_filled(rect, CornerRadius::same(10), c_field());
-    let r = rect.shrink(1.0);
-    let corners = [r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom(), r.left_top()];
-    ui.painter().extend(egui::Shape::dashed_line(&corners, Stroke::new(1.5, c_border()), 6.0, 5.0));
-    let wrap = rect.width() - 32.0;
-    let title = ui.painter().layout(tr!("Drop a world here"), egui::FontId::proportional(17.0), c_text(), wrap);
-    let hint = ui.painter().layout(
-        tr!("A Bedrock world folder, or a world packed as .mcworld or .zip"),
-        egui::FontId::proportional(14.0),
-        c_muted(),
-        wrap,
-    );
-    let total = title.size().y + 4.0 + hint.size().y;
-    let top = rect.center().y - total / 2.0;
-    let title_pos = egui::pos2(rect.center().x - title.size().x / 2.0, top);
-    let hint_pos = egui::pos2(rect.center().x - hint.size().x / 2.0, top + title.size().y + 4.0);
-    ui.painter().galley(title_pos, title, c_text());
-    ui.painter().galley(hint_pos, hint, c_muted());
-}
-
-/// Shown over the page while files are dragged above the window.
+/// Shown over the page while files are dragged above the window, when no drop area is on show: the selection fill and a
+/// plain edge, not colour.
 fn drop_hint(ui: &mut Ui) {
     if ui.ctx().input(|i| i.raw.hovered_files.is_empty()) {
         return;
@@ -605,18 +726,50 @@ fn drop_hint(ui: &mut Ui) {
     let rect = ui.max_rect();
     let painter =
         ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Foreground, ui.scope_id().with("convert-drop")));
-    painter.rect_filled(rect, CornerRadius::same(12), c_accent_soft());
+    painter.rect_filled(rect, CornerRadius::same(R_CARD), c_selection());
     painter.rect_stroke(
         rect.shrink(4.0),
-        CornerRadius::same(12),
-        Stroke::new(2.0, c_accent()),
+        CornerRadius::same(R_CARD),
+        Stroke::new(2.0, c_text()),
         egui::StrokeKind::Inside,
     );
     painter.text(
         rect.center(),
         egui::Align2::CENTER_CENTER,
         tr!("Drop the world to convert it"),
-        egui::FontId::proportional(20.0),
+        super::fonts::semibold(FS_TITLE),
         c_text(),
     );
+}
+
+/// The outline of a rectangle with round corners, as points to draw a dashed line along.
+fn rounded_outline(rect: egui::Rect, radius: f32) -> Vec<egui::Pos2> {
+    let r = radius.min(rect.width() / 2.0).min(rect.height() / 2.0);
+    let corners = [
+        (egui::pos2(rect.right() - r, rect.top() + r), -std::f32::consts::FRAC_PI_2),
+        (egui::pos2(rect.right() - r, rect.bottom() - r), 0.0),
+        (egui::pos2(rect.left() + r, rect.bottom() - r), std::f32::consts::FRAC_PI_2),
+        (egui::pos2(rect.left() + r, rect.top() + r), std::f32::consts::PI),
+    ];
+    let mut points = Vec::new();
+    for (centre, start) in corners {
+        for k in 0..=6 {
+            let a = start + std::f32::consts::FRAC_PI_2 * k as f32 / 6.0;
+            points.push(centre + vec2(a.cos(), a.sin()) * r);
+        }
+    }
+    points.push(points[0]);
+    points
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ellipsis;
+
+    #[test]
+    fn a_closing_three_dots_becomes_one_ellipsis() {
+        assert_eq!(ellipsis("Choose...".to_string()), "Choose\u{2026}");
+        assert_eq!(ellipsis("Change".to_string()), "Change");
+        assert_eq!(ellipsis("A... b".to_string()), "A... b");
+    }
 }

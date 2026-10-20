@@ -1,14 +1,49 @@
 //! The Tools page: clean up, diagnose problems and keep things tidy.
 
-use egui::{CornerRadius, RichText, ScrollArea, Stroke, Ui};
+use egui::{Align, Layout, RichText, ScrollArea, Ui};
 
 use super::services::{NetReport, SvcMsg, confirm_modal, modal_scroll_height, modal_width};
 use super::theme::*;
 use super::widgets::*;
-use super::{App, Msg};
-use crate::tools::{self, NetworkCheckOptions, TOOLS, ToolInfo};
+use super::{App, Msg, Page};
+use crate::tools::{self, NetworkCheckOptions, TOOLS};
 
-const CARD_WIDTH: f32 = 300.0;
+/// The widest the list of tools gets.
+const LIST_WIDTH: f32 = 720.0;
+
+/// The tools that look at things and the ones that tidy up, in the order each group shows them. Every tool of
+/// [`TOOLS`] is in one of the two.
+const DIAGNOSE: [&str; 3] = ["network_checker", "support_bundle", "debug_mode"];
+const CLEAN_UP: [&str; 5] =
+    ["log_clearer", "download_clearer", "class_cache_clearer", "libraries_deleter", "skin_updater"];
+
+/// The tools that delete things the player may want to think about: their button is red and asks first.
+fn is_destructive(id: &str) -> bool {
+    matches!(id, "download_clearer" | "libraries_deleter")
+}
+
+/// Where the player can fix what stops a tool from running.
+#[derive(Clone, Copy)]
+enum Fix {
+    Settings,
+    Accounts,
+}
+
+impl Fix {
+    fn label(self) -> &'static str {
+        match self {
+            Fix::Settings => "Open Settings",
+            Fix::Accounts => "Open Accounts",
+        }
+    }
+
+    fn page(self) -> Page {
+        match self {
+            Fix::Settings => Page::Settings,
+            Fix::Accounts => Page::Accounts,
+        }
+    }
+}
 
 /// Whether this copy runs in a Flatpak; it can't change while the launcher runs, so it is looked up once.
 static FLATPAK: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
@@ -27,48 +62,74 @@ impl App {
     pub(super) fn tools_ui(&mut self, ui: &mut Ui) {
         heading(ui, "Tools");
         muted(ui, "Clean up, diagnose problems and keep things tidy");
-        ui.add_space(10.0);
         // the network checker needs `enableLogs`, which is a plain field of the settings (no need to read them all)
         let logs_on = self.settings.enable_logs;
         let flatpak = *FLATPAK.get_or_init(tools::is_flatpak);
-        let per_row = ((ui.available_width() + 12.0) / (CARD_WIDTH + 12.0)).floor().max(1.0) as usize;
+        let no_accounts = self.accounts.is_empty();
         let mut clicked: Option<&'static str> = None;
+        let mut go: Option<Fix> = None;
         #[cfg(feature = "converter")]
         let mut open_convert = false;
         ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
-            // the world converter has a card of its own, first (it opens a page, not a job)
-            #[allow(unused_mut)]
-            let mut cards: Vec<Option<&ToolInfo>> = Vec::new();
-            #[cfg(feature = "converter")]
-            cards.push(None);
-            cards.extend(TOOLS.iter().map(Some));
-            for row in cards.chunks(per_row) {
-                ui.horizontal_top(|ui| {
-                    for tool in row {
-                        let Some(tool) = tool else {
-                            #[cfg(feature = "converter")]
-                            if self.convert_tool_card(ui) {
-                                open_convert = true;
+            // at most 720 wide, but never wider than the window
+            ui.set_max_width((ui.available_width() - 14.0).min(LIST_WIDTH));
+            for (title, ids) in [("Diagnose", &DIAGNOSE[..]), ("Clean up", &CLEAN_UP[..])] {
+                group(ui, title, |ui, rows| {
+                    for tool in ids.iter().filter_map(|id| TOOLS.iter().find(|t| t.id == *id)) {
+                        rows.gap(ui);
+                        // what stops a tool from running now, and where that is fixed
+                        let (enabled, hint): (bool, Option<(&str, Option<Fix>)>) = match tool.id {
+                            "network_checker" if !logs_on => (
+                                false,
+                                Some((
+                                    "Turn on \"Report pack installs and play time\" in Settings first.",
+                                    Some(Fix::Settings),
+                                )),
+                            ),
+                            "debug_mode" if flatpak => (false, Some(("Not available in a Flatpak.", None))),
+                            "debug_mode" if tools::is_debug_enabled() => {
+                                (false, Some(("Debug mode is already on.", None)))
                             }
-                            continue;
-                        };
-                        let (enabled, hint) = match tool.id {
-                            "network_checker" if !logs_on => {
-                                (false, Some("Turn on \"Report pack installs and play time\" in Settings first."))
+                            "skin_updater" if no_accounts => {
+                                (false, Some(("Add an account first.", Some(Fix::Accounts))))
                             }
-                            "debug_mode" if flatpak => (false, Some("Not available in a Flatpak.")),
-                            "debug_mode" if tools::is_debug_enabled() => (false, Some("Debug mode is already on.")),
-                            "skin_updater" if self.accounts.is_empty() => (false, Some("Add an account first.")),
                             _ => (true, None),
                         };
-                        if tool_card(ui, tool, enabled, hint) {
+                        let action = if is_destructive(tool.id) {
+                            format!("{}\u{2026}", tool.action)
+                        } else {
+                            tool.action.to_string()
+                        };
+                        let out = tool_row(
+                            ui,
+                            tool.name,
+                            tool.description,
+                            &action,
+                            if is_destructive(tool.id) { Button::Danger } else { Button::Plain },
+                            enabled,
+                            hint,
+                        );
+                        if out.pressed {
                             clicked = Some(tool.id);
+                        }
+                        if out.fix.is_some() {
+                            go = out.fix;
                         }
                     }
                 });
-                ui.add_space(12.0);
             }
+            // the world converter has a row of its own (it opens a page, not a job)
+            #[cfg(feature = "converter")]
+            group(ui, "Worlds", |ui, _rows| {
+                if self.convert_tool_card(ui) {
+                    open_convert = true;
+                }
+            });
+            ui.add_space(16.0);
         });
+        if let Some(fix) = go {
+            self.page = fix.page();
+        }
         if let Some(id) = clicked {
             self.tool_clicked(id);
         }
@@ -194,7 +255,7 @@ impl App {
                     let mut answer = None;
                     egui::Modal::new(egui::Id::unique("tool-confirm")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
                         ui.set_width(modal_width(ctx, 460.0));
-                        ui.label(RichText::new("Network checker").size(19.0).strong());
+                        ui.label(RichText::new("Network checker").size(FS_SECTION).semibold());
                         ui.add_space(4.0);
                         muted(ui, tools::NETWORK_CHECKER_WARNING);
                         ui.add_space(6.0);
@@ -250,12 +311,12 @@ impl App {
             if let Some(report) = &self.svc.net_report {
                 egui::Modal::new(egui::Id::unique("net-report")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
                     ui.set_width(modal_width(ctx, 680.0));
-                    ui.label(RichText::new("Network checker").size(21.0).strong());
+                    ui.label(RichText::new("Network checker").size(FS_SECTION).semibold());
                     match (&report.link, &report.error) {
                         (Some(link), _) => {
                             small_muted(ui, "The result was shared so problems can be diagnosed. Link:");
                             ui.horizontal(|ui| {
-                                ui.hyperlink(link);
+                                ui.add(egui::Hyperlink::from_label_and_url(RichText::new(link).underline(), link));
                                 if secondary(ui, "Copy link").clicked() {
                                     copy = Some(link.clone());
                                 }
@@ -299,12 +360,82 @@ impl App {
     }
 }
 
-/// One card of the grid. Returns whether its button was pressed.
-fn tool_card(ui: &mut Ui, tool: &ToolInfo, enabled: bool, hint: Option<&str>) -> bool {
-    card_frame(ui, tool.name, tool.description, tool.action, enabled, hint)
+/// A titled group of rows in one card, divided by rules: call `rows.gap(ui)` before each row.
+fn group(ui: &mut Ui, title: &str, rows: impl FnOnce(&mut Ui, &mut super::settings::Rows)) {
+    super::settings::section_head(ui, title, "");
+    card(ui, |ui| {
+        // the name of a row sits close to what it says
+        ui.spacing_mut().item_spacing.y = 2.0;
+        rows(ui, &mut super::settings::Rows::new());
+    });
 }
 
-/// A card with a title, a description and a button, as the grid draws them. Returns whether the button was pressed.
+/// How a row's button looks.
+#[derive(Clone, Copy, PartialEq)]
+enum Button {
+    Plain,
+    Danger,
+}
+
+/// What a row did this frame.
+struct RowOut {
+    pressed: bool,
+    /// The link next to the reason a tool can't run was pressed.
+    fix: Option<Fix>,
+}
+
+/// A row of the list: the name, what the tool does and, when it can't be used now, why (with a link to where that is
+/// fixed); then its button on the right.
+fn tool_row(
+    ui: &mut Ui,
+    name: &str,
+    description: &str,
+    action: &str,
+    button: Button,
+    enabled: bool,
+    hint: Option<(&str, Option<Fix>)>,
+) -> RowOut {
+    let mut out = RowOut { pressed: false, fix: None };
+    // the text makes room for the button (as wide as it was on the last frame)
+    let id = ui.scope_id().with(("tool-row", name));
+    let button_w = remembered_width(ui, id, 80.0);
+    ui.horizontal(|ui| {
+        ui.vertical(|ui| {
+            ui.set_max_width((ui.available_width() - button_w - 16.0).max(140.0));
+            ui.spacing_mut().item_spacing.y = 2.0;
+            ui.label(RichText::new(name).semibold());
+            ui.add(egui::Label::new(RichText::new(description).color(c_muted()).size(FS_META)).wrap());
+            if let Some((reason, fix)) = hint {
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing = egui::vec2(6.0, 2.0);
+                    ui.spacing_mut().interact_size.y = 16.0;
+                    ui.label(RichText::new(reason).color(c_faint()).size(FS_META));
+                    if let Some(fix) = fix {
+                        if ui.link(RichText::new(fix.label()).size(FS_META).underline()).clicked() {
+                            out.fix = Some(fix);
+                        }
+                    }
+                });
+            }
+        });
+        let used = ui
+            .with_layout(Layout::right_to_left(Align::Center), |ui| {
+                // a tool that can't run now shows its button greyed out, and the reason under its name
+                out.pressed = match (button, enabled) {
+                    (Button::Plain, _) => secondary_enabled(ui, action, enabled).clicked(),
+                    (Button::Danger, true) => danger(ui, action).clicked(),
+                    (Button::Danger, false) => danger_enabled(ui, action, false).clicked(),
+                };
+                ui.min_rect().width()
+            })
+            .inner;
+        remember_width(ui, id, used);
+    });
+    out
+}
+
+#[cfg_attr(not(feature = "converter"), allow(dead_code))]
+/// A row of the list, as the world converter's entry uses it. Returns whether its button was pressed.
 pub(super) fn card_frame(
     ui: &mut Ui,
     name: &str,
@@ -313,28 +444,7 @@ pub(super) fn card_frame(
     enabled: bool,
     hint: Option<&str>,
 ) -> bool {
-    let mut clicked = false;
-    egui::Frame::new()
-        .fill(c_card())
-        .stroke(Stroke::new(1.0, c_border()))
-        .corner_radius(CornerRadius::same(16))
-        .inner_margin(egui::Margin::same(16))
-        .show(ui, |ui| {
-            ui.set_width(CARD_WIDTH - 34.0);
-            ui.set_min_height(130.0);
-            ui.vertical(|ui| {
-                ui.label(RichText::new(name).strong().size(15.5));
-                ui.add(egui::Label::new(RichText::new(description).color(c_muted()).size(12.5)).wrap());
-                if let Some(h) = hint {
-                    ui.add_space(2.0);
-                    ui.add(egui::Label::new(RichText::new(h).color(c_warn()).size(12.0)).wrap());
-                }
-                ui.add_space(8.0);
-                clicked = primary_enabled(ui, action, enabled).clicked();
-            });
-        });
-    ui.add_space(4.0);
-    clicked
+    tool_row(ui, name, description, action, Button::Plain, enabled, hint.map(|h| (h, None))).pressed
 }
 
 #[cfg(test)]
@@ -346,12 +456,20 @@ mod tests {
         let ctx = egui::Context::default();
         let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
             for tool in TOOLS.iter() {
-                assert!(!tool_card(ui, tool, true, None), "nothing was pressed");
+                assert!(!card_frame(ui, tool.name, tool.description, tool.action, true, None), "nothing was pressed");
             }
-            tool_card(ui, &TOOLS[0], false, Some("Turn on logs first."));
+            card_frame(ui, TOOLS[0].name, TOOLS[0].description, TOOLS[0].action, false, Some("Turn on logs first."));
         });
         assert!(out.shapes.len() >= TOOLS.len());
         out.textures_delta.clear();
+    }
+
+    #[test]
+    fn every_tool_is_in_a_group() {
+        for tool in TOOLS.iter() {
+            let groups = [&DIAGNOSE[..], &CLEAN_UP[..]].iter().filter(|g| g.contains(&tool.id)).count();
+            assert_eq!(groups, 1, "{} is in one group", tool.id);
+        }
     }
 
     #[test]

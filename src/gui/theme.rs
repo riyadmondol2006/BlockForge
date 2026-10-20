@@ -20,67 +20,126 @@ fn pick(dark: u32, light: u32) -> Color32 {
     Color32::from_rgb((v >> 16) as u8, (v >> 8) as u8, v as u8)
 }
 
-/// Window background.
+// The palette. Neutral greys with the faintest green in them; the green accent is kept for the one main action on a
+// screen, for progress and for what is switched on. Everything else (selection, tabs, filters) is ink on ground, so
+// colour means something when it shows.
+
+/// Window background; the sidebar sits on the same ground.
 pub fn c_bg() -> Color32 {
-    pick(0x0E1210, 0xF3F6EF)
+    pick(0x0E100F, 0xF4F5F4)
 }
-/// Sidebar background.
+/// The sidebar. The same ground as the window, divided from it by one line.
 pub fn c_surface() -> Color32 {
-    pick(0x121712, 0xE8EEE3)
+    c_bg()
 }
-/// Cards and raised surfaces.
+/// Cards and panels.
 pub fn c_card() -> Color32 {
-    pick(0x1A201B, 0xFFFFFF)
-}
-pub fn c_card_hover() -> Color32 {
-    pick(0x222A23, 0xEEF4E9)
+    pick(0x171A18, 0xFFFFFF)
 }
 /// Inputs and tonal buttons.
 pub fn c_field() -> Color32 {
-    pick(0x232B24, 0xE2E9DC)
+    pick(0x1D201E, 0xFFFFFF)
+}
+/// The fill of a row, a nav item or a ghost button under the pointer.
+pub fn c_hover() -> Color32 {
+    pick(0x222624, 0xEAEDEB)
+}
+/// The open nav item, a pressed button, a selected segment, an empty cell of the play strip.
+pub fn c_active() -> Color32 {
+    pick(0x2A2E2C, 0xDEE2DF)
+}
+/// Old names for the hover fill, kept so older code reads the same.
+pub fn c_card_hover() -> Color32 {
+    c_hover()
 }
 pub fn c_field_hover() -> Color32 {
-    pick(0x2C362D, 0xD5DECE)
+    c_hover()
 }
+/// Menus, dialogs and tooltips: what floats sits one step above the cards.
+pub fn c_raised() -> Color32 {
+    pick(0x1F2321, 0xFFFFFF)
+}
+/// The line around cards and panels: barely there.
 pub fn c_border() -> Color32 {
-    pick(0x2E382F, 0xD3DCCC)
+    pick(0x272B29, 0xE2E5E3)
+}
+/// The line between rows inside one card or list.
+pub fn c_rule() -> Color32 {
+    pick(0x202422, 0xEDEFEE)
+}
+/// The line around things you can press: one step stronger than a card's.
+pub fn c_control() -> Color32 {
+    pick(0x3C413E, 0xC9CECB)
 }
 pub fn c_text() -> Color32 {
-    pick(0xE7ECE4, 0x141A15)
+    pick(0xECEEED, 0x121413)
 }
 pub fn c_muted() -> Color32 {
-    pick(0x9BA89C, 0x586558)
+    pick(0xA7ADA9, 0x565D59)
 }
+/// Meta text, placeholders and the like (4.5:1 on the cards). Never on `c_active` or `c_selection`: use `c_muted` there.
+pub fn c_faint() -> Color32 {
+    pick(0x8C928E, 0x616864)
+}
+/// The ink fill: the main action of a screen, a selected filter, the tab indicator, a switch that is on.
+pub fn c_ink() -> Color32 {
+    pick(0xECEEED, 0x1B1E1C)
+}
+pub fn c_ink_hover() -> Color32 {
+    pick(0xFFFFFF, 0x2E322F)
+}
+pub fn c_on_ink() -> Color32 {
+    pick(0x0E100F, 0xFFFFFF)
+}
+/// A selected list row or combo item, and selected text.
+pub fn c_selection() -> Color32 {
+    pick(0x303633, 0xDCE1DE)
+}
+/// Green means Play: the Play button, a running game and the progress of getting one started.
 pub fn c_accent() -> Color32 {
-    pick(0x5FD97A, 0x1B8A3C)
+    pick(0x5FD97A, 0x167A36)
 }
 pub fn c_accent_hover() -> Color32 {
-    pick(0x7BE892, 0x23A04A)
+    pick(0x7BE892, 0x12692E)
 }
 pub fn c_on_accent() -> Color32 {
     pick(0x04210C, 0xFFFFFF)
 }
-/// Selected navigation item, highlighted banners.
+/// The tint behind a highlighted banner or a file dropped on the window.
 pub fn c_accent_soft() -> Color32 {
-    pick(0x1D3824, 0xD3EED9)
+    pick(0x173020, 0xDCEFE1)
 }
 pub fn c_danger() -> Color32 {
-    pick(0xFF8A80, 0xC62828)
+    pick(0xFF8A80, 0xC02626)
 }
 pub fn c_danger_bg() -> Color32 {
-    pick(0x3A1F1D, 0xFBE3E1)
+    pick(0x2B1816, 0xFCE8E6)
 }
 pub fn c_danger_hover() -> Color32 {
-    pick(0x4A2725, 0xF6CFCB)
+    pick(0x3A201D, 0xF8D5D1)
 }
 pub fn c_danger_line() -> Color32 {
-    pick(0x5A2E2B, 0xE9A6A0)
+    pick(0x4F2A27, 0xEBB1AB)
 }
 pub fn c_warn() -> Color32 {
-    pick(0xF5C451, 0x9A6A00)
+    pick(0xF5C451, 0x8F6200)
+}
+pub fn c_warn_bg() -> Color32 {
+    pick(0x2A2410, 0xFFF6DB)
 }
 
-pub const RADIUS: u8 = 12;
+/// Corner radii, used everywhere so the shapes agree: cards and panels, things you press, small tags, dialogs.
+pub const R_CARD: u8 = 8;
+pub const R_CONTROL: u8 = 6;
+pub const R_TAG: u8 = 4;
+pub const R_DIALOG: u8 = 12;
+
+/// The type scale: nothing else is used.
+pub const FS_TITLE: f32 = 22.0;
+pub const FS_FIGURE: f32 = 20.0;
+pub const FS_SECTION: f32 = 16.0;
+pub const FS_BODY: f32 = 14.0;
+pub const FS_META: f32 = 12.0;
 
 /// The themes the Java edition offers: id, label, and whether it is one of the dark ones.
 pub const THEMES: [(&str, &str, bool); 18] = [
@@ -116,56 +175,59 @@ pub fn theme_label(id: &str) -> &'static str {
 pub fn apply(ctx: &egui::Context, reduced_motion: bool) {
     let mut v = if is_dark() { Visuals::dark() } else { Visuals::light() };
     v.panel_fill = c_bg();
-    v.window_fill = c_surface();
+    v.window_fill = c_raised();
     v.extreme_bg_color = c_field();
     v.faint_bg_color = c_card();
-    v.window_stroke = Stroke::new(1.0, c_border());
-    v.window_corner_radius = CornerRadius::same(RADIUS + 4);
-    v.menu_corner_radius = CornerRadius::same(RADIUS);
+    v.window_stroke = Stroke::new(1.0, c_control());
+    v.window_corner_radius = CornerRadius::same(R_DIALOG);
+    v.menu_corner_radius = CornerRadius::same(R_CARD);
     v.override_text_color = Some(c_text());
-    v.hyperlink_color = c_accent();
-    v.selection.bg_fill = c_accent_soft();
-    v.selection.stroke = Stroke::new(1.0, c_accent());
-    let shadow = Color32::from_black_alpha(if is_dark() { 120 } else { 50 });
-    v.window_shadow = egui::Shadow { offset: [0, 8], blur: 24, spread: 0, color: shadow };
-    v.popup_shadow = v.window_shadow;
+    v.hyperlink_color = c_text();
+    v.selection.bg_fill = c_selection();
+    v.selection.stroke = Stroke::new(1.0, c_text());
+    // shadows only on what floats (menus, dialogs, tooltips)
+    let shadow = Color32::from_black_alpha(if is_dark() { 140 } else { 36 });
+    v.window_shadow = egui::Shadow { offset: [0, 10], blur: 28, spread: 0, color: shadow };
+    v.popup_shadow = egui::Shadow { offset: [0, 6], blur: 18, spread: 0, color: shadow };
 
-    let r = CornerRadius::same(10);
+    let r = CornerRadius::same(R_CONTROL);
     v.widgets.noninteractive.bg_fill = c_card();
     v.widgets.noninteractive.weak_bg_fill = c_card();
     v.widgets.noninteractive.bg_stroke = Stroke::new(1.0, c_border());
     v.widgets.noninteractive.fg_stroke = Stroke::new(1.0, c_text());
     v.widgets.noninteractive.corner_radius = r;
-    v.widgets.inactive.bg_fill = c_card_hover();
-    v.widgets.inactive.weak_bg_fill = c_card_hover();
-    v.widgets.inactive.bg_stroke = Stroke::new(1.0, c_border());
+    v.widgets.inactive.bg_fill = c_field();
+    v.widgets.inactive.weak_bg_fill = c_field();
+    v.widgets.inactive.bg_stroke = Stroke::new(1.0, c_control());
     v.widgets.inactive.fg_stroke = Stroke::new(1.0, c_text());
     v.widgets.inactive.corner_radius = r;
-    v.widgets.hovered.bg_fill = c_field_hover();
-    v.widgets.hovered.weak_bg_fill = c_field_hover();
-    v.widgets.hovered.bg_stroke = Stroke::new(1.0, c_accent());
+    v.widgets.hovered.bg_fill = c_hover();
+    v.widgets.hovered.weak_bg_fill = c_hover();
+    v.widgets.hovered.bg_stroke = Stroke::new(1.0, c_control());
     v.widgets.hovered.fg_stroke = Stroke::new(1.5, c_text());
     v.widgets.hovered.corner_radius = r;
-    v.widgets.active.bg_fill = c_accent_soft();
-    v.widgets.active.weak_bg_fill = c_accent_soft();
-    v.widgets.active.bg_stroke = Stroke::new(1.0, c_accent());
+    v.widgets.active.bg_fill = c_active();
+    v.widgets.active.weak_bg_fill = c_active();
+    v.widgets.active.bg_stroke = Stroke::new(1.0, c_control());
     v.widgets.active.fg_stroke = Stroke::new(1.5, c_text());
     v.widgets.active.corner_radius = r;
     v.widgets.open = v.widgets.active;
     ctx.set_visuals(v);
 
     ctx.global_style_mut(|s| {
-        s.spacing.item_spacing = egui::vec2(10.0, 10.0);
-        s.spacing.button_padding = egui::vec2(14.0, 8.0);
-        s.spacing.interact_size.y = 34.0;
+        s.spacing.item_spacing = egui::vec2(8.0, 8.0);
+        s.spacing.button_padding = egui::vec2(12.0, 6.0);
+        s.spacing.interact_size.y = 32.0;
         s.spacing.scroll.bar_width = 8.0;
-        s.animation_time = if reduced_motion { 0.0 } else { 1.0 / 12.0 };
+        // the floating scroll bar gets its own strip so it never sits on the edge of a card
+        s.spacing.scroll.floating_allocated_width = 10.0;
+        s.animation_time = if reduced_motion { 0.0 } else { 1.0 / 10.0 };
         s.text_styles = [
-            (TextStyle::Heading, FontId::new(26.0, FontFamily::Proportional)),
-            (TextStyle::Body, FontId::new(14.5, FontFamily::Proportional)),
-            (TextStyle::Button, FontId::new(14.5, FontFamily::Proportional)),
+            (TextStyle::Heading, FontId::new(22.0, FontFamily::Proportional)),
+            (TextStyle::Body, FontId::new(14.0, FontFamily::Proportional)),
+            (TextStyle::Button, FontId::new(14.0, FontFamily::Proportional)),
             (TextStyle::Small, FontId::new(12.0, FontFamily::Proportional)),
-            (TextStyle::Monospace, FontId::new(12.5, FontFamily::Monospace)),
+            (TextStyle::Monospace, FontId::new(12.0, FontFamily::Monospace)),
         ]
         .into();
     });

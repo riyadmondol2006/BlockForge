@@ -3,17 +3,20 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use egui::{Align, Layout, RichText, Ui};
+use egui::{RichText, Ui};
 
 use super::App;
+use super::instance_menu::{SplitRow, secondary_menu};
 use super::theme::*;
 use super::widgets::*;
 use crate::backups::{self, Backup, BackupMode};
 use crate::instances::Instance;
 use crate::svcsettings::ServiceSettings;
 
-/// How many backups the card lists before "Show all".
-const SHOWN: usize = 6;
+/// How many backups the list shows before "Show all".
+const SHOWN: usize = 4;
+/// The width of the buttons at the end of a row: Restore and the menu.
+const TRAIL_W: f32 = 112.0;
 /// The list is read again when it is older than this.
 const REFRESH_AFTER: Duration = Duration::from_secs(5);
 
@@ -79,74 +82,106 @@ impl App {
         let mut delete = None;
         let mut toggle_all = false;
         let mut open_folder = false;
+        let mut show: Option<PathBuf> = None;
 
-        card(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(RichText::new("Backups").strong().size(16.0));
-                if svc.enable_automatic_backup_after_launch {
-                    tag(ui, "Automatic after playing", c_accent());
-                }
-            });
-            small_muted(
-                ui,
-                "A backup is a zip file of this instance. Worlds and settings are small; adding the mods or everything makes it bigger.",
-            );
-            ui.add_space(4.0);
+        // the title, what happens by itself, and the way to make one
+        let mut head = SplitRow::new(ui, egui::Id::unique("backups-head"), 32.0);
+        head.left(ui, |ui| {
+            ui.label(RichText::new("Backups").size(FS_SECTION).semibold());
+            if svc.enable_automatic_backup_after_launch {
+                ui.label(RichText::new("Automatic after playing").size(FS_META).color(c_faint()));
+            }
+        });
+        head.right(ui, |ui| {
+            if secondary_icon(ui, super::icons::Icon::Folder, "Open backups folder").clicked() {
+                open_folder = true;
+            }
             if working {
                 // a backup or a restore of this instance is running: another one now would read half-written files
-                ui.horizontal(|ui| {
-                    ui.spinner();
-                    muted(ui, "A backup or restore of this instance is running\u{2026}");
-                });
+                ui.add(egui::Spinner::new().size(14.0));
+                muted(ui, "A backup or restore of this instance is running\u{2026}");
             } else {
-                ui.horizontal_wrapped(|ui| {
-                    for mode in BackupMode::ALL {
-                        if secondary(ui, mode.label()).clicked() {
-                            make = Some(mode);
+                let (_, picked) = secondary_menu(ui, "Back up now", |ui| {
+                    let mut mode = None;
+                    for m in BackupMode::ALL {
+                        if ui.button(m.label()).clicked() {
+                            mode = Some(m);
+                            ui.close();
                         }
                     }
+                    mode
                 });
-            }
-            ui.add_space(6.0);
-            if list.is_empty() {
-                small_muted(ui, "No backups of this instance yet.");
-            }
-            for b in list.iter().take(if show_all { usize::MAX } else { SHOWN }) {
-                ui.horizontal(|ui| {
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        ui.add_enabled_ui(!working, |ui| {
-                            if danger(ui, "Delete").clicked() {
-                                delete = Some(b.path.clone());
-                            }
-                            if secondary(ui, "Restore").clicked() {
-                                restore = Some(b.path.clone());
-                            }
-                        });
-                        // a long file name wraps next to the buttons instead of running under them
-                        ui.with_layout(Layout::top_down(Align::Min), |ui| {
-                            ui.label(when(b));
-                            ui.add(
-                                egui::Label::new(
-                                    RichText::new(format!("{}  \u{00B7}  {}", human_size(b.size), b.file_name))
-                                        .color(c_muted())
-                                        .size(12.0),
-                                )
-                                .wrap(),
-                            );
-                        });
-                    });
-                });
-                ui.separator();
-            }
-            ui.horizontal(|ui| {
-                if list.len() > SHOWN && secondary(ui, if show_all { "Show fewer" } else { "Show all" }).clicked() {
-                    toggle_all = true;
+                if let Some(Some(mode)) = picked {
+                    make = Some(mode);
                 }
-                if secondary_icon(ui, super::icons::Icon::Folder, "Open backups folder").clicked() {
-                    open_folder = true;
+            }
+        });
+        head.finish(ui);
+        small_muted(
+            ui,
+            "A backup is a zip file of this instance. Worlds and settings are small; adding the mods or everything makes it bigger.",
+        );
+        ui.add_space(4.0);
+        if list.is_empty() {
+            small_muted(ui, "No backups of this instance yet. Back up now makes the first one.");
+        }
+        let shown = list.iter().take(if show_all { usize::MAX } else { SHOWN });
+        for (i, b) in shown.enumerate() {
+            if i > 0 {
+                rule(ui);
+            }
+            let mut line = SplitRow::fixed(ui, 52.0, TRAIL_W);
+            line.left(ui, |ui| {
+                // a long file name is cut short next to the buttons instead of running under them
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing.y = 2.0;
+                    ui.add_space(6.0);
+                    ui.add(egui::Label::new(when(b)).truncate());
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(format!("{}  \u{00B7}  {}", human_size(b.size), b.file_name))
+                                .color(c_muted())
+                                .size(FS_META),
+                        )
+                        .truncate(),
+                    );
+                });
+            });
+            line.right(ui, |ui| {
+                ui.add_enabled_ui(!working, |ui| {
+                    if ghost(ui, "Restore").clicked() {
+                        restore = Some(b.path.clone());
+                    }
+                });
+                if let Some(Some(act)) = kebab_menu(ui, |ui| {
+                    let mut act = None;
+                    if ui.button("Show in folder").clicked() {
+                        act = Some(false);
+                        ui.close();
+                    }
+                    ui.separator();
+                    if ui.add_enabled(!working, egui::Button::new(RichText::new("Delete").color(c_danger()))).clicked()
+                    {
+                        act = Some(true);
+                        ui.close();
+                    }
+                    act
+                }) {
+                    if act {
+                        delete = Some(b.path.clone());
+                    } else {
+                        show = Some(b.path.clone());
+                    }
                 }
             });
-        });
+            line.finish(ui);
+        }
+        if list.len() > SHOWN {
+            let label = if show_all { "Show fewer".to_string() } else { format!("Show all {}", list.len()) };
+            if ghost(ui, &label).clicked() {
+                toggle_all = true;
+            }
+        }
 
         self.svc.backups.list = list;
         if open_folder {
@@ -154,6 +189,9 @@ impl App {
         }
         if toggle_all {
             self.svc.backups.show_all = !show_all;
+        }
+        if let Some(dir) = show.as_deref().and_then(|p| p.parent()) {
+            self.open_folder(dir);
         }
         if let Some(path) = restore {
             self.svc.backups.restore = Some((inst.folder.clone(), path));

@@ -2,9 +2,11 @@
 //! update or reinstall an installed pack.
 
 use std::sync::Arc;
+use std::time::Instant;
 
-use egui::{Align, CornerRadius, Layout, RichText, ScrollArea, Stroke, Ui};
+use egui::{Align, Layout, RichText, ScrollArea, Ui};
 
+use super::discover::*;
 use super::theme::*;
 use super::widgets::*;
 use super::{App, Msg, Page};
@@ -93,6 +95,10 @@ pub struct PacksState {
     tech_seq: u64,
     tech_error: Option<String>,
     tech_started: bool,
+    /// When the Technic search field was last typed in and its search has not started yet.
+    edited: Option<Instant>,
+    /// The window that asks for a pack code is open.
+    code_open: bool,
     detail: Option<Detail>,
     token: u64,
     /// An update asked for before the pack list had arrived.
@@ -118,6 +124,8 @@ impl Default for PacksState {
             tech_seq: 0,
             tech_error: None,
             tech_started: false,
+            edited: None,
+            code_open: false,
             detail: None,
             token: 0,
             pending_update: None,
@@ -448,39 +456,100 @@ impl App {
             return;
         }
         ui.horizontal(|ui| {
-            heading(ui, "Packs");
-            muted(ui, "ATLauncher and Technic modpacks");
-        });
-        ui.add_space(4.0);
-        ui.horizontal(|ui| {
-            if chip(ui, "ATLauncher", self.packs.tab == PackTab::Atl).clicked() {
-                self.packs.tab = PackTab::Atl;
-            }
-            if chip(ui, "Technic", self.packs.tab == PackTab::Technic).clicked() {
-                self.packs.tab = PackTab::Technic;
-                if !self.packs.tech_started {
-                    self.packs_search_technic();
+            heading(ui, "ATLauncher & Technic");
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                // a pack code opens a pack that is not listed for everyone
+                kebab_menu(ui, |ui| {
+                    if ui.button("Add a private pack code\u{2026}").clicked() {
+                        self.packs.code_open = true;
+                        self.packs.tab = PackTab::Atl;
+                        ui.close();
+                    }
+                });
+                let shown = usize::from(self.packs.tab == PackTab::Technic);
+                if let Some(i) = segmented(ui, &["ATLauncher", "Technic"], shown) {
+                    if i == 0 {
+                        self.packs.tab = PackTab::Atl;
+                    } else {
+                        self.packs.tab = PackTab::Technic;
+                        if !self.packs.tech_started {
+                            self.packs_search_technic();
+                        }
+                    }
                 }
-            }
+            });
         });
-        ui.add_space(4.0);
+        ui.add_space(12.0);
         match self.packs.tab {
             PackTab::Atl => self.packs_atl_ui(ui),
             PackTab::Technic => self.packs_technic_ui(ui),
+        }
+        if self.packs.code_open {
+            self.packs_code_dialog(ui.ctx());
+        }
+    }
+
+    /// The small window that asks for a pack code.
+    fn packs_code_dialog(&mut self, ctx: &egui::Context) {
+        let mut close = false;
+        let mut add = false;
+        let (width, _) = super::curseforge::modal_size(ctx, 420.0, 200.0);
+        let modal = egui::Modal::new(egui::Id::unique("pack-code")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
+            ui.set_width(width);
+            ui.label(RichText::new("Add a private pack").size(FS_SECTION).semibold());
+            muted(ui, "A pack code opens a pack that is not listed for everyone.");
+            ui.add_space(12.0);
+            let r = ui.add_sized(
+                [ui.available_width(), 32.0],
+                egui::TextEdit::singleline(&mut self.packs.code)
+                    .hint_text(RichText::new("Pack code").color(c_faint()))
+                    .margin(egui::Margin::symmetric(10, 7))
+                    .background_color(c_field()),
+            );
+            focus_when_shown(ui, &r);
+            if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                add = true;
+            }
+            ui.add_space(16.0);
+            dialog_footer(
+                ui,
+                "pack-code",
+                |_| {},
+                |ui| {
+                    if secondary(ui, "Cancel").clicked() {
+                        close = true;
+                    }
+                    if primary_enabled(ui, "Add", !self.packs.code.trim().is_empty()).clicked() {
+                        add = true;
+                    }
+                },
+            );
+        });
+        if modal.should_close() {
+            close = true;
+        }
+        if add {
+            self.packs_add_code();
+            // the code is cleared when it opened a pack; when it did not, the window stays to try another
+            close = self.packs.code.is_empty();
+        }
+        if close {
+            self.packs.code_open = false;
         }
     }
 
     fn packs_atl_ui(&mut self, ui: &mut Ui) {
         ui.horizontal_wrapped(|ui| {
             let mut q = std::mem::take(&mut self.packs.query);
-            search_field(ui, &mut q, "Search ATLauncher packs", 320.0f32.min(ui.available_width()));
+            search_input(ui, &mut q, "Search ATLauncher packs", SEARCH_W);
             self.packs.query = q;
             egui::ComboBox::from_id_salt("pack-order")
                 .selected_text(match self.packs.order {
-                    PackOrder::Position => "Featured order",
-                    PackOrder::NameAscending => "Name A to Z",
-                    PackOrder::NameDescending => "Name Z to A",
+                    PackOrder::Position => "Order: Featured",
+                    PackOrder::NameAscending => "Order: Name A to Z",
+                    PackOrder::NameDescending => "Order: Name Z to A",
                 })
+                .width(190.0)
                 .show_ui(ui, |ui| {
                     for (o, l) in [
                         (PackOrder::Position, "Featured order"),
@@ -490,26 +559,21 @@ impl App {
                         ui.selectable_value(&mut self.packs.order, o, l);
                     }
                 });
-            // a pack code opens a pack that is not listed for everyone
-            let mut code = std::mem::take(&mut self.packs.code);
-            search_field(ui, &mut code, "Pack code", 140.0);
-            self.packs.code = code;
-            if secondary(ui, "Add code").clicked() {
-                self.packs_add_code();
-            }
         });
+        ui.add_space(6.0);
         if let Some(e) = self.packs.atl_error.clone() {
-            if super::discover::fetch_error_card(ui, "Couldn't load the ATLauncher pack list", &e) {
+            if fetch_error(
+                ui,
+                "Couldn't load the ATLauncher pack list. Check your internet connection, or try again in a few minutes.",
+                &e,
+            ) {
                 // the page asks again once the error is gone
                 self.packs.atl_error = None;
             }
             return;
         }
         let Some(list) = self.packs.atl.clone() else {
-            ui.horizontal(|ui| {
-                ui.spinner();
-                muted(ui, "Getting the pack list");
-            });
+            skeleton_rows(ui, 6, ROW_H);
             return;
         };
         let user = self.packs_user();
@@ -530,37 +594,54 @@ impl App {
         }
         let Some((key, packs)) = self.packs.atl_view.take() else { return };
         if packs.is_empty() {
-            card(ui, |ui| muted(ui, "No packs found."));
+            let query = self.packs.query.trim().to_string();
+            let text = if query.is_empty() {
+                "No packs to show. Try adding a pack code.".to_string()
+            } else {
+                format!("No packs match \u{201C}{query}\u{201D}.")
+            };
+            if empty_row(ui, &text, (!query.is_empty()).then_some("Clear search")).is_some_and(|r| r.clicked()) {
+                self.packs.query.clear();
+            }
             self.packs.atl_view = Some((key, packs));
             return;
         }
+        context_line(ui, Some(format!("{} packs", thousands(packs.len() as u64))), false, |_| {});
+        ui.add_space(4.0);
         let mut open: Option<Pack> = None;
-        super::mods::lazy_list(ui, egui::Id::unique("atl-packs"), &packs, 104.0, |ui, (pack, description)| {
-            pack_card(ui, |ui| {
+        super::mods::lazy_list(ui, egui::Id::unique("atl-packs"), &packs, ROW_H, |ui, (pack, description)| {
+            let rkey = format!("atl:{}", pack.name);
+            row_frame(ui, |ui| {
                 ui.horizontal(|ui| {
-                    self.remote_image(ui, &pack.image_url(), 60.0, &pack.name);
+                    ui.spacing_mut().item_spacing.x = 12.0;
+                    self.remote_image(ui, &pack.image_url(), 48.0, &pack.name);
+                    let text_w = row_text_width(ui, &rkey);
                     ui.vertical(|ui| {
-                        ui.set_max_width((ui.available_width() - 150.0).max(120.0));
-                        ui.horizontal(|ui| {
-                            ui.label(RichText::new(&pack.name).strong().size(16.0));
-                            if pack.is_private() {
-                                tag(ui, "Private", c_warn());
-                            } else if pack.is_semi_public() {
-                                tag(ui, "Code", c_warn());
-                            }
-                        });
-                        ui.add(egui::Label::new(RichText::new(description).color(c_muted())).truncate());
-                        ui.horizontal(|ui| {
-                            if let Some(v) = pack.latest_version() {
-                                small_muted(ui, format!("{} \u{00B7} Minecraft {}", v.version, v.minecraft));
-                            }
-                            small_muted(ui, format!("{} versions", pack.versions.len()));
-                        });
-                    });
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if primary(ui, "Install").clicked() {
-                            open = Some(pack.clone());
+                        ui.set_max_width(text_w);
+                        ui.spacing_mut().item_spacing.y = 2.0;
+                        let note = if pack.is_private() {
+                            Some(("Private".to_string(), c_warn()))
+                        } else if pack.is_semi_public() {
+                            Some(("Code".to_string(), c_warn()))
+                        } else {
+                            None
+                        };
+                        name_line_with(ui, &pack.name, note);
+                        summary_line(ui, description);
+                        let mut parts = Vec::new();
+                        if let Some(v) = pack.latest_version() {
+                            parts.push((v.version.to_string(), c_faint()));
+                            parts.push((format!("Minecraft {}", v.minecraft), c_faint()));
                         }
+                        parts.push((format!("{} versions", pack.versions.len()), c_faint()));
+                        meta_line(ui, &parts);
+                    });
+                    row_actions(ui, &rkey, |ui| {
+                        action_cell(ui, &rkey, |ui| {
+                            if secondary(ui, "Details").clicked() {
+                                open = Some(pack.clone());
+                            }
+                        });
                     });
                 });
             });
@@ -595,56 +676,80 @@ impl App {
         let mut search = false;
         ui.horizontal_wrapped(|ui| {
             let mut q = std::mem::take(&mut self.packs.tech_query);
-            let r = search_field(ui, &mut q, "Search Technic packs", 340.0f32.min(ui.available_width()));
+            let mut edited = self.packs.edited.take();
+            if live_search(ui, &mut q, "Search Technic packs", &mut edited) {
+                search = true;
+            }
             self.packs.tech_query = q;
-            if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                search = true;
-            }
-            if primary(ui, "Search").clicked() {
-                search = true;
-            }
+            self.packs.edited = edited;
         });
         if self.packs.tech_query.trim().is_empty() {
-            small_muted(ui, "Showing what's trending");
+            context_line(ui, None, false, |ui| small_muted(ui, "Showing what's trending"));
         }
+        ui.add_space(6.0);
         if let Some(e) = self.packs.tech_error.clone() {
-            if super::discover::fetch_error_card(ui, "Couldn't reach Technic", &e) && !self.packs.tech_loading {
+            if fetch_error(
+                ui,
+                "Couldn't reach Technic. Check your internet connection, or try again in a few minutes.",
+                &e,
+            ) && !self.packs.tech_loading
+            {
                 search = true;
             }
         }
         if search {
             self.packs_search_technic();
         }
-        if self.packs.tech_loading {
-            ui.spinner();
+        if self.packs.tech_loading && self.packs.tech.is_empty() {
+            skeleton_rows(ui, 6, ROW_H);
         } else if self.packs.tech.is_empty() && self.packs.tech_error.is_none() && self.packs.tech_started {
-            card(ui, |ui| muted(ui, "No packs found. Try other words."));
+            let query = self.packs.tech_query.trim().to_string();
+            let text = if query.is_empty() {
+                "No packs to show.".to_string()
+            } else {
+                format!("No packs match \u{201C}{query}\u{201D}.")
+            };
+            if empty_row(ui, &text, (!query.is_empty()).then_some("Clear search")).is_some_and(|r| r.clicked()) {
+                self.packs.tech_query.clear();
+                self.packs_search_technic();
+            }
         }
         let results = std::mem::take(&mut self.packs.tech);
         let mut open: Option<Slim> = None;
         ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
             for m in &results {
-                pack_card(ui, |ui| {
+                let rkey = format!("tech:{}", m.slug);
+                row_frame(ui, |ui| {
                     ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 12.0;
                         match &m.icon_url {
-                            Some(u) if !u.is_empty() => self.remote_image(ui, u, 60.0, &m.name),
+                            Some(u) if !u.is_empty() => self.remote_image(ui, u, 48.0, &m.name),
                             _ => {
-                                avatar(ui, &m.name, 60.0);
+                                avatar(ui, &m.name, 48.0);
                             }
                         }
+                        let text_w = row_text_width(ui, &rkey);
                         ui.vertical(|ui| {
-                            ui.set_max_width((ui.available_width() - 150.0).max(120.0));
-                            ui.label(RichText::new(&m.name).strong().size(16.0));
-                            small_muted(ui, &m.slug);
+                            ui.set_max_width(text_w);
+                            ui.spacing_mut().item_spacing.y = 2.0;
+                            name_line(ui, &m.name, None);
+                            meta_line(ui, &[(m.slug.clone(), c_faint())]);
                         });
-                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            if primary(ui, "Install").clicked() {
-                                open = Some(m.clone());
-                            }
+                        row_actions(ui, &rkey, |ui| {
+                            action_cell(ui, &rkey, |ui| {
+                                if secondary(ui, "Details").clicked() {
+                                    open = Some(m.clone());
+                                }
+                            });
                         });
                     });
                 });
             }
+            if self.packs.tech_loading {
+                ui.add_space(8.0);
+                ui.spinner();
+            }
+            ui.add_space(8.0);
         });
         self.packs.tech = results;
         if let Some(m) = open {
@@ -658,134 +763,183 @@ impl App {
         let mut reprepare = false;
         let mut website: Option<String> = None;
         let mut icon: Option<(String, String)> = None;
+        let mut title = String::new();
+        let mut facts: Vec<(String, egui::Color32)> = Vec::new();
         if let Some(d) = &self.packs.detail {
+            title = d.title.clone();
             if let Some(i) = &d.icon {
                 icon = Some((i.clone(), d.title.clone()));
             }
+            website = d.website.clone();
+            if let Some(p) = &d.prepared {
+                facts.push((format!("Minecraft {}", p.json.minecraft), c_muted()));
+                if let Some(k) = d.loader_kind {
+                    facts.push((k.type_name().to_string(), loader_color(k.type_name())));
+                }
+                if p.json.memory > 0 {
+                    facts.push((format!("{} MB memory", p.json.memory), c_muted()));
+                }
+                if let Some(j) = &p.json.java {
+                    facts.push((j.describe(), c_muted()));
+                }
+            }
         }
         let java_major = self.java_list.iter().filter_map(|j| j.major).max();
+        let mut open_website = false;
+        if back_link(ui, "ATLauncher & Technic").clicked() {
+            back = true;
+        }
         ui.horizontal(|ui| {
-            if secondary(ui, "Back").clicked() {
-                back = true;
+            ui.spacing_mut().item_spacing.x = 12.0;
+            if let Some((url, name)) = &icon {
+                self.remote_image(ui, url, 48.0, name);
             }
-            if let Some((url, title)) = &icon {
-                self.remote_image(ui, url, 44.0, title);
-            }
-            if let Some(d) = &self.packs.detail {
-                heading(ui, &d.title);
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = 2.0;
+                heading(ui, &title);
+                meta_line(ui, &facts);
+            });
+            if website.is_some() {
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if ghost(ui, "Open website").clicked() {
+                        open_website = true;
+                    }
+                });
             }
         });
-        ui.add_space(6.0);
+        ui.add_space(8.0);
         let Some(d) = self.packs.detail.as_mut() else { return };
-        ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
+        ScrollArea::vertical().auto_shrink(false).max_height((ui.available_height() - 64.0).max(160.0)).show(ui, |ui| {
+            // text is easiest to read in a column of its own
+            ui.set_max_width(ui.available_width().min(DETAIL_W));
+            ui.spacing_mut().item_spacing.y = 8.0;
             if !d.description.is_empty() {
-                card(ui, |ui| {
-                    ui.label(plain_text(&d.description));
-                    if let Some(w) = &d.website {
-                        if secondary(ui, "Open website").clicked() {
-                            website = Some(w.clone());
-                        }
-                    }
-                });
-                ui.add_space(6.0);
+                ui.add(egui::Label::new(RichText::new(plain_text(&d.description)).color(c_muted())).wrap());
+                ui.add_space(8.0);
             }
-            card(ui, |ui| {
-                if d.reinstall.is_none() {
-                    ui.label(RichText::new("Name").strong());
-                    ui.add(egui::TextEdit::singleline(&mut d.name).desired_width(400.0));
-                    ui.add_space(8.0);
-                } else {
-                    small_muted(ui, format!("Updating {}", d.name));
-                }
-                ui.label(RichText::new("Version").strong());
-                let current = d.versions.get(d.selected).map(|v| v.label.clone()).unwrap_or_else(|| if d.loading { "Loading".into() } else { "No versions".into() });
-                let before = d.selected;
-                egui::ComboBox::from_id_salt("pack-version").selected_text(current).width(400.0).show_ui(ui, |ui| {
-                    for (i, v) in d.versions.iter().enumerate() {
-                        let text = if v.recommended { format!("{}  (recommended)", v.label) } else { v.label.clone() };
-                        ui.selectable_value(&mut d.selected, i, text);
-                    }
-                });
-                if d.selected != before {
-                    reprepare = true;
-                }
-                if let Some(p) = &d.prepared {
-                    ui.add_space(6.0);
-                    ui.horizontal(|ui| {
-                        tag(ui, &format!("Minecraft {}", p.json.minecraft), c_accent());
-                        if let Some(k) = d.loader_kind {
-                            tag(ui, k.type_name(), loader_color(k.type_name()));
-                        }
-                        if p.json.memory > 0 {
-                            tag(ui, &format!("{} MB memory", p.json.memory), c_muted());
-                        }
-                        if let Some(j) = &p.json.java {
-                            tag(ui, &j.describe(), c_muted());
-                        }
-                    });
-                    // the Java edition warns before launching when the Java in use does not fit; say so early
-                    if let (Some(j), Some(have)) = (&p.json.java, java_major) {
-                        if !j.conforms(have as i64) {
-                            ui.label(RichText::new(format!("This version needs {}. The newest Java found here is {}.", j.describe(), have)).color(c_warn()).size(12.5));
-                        }
-                    }
-                }
-                if !d.loader_versions.is_empty() {
-                    ui.add_space(8.0);
-                    ui.label(RichText::new(format!("{} version", d.loader_kind.map(|k| k.type_name()).unwrap_or("Loader"))).strong());
-                    let current = d.loader_versions.get(d.loader_pick).map(|l| l.version.clone()).unwrap_or_default();
-                    egui::ComboBox::from_id_salt("pack-loader").selected_text(current).width(400.0).show_ui(ui, |ui| {
-                        for (i, l) in d.loader_versions.iter().enumerate() {
-                            ui.selectable_value(&mut d.loader_pick, i, &l.version);
-                        }
-                    });
-                }
-                if d.reinstall.is_some() {
-                    ui.add_space(8.0);
-                    ui.checkbox(&mut d.save_mods, "Keep my mods");
-                    small_muted(ui, "If the update changes the Minecraft version, mods you added may stop working. Keep them, or leave this off to remove them.");
+            if d.reinstall.is_none() {
+                section(ui, "Name");
+                ui.add_sized(
+                    [ui.available_width().min(360.0), 32.0],
+                    egui::TextEdit::singleline(&mut d.name).margin(egui::Margin::symmetric(10, 7)).background_color(c_field()),
+                );
+                ui.add_space(8.0);
+            } else {
+                small_muted(ui, format!("Updating {}", d.name));
+            }
+            section(ui, "Version");
+            let current = d.versions.get(d.selected).map(|v| v.label.clone()).unwrap_or_else(|| if d.loading { "Loading".into() } else { "No versions".into() });
+            let before = d.selected;
+            egui::ComboBox::from_id_salt("pack-version").selected_text(current).width(320.0).show_ui(ui, |ui| {
+                for (i, v) in d.versions.iter().enumerate() {
+                    let text = if v.recommended { format!("{}  (recommended)", v.label) } else { v.label.clone() };
+                    ui.selectable_value(&mut d.selected, i, text);
                 }
             });
+            if d.selected != before {
+                reprepare = true;
+            }
+            if let Some(p) = &d.prepared {
+                // the Java edition warns before launching when the Java in use does not fit; say so early
+                if let (Some(j), Some(have)) = (&p.json.java, java_major) {
+                    if !j.conforms(have as i64) {
+                        notice(
+                            ui,
+                            NoticeKind::Warn,
+                            &format!("This version needs {}. The newest Java found here is {}.", j.describe(), have),
+                            None,
+                        );
+                    }
+                }
+            }
+            if !d.loader_versions.is_empty() {
+                ui.add_space(8.0);
+                section(ui, &format!("{} version", d.loader_kind.map(|k| k.type_name()).unwrap_or("Loader")));
+                let current = d.loader_versions.get(d.loader_pick).map(|l| l.version.clone()).unwrap_or_default();
+                egui::ComboBox::from_id_salt("pack-loader").selected_text(current).width(320.0).show_ui(ui, |ui| {
+                    for (i, l) in d.loader_versions.iter().enumerate() {
+                        ui.selectable_value(&mut d.loader_pick, i, &l.version);
+                    }
+                });
+            }
+            if d.reinstall.is_some() {
+                ui.add_space(8.0);
+                setting_row(
+                    ui,
+                    "Keep my mods",
+                    "If the update changes the Minecraft version, mods you added may stop working. Keep them, or leave this off to remove them.",
+                    |ui| {
+                        toggle(ui, &mut d.save_mods);
+                    },
+                );
+            }
             if d.loading {
                 ui.add_space(8.0);
-                ui.spinner();
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    muted(ui, "Reading this version");
+                });
             }
             if let Some(e) = &d.error {
-                ui.add_space(6.0);
-                card(ui, |ui| {
-                    ui.label(RichText::new("Couldn't read this version").color(c_danger()).strong());
-                    muted(ui, e.clone());
-                });
+                ui.add_space(8.0);
+                notice(ui, NoticeKind::Error, &format!("Couldn't read this version: {e}"), None);
             }
             if let Some(msg) = d.prepared.as_ref().and_then(|p| p.json.messages.clone()) {
                 if let Some(text) = if d.reinstall.is_some() { msg.update } else { msg.install } {
-                    ui.add_space(6.0);
-                    card(ui, |ui| {
-                        ui.label(RichText::new("Message from the pack").strong());
-                        muted(ui, plain_text(&text));
-                    });
+                    ui.add_space(8.0);
+                    small_muted(ui, "Message from the pack");
+                    notice(ui, NoticeKind::Info, &plain_text(&text), None);
                 }
             }
             if let (Some(choices), Some(p)) = (d.choices.as_mut(), d.prepared.clone()) {
                 if choices.needs_asking() {
-                    ui.add_space(6.0);
+                    ui.add_space(12.0);
                     choices_ui(ui, choices, &p);
                 }
             }
-            ui.add_space(10.0);
-            ui.horizontal(|ui| {
-                let ready = d.prepared.is_some() && !d.loading && (d.reinstall.is_some() || !d.name.trim().is_empty());
-                let label = if d.reinstall.is_some() { "Update" } else { "Install" };
-                if primary_enabled(ui, label, ready).clicked() {
-                    install = true;
-                }
-                if secondary(ui, "Cancel").clicked() {
-                    back = true;
-                }
-            });
+            ui.add_space(16.0);
         });
-        if let Some(w) = website {
-            let _ = open::that(w);
+        // what installing does, and the one button for it
+        let summary = match (&d.prepared, d.loading) {
+            (Some(p), _) => {
+                let mut parts = Vec::new();
+                if let Some(c) = &d.choices {
+                    let n = c.choices.iter().filter(|c| c.selected).count();
+                    if n > 0 {
+                        parts.push(format!("Installs {n} mods"));
+                    }
+                }
+                if let Some(j) = &p.json.java {
+                    parts.push(format!("needs {}", j.describe()));
+                }
+                parts.join("  \u{00B7}  ")
+            }
+            (None, true) => "Reading this version".to_string(),
+            (None, false) => String::new(),
+        };
+        let ready = d.prepared.is_some() && !d.loading && (d.reinstall.is_some() || !d.name.trim().is_empty());
+        let label = if d.reinstall.is_some() { "Update" } else { "Install" };
+        ui.scope(|ui| {
+            ui.set_max_width(ui.available_width().min(DETAIL_W));
+            rule(ui);
+            ui.add_space(8.0);
+            dialog_footer(
+                ui,
+                "pack-detail",
+                |ui| {
+                    small_muted(ui, summary);
+                },
+                |ui| {
+                    if primary_enabled(ui, label, ready).clicked() {
+                        install = true;
+                    }
+                },
+            );
+        });
+        if open_website {
+            if let Some(w) = website {
+                let _ = open::that(w);
+            }
         }
         if reprepare {
             self.packs_prepare_selected();
@@ -800,77 +954,63 @@ impl App {
 
 /// The optional-mod boxes: required mods on one side, optional on the other, with the Java window's buttons.
 fn choices_ui(ui: &mut Ui, choices: &mut ModChoices, prepared: &Prepared) {
-    card(ui, |ui| {
-        ui.label(RichText::new("Optional mods").strong().size(16.0));
+    section(ui, "Optional mods");
+    ui.horizontal(|ui| {
+        let label = if choices.has_recommended() { "Select recommended" } else { "Select all" };
+        if secondary(ui, label).clicked() {
+            choices.select_recommended();
+        }
+        if secondary(ui, "Clear all").clicked() {
+            choices.clear_all();
+        }
+    });
+    ui.add_space(4.0);
+    let order = choices.alphabetical();
+    let mut toggled: Option<(usize, bool)> = None;
+    for &i in &order {
+        let c = &choices.choices[i];
+        if !c.optional || !c.visible {
+            continue;
+        }
+        let mut on = c.selected;
+        let indent = if c.pack_mod.has_linked() { 22.0 } else { 0.0 };
         ui.horizontal(|ui| {
-            let label = if choices.has_recommended() { "Select recommended" } else { "Select all" };
-            if secondary(ui, label).clicked() {
-                choices.select_recommended();
+            ui.add_space(indent);
+            let r = ui.add_enabled(c.enabled, egui::Checkbox::new(&mut on, &c.pack_mod.name));
+            if let Some(desc) = c.pack_mod.description.as_deref().filter(|d| !d.is_empty()) {
+                r.on_hover_text(desc);
             }
-            if secondary(ui, "Clear all").clicked() {
-                choices.clear_all();
+            if !c.pack_mod.version.is_empty() {
+                small_muted(ui, &c.pack_mod.version);
+            }
+            if c.pack_mod.has_group() {
+                small_muted(ui, "pick one");
             }
         });
-        ui.add_space(4.0);
-        let order = choices.alphabetical();
-        let mut toggled: Option<(usize, bool)> = None;
-        for &i in &order {
-            let c = &choices.choices[i];
-            if !c.optional || !c.visible {
-                continue;
-            }
-            let mut on = c.selected;
-            let indent = if c.pack_mod.has_linked() { 22.0 } else { 0.0 };
-            ui.horizontal(|ui| {
-                ui.add_space(indent);
-                let r = ui.add_enabled(c.enabled, egui::Checkbox::new(&mut on, &c.pack_mod.name));
-                if let Some(desc) = c.pack_mod.description.as_deref().filter(|d| !d.is_empty()) {
-                    r.on_hover_text(desc);
-                }
-                if !c.pack_mod.version.is_empty() {
-                    small_muted(ui, &c.pack_mod.version);
-                }
-                if c.pack_mod.has_group() {
-                    tag(ui, "pick one", c_muted());
-                }
-            });
-            // the Java edition asks before a mod with a warning is switched on; here the warning stays under the
-            // box for as long as it is ticked
-            if c.selected {
-                if let Some(w) = choices.warning_for(i, &prepared.json.warnings) {
-                    ui.horizontal_wrapped(|ui| {
-                        ui.add_space(indent + 26.0);
-                        ui.label(RichText::new(plain_text(&w)).color(c_warn()).size(12.5));
-                    });
-                }
-            }
-            if on != c.selected {
-                toggled = Some((i, on));
+        // the Java edition asks before a mod with a warning is switched on; here the warning stays under the
+        // box for as long as it is ticked
+        if c.selected {
+            if let Some(w) = choices.warning_for(i, &prepared.json.warnings) {
+                ui.horizontal_wrapped(|ui| {
+                    ui.add_space(indent + 26.0);
+                    ui.label(RichText::new(plain_text(&w)).color(c_warn()).size(FS_META));
+                });
             }
         }
-        if let Some((i, on)) = toggled {
-            choices.toggle(i, on);
-            ui.ctx().request_repaint();
+        if on != c.selected {
+            toggled = Some((i, on));
         }
-        let required = choices.choices.iter().filter(|c| !c.optional && c.visible).count();
-        small_muted(ui, format!("{required} required mods are always installed"));
-    });
+    }
+    if let Some((i, on)) = toggled {
+        choices.toggle(i, on);
+        ui.ctx().request_repaint();
+    }
+    let required = choices.choices.iter().filter(|c| !c.optional && c.visible).count();
+    small_muted(ui, format!("{required} required mods are always installed"));
 }
 
-fn pack_card<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
-    let r = egui::Frame::new()
-        .fill(c_card())
-        .stroke(Stroke::new(1.0, c_border()))
-        .corner_radius(CornerRadius::same(14))
-        .inner_margin(egui::Margin::same(14))
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            add(ui)
-        })
-        .inner;
-    ui.add_space(2.0);
-    r
-}
+/// The widest the text of a pack's page gets.
+const DETAIL_W: f32 = 720.0;
 
 /// Pack descriptions come with HTML and line breaks; show them as plain text.
 fn plain_text(s: &str) -> String {

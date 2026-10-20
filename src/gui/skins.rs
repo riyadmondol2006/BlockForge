@@ -87,6 +87,32 @@ fn skin_candidates(dir: &Path, limit: usize) -> Vec<PathBuf> {
         .collect()
 }
 
+/// A file of the downloads folder as a row of the list: the chosen one has the selection fill.
+fn file_row(ui: &mut Ui, name: &str, selected: bool) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 28.0), Sense::click());
+    if selected {
+        ui.painter().rect_filled(rect, CornerRadius::same(R_CONTROL), c_selection());
+    } else if resp.hovered() {
+        ui.painter().rect_filled(rect, CornerRadius::same(R_CONTROL), c_hover());
+    }
+    let fg = if selected || resp.hovered() { c_text() } else { c_muted() };
+    let mut job = egui::text::LayoutJob::single_section(
+        name.to_string(),
+        egui::TextFormat::simple(egui::FontId::proportional(FS_BODY), fg),
+    );
+    job.wrap = egui::text::TextWrapping {
+        max_width: rect.width() - 20.0,
+        max_rows: 1,
+        break_anywhere: true,
+        overflow_character: Some('\u{2026}'),
+    };
+    let galley = ui.painter().layout_job(job);
+    ui.painter().galley(egui::pos2(rect.left() + 10.0, rect.center().y - galley.size().y / 2.0), galley, fg);
+    focus_ring(ui, &resp, rect, R_CONTROL);
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, name));
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
 fn color_image(img: &RgbaImage) -> ColorImage {
     ColorImage::from_rgba_unmultiplied([img.width() as usize, img.height() as usize], img.as_raw())
 }
@@ -200,7 +226,7 @@ impl App {
 
         egui::Modal::new(egui::Id::unique("skin-dialog")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
             ui.set_width(modal_width(ctx, if d.offline { 460.0 } else { 600.0 }));
-            ui.label(RichText::new("Change skin").size(22.0).strong());
+            ui.label(RichText::new("Change skin").size(FS_SECTION).semibold());
             if d.offline {
                 muted(ui, format!("{} is an offline player", d.name));
                 ui.add_space(8.0);
@@ -222,79 +248,79 @@ impl App {
             ui.add_space(10.0);
             // a short window (or a big zoom) scrolls the middle part instead of pushing the buttons off the screen
             egui::ScrollArea::vertical().max_height(modal_scroll_height(ctx, 560.0, 170.0)).auto_shrink([false, true]).show(ui, |ui| {
-            ui.horizontal_top(|ui| {
-                // the figure, 8 times its size, or 5 times in a narrow window
-                let scale = if ui.available_width() >= 480.0 { 8.0 } else { 5.0 };
-                let size = vec2(16.0 * scale, 32.0 * scale);
-                let (rect, _) = ui.allocate_exact_size(size + vec2(24.0, 24.0), Sense::hover());
-                ui.painter().rect_filled(rect, CornerRadius::same(14), c_field());
-                if let Some((_, tex)) = &d.preview {
-                    egui::Image::from_texture(egui::load::SizedTexture::new(tex.id(), size)).paint_at(ui, egui::Rect::from_center_size(rect.center(), size));
-                }
-                ui.add_space(14.0);
-                ui.vertical(|ui| {
-                    ui.set_width(ui.available_width().clamp(160.0, 330.0));
-                    ui.label(RichText::new("1. Choose a skin").strong());
-                    small_muted(ui, "Pick a 64x64 PNG skin file, or drag one onto this window. Need one? Browse a skin site and download a PNG.");
-                    ui.add_space(4.0);
-                    ui.horizontal(|ui| {
-                        let field = (ui.available_width() - 64.0).clamp(100.0, 250.0);
-                        let r = ui.add_sized([field, 32.0], egui::TextEdit::singleline(&mut d.path_text).hint_text("Path to a skin file").margin(egui::Margin::symmetric(10, 6)).background_color(c_field()));
-                        let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                        if secondary(ui, "Use").clicked() || enter {
-                            typed = true;
-                        }
-                    });
-                    if secondary_icon(ui, super::icons::Icon::Search, "Find skins online").clicked() {
-                        open_site = true;
+                ui.horizontal_top(|ui| {
+                    // the figure, 8 times its size, or 5 times in a narrow window, on a panel of its own
+                    let wide = ui.available_width() >= 480.0;
+                    let scale = if wide { 8.0 } else { 5.0 };
+                    let size = vec2(16.0 * scale, 32.0 * scale);
+                    let panel = vec2(if wide { 200.0 } else { size.x + 24.0 }, size.y + 24.0);
+                    let (rect, _) = ui.allocate_exact_size(panel, Sense::hover());
+                    ui.painter().rect_filled(rect, CornerRadius::same(R_CARD), c_field());
+                    if let Some((_, tex)) = &d.preview {
+                        egui::Image::from_texture(egui::load::SizedTexture::new(tex.id(), size)).paint_at(ui, egui::Rect::from_center_size(rect.center(), size));
                     }
-                    if !d.downloads.is_empty() {
-                        small_muted(ui, "In your downloads:");
-                        ui.horizontal_wrapped(|ui| {
+                    ui.add_space(14.0);
+                    ui.vertical(|ui| {
+                        ui.set_width(ui.available_width().clamp(160.0, 330.0));
+                        ui.label(RichText::new("Skin file").semibold());
+                        small_muted(ui, "Pick a 64x64 PNG skin file, or drag one onto this window.");
+                        ui.add_space(2.0);
+                        ui.horizontal(|ui| {
+                            let field = (ui.available_width() - 64.0).clamp(100.0, 250.0);
+                            let r = ui.add_sized([field, 32.0], egui::TextEdit::singleline(&mut d.path_text).hint_text("Path to a skin file").margin(egui::Margin::symmetric(10, 7)).background_color(c_field()));
+                            let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                            if secondary(ui, "Use").clicked() || enter {
+                                typed = true;
+                            }
+                        });
+                        if !d.downloads.is_empty() {
+                            small_muted(ui, "In your downloads");
+                            ui.spacing_mut().item_spacing.y = 2.0;
                             for p in &d.downloads {
                                 let label = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-                                let label = if label.chars().count() > 26 { format!("{}\u{2026}", label.chars().take(25).collect::<String>()) } else { label };
-                                if chip(ui, &label, d.chosen.as_ref() == Some(p)).clicked() {
+                                if file_row(ui, &label, d.chosen.as_ref() == Some(p)).clicked() {
                                     pick = Some(p.clone());
                                 }
                             }
-                        });
-                    }
-                    if let Some(c) = &d.chosen {
-                        small_muted(ui, c.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default());
-                    } else {
-                        small_muted(ui, "Showing your current skin");
-                    }
-                    ui.add_space(10.0);
-                    ui.label(RichText::new("2. Arm width").strong());
-                    small_muted(ui, "Skins are made for one of two arm widths. Pick the one that looks right in the preview.");
-                    ui.horizontal(|ui| {
-                        if chip(ui, "Classic arms", !d.slim).clicked() {
-                            d.slim = false;
+                            ui.spacing_mut().item_spacing.y = 8.0;
                         }
-                        if chip(ui, "Slim arms", d.slim).clicked() {
-                            d.slim = true;
+                        if secondary_icon(ui, super::icons::Icon::Search, "Find skins online").clicked() {
+                            open_site = true;
+                        }
+                        if let Some(c) = &d.chosen {
+                            small_muted(ui, c.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default());
+                        } else {
+                            small_muted(ui, "Showing your current skin");
+                        }
+                        ui.add_space(6.0);
+                        ui.label(RichText::new("Arms").semibold());
+                        small_muted(ui, "Skins are made for one of two arm widths. Pick the one that looks right in the preview.");
+                        if let Some(i) = segmented(ui, &["Classic", "Slim"], usize::from(d.slim)) {
+                            d.slim = i == 1;
+                        }
+                        if d.uploading {
+                            ui.horizontal(|ui| {
+                                ui.spinner();
+                                muted(ui, "Uploading your skin\u{2026}");
+                            });
+                        } else if let Some((text, error)) = &d.message {
+                            ui.add(egui::Label::new(RichText::new(text).color(if *error { c_danger() } else { c_muted() }).size(FS_META)).wrap());
                         }
                     });
-                    ui.add_space(8.0);
-                    if d.uploading {
-                        ui.horizontal(|ui| {
-                            ui.spinner();
-                            muted(ui, "Uploading your skin...");
-                        });
-                    } else if let Some((text, error)) = &d.message {
-                        ui.label(RichText::new(text).color(if *error { c_danger() } else { c_muted() }).size(13.0));
-                    }
                 });
-            });
             });
             ui.add_space(12.0);
             ui.horizontal(|ui| {
-                if primary_enabled(ui, "Use this skin", d.chosen.is_some() && !d.uploading).clicked() {
+                let ready = d.chosen.is_some() && !d.uploading;
+                if primary_enabled(ui, "Use this skin", ready).clicked() {
                     upload = true;
                 }
                 if secondary(ui, "Cancel").clicked() {
                     close = true;
+                }
+                // why the main button is greyed out
+                if d.chosen.is_none() {
+                    ui.label(RichText::new("Choose a skin file first").size(FS_META).color(c_faint()));
                 }
             });
         });
