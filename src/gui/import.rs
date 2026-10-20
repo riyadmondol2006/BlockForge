@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender, channel};
 
-use egui::{Align, CornerRadius, Layout, RichText, ScrollArea, Stroke};
+use egui::{CornerRadius, RichText, ScrollArea, Stroke, Ui};
 
 use super::App;
 use super::theme::*;
@@ -162,6 +162,23 @@ pub fn pick_path_blocking(folder: bool) -> Option<PathBuf> {
     run(k)
 }
 
+/// What the field turned out to be, in one small line: a check when it can be imported, a warning when not.
+fn status_line(ui: &mut Ui, ok: bool, text: &str) {
+    ui.scope(|ui| {
+        ui.spacing_mut().interact_size.y = 18.0;
+        ui.horizontal_top(|ui| {
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(16.0, 18.0), egui::Sense::hover());
+            if ok {
+                super::discover::paint_check(ui.painter(), rect.center(), 13.0, c_text());
+            } else {
+                super::icons::paint(ui.painter(), super::icons::Icon::Info, rect.center(), 14.0, c_warn());
+            }
+            let color = if ok { c_muted() } else { c_warn() };
+            ui.add(egui::Label::new(RichText::new(text).size(FS_META).color(color)).wrap());
+        });
+    });
+}
+
 impl App {
     /// Open the import window (empty, or with something already in the field).
     pub fn open_import(&mut self, input: Option<String>) {
@@ -279,10 +296,10 @@ impl App {
                     egui::Frame::new()
                         .fill(c_accent_soft())
                         .stroke(Stroke::new(2.0, c_accent()))
-                        .corner_radius(CornerRadius::same(R_CARD + 4))
+                        .corner_radius(CornerRadius::same(R_DIALOG))
                         .inner_margin(egui::Margin::symmetric(40, 28))
                         .show(ui, |ui| {
-                            ui.label(RichText::new("Drop to import").size(22.0).semibold().color(c_accent()));
+                            ui.label(RichText::new("Drop to import").size(FS_TITLE).semibold());
                         });
                 });
         }
@@ -300,25 +317,25 @@ impl App {
         let mut pick_file = false;
         let mut pick_folder = false;
         let mut use_found: Option<ImportedInstance> = None;
-        let (width, room) = super::curseforge::modal_size(ctx, 620.0, 360.0);
+        let (width, room) = super::curseforge::modal_size(ctx, 620.0, 380.0);
         let modal = egui::Modal::new(egui::Id::new("import-modal")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
+            use super::discover::*;
             ui.set_width(width);
-            ui.horizontal(|ui| {
-                ui.label(RichText::new("Import an instance").size(18.0).semibold());
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if secondary(ui, "Close").clicked() {
-                        close = true;
-                    }
-                });
-            });
+            if dialog_title(ui, "Import an instance") {
+                close = true;
+            }
             muted(ui, "Your files are copied. Nothing is changed or removed in the other launcher.");
             ui.add_space(16.0);
 
-            ui.label(RichText::new("File, folder or link").size(15.0).semibold());
+            section(ui, "File, folder or link");
             ui.add_space(2.0);
+            // the field takes what is left of the row after the buttons, measured on the last frame
+            let buttons_id = ui.scope_id().with("import-buttons");
+            let buttons_w = remembered_width(ui, buttons_id, 200.0);
             ui.horizontal(|ui| {
+                let field_w = (ui.available_width() - buttons_w - ui.spacing().item_spacing.x).max(160.0);
                 ui.add_sized(
-                    [(ui.available_width() - 214.0).max(160.0), 32.0],
+                    [field_w, 32.0],
                     egui::TextEdit::singleline(&mut self.import.input)
                         .hint_text(
                             RichText::new("Paste a link, or choose a .mrpack / .zip / instance folder")
@@ -327,12 +344,19 @@ impl App {
                         .margin(egui::Margin::symmetric(10, 7))
                         .background_color(c_field()),
                 );
-                if secondary(ui, "Choose file").clicked() {
-                    pick_file = true;
-                }
-                if secondary(ui, "Choose folder").clicked() {
-                    pick_folder = true;
-                }
+                let used = ui
+                    .scope(|ui| {
+                        if secondary(ui, "Choose file").clicked() {
+                            pick_file = true;
+                        }
+                        if ghost(ui, "Folder").clicked() {
+                            pick_folder = true;
+                        }
+                    })
+                    .response
+                    .rect
+                    .width();
+                remember_width(ui, buttons_id, used);
             });
             if self.import.picking {
                 ui.horizontal(|ui| {
@@ -341,17 +365,15 @@ impl App {
                 });
             }
             let (text, ok) = self.import.described.clone();
-            ui.horizontal_wrapped(|ui| {
-                if self.import.detected == Detected::Empty {
-                    small_muted(ui, text);
-                } else {
-                    ui.label(RichText::new(text).color(if ok { c_text() } else { c_warn() }).size(13.0));
-                }
-            });
+            if self.import.detected == Detected::Empty {
+                small_muted(ui, text);
+            } else {
+                status_line(ui, ok, &text);
+            }
             if ok {
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    super::discover::filter_label(ui, "Name");
+                    filter_label(ui, "Name");
                     ui.add_sized(
                         [280.0, 32.0],
                         egui::TextEdit::singleline(&mut self.import.name)
@@ -359,22 +381,13 @@ impl App {
                             .margin(egui::Margin::symmetric(10, 7))
                             .background_color(c_field()),
                     );
-                    if primary(ui, "Import").clicked() {
-                        run = Some((
-                            self.import.input.clone(),
-                            Some(self.import.name.trim().to_string()).filter(|n| !n.is_empty()),
-                        ));
-                    }
                 });
-            }
-            if !self.import.queue.is_empty() {
-                small_muted(ui, format!("{} more dropped files are waiting", self.import.queue.len()));
             }
 
             ui.add_space(16.0);
-            ui.separator();
+            rule(ui);
             ui.add_space(12.0);
-            ui.label(RichText::new("Found on this computer").size(15.0).semibold());
+            section(ui, "Found on this computer");
             ui.add_space(4.0);
             match &self.import.scan {
                 None => {
@@ -394,12 +407,14 @@ impl App {
                         .show(ui, |ui| {
                             for (n, i) in found.iter().enumerate() {
                                 if n > 0 {
-                                    ui.separator();
+                                    rule(ui);
                                 }
+                                ui.add_space(6.0);
                                 ui.horizontal(|ui| {
                                     ui.vertical(|ui| {
                                         ui.set_max_width((ui.available_width() - 110.0).max(240.0));
-                                        ui.label(RichText::new(&i.name).semibold());
+                                        ui.spacing_mut().item_spacing.y = 0.0;
+                                        ui.add(egui::Label::new(RichText::new(&i.name).semibold()).truncate());
                                         small_muted(
                                             ui,
                                             format!(
@@ -423,16 +438,36 @@ impl App {
                                             None => small_muted(ui, " "),
                                         }
                                     });
-                                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                    let id = ui.scope_id().with(("found-row", &i.root));
+                                    end_aligned(ui, id, |ui| {
                                         if secondary(ui, "Import").clicked() {
                                             use_found = Some(i.clone());
                                         }
                                     });
                                 });
+                                ui.add_space(6.0);
                             }
                         });
                 }
             }
+            ui.add_space(16.0);
+            dialog_footer(
+                ui,
+                "import",
+                |ui| {
+                    if !self.import.queue.is_empty() {
+                        small_muted(ui, format!("{} more dropped files are waiting", self.import.queue.len()));
+                    }
+                },
+                |ui| {
+                    if primary_enabled(ui, "Import", ok).clicked() {
+                        run = Some((
+                            self.import.input.clone(),
+                            Some(self.import.name.trim().to_string()).filter(|n| !n.is_empty()),
+                        ));
+                    }
+                },
+            );
         });
         if modal.should_close() {
             close = true;

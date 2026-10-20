@@ -4,8 +4,9 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender, channel};
+use std::time::Instant;
 
-use egui::{Align, Layout, RichText, ScrollArea, Ui};
+use egui::{RichText, ScrollArea, Ui};
 
 use super::App;
 use super::discover::*;
@@ -40,6 +41,10 @@ pub struct FtbState {
     seq: u64,
     error: Option<String>,
     selected: Option<Selected>,
+    /// When the search field was last typed in and its search has not started yet.
+    edited: Option<Instant>,
+    /// The window that lists the packs with updates is open.
+    review_open: bool,
     /// version id -> "Minecraft 1.20.1, Fabric 0.14.21"
     targets: HashMap<i64, String>,
     /// Versions that couldn't be read; asked again when picked again.
@@ -66,6 +71,8 @@ impl Default for FtbState {
             seq: 0,
             error: None,
             selected: None,
+            edited: None,
+            review_open: false,
             targets: HashMap::new(),
             targets_failed: HashSet::new(),
             updates: HashMap::new(),
@@ -84,8 +91,7 @@ impl App {
         f.seq += 1;
         f.loading = true;
         f.loaded_once = true;
-        f.packs.clear();
-        f.ids.clear();
+        // the old rows stay until the first page of the new listing arrives
         f.page = 0;
         f.error = None;
         let (seq, query, sort, dirs, tx, ctx) =
@@ -187,6 +193,9 @@ impl App {
                     Err(e) => {
                         self.ftb.loading = false;
                         self.ftb.error = Some(e);
+                        // the old rows no longer match what was asked for
+                        self.ftb.packs.clear();
+                        self.ftb.ids.clear();
                     }
                 },
                 Event::Page { seq, asked, packs } if seq == self.ftb.seq => {
@@ -195,6 +204,9 @@ impl App {
                         // every pack of the page failed to arrive: the list can't be trusted to be empty
                         self.ftb.page = self.ftb.page.saturating_sub(1);
                         self.ftb.error = Some("None of the packs on this page arrived.".into());
+                    } else if self.ftb.page == 1 {
+                        // the first page of a new listing takes the place of the old rows
+                        self.ftb.packs.clear();
                     }
                     self.ftb.packs.extend(packs);
                 }
@@ -254,67 +266,57 @@ impl App {
             self.ftb_check_updates();
         }
         let mut search = false;
-        heading(ui, "FTB Modpacks");
-        ui.add_space(8.0);
-        let mut q = std::mem::take(&mut self.ftb.query);
-        if big_search(ui, &mut q, "Search FTB modpacks") {
-            search = true;
-        }
-        self.ftb.query = q;
-        ui.add_space(8.0);
+        heading(ui, "FTB");
+        ui.add_space(12.0);
         ui.horizontal_wrapped(|ui| {
-            filter_label(ui, "Sort by");
-            egui::ComboBox::from_id_salt("ftb-sort").selected_text(self.ftb.sort.label()).width(160.0).show_ui(
-                ui,
-                |ui| {
+            let mut q = std::mem::take(&mut self.ftb.query);
+            let mut edited = self.ftb.edited.take();
+            if live_search(ui, &mut q, "Search FTB modpacks", &mut edited) {
+                search = true;
+            }
+            self.ftb.query = q;
+            self.ftb.edited = edited;
+            egui::ComboBox::from_id_salt("ftb-sort")
+                .selected_text(format!("Sort: {}", self.ftb.sort.label()))
+                .width(190.0)
+                .show_ui(ui, |ui| {
                     for s in Sort::ALL {
                         if ui.selectable_value(&mut self.ftb.sort, s, s.label()).clicked() {
                             search = true;
                         }
                     }
-                },
-            );
+                });
         });
         if search {
             self.ftb_search();
         }
         ui.add_space(8.0);
 
-        // updates for installed FTB packs
-        let updates: Vec<(String, String, PackVersion)> = self
-            .instances
-            .iter()
-            .filter_map(|i| {
-                self.ftb.updates.get(&i.folder).map(|v| (i.folder.clone(), i.name().to_string(), v.clone()))
-            })
-            .collect();
-        let mut update_folder: Option<String> = None;
-        if !updates.is_empty() {
-            card(ui, |ui| {
-                ui.label(RichText::new("Updates available").size(15.0).semibold());
-                ui.add_space(4.0);
-                for (folder, name, v) in &updates {
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new(name).semibold());
-                        small_muted(ui, format!("\u{2192} {}", v.label()));
-                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            if secondary(ui, "Update").clicked() {
-                                update_folder = Some(folder.clone());
-                            }
-                        });
-                    });
-                }
-            });
+        // updates for installed FTB packs: one line, the list is in a window
+        let waiting = self.instances.iter().filter(|i| self.ftb.updates.contains_key(&i.folder)).count();
+        if waiting > 0 {
+            let text = if waiting == 1 {
+                "1 FTB pack has an update".to_string()
+            } else {
+                format!("{waiting} FTB packs have updates")
+            };
+            if notice(ui, NoticeKind::Info, &text, Some("Review")).is_some_and(|r| r.clicked()) {
+                self.ftb.review_open = true;
+            }
             ui.add_space(8.0);
         }
-        if let Some(f) = update_folder {
-            self.ftb_update_instance(&f);
+        if waiting == 0 {
+            self.ftb.review_open = false;
+        }
+        if self.ftb.review_open {
+            self.ftb_review_dialog(ui.ctx());
         }
 
-        self.ftb_manual_card(ui);
+        self.ftb_manual_dialog(ui.ctx());
 
         if let Some(e) = self.ftb.error.clone() {
-            if super::discover::fetch_error_card(ui, "Couldn't reach Feed The Beast", &e) && !self.ftb.loading {
+            let text = "Couldn't reach Feed The Beast. Check your internet connection, or try again in a few minutes.";
+            if fetch_error(ui, text, &e) && !self.ftb.loading {
                 if self.ftb.ids.is_empty() {
                     self.ftb_search();
                 } else {
@@ -324,56 +326,210 @@ impl App {
         }
 
         let mut open: Option<PackManifest> = None;
-        let mut install: Option<(i64, i64, Option<String>, String)> = None;
         let mut more = false;
-        let mut close_details = false;
-        let mut version_change: Option<i64> = None;
+        self.ftb_details_dialog(ui.ctx());
 
-        if self.ftb.selected.is_some() {
-            let targets = self.ftb.targets.clone();
-            // a second click while the first install runs would make a second instance
-            let installing = self
-                .ftb
-                .selected
-                .as_ref()
-                .is_some_and(|s| self.tasks.iter().any(|t| t.label == format!("Installing {}", s.pack.name)));
-            let sel = self.ftb.selected.as_mut();
-            if let Some(sel) = sel {
-                card(ui, |ui| {
+        if self.ftb.packs.is_empty() && self.ftb.loading {
+            skeleton_rows(ui, 6, ROW_H);
+        } else if self.ftb.packs.is_empty() && self.ftb.error.is_none() {
+            let query = self.ftb.query.trim().to_string();
+            let text = if query.is_empty() {
+                "No packs to show.".to_string()
+            } else {
+                format!("No packs match \u{201C}{query}\u{201D}.")
+            };
+            if empty_row(ui, &text, (!query.is_empty()).then_some("Clear search")).is_some_and(|r| r.clicked()) {
+                self.ftb.query.clear();
+                self.ftb_search();
+            }
+        }
+        if !self.ftb.ids.is_empty() {
+            context_line(ui, Some(format!("{} packs", thousands(self.ftb.ids.len() as u64))), false, |_| {});
+        }
+        // a new search over rows that are already shown: a thin bar says it is on its way
+        if self.ftb.loading && self.ftb.page <= 1 && !self.ftb.packs.is_empty() {
+            progress_bar(ui, None, 2.0);
+        } else {
+            ui.add_space(2.0);
+        }
+        let packs = std::mem::take(&mut self.ftb.packs);
+        ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
+            for pack in &packs {
+                let rkey = format!("ftb:{}", pack.id);
+                row_frame(ui, |ui| {
+                    let wide = ui.available_width() >= 560.0;
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new(&sel.pack.name).size(18.0).semibold());
-                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            if secondary(ui, "Close").clicked() {
-                                close_details = true;
+                        ui.spacing_mut().item_spacing.x = 12.0;
+                        match pack.square_art() {
+                            Some(art) => self.remote_image(ui, &art.url, 48.0, &pack.name),
+                            None => {
+                                avatar(ui, &pack.name, 48.0);
                             }
-                            if secondary(ui, "Website").clicked() {
-                                let _ = open::that(sel.pack.website_url());
-                            }
-                        });
-                    });
-                    if !sel.pack.authors.is_empty() {
-                        small_muted(
-                            ui,
-                            format!(
-                                "by {}",
-                                sel.pack.authors.iter().map(|a| a.name.as_str()).collect::<Vec<_>>().join(", ")
-                            ),
-                        );
-                    }
-                    if let Some(s) = &sel.pack.synopsis {
-                        ui.add_space(4.0);
-                        ui.scope(|ui| {
-                            ui.set_max_width(ui.available_width().min(720.0));
-                            ui.add(egui::Label::new(RichText::new(s.clone()).color(c_muted())).wrap());
-                        });
-                    }
-                    ui.add_space(4.0);
-                    ui.horizontal_wrapped(|ui| {
-                        for t in sel.pack.tags.iter().take(8) {
-                            tag(ui, &t.name, c_muted());
                         }
+                        let text_w = row_text_width(ui, &rkey);
+                        ui.vertical(|ui| {
+                            ui.set_max_width(text_w);
+                            ui.spacing_mut().item_spacing.y = 2.0;
+                            name_line(ui, &pack.name, None);
+                            summary_line(ui, pack.synopsis.as_deref().unwrap_or_default());
+                            let mut parts = Vec::new();
+                            if !wide {
+                                parts.push((
+                                    format!("{} installs", human_count(pack.installs.max(0) as u64)),
+                                    c_faint(),
+                                ));
+                            }
+                            parts.extend(pack.tags.iter().take(4).map(|t| (t.name.clone(), c_faint())));
+                            meta_line(ui, &parts);
+                        });
+                        row_actions(ui, &rkey, |ui| {
+                            action_cell(ui, &rkey, |ui| {
+                                if secondary(ui, "Details").clicked() {
+                                    open = Some(pack.clone());
+                                }
+                            });
+                            if wide {
+                                ui.add_space(8.0);
+                                stat_column(ui, &human_count(pack.installs.max(0) as u64), "installs");
+                            }
+                        });
                     });
-                    ui.add_space(8.0);
+                });
+            }
+            ui.add_space(8.0);
+            let shown = packs.len();
+            let total = self.ftb.ids.len();
+            if self.ftb.loading {
+                if !packs.is_empty() {
+                    ui.vertical_centered(|ui| {
+                        ui.spinner();
+                    });
+                }
+            } else if total > self.ftb.page * ftb::PAGE_SIZE {
+                ui.vertical_centered(|ui| {
+                    small_faint(ui, format!("Showing {} of {}", thousands(shown as u64), thousands(total as u64)));
+                    let next = (total - shown).min(ftb::PAGE_SIZE);
+                    if ghost(ui, &format!("Load {next} more")).clicked() {
+                        more = true;
+                    }
+                });
+            }
+            ui.add_space(8.0);
+        });
+        self.ftb.packs = packs;
+        if let Some(p) = open {
+            self.ftb_select(p);
+        }
+        if more {
+            self.ftb_more();
+        }
+    }
+
+    /// The packs with a newer version, each with its Update button.
+    fn ftb_review_dialog(&mut self, ctx: &egui::Context) {
+        let rows: Vec<(String, String, PackVersion)> = self
+            .instances
+            .iter()
+            .filter_map(|i| {
+                self.ftb.updates.get(&i.folder).map(|v| (i.folder.clone(), i.name().to_string(), v.clone()))
+            })
+            .collect();
+        let mut close = false;
+        let mut update: Option<String> = None;
+        let (width, list_height) = super::curseforge::modal_size(ctx, 560.0, 220.0);
+        let modal = egui::Modal::new(egui::Id::unique("ftb-updates")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
+            ui.set_width(width);
+            ui.label(RichText::new("FTB pack updates").size(FS_SECTION).semibold());
+            ui.add_space(8.0);
+            ScrollArea::vertical().max_height(list_height.min(340.0)).id_salt("ftb-updates-list").show(ui, |ui| {
+                for (n, (folder, name, v)) in rows.iter().enumerate() {
+                    if n > 0 {
+                        rule(ui);
+                    }
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        ui.vertical(|ui| {
+                            ui.set_max_width((ui.available_width() - 120.0).max(160.0));
+                            ui.spacing_mut().item_spacing.y = 0.0;
+                            ui.add(egui::Label::new(RichText::new(name).semibold()).truncate());
+                            small_muted(ui, format!("\u{2192} {}", v.label()));
+                        });
+                        let id = ui.scope_id().with(("ftb-update-row", folder));
+                        end_aligned(ui, id, |ui| {
+                            let clicked = if rows.len() == 1 { primary(ui, "Update") } else { secondary(ui, "Update") };
+                            if clicked.clicked() {
+                                update = Some(folder.clone());
+                            }
+                        });
+                    });
+                    ui.add_space(6.0);
+                }
+            });
+            ui.add_space(8.0);
+            dialog_footer(
+                ui,
+                "ftb-updates",
+                |_| {},
+                |ui| {
+                    if secondary(ui, "Close").clicked() {
+                        close = true;
+                    }
+                },
+            );
+        });
+        if modal.should_close() {
+            close = true;
+        }
+        if let Some(f) = update {
+            self.ftb_update_instance(&f);
+        }
+        if close {
+            self.ftb.review_open = false;
+        }
+    }
+
+    /// One pack: who made it, what it is, the version to take and the name of the instance.
+    fn ftb_details_dialog(&mut self, ctx: &egui::Context) {
+        if self.ftb.selected.is_none() {
+            return;
+        }
+        let targets = self.ftb.targets.clone();
+        // a second click while the first install runs would make a second instance
+        let installing = self
+            .ftb
+            .selected
+            .as_ref()
+            .is_some_and(|s| self.tasks.iter().any(|t| t.label == format!("Installing {}", s.pack.name)));
+        let mut close = false;
+        let mut install: Option<(i64, i64, Option<String>, String)> = None;
+        let mut version_change: Option<i64> = None;
+        let (width, body_height) = super::curseforge::modal_size(ctx, 620.0, 260.0);
+        let Some(sel) = self.ftb.selected.as_mut() else { return };
+        let modal = egui::Modal::new(egui::Id::unique("ftb-details")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
+            ui.set_width(width);
+            if dialog_title(ui, &sel.pack.name) {
+                close = true;
+            }
+            if !sel.pack.authors.is_empty() {
+                small_muted(
+                    ui,
+                    format!("by {}", sel.pack.authors.iter().map(|a| a.name.as_str()).collect::<Vec<_>>().join(", ")),
+                );
+            }
+            ui.add_space(8.0);
+            ScrollArea::vertical().id_salt("ftb-details-body").max_height(body_height).auto_shrink([false, true]).show(
+                ui,
+                |ui| {
+                    if let Some(s) = &sel.pack.synopsis {
+                        ui.add(egui::Label::new(RichText::new(s.clone()).color(c_muted())).wrap());
+                        ui.add_space(4.0);
+                    }
+                    let tags: Vec<(String, egui::Color32)> =
+                        sel.pack.tags.iter().take(8).map(|t| (t.name.clone(), c_faint())).collect();
+                    if !tags.is_empty() {
+                        ui.add(egui::Label::new(tag_line(&tags)).wrap());
+                        ui.add_space(8.0);
+                    }
                     ui.horizontal_wrapped(|ui| {
                         filter_label(ui, "Version");
                         let current = sel
@@ -396,9 +552,12 @@ impl App {
                                 }
                             },
                         );
-                        small_muted(ui, targets.get(&sel.version).cloned().unwrap_or_default());
                     });
-                    ui.horizontal_wrapped(|ui| {
+                    if let Some(text) = targets.get(&sel.version).filter(|t| !t.is_empty()) {
+                        small_muted(ui, text.clone());
+                    }
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
                         filter_label(ui, "Name");
                         ui.add_sized(
                             [300.0, 32.0],
@@ -406,153 +565,119 @@ impl App {
                                 .margin(egui::Margin::symmetric(10, 7))
                                 .background_color(c_field()),
                         );
-                        if installing {
-                            ui.spinner();
-                            muted(ui, "Installing");
-                        } else if primary(ui, "Install").clicked() {
-                            install = Some((
-                                sel.pack.id,
-                                sel.version,
-                                Some(sel.name.trim().to_string()).filter(|n| !n.is_empty()),
-                                sel.pack.name.clone(),
-                            ));
-                        }
                     });
-                });
-            }
-            ui.add_space(8.0);
+                },
+            );
+            ui.add_space(12.0);
+            let website = sel.pack.website_url();
+            dialog_footer(
+                ui,
+                "ftb-details",
+                |ui| {
+                    if ghost(ui, "Website").clicked() {
+                        let _ = open::that(&website);
+                    }
+                },
+                |ui| {
+                    if installing {
+                        ui.spinner();
+                        muted(ui, "Installing");
+                    }
+                    if secondary(ui, "Close").clicked() {
+                        close = true;
+                    }
+                    if primary_enabled(ui, "Install", !installing).clicked() {
+                        install = Some((
+                            sel.pack.id,
+                            sel.version,
+                            Some(sel.name.trim().to_string()).filter(|n| !n.is_empty()),
+                            sel.pack.name.clone(),
+                        ));
+                    }
+                },
+            );
+        });
+        if modal.should_close() {
+            close = true;
         }
         if let Some(v) = version_change {
             self.ftb_load_target(v);
         }
-        if close_details {
-            self.ftb.selected = None;
-        }
-
-        if self.ftb.packs.is_empty() && self.ftb.loading {
-            skeleton_rows(ui, 6, 76.0);
-        } else if self.ftb.packs.is_empty() && self.ftb.error.is_none() {
-            let query = self.ftb.query.trim().to_string();
-            let title = if query.is_empty() {
-                "No packs to show".to_string()
-            } else {
-                format!("No packs match \u{201C}{query}\u{201D}")
-            };
-            if empty_state(ui, &title, "Try a different search.", (!query.is_empty()).then_some("Clear search")) {
-                self.ftb.query.clear();
-                self.ftb_search();
-            }
-        }
-        let packs = std::mem::take(&mut self.ftb.packs);
-        ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
-            for pack in &packs {
-                let rkey = format!("ftb:{}", pack.id);
-                row_frame(ui, |ui| {
-                    let wide = ui.available_width() >= 560.0;
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 12.0;
-                        match pack.square_art() {
-                            Some(art) => self.remote_image(ui, &art.url, 48.0, &pack.name),
-                            None => {
-                                avatar(ui, &pack.name, 48.0);
-                            }
-                        }
-                        let text_w = row_text_width(ui, &rkey);
-                        ui.vertical(|ui| {
-                            ui.set_max_width(text_w);
-                            ui.spacing_mut().item_spacing.y = 2.0;
-                            ui.label(RichText::new(&pack.name).size(15.0).semibold());
-                            ui.add(
-                                egui::Label::new(
-                                    RichText::new(pack.synopsis.clone().unwrap_or_default())
-                                        .color(c_muted())
-                                        .size(13.0),
-                                )
-                                .truncate(),
-                            );
-                            let tags: Vec<(&str, egui::Color32)> =
-                                pack.tags.iter().take(4).map(|t| (t.name.as_str(), c_muted())).collect();
-                            let figure =
-                                (!wide).then(|| format!("{} installs", human_count(pack.installs.max(0) as u64)));
-                            meta_line(ui, figure, &tags, false);
-                        });
-                        row_actions(ui, &rkey, |ui| {
-                            if secondary(ui, "Details").clicked() {
-                                open = Some(pack.clone());
-                            }
-                            if wide {
-                                ui.add_space(8.0);
-                                stat_column(ui, &human_count(pack.installs.max(0) as u64), "installs");
-                            }
-                        });
-                    });
-                });
-            }
-            ui.add_space(8.0);
-            if self.ftb.loading {
-                if !packs.is_empty() {
-                    ui.spinner();
-                }
-            } else if self.ftb.ids.len() > self.ftb.page * ftb::PAGE_SIZE && secondary(ui, "Load more").clicked() {
-                more = true;
-            }
-            ui.add_space(8.0);
-        });
-        self.ftb.packs = packs;
-        if let Some(p) = open {
-            self.ftb_select(p);
-        }
         if let Some((pack, version, name, title)) = install {
             self.ftb_install(pack, version, name, title);
         }
-        if more {
-            self.ftb_more();
+        if close {
+            self.ftb.selected = None;
         }
     }
 
     /// Mods CurseForge only gives out through its website: open each page, then try again.
-    fn ftb_manual_card(&mut self, ui: &mut Ui) {
+    fn ftb_manual_dialog(&mut self, ctx: &egui::Context) {
         let Some((pack, version, name, files)) = self.ftb.manual.clone() else { return };
         let mut retry = false;
         let mut dismiss = false;
-        card(ui, |ui| {
-            ui.label(RichText::new("Some mods need to be downloaded by hand").semibold().color(c_warn()));
-            small_muted(
+        let downloads: PathBuf = crate::packutil::downloads_dir();
+        let (width, list_height) = super::curseforge::modal_size(ctx, 620.0, 300.0);
+        let modal = egui::Modal::new(egui::Id::unique("ftb-manual")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
+            ui.set_width(width);
+            ui.label(RichText::new("Some mods need to be downloaded by hand").size(FS_SECTION).semibold());
+            muted(
                 ui,
                 "The authors of these mods don't allow other launchers to download them. Open each page, save the file to your Downloads folder, then press Try again.",
             );
-            let downloads: PathBuf = crate::packutil::downloads_dir();
-            for f in &files {
-                let present =
-                    downloads.join(&f.file_name).is_file() || downloads.join(f.file_name.replace(' ', "+")).is_file();
-                ui.horizontal(|ui| {
-                    ui.label(if present {
-                        RichText::new("\u{2713}").color(c_accent())
-                    } else {
-                        RichText::new("\u{2022}").color(c_muted())
-                    });
-                    ui.label(&f.file_name);
-                    small_muted(ui, format!("({})", f.mod_name));
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if secondary(ui, "Open page").clicked() {
-                            let _ = open::that(&f.url);
+            ui.add_space(8.0);
+            ScrollArea::vertical().max_height(list_height.min(320.0)).id_salt("ftb-manual-list").show(ui, |ui| {
+                for (n, f) in files.iter().enumerate() {
+                    if n > 0 {
+                        rule(ui);
+                    }
+                    let present = downloads.join(&f.file_name).is_file()
+                        || downloads.join(f.file_name.replace(' ', "+")).is_file();
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        if present {
+                            check_label(ui, "In Downloads");
+                        } else {
+                            small_muted(ui, "\u{2022}");
                         }
+                        ui.vertical(|ui| {
+                            ui.set_max_width((ui.available_width() - 130.0).max(160.0));
+                            ui.spacing_mut().item_spacing.y = 0.0;
+                            ui.add(egui::Label::new(&f.file_name).truncate());
+                            small_muted(ui, &f.mod_name);
+                        });
+                        let id = ui.scope_id().with(("ftb-manual-row", &f.file_name));
+                        end_aligned(ui, id, |ui| {
+                            if secondary(ui, "Open page").clicked() {
+                                let _ = open::that(&f.url);
+                            }
+                        });
                     });
-                });
-            }
-            ui.horizontal(|ui| {
-                if primary(ui, "Try again").clicked() {
-                    retry = true;
-                }
-                if secondary(ui, "Open Downloads folder").clicked() {
-                    let _ = open::that(&downloads);
-                }
-                if secondary(ui, "Cancel").clicked() {
-                    dismiss = true;
+                    ui.add_space(6.0);
                 }
             });
+            ui.add_space(8.0);
+            dialog_footer(
+                ui,
+                "ftb-manual",
+                |ui| {
+                    if ghost(ui, "Open Downloads folder").clicked() {
+                        let _ = open::that(&downloads);
+                    }
+                },
+                |ui| {
+                    if secondary(ui, "Cancel").clicked() {
+                        dismiss = true;
+                    }
+                    if primary(ui, "Try again").clicked() {
+                        retry = true;
+                    }
+                },
+            );
         });
-        ui.add_space(6.0);
+        if modal.should_close() {
+            dismiss = true;
+        }
         if retry {
             self.ftb.manual = None;
             let title =
@@ -563,4 +688,18 @@ impl App {
             self.ftb.manual = None;
         }
     }
+}
+
+/// Words divided by dots, as one line of faint text (the tags of a pack).
+fn tag_line(parts: &[(String, egui::Color32)]) -> egui::text::LayoutJob {
+    let mut job = egui::text::LayoutJob::default();
+    let format =
+        |color| egui::text::TextFormat { font_id: egui::FontId::proportional(FS_META), color, ..Default::default() };
+    for (i, (text, color)) in parts.iter().enumerate() {
+        if i > 0 {
+            job.append(" \u{00B7} ", 0.0, format(c_faint()));
+        }
+        job.append(text, 0.0, format(*color));
+    }
+    job
 }
