@@ -53,7 +53,6 @@ pub(super) enum Act {
     Open(PathBuf),
     Copy(String),
     Link(&'static str),
-    BackToTools,
     BackToInstance(String),
 }
 
@@ -630,7 +629,6 @@ impl App {
                 self.toast(tr!("Copied"));
             }
             Act::Link(url) => self.open_link(url),
-            Act::BackToTools => self.page = Page::Tools,
             Act::BackToInstance(folder) => self.open_instance(&folder),
         }
     }

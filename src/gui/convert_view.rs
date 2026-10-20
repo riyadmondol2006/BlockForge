@@ -80,16 +80,10 @@ impl ConvertState {
                 heading(ui, &if self.dest.is_some() { tr!("Add a Bedrock world") } else { tr!("World converter") });
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if self.screen != Screen::Running {
-                        match &self.dest {
-                            Some(d) => {
-                                if ui.link(RichText::new(tr!("Back to {0}", &d.name)).color(c_muted())).clicked() {
-                                    acts.push(Act::BackToInstance(d.folder.clone()));
-                                }
-                            }
-                            None => {
-                                if ui.link(RichText::new(tr!("Back to Tools")).color(c_muted())).clicked() {
-                                    acts.push(Act::BackToTools);
-                                }
+                        // the standalone converter is a page of its own in the sidebar: nowhere to go back to
+                        if let Some(d) = &self.dest {
+                            if ui.link(RichText::new(tr!("Back to {0}", &d.name)).color(c_muted())).clicked() {
+                                acts.push(Act::BackToInstance(d.folder.clone()));
                             }
                         }
                     }
