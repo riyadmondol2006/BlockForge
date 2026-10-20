@@ -12,10 +12,10 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::SystemTime;
 
-use egui::{Align, Color32, CornerRadius, Layout, RichText, ScrollArea, Stroke, Ui};
+use egui::{Align, CornerRadius, Layout, RichText, ScrollArea, Stroke, Ui};
 
 use super::icons::Icon;
-use super::instance_menu::{ghost_button, secondary_menu};
+use super::instance_menu::{ghost_button, secondary_menu, split_or_stack};
 use super::theme::*;
 use super::widgets::*;
 use super::{App, InstTab, Msg, Page};
@@ -166,6 +166,10 @@ enum Act {
     ShaderLoader,
     EnableAll(Vec<ModKey>, bool),
     Select(ModKey, bool),
+    ClearFilter,
+    /// Open the mod loader dialog of the instance.
+    Loader,
+    DismissScan,
 }
 
 /// The platforms besides Modrinth that can offer updates. The CurseForge module adds its source here.
@@ -245,19 +249,6 @@ pub(super) fn instance_lock(root: &Path) -> Arc<tokio::sync::Mutex<()>> {
     static LOCKS: OnceLock<Mutex<HashMap<PathBuf, Arc<tokio::sync::Mutex<()>>>>> = OnceLock::new();
     let mut locks = LOCKS.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
     locks.entry(root.to_path_buf()).or_default().clone()
-}
-
-/// The calm panel that stands where the list would be when there is nothing to list: what is going on, and what to do.
-fn mods_empty_panel(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
-    egui::Frame::new()
-        .fill(c_card())
-        .stroke(Stroke::new(1.0, c_border()))
-        .corner_radius(CornerRadius::same(R_CARD))
-        .inner_margin(egui::Margin::symmetric(24, 28))
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.vertical_centered(add);
-        });
 }
 
 fn short(text: &str, max: usize) -> String {
@@ -573,6 +564,12 @@ impl App {
                     .await?
                 });
             }
+            Act::ClearFilter => {
+                self.mods.filter.clear();
+                self.mods.show = Show::All;
+            }
+            Act::Loader => self.apply(super::instance_menu::Act::ChangeLoader(folder)),
+            Act::DismissScan => self.mods.scan = None,
             Act::Select(key, on) => {
                 if on {
                     self.mods.selected.insert(key);
@@ -750,54 +747,79 @@ impl App {
             .clone()
             .unwrap_or_else(|| crate::mods::InstanceTarget::of(inst, &crate::mods::RemoteConfig::load(&self.dirs)));
 
-        // kinds, then search and filters
+        // kinds on the left, the folder and the main action on the right; then the search and the filters on the left
+        // and the tools on the right. Each pair shares a line, or the right part goes on the next line in a narrow window.
         let total = self.mods.entries.get(&kind).map_or(0, Vec::len);
-        let buttons = |ui: &mut Ui, acts: &mut Vec<Act>| {
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                // with nothing in the list the one main action is in the list's place
-                let add = if total == 0 {
-                    secondary_icon(ui, Icon::Plus, "Add")
-                } else {
-                    primary_icon(ui, Icon::Plus, "Add")
-                };
-                if add.clicked() {
-                    acts.push(Act::Add);
+        let offers_n = self.mods.updates.values().filter(|o| o.kind == kind).count();
+        let kinds_id = ui.scope_id().with("mods-kinds");
+        let tools_id = ui.scope_id().with("mods-tools");
+        let mut st = (&mut *self, &mut acts);
+        split_or_stack(
+            ui,
+            kinds_id,
+            34.0,
+            &mut st,
+            |ui, (this, acts)| {
+                ui.spacing_mut().item_spacing.x = 22.0;
+                for k in ContentKind::ALL {
+                    let count = this.mods.entries.get(&k).map_or(0, Vec::len);
+                    let label = if count > 0 { format!("{} {count}", k.label()) } else { k.label().to_string() };
+                    if tab(ui, &label, kind == k).clicked() && kind != k {
+                        acts.push(Act::Kind(k));
+                    }
                 }
+            },
+            |ui, (_, acts)| {
                 if secondary_icon(ui, Icon::Folder, "Open folder").clicked() {
                     acts.push(Act::OpenFolder);
                 }
-            });
-        };
-        // the buttons sit beside the kinds, or on a row of their own when the window (or a large interface
-        // scale) leaves no room for them there
-        let mut room = 0.0;
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 22.0;
-            for k in ContentKind::ALL {
-                let count = self.mods.entries.get(&k).map_or(0, Vec::len);
-                let label = if count > 0 { format!("{} {count}", k.label()) } else { k.label().to_string() };
-                if tab(ui, &label, kind == k).clicked() && kind != k {
-                    acts.push(Act::Kind(k));
+                if primary_icon(ui, Icon::Plus, "Add").clicked() {
+                    acts.push(Act::Add);
                 }
-            }
-            room = ui.available_width();
-            if room >= 260.0 {
-                buttons(ui, &mut acts);
-            }
-        });
-        if room < 260.0 {
-            ui.horizontal(|ui| buttons(ui, &mut acts));
-        }
+            },
+        );
         ui.add_space(6.0);
-
-        let offers_n = self.mods.updates.values().filter(|o| o.kind == kind).count();
-        let tools_id = ui.scope_id().with("mods-tools-width");
-        let tools_w = remembered_width(ui, tools_id, 420.0);
-        let mut tools_used = tools_w;
-        let mut tools_acts: Vec<Act> = Vec::new();
-        let mut tools = |this: &mut Self, ui: &mut Ui, acts: &mut Vec<Act>| {
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                // from the right edge inwards: More, Select, Update all, Check for updates, then what is going on
+        split_or_stack(
+            ui,
+            tools_id,
+            32.0,
+            &mut st,
+            |ui, (this, _)| {
+                let mut f = std::mem::take(&mut this.mods.filter);
+                let width = 200.0f32.min(ui.available_width());
+                search_field(ui, &mut f, &format!("Filter {}", kind.label().to_lowercase()), width);
+                this.mods.filter = f;
+                let updates = if offers_n > 0 { format!("Updates {offers_n}") } else { "Updates".to_string() };
+                let choices =
+                    [(Show::All, "All"), (Show::On, "On"), (Show::Off, "Off"), (Show::Updates, updates.as_str())];
+                let labels: Vec<&str> = choices.iter().map(|c| c.1).collect();
+                let chosen = choices.iter().position(|c| c.0 == this.mods.show).unwrap_or(0);
+                if let Some(i) = segmented(ui, &labels, chosen) {
+                    this.mods.show = choices[i].0;
+                }
+            },
+            |ui, (this, acts)| {
+                if let Some(b) = &this.mods.busy {
+                    muted(ui, format!("{b}\u{2026}"));
+                    ui.add(egui::Spinner::new().size(14.0));
+                }
+                if this.mods.checking {
+                    muted(ui, "Checking for updates");
+                    ui.add(egui::Spinner::new().size(14.0));
+                } else if secondary(ui, "Check for updates").clicked() {
+                    acts.push(Act::CheckUpdates);
+                }
+                if offers_n > 0 {
+                    let all = format!("Update all ({offers_n})");
+                    if ui.add_enabled_ui(!busy, |ui| secondary(ui, &all)).inner.clicked() {
+                        acts.push(Act::UpdateAll);
+                    }
+                }
+                let select = if this.mods.select_mode { "Done selecting" } else { "Select" };
+                if ghost(ui, select).clicked() {
+                    this.mods.select_mode = !this.mods.select_mode;
+                    this.mods.selected.clear();
+                }
                 secondary_menu(ui, "More", |ui| {
                     if ui.button("Look for new and missing files").clicked() {
                         acts.push(Act::Rescan);
@@ -837,57 +859,8 @@ impl App {
                         }
                     }
                 });
-                let select = if this.mods.select_mode { "Done selecting" } else { "Select" };
-                if secondary(ui, select).clicked() {
-                    this.mods.select_mode = !this.mods.select_mode;
-                    this.mods.selected.clear();
-                }
-                if offers_n > 0 {
-                    let all = format!("Update all ({offers_n})");
-                    if ui.add_enabled_ui(!busy, |ui| secondary(ui, &all)).inner.clicked() {
-                        acts.push(Act::UpdateAll);
-                    }
-                }
-                if this.mods.checking {
-                    muted(ui, "Checking for updates");
-                    ui.spinner();
-                } else if secondary(ui, "Check for updates").clicked() {
-                    acts.push(Act::CheckUpdates);
-                }
-                if let Some(b) = &this.mods.busy {
-                    muted(ui, format!("{b}\u{2026}"));
-                    ui.spinner();
-                }
-                tools_used = ui.min_rect().width();
-            });
-        };
-        // the search and the filters on the left; the tools on the right, or under them in a narrow window
-        let mut filter_room = 0.0;
-        ui.horizontal(|ui| {
-            let mut f = std::mem::take(&mut self.mods.filter);
-            search_field(
-                ui,
-                &mut f,
-                &format!("Filter {}", kind.label().to_lowercase()),
-                240.0f32.min(ui.available_width()),
-            );
-            self.mods.filter = f;
-            for (s, label) in [(Show::All, "All"), (Show::On, "On"), (Show::Off, "Off"), (Show::Updates, "Updates")] {
-                if chip(ui, label, self.mods.show == s).clicked() {
-                    self.mods.show = s;
-                }
-            }
-            filter_room = ui.available_width();
-            if filter_room >= tools_w + 12.0 {
-                tools(self, ui, &mut tools_acts);
-            }
-        });
-        if filter_room < tools_w + 12.0 {
-            ui.add_space(4.0);
-            ui.horizontal(|ui| tools(self, ui, &mut tools_acts));
-        }
-        remember_width(ui, tools_id, tools_used);
-        acts.append(&mut tools_acts);
+            },
+        );
 
         if self.mods.select_mode {
             let chosen: Vec<ModKey> = self.mods.selected.iter().cloned().collect();
@@ -940,46 +913,36 @@ impl App {
             .collect();
         if total == 0 {
             let loading = self.mods.last_report.is_none() && self.mods.sync_error.is_none();
-            mods_empty_panel(ui, |ui| {
-                if let Some(e) = &self.mods.sync_error {
-                    ui.label(RichText::new("Couldn't look through the folders").semibold());
-                    ui.add(egui::Label::new(RichText::new(short(e, 200)).color(c_danger()).size(12.5)).wrap());
-                    ui.add_space(4.0);
-                    if secondary(ui, "Try again").clicked() {
-                        acts.push(Act::Rescan);
-                    }
-                } else if loading {
-                    ui.spinner();
-                    muted(ui, "Looking through the folders\u{2026}");
-                } else {
-                    let (title, hint) = match kind {
-                        ContentKind::Mods if target.loader_key.is_none() => (
-                            "No mod loader yet",
-                            "This instance runs plain Minecraft. Mods need a mod loader such as Fabric.",
-                        ),
-                        ContentKind::Mods => {
-                            ("No mods yet", "Add some from Modrinth, or drop .jar files onto this window.")
-                        }
-                        ContentKind::ResourcePacks => {
-                            ("No resource packs yet", "Browse Modrinth, or drop .zip files onto this window.")
-                        }
-                        ContentKind::Shaders => {
-                            ("No shaders yet", "Browse Modrinth, or drop .zip files onto this window.")
-                        }
-                    };
-                    ui.label(RichText::new(title).semibold());
-                    muted(ui, hint);
-                    if kind != ContentKind::Mods || target.loader_key.is_some() {
-                        ui.add_space(6.0);
-                        if primary_icon(ui, Icon::Plus, "Add").clicked() {
-                            acts.push(Act::Add);
-                        }
-                    }
+            if let Some(e) = &self.mods.sync_error {
+                let text = format!("Couldn't look through the folders: {}", short(e, 200));
+                if notice(ui, NoticeKind::Error, &text, Some("Try again")).is_some_and(|r| r.clicked()) {
+                    acts.push(Act::Rescan);
                 }
-            });
+            } else if loading {
+                skeleton_rows(ui, 6, ROW_H);
+            } else if kind == ContentKind::Mods && target.loader_key.is_none() {
+                let text =
+                    "No mod loader yet. This instance runs plain Minecraft, and mods need a mod loader such as Fabric.";
+                if notice(ui, NoticeKind::Info, text, Some("Add a mod loader")).is_some_and(|r| r.clicked()) {
+                    acts.push(Act::Loader);
+                }
+            } else {
+                let text = match kind {
+                    ContentKind::Mods => "No mods yet. Add some from Modrinth, or drop .jar files onto this window.",
+                    ContentKind::ResourcePacks => {
+                        "No resource packs yet. Browse Modrinth, or drop .zip files onto this window."
+                    }
+                    ContentKind::Shaders => "No shaders yet. Browse Modrinth, or drop .zip files onto this window.",
+                };
+                empty_row(ui, text, None);
+            }
         } else if rows.is_empty() {
-            ui.add_space(8.0);
-            muted(ui, "Nothing matches your filter.");
+            let what = kind.label().to_lowercase();
+            if empty_row(ui, &format!("No {what} match your filter."), Some("Clear filter"))
+                .is_some_and(|r| r.clicked())
+            {
+                acts.push(Act::ClearFilter);
+            }
         }
         lazy_list(ui, egui::Id::unique(("mod-list", kind)), &rows, ROW_H + 1.0, |ui, e| {
             ui.spacing_mut().item_spacing.y = 0.0;
@@ -1003,75 +966,55 @@ impl App {
         acts: &mut Vec<Act>,
     ) {
         if let Some(report) = &self.mods.scan {
-            let mut dismiss = false;
-            card(ui, |ui| {
-                match report.warning() {
-                    Some(w) => {
-                        ui.label(RichText::new(w).color(c_danger()));
-                    }
-                    None => {
-                        ui.label(
-                            RichText::new(format!(
-                                "No malware found ({} files read, {} already known to be fine)",
-                                report.scanned, report.known_clean
-                            ))
-                            .color(c_accent()),
-                        );
-                    }
-                }
-                if !report.unreadable.is_empty() {
-                    small_muted(ui, format!("{} file(s) couldn't be opened as a zip", report.unreadable.len()));
-                }
-                if secondary(ui, "Dismiss").clicked() {
-                    dismiss = true;
-                }
-            });
-            if dismiss {
-                self.mods.scan = None;
+            let (level, mut text) = match report.warning() {
+                Some(w) => (NoticeKind::Error, w.to_string()),
+                None => (
+                    NoticeKind::Info,
+                    format!(
+                        "No malware found ({} files read, {} already known to be fine)",
+                        report.scanned, report.known_clean
+                    ),
+                ),
+            };
+            if !report.unreadable.is_empty() {
+                text.push_str(&format!(". {} file(s) couldn't be opened as a zip", report.unreadable.len()));
             }
+            if notice(ui, level, &text, Some("Dismiss")).is_some_and(|r| r.clicked()) {
+                acts.push(Act::DismissScan);
+            }
+            ui.add_space(6.0);
         } else if self.mods.scanning {
             ui.horizontal(|ui| {
-                ui.spinner();
+                ui.add(egui::Spinner::new().size(14.0));
                 muted(ui, "Scanning for malware");
             });
         }
         if kind == ContentKind::Shaders {
-            match self.mods.shader_setup.unwrap_or_else(|| install::shader_setup(inst, target)) {
-                versions::ShaderSetup::AddIris => {
-                    card(ui, |ui| {
-                        ui.label(RichText::new("Shaders need Iris to work").semibold());
-                        small_muted(ui, "Iris and Sodium will be added from Modrinth. They make shaders run fast.");
-                        if secondary_icon(ui, Icon::Plus, "Add Iris").clicked() {
-                            acts.push(Act::ShaderLoader);
-                        }
-                    });
-                }
-                versions::ShaderSetup::AddOculus => {
-                    card(ui, |ui| {
-                        ui.label(RichText::new("Shaders on Forge need Oculus or OptiFine").semibold());
-                        small_muted(
-                            ui,
-                            format!(
-                                "Oculus can be added from Modrinth if it's made for Minecraft {}.",
-                                inst.mc_version()
-                            ),
-                        );
-                        if secondary_icon(ui, Icon::Plus, "Add Oculus").clicked() {
-                            acts.push(Act::ShaderLoader);
-                        }
-                    });
-                }
-                versions::ShaderSetup::NeedsModLoader => {
-                    card(ui, |ui| {
-                        ui.label(RichText::new("Shaders need a mod loader").semibold());
-                        small_muted(
-                            ui,
-                            "Plain Minecraft can't show shaders. They work once the instance has Fabric and Iris.",
-                        );
-                    });
-                }
-                versions::ShaderSetup::Ready => {}
+            let setup = self.mods.shader_setup.unwrap_or_else(|| install::shader_setup(inst, target));
+            let (text, action) = match setup {
+                versions::ShaderSetup::AddIris => (
+                    "Shaders need Iris to work. Iris and Sodium will be added from Modrinth; they make shaders run fast."
+                        .to_string(),
+                    Some("Add Iris"),
+                ),
+                versions::ShaderSetup::AddOculus => (
+                    format!(
+                        "Shaders on Forge need Oculus or OptiFine. Oculus can be added from Modrinth if it's made for Minecraft {}.",
+                        inst.mc_version()
+                    ),
+                    Some("Add Oculus"),
+                ),
+                versions::ShaderSetup::NeedsModLoader => (
+                    "Shaders need a mod loader. Plain Minecraft can't show shaders; they work once the instance has Fabric and Iris."
+                        .to_string(),
+                    None,
+                ),
+                versions::ShaderSetup::Ready => return,
+            };
+            if notice(ui, NoticeKind::Info, &text, action).is_some_and(|r| r.clicked()) {
+                acts.push(Act::ShaderLoader);
             }
+            ui.add_space(6.0);
         }
     }
 
@@ -1093,7 +1036,7 @@ impl App {
         let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), ROW_H), egui::Sense::hover());
         let hovered = ui.rect_contains_pointer(rect);
         if hovered || expanded {
-            ui.painter().rect_filled(rect, CornerRadius::same(R_CONTROL), c_card_hover());
+            ui.painter().rect_filled(rect, CornerRadius::same(R_CONTROL), c_hover());
         }
         let inner = rect.shrink2(egui::vec2(8.0, 0.0));
         let mut left = inner.left();
@@ -1105,19 +1048,21 @@ impl App {
             }
             left += 30.0;
         }
-        // the picture
+        // the picture, dimmed while the mod is off
         let icon = egui::Rect::from_min_size(egui::pos2(left, rect.center().y - ICON / 2.0), egui::vec2(ICON, ICON));
+        let mut picture = ui.new_child(egui::UiBuilder::new().max_rect(icon));
+        if off {
+            picture.set_opacity(0.45);
+        }
         match self.mods.textures.get(key) {
             Some(tex) => {
-                let tint = if off { Color32::from_white_alpha(110) } else { Color32::WHITE };
-                ui.new_child(egui::UiBuilder::new().max_rect(icon)).add(
+                picture.add(
                     egui::Image::from_texture(tex)
                         .fit_to_exact_size(egui::vec2(ICON, ICON))
-                        .corner_radius(CornerRadius::same(R_CONTROL))
-                        .tint(tint),
+                        .corner_radius(CornerRadius::same(R_CONTROL)),
                 );
             }
-            None => paint_avatar(ui, icon, &name),
+            None => paint_avatar(&picture, icon, &name),
         }
         left += ICON + 12.0;
         // the switch, at the right edge
@@ -1133,8 +1078,12 @@ impl App {
         let text_w = |ui: &Ui, t: &str, size: f32| {
             ui.painter().layout_no_wrap(t.to_string(), super::fonts::medium(size), c_text()).size().x
         };
-        let actions_w =
-            2.0 * 8.0 + 76.0 + 70.0 + update_label.as_deref().map_or(0.0, |t| text_w(ui, t, 13.0) + 20.0 + 4.0);
+        let actions_w = 2.0 * 8.0
+            + text_w(ui, "Remove", FS_BODY)
+            + 20.0
+            + text_w(ui, "Details", FS_BODY)
+            + 20.0
+            + update_label.as_deref().map_or(0.0, |t| text_w(ui, t, FS_BODY) + 20.0 + 4.0);
         let actions = egui::Rect::from_min_max(
             egui::pos2((switch.left() - 12.0 - actions_w).max(left + 120.0), rect.top()),
             egui::pos2(switch.left() - 12.0, rect.bottom()),
@@ -1149,10 +1098,11 @@ impl App {
             acts.push(Act::Details(key.clone()));
         }
         if let (Some(o), Some(label)) = (offer, update_label) {
+            // plain text in the text colour: green is kept for starting the game
             let r = ac
-                .add_enabled_ui(!busy, |ui| ghost_button(ui, &label, Some(c_accent()), Some(c_accent_hover()), true))
+                .add_enabled_ui(!busy, |ui| ghost_button(ui, &label, Some(c_text()), Some(c_text()), true))
                 .inner
-                .on_hover_text(format!("{} -> {} on {}", o.current, o.newer, o.platform.label()));
+                .on_hover_text(format!("{} \u{2192} {} on {}", o.current, o.newer, o.platform.label()));
             if r.clicked() {
                 acts.push(Act::Update(key.clone()));
             }
@@ -1168,7 +1118,7 @@ impl App {
         tc.spacing_mut().interact_size.y = 20.0;
         let version =
             if rec.version.is_empty() || rec.version == "Unknown" { String::new() } else { short(&rec.version, 40) };
-        let mut tags: Vec<(&str, Color32)> = Vec::new();
+        let mut tags: Vec<(&str, egui::Color32)> = Vec::new();
         if files::is_from_modrinth(rec) {
             tags.push(("Modrinth", c_muted()));
         }
@@ -1181,9 +1131,9 @@ impl App {
         if !e.exists {
             tags.push(("File missing", c_danger()));
         }
-        let tags_w: f32 = tags.iter().map(|(t, _)| text_w(&tc, t, 12.0) + 14.0 + 6.0).sum();
+        let tags_w: f32 = tags.iter().map(|(t, _)| text_w(&tc, t, FS_META) + 12.0 + 6.0).sum();
         let name_text = RichText::new(&name).semibold().color(if off { c_muted() } else { c_text() });
-        let name_nat = tc.painter().layout_no_wrap(name.clone(), super::fonts::semibold(14.0), c_text()).size().x;
+        let name_nat = tc.painter().layout_no_wrap(name.clone(), super::fonts::semibold(FS_BODY), c_text()).size().x;
         let name_w = name_nat.min((text.width() - tags_w - 6.0).max(text.width() * 0.4));
         // the version takes what is left on the line, or is left to the details when there is no room
         let left_over = text.width() - name_w - tags_w - 12.0;
@@ -1196,7 +1146,7 @@ impl App {
             if show_version {
                 ui.scope(|ui| {
                     ui.set_max_width(left_over);
-                    ui.add(egui::Label::new(RichText::new(version.as_str()).color(c_muted()).size(12.0)).truncate());
+                    ui.add(egui::Label::new(RichText::new(version.as_str()).color(c_muted()).size(FS_META)).truncate());
                 });
             }
             for (t, c) in &tags {
@@ -1205,12 +1155,12 @@ impl App {
         });
         if let Some(p) = details.and_then(|d| d.problem.as_ref()) {
             tc.add(
-                egui::Label::new(RichText::new(format!("May not work here: {p}")).color(c_warn()).size(12.5))
+                egui::Label::new(RichText::new(format!("May not work here: {p}")).color(c_warn()).size(FS_META))
                     .truncate(),
             );
         } else if !rec.description.is_empty() {
             tc.add(
-                egui::Label::new(RichText::new(short(&rec.description, 160)).color(c_muted()).size(12.5)).truncate(),
+                egui::Label::new(RichText::new(short(&rec.description, 160)).color(c_muted()).size(FS_META)).truncate(),
             );
         }
         if expanded {
@@ -1227,7 +1177,7 @@ impl App {
         }
         // one hairline between rows
         let y = if expanded { ui.cursor().top() } else { rect.bottom() - 0.5 };
-        ui.painter().hline(rect.left()..=rect.right(), y, Stroke::new(1.0, c_border()));
+        ui.painter().hline(rect.left()..=rect.right(), y, Stroke::new(1.0, c_rule()));
     }
 
     /// The details of one mod: what the file says about itself, links, and the actions that need a closer look.
@@ -1278,7 +1228,7 @@ impl App {
                 row(ui, "Needs", i.depends.join(", "));
             }
             if let Some(o) = offer {
-                row(ui, "Update", format!("{} -> {} ({})", o.current, o.newer, o.platform.label()));
+                row(ui, "Update", format!("{} \u{2192} {} ({})", o.current, o.newer, o.platform.label()));
             }
         });
         let text = info
@@ -1361,7 +1311,7 @@ impl App {
             let (mut yes, mut no) = (false, false);
             egui::Modal::new(egui::Id::unique("mods-confirm-remove")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
                 ui.set_width(380.0);
-                ui.label(RichText::new(format!("Remove {label}?")).size(19.0).semibold());
+                ui.label(RichText::new(format!("Remove {label}?")).size(FS_SECTION).semibold());
                 ui.add_space(4.0);
                 muted(ui, "The file is deleted from this instance. You can add it again at any time.");
                 ui.add_space(12.0);
@@ -1399,12 +1349,12 @@ impl App {
             let (mut yes, mut no) = (false, false);
             egui::Modal::new(egui::Id::unique("mods-confirm-restore")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
                 ui.set_width(420.0);
-                ui.label(RichText::new("Restore this snapshot?").size(19.0).semibold());
+                ui.label(RichText::new("Restore this snapshot?").size(FS_SECTION).semibold());
                 ui.add_space(4.0);
                 muted(ui, format!("Puts the mods and configs of \"{}\" back to how they were. Your worlds are not changed, and the current state is saved first so you can undo this.", inst.name()));
                 ui.add_space(12.0);
                 ui.horizontal(|ui| {
-                    yes = danger(ui, "Restore").clicked();
+                    yes = primary(ui, "Restore").clicked();
                     no = secondary(ui, "Cancel").clicked();
                 });
             });
@@ -1435,7 +1385,7 @@ impl App {
             let (mut yes, mut no) = (false, false);
             egui::Modal::new(egui::Id::unique("mods-confirm-pack")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
                 ui.set_width(420.0);
-                ui.label(RichText::new("Make Minecraft run faster").size(19.0).semibold());
+                ui.label(RichText::new("Make Minecraft run faster").size(FS_SECTION).semibold());
                 ui.add_space(4.0);
                 muted(
                     ui,
@@ -1482,13 +1432,13 @@ impl App {
         if let Some(d) = &self.mods.versions {
             egui::Modal::new(egui::Id::unique("mods-versions")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
                 ui.set_width(560.0);
-                ui.label(RichText::new(format!("Versions of {}", d.name)).size(19.0).semibold());
+                ui.label(RichText::new(format!("Versions of {}", d.name)).size(FS_SECTION).semibold());
                 small_muted(ui, "Pick one to install it in place of the current one. Older versions are fine if a newer one gives you trouble.");
                 ui.add_space(8.0);
                 match &d.list {
                     None => {
                         ui.horizontal(|ui| {
-                            ui.spinner();
+                            ui.add(egui::Spinner::new().size(14.0));
                             muted(ui, "Asking Modrinth");
                         });
                     }
@@ -1510,7 +1460,7 @@ impl App {
                                     });
                                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                         if current {
-                                            tag(ui, "Installed", c_accent());
+                                            small_muted(ui, "\u{2713} Installed");
                                         } else if secondary(ui, "Install").clicked() {
                                             install_version = Some((d.key.clone(), v.id.clone()));
                                         }

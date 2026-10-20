@@ -8,7 +8,7 @@ use std::time::{Duration, Instant, SystemTime};
 use egui::{RichText, Ui};
 
 use super::App;
-use super::instance_menu::{Act, ghost_menu, hairline};
+use super::instance_menu::{Act, secondary_menu, section_break};
 use super::theme::*;
 use super::widgets::*;
 use crate::config::Settings;
@@ -79,12 +79,22 @@ fn ago(t: SystemTime) -> String {
     }
 }
 
-/// `setting_row` with room for a wider control (a row of chips) on the right.
+/// `setting_row` with room for a wider control (a choice of several words). On a narrow page the control goes under
+/// the text.
 fn wide_row(ui: &mut Ui, title: &str, control_width: f32, hint: &str, control: impl FnOnce(&mut Ui)) {
-    ui.add_space(12.0);
+    let room = ui.available_width();
+    if room < control_width + 240.0 {
+        ui.label(RichText::new(title).semibold());
+        if !hint.is_empty() {
+            small_muted(ui, hint);
+        }
+        ui.horizontal_wrapped(control);
+        return;
+    }
     ui.horizontal(|ui| {
         ui.vertical(|ui| {
-            ui.set_max_width((ui.available_width() - control_width).max(200.0));
+            ui.spacing_mut().item_spacing.y = 2.0;
+            ui.set_max_width(room - control_width - 16.0);
             ui.label(RichText::new(title).semibold());
             if !hint.is_empty() {
                 small_muted(ui, hint);
@@ -94,9 +104,16 @@ fn wide_row(ui: &mut Ui, title: &str, control_width: f32, hint: &str, control: i
     });
 }
 
+/// The hairline between two rows of a block, with the same air on both sides.
+fn row_gap(ui: &mut Ui) {
+    ui.add_space(4.0);
+    rule(ui);
+    ui.add_space(4.0);
+}
+
 fn state_color(state: PatchState) -> egui::Color32 {
     match state {
-        PatchState::On => c_accent(),
+        PatchState::On => c_text(),
         PatchState::Off | PatchState::Other => c_muted(),
         PatchState::Problem => c_danger(),
     }
@@ -131,33 +148,42 @@ impl SettingsView {
     /// The Performance rows of Settings > Game. Returns true when a setting changed.
     pub(super) fn rows(&self, ui: &mut Ui, s: &mut Settings) -> bool {
         let mut dirty = false;
-        ui.add_space(6.0);
-        ui.separator();
-        section(ui, "Performance");
-        setting_row(
-            ui,
-            "Fast start",
-            "A tiny helper that loads Minecraft's classes ahead of time so games open sooner. Works with every version and mod loader; each instance has its own switch too",
-            |ui| {
-                dirty |= toggle(ui, &mut s.fast_start).changed();
-            },
-        );
-        setting_row(ui, "Smoothness helper", LITE_HINT, |ui| {
-            dirty |= toggle(ui, &mut s.lite).changed();
-        });
-        let mode = Mode::parse(&s.low_end_mode);
-        wide_row(ui, "Low-end mode", 240.0, &format!("{LOW_END_HINT} {}.", self.low_end_status(mode)), |ui| {
-            for m in [Mode::Off, Mode::On, Mode::Auto] {
-                if chip(ui, m.label(), mode == m).clicked() && mode != m {
-                    s.low_end_mode = m.as_setting().to_string();
-                    dirty = true;
+        ui.scope(|ui| {
+            ui.spacing_mut().item_spacing.y = 8.0;
+            row_gap(ui);
+            ui.label(RichText::new("Performance").size(FS_SECTION).semibold());
+            ui.add_space(4.0);
+            setting_row(
+                ui,
+                "Fast start",
+                "A tiny helper that loads Minecraft's classes ahead of time so games open sooner. Works with every version and mod loader; each instance has its own switch too",
+                |ui| {
+                    dirty |= toggle(ui, &mut s.fast_start).changed();
+                },
+            );
+            row_gap(ui);
+            setting_row(ui, "Smoothness helper", LITE_HINT, |ui| {
+                dirty |= toggle(ui, &mut s.lite).changed();
+            });
+            row_gap(ui);
+            let mode = Mode::parse(&s.low_end_mode);
+            wide_row(ui, "Low-end mode", 200.0, &format!("{LOW_END_HINT} {}.", self.low_end_status(mode)), |ui| {
+                let modes = [Mode::Auto, Mode::On, Mode::Off];
+                let labels: Vec<&str> = modes.iter().map(|m| m.label()).collect();
+                let chosen = modes.iter().position(|m| *m == mode).unwrap_or(0);
+                if let Some(i) = segmented(ui, &labels, chosen) {
+                    if modes[i] != mode {
+                        s.low_end_mode = modes[i].as_setting().to_string();
+                        dirty = true;
+                    }
                 }
-            }
+            });
+            row_gap(ui);
+            egui::CollapsingHeader::new(RichText::new("Details").color(c_muted()))
+                .id_salt("perf-details")
+                .default_open(false)
+                .show(ui, |ui| self.details(ui));
         });
-        egui::CollapsingHeader::new(RichText::new("Details").color(c_muted()))
-            .id_salt("perf-details")
-            .default_open(false)
-            .show(ui, |ui| self.details(ui));
         dirty
     }
 
@@ -180,7 +206,7 @@ impl SettingsView {
                 ui.vertical(|ui| {
                     // what it is, in plain words, then what happened in that game
                     if !p.description.is_empty() {
-                        ui.label(RichText::new(&p.description).size(12.5));
+                        ui.label(RichText::new(&p.description).size(FS_META));
                     }
                     if !p.detail.is_empty() && p.detail != p.description {
                         small_muted(ui, &p.detail);
@@ -197,50 +223,39 @@ impl SettingsView {
 }
 
 impl App {
-    /// The switches of an instance on its page, as one quiet row of small labelled toggles: Fast start, the
-    /// smoothness helper and the Low-end menu (the cards have no room; their menu has the same switches, see
-    /// [`App::helpers_menu`]).
-    pub(super) fn helper_switches(&self, ui: &mut Ui, inst: &Instance) -> Option<Act> {
+    /// "Speed and smoothness" on an instance's overview: Fast start, the smoothness helper and the Low-end menu (the
+    /// cards have no room; their menu has the same switches, see [`App::helpers_menu`]). Returns what was changed.
+    pub(super) fn speed_rows(&self, ui: &mut Ui, inst: &Instance) -> Option<Act> {
         let mut act = None;
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 5.0;
-            // read from the left also inside a right-to-left row
-            let mut order = [0, 1, 2];
-            if ui.layout().prefer_right_to_left() {
-                order.reverse();
-            }
-            for step in order {
-                match step {
-                    0 => {
-                        let mut fast = crate::launch::fast_start_enabled(&self.settings, inst);
-                        if labelled_switch(
-                            ui,
-                            &mut fast,
-                            "Fast start",
-                            "Fast start: a tiny helper that loads Minecraft's classes ahead of time so the game opens sooner. \
-                             Works with every version and mod loader. Turn it off if the game fails to start.",
-                        ) {
-                            act = Some(Act::FastStart(inst.folder.clone(), fast));
-                        }
-                        ui.add_space(8.0);
-                    }
-                    1 => {
-                        let mut on = lite::enabled(&self.settings, inst);
-                        if labelled_switch(ui, &mut on, "Smooth", &format!("Smoothness helper: {LITE_HINT}.")) {
-                            act = Some(Act::Helper(inst.folder.clone(), HelperChange::Lite(Some(on))));
-                        }
-                    }
-                    _ => {
-                        let mode = lowend::mode(&self.settings, inst);
-                        let (resp, choice) = ghost_menu(ui, &format!("Low-end: {}", mode.as_setting()), |ui| {
-                            self.low_end_choices(ui, inst)
-                        });
-                        resp.on_hover_text(LOW_END_HINT);
-                        if let Some(Some(a)) = choice {
-                            act = Some(a);
-                        }
-                    }
+        ui.spacing_mut().item_spacing.y = 8.0;
+        let mut fast = crate::launch::fast_start_enabled(&self.settings, inst);
+        setting_row(
+            ui,
+            "Fast start",
+            "Loads Minecraft's classes ahead of time so the game opens sooner. Works with every version and mod loader. Turn it off if the game fails to start.",
+            |ui| {
+                if toggle(ui, &mut fast).changed() {
+                    act = Some(Act::FastStart(inst.folder.clone(), fast));
                 }
+            },
+        );
+        row_gap(ui);
+        let mut on = lite::enabled(&self.settings, inst);
+        setting_row(ui, "Smoothness helper", LITE_HINT, |ui| {
+            if toggle(ui, &mut on).changed() {
+                act = Some(Act::Helper(inst.folder.clone(), HelperChange::Lite(Some(on))));
+            }
+        });
+        row_gap(ui);
+        let own = lowend::instance_override(inst);
+        let launcher = Mode::parse(&self.settings.low_end_mode);
+        let shown = match own {
+            Some(m) => m.label().to_string(),
+            None => format!("Like the launcher ({})", launcher.label().to_lowercase()),
+        };
+        setting_row(ui, "Low-end mode", LOW_END_HINT, |ui| {
+            if let (_, Some(Some(a))) = secondary_menu(ui, &shown, |ui| self.low_end_choices(ui, inst)) {
+                act = Some(a);
             }
         });
         act
@@ -295,52 +310,48 @@ impl App {
     pub(super) fn instance_performance_card(&self, ui: &mut Ui, inst: &Instance) -> Option<HelperChange> {
         let mut change = None;
         let s = &self.settings;
-        hairline(ui);
-        {
-            section(ui, "Performance");
-            small_muted(ui, "These apply right away, from the next start of the game.");
-            ui.add_space(4.0);
-            let fast_own = crate::launch::boost::instance_override(inst);
-            wide_row(
-                ui,
-                "Fast start",
-                260.0,
-                "Loads Minecraft's classes ahead of time so the game opens sooner",
-                |ui| {
-                    if let Some(v) = tri_chips_rtl(ui, fast_own, s.fast_start) {
-                        change = Some(HelperChange::FastStart(v));
-                    }
-                },
-            );
-            let lite_own = lite::instance_override(inst);
-            wide_row(ui, "Smoothness helper", 260.0, "Small fixes inside the game that make it run smoother", |ui| {
-                if let Some(v) = tri_chips_rtl(ui, lite_own, s.lite) {
-                    change = Some(HelperChange::Lite(v));
+        section_break(ui);
+        section(ui, "Performance");
+        small_muted(ui, "These apply right away, from the next start of the game.");
+        ui.add_space(12.0);
+        let fast_own = crate::launch::boost::instance_override(inst);
+        wide_row(ui, "Fast start", 230.0, "Loads Minecraft's classes ahead of time so the game opens sooner", |ui| {
+            if let Some(v) = tri_choice(ui, "fast-start", fast_own, s.fast_start) {
+                change = Some(HelperChange::FastStart(v));
+            }
+        });
+        row_gap(ui);
+        let lite_own = lite::instance_override(inst);
+        wide_row(ui, "Smoothness helper", 230.0, "Small fixes inside the game that make it run smoother", |ui| {
+            if let Some(v) = tri_choice(ui, "smoothness", lite_own, s.lite) {
+                change = Some(HelperChange::Lite(v));
+            }
+        });
+        row_gap(ui);
+        let own = lowend::instance_override(inst);
+        let launcher = Mode::parse(&s.low_end_mode);
+        let status = if inst.root.join(lowend::BACKUP_FILE).exists() {
+            let n = lowend::Backup::load(&inst.root).changed.len();
+            format!(" Now: {n} settings of this game are lowered.")
+        } else {
+            String::new()
+        };
+        wide_row(ui, "Low-end mode", 310.0, &format!("{LOW_END_HINT}{status}"), |ui| {
+            let follow = format!("Launcher ({})", launcher.label().to_lowercase());
+            let choices = [
+                (follow.as_str(), None),
+                ("Automatic", Some(Mode::Auto)),
+                ("On", Some(Mode::On)),
+                ("Off", Some(Mode::Off)),
+            ];
+            let labels: Vec<&str> = choices.iter().map(|c| c.0).collect();
+            let chosen = choices.iter().position(|c| c.1 == own).unwrap_or(0);
+            if let Some(i) = ui.push_id("low-end", |ui| segmented(ui, &labels, chosen)).inner {
+                if choices[i].1 != own {
+                    change = Some(HelperChange::LowEnd(choices[i].1));
                 }
-            });
-            let own = lowend::instance_override(inst);
-            let launcher = Mode::parse(&s.low_end_mode);
-            let status = if inst.root.join(lowend::BACKUP_FILE).exists() {
-                let n = lowend::Backup::load(&inst.root).changed.len();
-                format!(" Now: {n} settings of this game are lowered.")
-            } else {
-                String::new()
-            };
-            wide_row(ui, "Low-end mode", 400.0, &format!("{LOW_END_HINT}{status}"), |ui| {
-                // right to left: the last chip is drawn first
-                let follow = format!("Launcher ({})", launcher.label().to_lowercase());
-                for (label, value) in [
-                    ("Off", Some(Mode::Off)),
-                    ("On", Some(Mode::On)),
-                    ("Automatic", Some(Mode::Auto)),
-                    (follow.as_str(), None),
-                ] {
-                    if chip(ui, label, own == value).clicked() && own != value {
-                        change = Some(HelperChange::LowEnd(value));
-                    }
-                }
-            });
-        }
+            }
+        });
         change
     }
 
@@ -468,7 +479,7 @@ impl App {
         let (mut off, mut keep) = (false, false);
         egui::Modal::new(egui::Id::unique("helpers-blame")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
             ui.set_width(460.0);
-            ui.label(RichText::new("Minecraft closed early").size(19.0).semibold());
+            ui.label(RichText::new("Minecraft closed early").size(FS_SECTION).semibold());
             muted(
                 ui,
                 format!(
@@ -499,28 +510,6 @@ impl App {
     }
 }
 
-/// A small switch with its label beside it (the label can be pressed too). Returns whether it was changed.
-fn labelled_switch(ui: &mut Ui, on: &mut bool, label: &str, hint: &str) -> bool {
-    let text = egui::Label::new(RichText::new(label).size(12.0).color(c_muted())).sense(egui::Sense::click());
-    // the label follows the switch when read from the left, so it comes first in a right-to-left row
-    let (mut changed, mut clicked) = (false, false);
-    let add_label = |ui: &mut Ui| {
-        clicked = ui.add(text).on_hover_text(hint).on_hover_cursor(egui::CursorIcon::PointingHand).clicked();
-    };
-    if ui.layout().prefer_right_to_left() {
-        add_label(ui);
-        changed |= toggle(ui, on).on_hover_text(hint).changed();
-    } else {
-        changed |= toggle(ui, on).on_hover_text(hint).changed();
-        add_label(ui);
-    }
-    if clicked {
-        *on = !*on;
-        changed = true;
-    }
-    changed
-}
-
 /// A switch with its label in a menu.
 fn menu_switch(ui: &mut Ui, on: &mut bool, label: &str, hint: &str) -> bool {
     ui.horizontal(|ui| {
@@ -535,17 +524,13 @@ fn menu_switch(ui: &mut Ui, on: &mut bool, label: &str, hint: &str) -> bool {
     .inner
 }
 
-/// "Launcher (on)" / "On" / "Off" chips for a switch an instance can follow or override, inside a right-to-left
-/// row (so they are added in reverse). Returns the new choice.
-fn tri_chips_rtl(ui: &mut Ui, current: Option<bool>, launcher: bool) -> Option<Option<bool>> {
-    let mut picked = None;
+/// "Launcher (on)" / "On" / "Off" for a switch an instance can follow or override. Returns the new choice.
+fn tri_choice(ui: &mut Ui, id: &str, current: Option<bool>, launcher: bool) -> Option<Option<bool>> {
     let follow = format!("Launcher ({})", if launcher { "on" } else { "off" });
-    for (label, value) in [("Off", Some(false)), ("On", Some(true)), (follow.as_str(), None)] {
-        if chip(ui, label, current == value).clicked() && current != value {
-            picked = Some(value);
-        }
-    }
-    picked
+    let values = [None, Some(true), Some(false)];
+    let chosen = values.iter().position(|v| *v == current).unwrap_or(0);
+    let picked = ui.push_id(id, |ui| segmented(ui, &[follow.as_str(), "On", "Off"], chosen)).inner?;
+    (values[picked] != current).then_some(values[picked])
 }
 
 #[cfg(test)]

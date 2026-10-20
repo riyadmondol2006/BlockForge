@@ -1,10 +1,10 @@
 //! The settings of one instance: three tabs (General, Java and Minecraft, Commands) with the same options, wording,
 //! checks and "null means follow the launcher" rules as the Java edition's instance settings dialog.
 
-use egui::{Align, Layout, RichText, ScrollArea, Ui};
+use egui::{RichText, ScrollArea, Ui};
 use serde_json::{Value, json};
 
-use super::instance_menu::hairline;
+use super::instance_menu::{SplitRow, section_break};
 use super::theme::*;
 use super::widgets::*;
 use super::{App, Msg};
@@ -206,16 +206,11 @@ impl InstDraft {
 
 /// A yes / no / "use the launcher default" choice (Java keeps these as a nullable Boolean).
 fn tri(ui: &mut Ui, id: &str, value: &mut Option<bool>) {
-    let label = match value {
-        None => "Use launcher default",
-        Some(true) => "Yes",
-        Some(false) => "No",
-    };
-    egui::ComboBox::from_id_salt(id).selected_text(label).width(240.0).show_ui(ui, |ui| {
-        ui.selectable_value(value, None, "Use launcher default");
-        ui.selectable_value(value, Some(true), "Yes");
-        ui.selectable_value(value, Some(false), "No");
-    });
+    let values = [None, Some(true), Some(false)];
+    let chosen = values.iter().position(|v| v == value).unwrap_or(0);
+    if let Some(i) = ui.push_id(id, |ui| segmented(ui, &["Launcher default", "Yes", "No"], chosen)).inner {
+        *value = values[i];
+    }
 }
 
 /// A row with the title above a text field as wide as the form (long paths and commands).
@@ -304,26 +299,26 @@ impl App {
         // the tabs and Save sit over the form, so Save ends where the rows end
         ui.scope(|ui| {
             ui.set_max_width(ui.available_width().min(FORM_WIDTH));
-            ui.horizontal(|ui| {
-                for (i, label) in ["General", "Java and Minecraft", "Commands"].iter().enumerate() {
-                    if chip(ui, label, d.tab == i as u8).clicked() {
-                        d.tab = i as u8;
-                    }
+            let mut bar = SplitRow::new(ui, egui::Id::unique("instance-settings-bar"), 32.0);
+            bar.left(ui, |ui| {
+                if let Some(i) = segmented(ui, &["General", "Java and Minecraft", "Commands"], d.tab as usize) {
+                    d.tab = i as u8;
                 }
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if primary(ui, "Save").clicked() {
-                        save = true;
-                    }
-                    if secondary(ui, "Reset").clicked() {
-                        reset = true;
-                    }
-                    const SHOWN: std::time::Duration = std::time::Duration::from_secs(3);
-                    if let Some(left) = d.saved.and_then(|t| SHOWN.checked_sub(t.elapsed())) {
-                        small_muted(ui, "Saved");
-                        ui.ctx().request_repaint_after(left);
-                    }
-                });
             });
+            bar.right(ui, |ui| {
+                const SHOWN: std::time::Duration = std::time::Duration::from_secs(3);
+                if let Some(left) = d.saved.and_then(|t| SHOWN.checked_sub(t.elapsed())) {
+                    small_muted(ui, "Saved");
+                    ui.ctx().request_repaint_after(left);
+                }
+                if secondary(ui, "Reset").clicked() {
+                    reset = true;
+                }
+                if primary(ui, "Save").clicked() {
+                    save = true;
+                }
+            });
+            bar.finish(ui);
         });
         ui.add_space(4.0);
         if let Some(e) = &d.error {
@@ -349,7 +344,7 @@ impl App {
                             });
                         });
                     });
-                    hairline(ui);
+                    section_break(ui);
                     block(ui, "Quick play", |ui| {
                         row(ui, "Start in", "Skip the title screen and go straight into a world, server or realm", |ui| {
                             let label = |k: QuickKind| match k {
@@ -385,7 +380,7 @@ impl App {
                         }
                     });
                     helper_change = self.instance_performance_card(ui, inst);
-                    hairline(ui);
+                    section_break(ui);
                     block(ui, "Instance", |ui| {
                         ui.horizontal(|ui| {
                             if secondary(ui, "Rename").clicked() {
@@ -433,7 +428,7 @@ impl App {
                             ui.label(RichText::new("Setting PermGen size above 256MB is not recommended and can cause issues.").color(c_warn()));
                         }
                     });
-                    hairline(ui);
+                    section_break(ui);
                     block(ui, "Java", |ui| {
                         if inst.file.version.java_version.is_some() {
                             row(ui, "Use Java provided by Minecraft", "Recommended. Turning this off may stop Minecraft from starting", |ui| tri(ui, "use-mc-java", &mut d.use_mc_java));
@@ -479,7 +474,7 @@ impl App {
                             d.java_args = default_args.clone();
                         }
                     });
-                    hairline(ui);
+                    section_break(ui);
                     block(ui, "Advanced", |ui| {
                         row(ui, "Turn off legacy launching", "For Minecraft older than 1.6. Only change this if an old version won't start", |ui| tri(ui, "legacy", &mut d.disable_legacy));
                         row(ui, "Use system GLFW", "Use the GLFW library installed on this computer instead of Minecraft's own", |ui| tri(ui, "glfw", &mut d.system_glfw));
@@ -493,11 +488,11 @@ impl App {
                         stacked(ui, "After exit", "Runs after the game closes, even if it crashed or was stopped", &mut d.post, "");
                         stacked(ui, "Wrapper command", "Starts the game through another program, such as prime-run on Linux. Use %command% for the launch command, or %\"command\"% for it as one quoted string", &mut d.wrapper, "prime-run %command%");
                     });
-                    hairline(ui);
+                    section_break(ui);
                     block(ui, "Variables", |ui| {
                         ui.label(RichText::new("Available in every command").semibold());
                         small_muted(ui, "Commands run in the folder of the instance that is launched or exited");
-                        egui::Grid::new("command-variables").num_columns(2).spacing([20.0, 6.0]).show(ui, |ui| {
+                        egui::Grid::new("command-variables").num_columns(2).spacing([20.0, 6.0]).min_row_height(20.0).show(ui, |ui| {
                             for (k, v) in [
                                 ("$INST_NAME", "The name of the instance"),
                                 ("$INST_ID", "The name of the instance's root directory"),
@@ -507,7 +502,7 @@ impl App {
                                 ("$INST_JAVA_ARGS", "The JVM parameters used for launch"),
                             ] {
                                 ui.label(RichText::new(k).monospace());
-                                muted(ui, v);
+                                small_muted(ui, v);
                                 ui.end_row();
                             }
                         });
@@ -554,7 +549,7 @@ impl App {
         let mut apply = false;
         let modal = egui::Modal::new(egui::Id::unique("rename")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
             ui.set_width(380.0);
-            ui.label(RichText::new("Rename instance").size(19.0).semibold());
+            ui.label(RichText::new("Rename instance").size(FS_SECTION).semibold());
             ui.add_space(6.0);
             let r = ui.add_sized(
                 [ui.available_width(), 38.0],

@@ -96,13 +96,16 @@ impl App {
 }
 
 fn mix(a: Color32, b: Color32, t: f32) -> Color32 {
-    let f = |x: u8, y: u8| (f32::from(x) + (f32::from(y) - f32::from(x)) * t).round() as u8;
-    Color32::from_rgb(f(a.r(), b.r()), f(a.g(), b.g()), f(a.b(), b.b()))
+    a.lerp_to_gamma(b, t)
 }
 
+/// `c` darker (factor under 1) or lighter (over 1).
 fn shade(c: Color32, factor: f32) -> Color32 {
-    let f = |x: u8| (f32::from(x) * factor).round().clamp(0.0, 255.0) as u8;
-    Color32::from_rgb(f(c.r()), f(c.g()), f(c.b()))
+    if factor < 1.0 {
+        c.lerp_to_gamma(Color32::BLACK, 1.0 - factor)
+    } else {
+        c.lerp_to_gamma(Color32::WHITE, factor - 1.0)
+    }
 }
 
 /// A steady pseudo-random number between -1 and 1 for one cell of the cube, so the speckles don't flicker.
@@ -114,25 +117,22 @@ fn speckle(face: u32, i: u32, j: u32) -> f32 {
     (h % 2001) as f32 / 1000.0 - 1.0
 }
 
-/// The default picture: a block with a grassy top and earthy sides on a tile. The top and the tile take the colour
-/// of the mod loader (green for plain Minecraft), so a Fabric, Forge, NeoForge or Quilt instance is easy to tell apart.
+/// The default picture: a block on a tile. The top, the sides and the tile take the colour of the mod loader (grey for
+/// plain Minecraft), so a Fabric, Forge, NeoForge or Quilt instance is easy to tell apart.
 pub fn paint_default_icon(ui: &Ui, rect: egui::Rect, loader: Option<&str>) {
     let painter = ui.painter();
     let tint = match loader {
-        None | Some("") => Color32::from_rgb(0x5F, 0xB0, 0x44),
+        None | Some("") => c_muted(),
         Some(kind) => loader_color(kind),
     };
     let dark = is_dark();
     let corner = CornerRadius::same((rect.width() * 0.22).round() as u8);
-    let tile = mix(
-        if dark { Color32::from_rgb(0x1B, 0x22, 0x1E) } else { Color32::from_rgb(0xEE, 0xF1, 0xEC) },
-        tint,
-        if dark { 0.22 } else { 0.18 },
-    );
+    let tile = mix(c_hover(), tint, if dark { 0.22 } else { 0.18 });
     painter.rect_filled(rect, corner, tile);
     painter.rect_stroke(rect, corner, Stroke::new(1.0, mix(tile, tint, 0.45)), egui::StrokeKind::Inside);
 
-    let dirt = Color32::from_rgb(0x8B, 0x5E, 0x34);
+    // the sides are the same colour in the shade, like the grass and the earth of a block
+    let dirt = shade(tint, 0.62);
     let r = rect.width() * 0.34;
     let c = rect.center() + vec2(0.0, rect.height() * 0.02);
     let w = r * 0.866;

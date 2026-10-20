@@ -3,7 +3,7 @@
 use egui::{Align, CornerRadius, Layout, RichText, ScrollArea, Sense, Stroke, Ui, UiBuilder, vec2};
 
 use super::icons::Icon;
-use super::instance_menu::{Act, back_link, facts_strip, hairline, menu_items};
+use super::instance_menu::{Act, SplitRow, menu_items, section_break};
 use super::theme::*;
 use super::widgets::*;
 use super::{App, InstTab, Page, Phase};
@@ -123,31 +123,14 @@ impl App {
         });
     }
 
-    /// The picture, name and tags at the top of an instance's page; `beside` as for [`App::hero_title`].
-    fn instance_title(&self, ui: &mut Ui, inst: &Instance, beside: Option<f32>) {
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 14.0;
-            self.instance_icon(ui, inst, 56.0);
-            ui.vertical(|ui| {
-                if let Some(w) = beside {
-                    ui.set_max_width(ui.available_width() - w - 16.0);
-                }
-                ui.spacing_mut().item_spacing.y = 4.0;
-                ui.add_space(3.0);
-                ui.add(egui::Label::new(RichText::new(inst.name()).size(22.0).semibold()).truncate());
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 6.0;
-                    ui.spacing_mut().interact_size.y = 20.0;
-                    match inst.loader() {
-                        Some((kind, ver)) => tag(ui, &format!("{kind} {ver}"), loader_color(kind)),
-                        None => tag(ui, "Vanilla", c_muted()),
-                    }
-                    tag(ui, &format!("Minecraft {}", inst.mc_version()), c_muted());
-                    if inst.mod_count > 0 {
-                        tag(ui, &format!("{} mods", inst.mod_count), c_muted());
-                    }
-                });
-            });
+    /// The picture and name at the top of an instance's page, and under the name one line of what it is.
+    fn instance_title(&self, ui: &mut Ui, inst: &Instance) {
+        ui.spacing_mut().item_spacing.x = 16.0;
+        self.instance_icon(ui, inst, 48.0);
+        ui.vertical(|ui| {
+            ui.spacing_mut().item_spacing.y = 2.0;
+            ui.add(egui::Label::new(RichText::new(inst.name()).size(FS_TITLE).semibold()).truncate());
+            ui.add(egui::Label::new(instance_meta(inst)).truncate());
         });
     }
 
@@ -390,65 +373,52 @@ impl App {
             self.page = Page::Library;
         }
         ui.add_space(4.0);
-        // the buttons keep their room on the right; in a narrow window they get a row of their own under the title
-        let buttons_id = egui::Id::unique("instance-header-buttons");
-        let buttons_w = remembered_width(ui, buttons_id, 560.0);
-        let narrow = ui.available_width() - buttons_w < 336.0;
-        let mut used = buttons_w;
-        let mut actions = |this: &mut Self, ui: &mut Ui| {
-            ui.spacing_mut().item_spacing.x = 6.0;
-            // added from the right edge inwards: the menu, Play, "Play as", then the quiet switches
-            if let Some(Some(a)) = kebab_menu(ui, |ui| {
-                menu_items(ui);
-                this.instance_menu(ui, &inst)
-            }) {
-                action = Some(a);
+        // the picture and the name on the left; what is going on, Play as, Play and the menu on the right, read from
+        // left to right. "Play as" is left to the menu, which has it too, when the window is narrow or the name would
+        // be left with too little room.
+        let full_id = egui::Id::unique("instance-header-full");
+        let full_w: f32 = ui.data(|d| d.get_temp(full_id)).unwrap_or(300.0);
+        let compact = ui.available_width() < 560.0 || ui.available_width() < full_w + 300.0;
+        let mut header = SplitRow::new(ui, egui::Id::unique("instance-header"), 48.0);
+        header.left(ui, |ui| self.instance_title(ui, &inst));
+        header.right(ui, |ui| {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            match self.games.get(&folder).map(|g| g.phase) {
+                Some(Phase::Preparing) => {
+                    ui.add(egui::Spinner::new().size(14.0));
+                    ui.label(RichText::new("Getting ready").color(c_muted()));
+                }
+                Some(Phase::Running) => {
+                    let (dot, _) = ui.allocate_exact_size(vec2(8.0, 8.0), Sense::hover());
+                    ui.painter().circle_filled(dot.center(), 4.0, c_accent());
+                    ui.label(RichText::new("Running").color(c_muted()));
+                }
+                _ => {}
             }
-            if this.is_playing(&folder) {
+            if !compact {
+                if let Some(a) = self.play_as_menu(ui, &folder) {
+                    action = Some(a);
+                }
+            }
+            if self.is_playing(&folder) {
                 if danger_big(ui, Icon::Stop, "Stop").clicked() {
                     action = Some(Act::Stop(folder.clone()));
                 }
             } else if play_button(ui, true).clicked() {
                 action = Some(Act::Play(folder.clone()));
             }
-            if let Some(a) = this.play_as_menu(ui, &folder) {
+            if let Some(Some(a)) = kebab_menu(ui, |ui| {
+                menu_items(ui);
+                self.instance_menu(ui, &inst)
+            }) {
                 action = Some(a);
             }
-            ui.add_space(6.0);
-            if let Some(a) = this.helper_switches(ui, &inst) {
-                action = Some(a);
-            }
-            match this.games.get(&folder).map(|g| g.phase) {
-                Some(Phase::Preparing) => {
-                    muted(ui, "Getting ready");
-                    ui.spinner();
-                }
-                Some(Phase::Running) => {
-                    small_muted(ui, "Running");
-                    let (dot, _) = ui.allocate_exact_size(vec2(8.0, 8.0), Sense::hover());
-                    ui.painter().circle_filled(dot.center(), 3.5, c_accent());
-                }
-                _ => {}
-            }
-            used = ui.min_rect().width();
-        };
-        if narrow {
-            self.instance_title(ui, &inst, None);
-            ui.add_space(4.0);
-            ui.allocate_ui_with_layout(vec2(ui.available_width(), 40.0), Layout::right_to_left(Align::Center), |ui| {
-                actions(self, ui)
-            });
-        } else {
-            ui.horizontal(|ui| {
-                self.instance_title(ui, &inst, Some(buttons_w));
-                ui.allocate_ui_with_layout(
-                    vec2(ui.available_width(), 56.0),
-                    Layout::right_to_left(Align::Center),
-                    |ui| actions(self, ui),
-                );
-            });
+        });
+        if !compact {
+            let used = header.used();
+            ui.data_mut(|d| d.insert_temp(full_id, used));
         }
-        remember_width(ui, buttons_id, used);
+        header.finish(ui);
         ui.add_space(12.0);
         tab_bar(ui, |ui| {
             for (t, label) in [
@@ -465,7 +435,7 @@ impl App {
                 }
             }
         });
-        ui.add_space(14.0);
+        ui.add_space(16.0);
         match self.tab {
             InstTab::Overview => self.tab_overview(ui, &inst),
             InstTab::Mods => self.mods_tab(ui, &inst),
@@ -478,74 +448,48 @@ impl App {
     }
 
     fn tab_overview(&mut self, ui: &mut Ui, inst: &Instance) {
+        let mut act = None;
         ScrollArea::vertical().id_salt("instance-overview").auto_shrink(false).show(ui, |ui| {
+            // one column, as wide as a form should be, so a switch stays near its words
+            ui.set_max_width(ui.available_width().min(OVERVIEW_WIDTH));
+            // a newer version of the pack this instance came from
+            if let Some(v) = self.ftb.updates.get(&inst.folder).cloned() {
+                let text = format!("A newer version of this modpack is available: {}", v.label());
+                if notice(ui, NoticeKind::Info, &text, Some(&format!("Update to {}", v.label())))
+                    .is_some_and(|r| r.clicked())
+                {
+                    self.ftb_update_instance(&inst.folder);
+                }
+                ui.add_space(12.0);
+            }
+            // what this instance is, in one strip (the version and the loader are under its name)
             let java = inst
                 .file
                 .version
                 .java_version
                 .as_ref()
-                .map(|j| format!("Java {}", j.major_version))
+                .map(|j| j.major_version.to_string())
                 .unwrap_or_else(|| "Automatic".into());
-            // what this instance is, in one strip
-            egui::Frame::new()
-                .fill(c_card())
-                .stroke(Stroke::new(1.0, c_border()))
-                .corner_radius(CornerRadius::same(R_CARD))
-                .inner_margin(egui::Margin::symmetric(16, 10))
-                .show(ui, |ui| {
-                    ui.set_width(ui.available_width());
-                    facts_strip(
-                        ui,
-                        &[
-                            ("Minecraft", inst.mc_version().to_string()),
-                            (
-                                "Loader",
-                                inst.loader()
-                                    .map(|(k, v)| format!("{k} {v}"))
-                                    .unwrap_or_else(|| "None (vanilla)".into()),
-                            ),
-                            ("Java", java),
-                            ("Last played", time_ago(inst.last_played())),
-                            ("Times played", inst.file.launcher.num_plays.unwrap_or(0).to_string()),
-                        ],
-                    );
-                });
-            ui.add_space(16.0);
-            ui.horizontal(|ui| {
-                ui.label(RichText::new("Folder").size(15.0).semibold());
-                ui.add(egui::Label::new(RichText::new(inst.root.display().to_string()).color(c_muted())).truncate());
-            });
-            ui.horizontal_wrapped(|ui| {
-                if secondary_icon(ui, Icon::Folder, "Open folder").clicked() {
-                    self.open_path(&inst.root);
-                }
-                if secondary(ui, "Rename").clicked() {
-                    self.rename_target = Some((inst.folder.clone(), inst.name().to_string()));
-                }
-                if secondary(ui, "Open saves").clicked() {
-                    // a new instance has no saves folder until its first world
-                    let saves = inst.root.join("saves");
-                    let _ = std::fs::create_dir_all(&saves);
-                    self.open_path(&saves);
-                }
-                if secondary(ui, "Export").clicked() {
-                    self.open_export(&inst.folder);
-                }
-                #[cfg(feature = "converter")]
-                self.add_bedrock_world_button(ui, inst);
-                if let Some(v) = self.ftb.updates.get(&inst.folder).cloned() {
-                    if secondary(ui, &format!("Update to {}", v.label())).clicked() {
-                        self.ftb_update_instance(&inst.folder);
-                    }
-                }
-            });
-            hairline(ui);
+            let played = if inst.last_played() > 0 { time_ago(inst.last_played()) } else { "\u{2014}".to_string() };
+            facts(
+                ui,
+                &[
+                    ("Last played", played),
+                    ("Times played", inst.file.launcher.num_plays.unwrap_or(0).to_string()),
+                    ("Mods", inst.mod_count.to_string()),
+                    ("Java", java),
+                ],
+            );
+            ui.add_space(8.0);
+            self.play_history(ui, inst);
+            section_break(ui);
+
             section(ui, "Join a server on start");
             small_muted(ui, "Enter an address like play.example.com or play.example.com:25566");
             ui.add_space(2.0);
             ui.horizontal(|ui| {
                 let mut s = std::mem::take(&mut self.quick_server);
-                search_field(ui, &mut s, "Server address", 300.0);
+                search_field(ui, &mut s, "Server address", 280.0);
                 self.quick_server = s;
                 let ready = !self.quick_server.trim().is_empty() && !self.is_playing(&inst.folder);
                 // neutral: the one green button of the page is Play
@@ -554,9 +498,41 @@ impl App {
                     self.play(&inst.folder, LaunchOptions { server: Some(server), world: None });
                 }
             });
-            hairline(ui);
+            section_break(ui);
+
+            // what used to be switches in the header
+            section(ui, "Speed and smoothness");
+            ui.add_space(4.0);
+            if let Some(a) = self.speed_rows(ui, inst) {
+                act = Some(a);
+            }
+            section_break(ui);
+
             self.backups_card(ui, inst);
+            section_break(ui);
+
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Folder").size(FS_SECTION).semibold());
+                ui.add(egui::Label::new(RichText::new(inst.root.display().to_string()).color(c_muted())).truncate());
+            });
+            ui.horizontal_wrapped(|ui| {
+                if secondary_icon(ui, Icon::Folder, "Open folder").clicked() {
+                    self.open_path(&inst.root);
+                }
+                if secondary(ui, "Open saves").clicked() {
+                    // a new instance has no saves folder until its first world
+                    let saves = inst.root.join("saves");
+                    let _ = std::fs::create_dir_all(&saves);
+                    self.open_path(&saves);
+                }
+                #[cfg(feature = "converter")]
+                self.add_bedrock_world_button(ui, inst);
+            });
+            ui.add_space(12.0);
         });
+        if let Some(a) = act {
+            self.apply(a);
+        }
     }
 
     fn tab_logs(&mut self, ui: &mut Ui, inst: &Instance) {
@@ -594,7 +570,9 @@ impl App {
         }
         let Some(phase) = self.games.get(&folder).map(|g| g.phase) else { return };
         let (mut copy, mut clear) = (false, false);
-        ui.horizontal(|ui| {
+        // the status on the left; the filter and the buttons on the right, read from left to right
+        let mut bar = SplitRow::new(ui, egui::Id::unique("instance-log-bar"), 32.0);
+        bar.left(ui, |ui| {
             let (status, dot) = match phase {
                 Phase::Preparing => ("Getting ready".to_string(), c_accent()),
                 Phase::Running => ("Running".to_string(), c_accent()),
@@ -604,16 +582,17 @@ impl App {
                 Phase::Failed => ("Couldn't start".to_string(), c_danger()),
             };
             let (rect, _) = ui.allocate_exact_size(vec2(8.0, 8.0), Sense::hover());
-            ui.painter().circle_filled(rect.center(), 3.5, dot);
-            muted(ui, status);
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                copy = secondary(ui, "Copy all").clicked();
-                clear = secondary(ui, "Clear").clicked();
-                let mut f = std::mem::take(&mut self.log_filter);
-                search_field(ui, &mut f, "Filter", 220.0);
-                self.log_filter = f;
-            });
+            ui.painter().circle_filled(rect.center(), 4.0, dot);
+            ui.label(RichText::new(status).font(super::fonts::medium(FS_BODY)));
         });
+        bar.right(ui, |ui| {
+            let mut f = std::mem::take(&mut self.log_filter);
+            search_field(ui, &mut f, "Filter lines", 200.0);
+            self.log_filter = f;
+            copy = secondary(ui, "Copy all").clicked();
+            clear = ghost(ui, "Clear").clicked();
+        });
+        bar.finish(ui);
         ui.add_space(4.0);
         if clear {
             if let Some(g) = self.games.get_mut(&folder) {
@@ -661,6 +640,31 @@ impl App {
     fn tab_settings(&mut self, ui: &mut Ui, inst: &Instance) {
         self.instance_settings_ui(ui, inst);
     }
+}
+
+/// The widest the overview gets: the width of a form.
+const OVERVIEW_WIDTH: f32 = 760.0;
+
+/// "Minecraft 1.21.1 · Fabric 0.20.0 · 7 mods": what an instance is, with the loader in its own colour.
+fn instance_meta(inst: &Instance) -> egui::text::LayoutJob {
+    let part = |color: egui::Color32| egui::TextFormat {
+        font_id: egui::FontId::proportional(FS_BODY),
+        color,
+        ..Default::default()
+    };
+    let mut job = egui::text::LayoutJob::default();
+    job.append(&format!("Minecraft {}", inst.mc_version()), 0.0, part(c_muted()));
+    job.append("  \u{00B7}  ", 0.0, part(c_faint()));
+    match inst.loader() {
+        Some((kind, ver)) => job.append(&format!("{kind} {ver}"), 0.0, part(loader_color(kind))),
+        None => job.append("Vanilla", 0.0, part(c_muted())),
+    }
+    if inst.mod_count > 0 {
+        job.append("  \u{00B7}  ", 0.0, part(c_faint()));
+        let mods = if inst.mod_count == 1 { "1 mod".to_string() } else { format!("{} mods", inst.mod_count) };
+        job.append(&mods, 0.0, part(c_muted()));
+    }
+    job
 }
 
 /// The flat panel the log is read in.
