@@ -1,5 +1,7 @@
 //! Settings: the same sections, options, wording and defaults as the Java edition's Settings page. Every change is
-//! saved as it is made.
+//! saved as it is made, and a small "Saved" says so for a moment.
+
+use std::time::{Duration, Instant};
 
 use egui::{Align, Layout, RichText, ScrollArea, Ui};
 
@@ -8,22 +10,63 @@ use super::theme::{self, *};
 use super::widgets::*;
 
 /// The widest the page's content gets; a wider window leaves the rest empty rather than stretching the rows.
-const PAGE_WIDTH: f32 = 760.0;
+const PAGE_WIDTH: f32 = 720.0;
+
+/// How long "Saved" stays on the title row after a setting was saved, and how much of that it takes to fade out.
+const SAVED_FOR: Duration = Duration::from_millis(2000);
+const SAVED_FADE: Duration = Duration::from_millis(400);
+/// The room "Saved" always takes, shown or not, so nothing on the title row moves.
+const SAVED_WIDTH: f32 = 56.0;
+
+fn saved_at_id() -> egui::Id {
+    egui::Id::unique("settings-saved-at")
+}
+
+/// Note that the settings were just saved: the title row of the Settings page shows "Saved" for a moment.
+pub(super) fn mark_saved(ctx: &egui::Context) {
+    ctx.data_mut(|d| d.insert_temp(saved_at_id(), Instant::now()));
+    ctx.request_repaint();
+}
+
+/// How much of "Saved" shows `since` it was saved: all of it for the first part of its time, then fading out, then
+/// nothing (`None`).
+fn saved_alpha(since: Duration) -> Option<f32> {
+    if since >= SAVED_FOR {
+        return None;
+    }
+    let left = SAVED_FOR - since;
+    Some((left.as_secs_f32() / SAVED_FADE.as_secs_f32()).min(1.0))
+}
+
+/// "Saved" in a fixed slot at the right of the title row, there for two seconds after a save and then gone.
+fn saved_stamp(ui: &mut Ui) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(SAVED_WIDTH, 20.0), egui::Sense::hover());
+    let Some(at) = ui.data(|d| d.get_temp::<Instant>(saved_at_id())) else { return };
+    let Some(alpha) = saved_alpha(at.elapsed()) else { return };
+    ui.painter().text(
+        rect.right_center(),
+        egui::Align2::RIGHT_CENTER,
+        "Saved",
+        egui::FontId::proportional(FS_META),
+        c_faint().gamma_multiply(alpha),
+    );
+    ui.ctx().request_repaint_after(Duration::from_millis(50));
+}
 
 /// The title of a block of settings and one muted line about it, above its card.
 pub(super) fn section_head(ui: &mut Ui, title: &str, hint: &str) {
     ui.add_space(20.0);
     ui.scope(|ui| {
         ui.spacing_mut().item_spacing.y = 2.0;
-        ui.label(RichText::new(title).size(15.0).semibold());
+        ui.label(RichText::new(title).size(FS_SECTION).semibold());
         if !hint.is_empty() {
-            ui.label(RichText::new(hint).size(13.0).color(c_muted()));
+            ui.label(RichText::new(hint).size(FS_META).color(c_muted()));
         }
     });
     ui.add_space(8.0);
 }
 
-/// The hairlines between the rows of one card: call [`Rows::gap`] before each row.
+/// The rules between the rows of one card: call [`Rows::gap`] before each row.
 pub(super) struct Rows {
     first: bool,
 }
@@ -33,7 +76,7 @@ impl Rows {
         Rows { first: true }
     }
 
-    /// Nothing before the first row, a hairline before every other.
+    /// Nothing before the first row, a rule before every other.
     pub(super) fn gap(&mut self, ui: &mut Ui) {
         if std::mem::take(&mut self.first) {
             return;
@@ -41,18 +84,12 @@ impl Rows {
         // the same room above and below the line, whatever the spacing of the card is
         let pad = (10.0 - ui.spacing().item_spacing.y).max(0.0);
         ui.add_space(pad);
-        hairline(ui);
+        rule(ui);
         ui.add_space(pad);
     }
 }
 
-/// A one-pixel line across the width that is left.
-pub(super) fn hairline(ui: &mut Ui) {
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 1.0), egui::Sense::hover());
-    ui.painter().rect_filled(rect, 0.0, c_border());
-}
-
-/// A titled block: the heading with its hint, then one card holding the rows, divided by hairlines.
+/// A titled block: the heading with its hint, then one card holding the rows, divided by rules.
 fn section(ui: &mut Ui, title: &str, hint: &str, rows: impl FnOnce(&mut Ui, &mut Rows)) {
     section_head(ui, title, hint);
     card(ui, |ui| {
@@ -62,8 +99,8 @@ fn section(ui: &mut Ui, title: &str, hint: &str, rows: impl FnOnce(&mut Ui, &mut
     });
 }
 
-/// A setting row for a control wider than [`setting_row`] leaves room for (a drop-down, a text field, a row of
-/// chips): the explanation keeps clear of the control, and on a narrow page the control goes under the text.
+/// A setting row for a control wider than [`setting_row`] leaves room for (a drop-down, a text field, a segmented
+/// control): the explanation keeps clear of the control, and on a narrow page the control goes under the text.
 pub(super) fn wide_row(ui: &mut Ui, title: &str, hint: &str, control_width: f32, control: impl FnOnce(&mut Ui)) {
     let room = ui.available_width();
     if room < control_width + 240.0 {
@@ -95,7 +132,6 @@ fn memory_text(mb: u32) -> String {
 /// The computer's memory (total, free) in MB, read again at most every few seconds rather than on every frame.
 pub(super) fn memory_now() -> (u64, u64) {
     use std::sync::Mutex;
-    use std::time::{Duration, Instant};
     static LAST: Mutex<Option<(Instant, (u64, u64))>> = Mutex::new(None);
     let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
     match *last {
@@ -237,8 +273,16 @@ fn memory_slider_max(total_mb: u64) -> u32 {
 
 impl App {
     pub(super) fn settings_ui(&mut self, ui: &mut Ui) {
-        heading(ui, "Settings");
-        muted(ui, "Changes are saved as you make them.");
+        // the title, and at the right of the same row a "Saved" that shows for a moment after each save
+        ui.scope(|ui| {
+            ui.set_max_width((ui.available_width() - 14.0).min(PAGE_WIDTH));
+            // as tall as the title, like the title row of every other page
+            ui.spacing_mut().interact_size.y = 0.0;
+            ui.horizontal(|ui| {
+                heading(ui, "Settings");
+                ui.with_layout(Layout::right_to_left(Align::Center), saved_stamp);
+            });
+        });
         let mut dirty = false;
         let mut theme_changed = false;
         let mut open_data = false;
@@ -286,14 +330,24 @@ impl App {
                     }
                     ui.label("Automatic");
                     if !auto {
-                        ui.label(RichText::new(memory_text(s.maximum_memory)).semibold());
-                        ui.spacing_mut().slider_width = 200.0;
-                        let mut mb = s.maximum_memory.clamp(1024, max_mb);
-                        if ui.add(egui::Slider::new(&mut mb, 1024..=max_mb).step_by(256.0).show_value(false)).changed()
-                        {
-                            s.maximum_memory = mb;
-                            dirty = true;
-                        }
+                        // the row lays out from the right: the amount, then the slider to its left
+                        ui.add_space(16.0);
+                        ui.label(RichText::new(memory_text(s.maximum_memory)).font(super::fonts::medium(FS_BODY)));
+                        ui.scope(|ui| {
+                            // a rail that can be seen, filled in ink up to the handle (like a switch that is on)
+                            ui.visuals_mut().widgets.inactive.bg_fill = c_active();
+                            ui.visuals_mut().selection.bg_fill = c_ink();
+                            ui.spacing_mut().slider_width = 200.0;
+                            let mut mb = s.maximum_memory.clamp(1024, max_mb);
+                            let slider = egui::Slider::new(&mut mb, 1024..=max_mb)
+                                .step_by(256.0)
+                                .show_value(false)
+                                .trailing_fill(true);
+                            if ui.add(slider).changed() {
+                                s.maximum_memory = mb;
+                                dirty = true;
+                            }
+                        });
                     }
                 });
                 r.gap(ui);
@@ -323,16 +377,15 @@ impl App {
                     ui,
                     "Java compiler",
                     "Automatic uses the light one on computers with few cores, for much quicker starts. Full performance can give higher frame rates in long sessions.",
-                    330.0,
+                    300.0,
                     |ui| {
-                        // the row lays out from the right, so the choices go in backwards to read left to right
-                        for (mode, label) in
-                            [("full", "Full performance"), ("fast", "Light"), ("auto", "Automatic")]
-                        {
-                            if chip(ui, label, s.startup_mode == mode).clicked() && s.startup_mode != mode {
-                                s.startup_mode = mode.to_string();
-                                dirty = true;
-                            }
+                        const MODES: [(&str, &str); 3] =
+                            [("auto", "Automatic"), ("fast", "Light"), ("full", "Full performance")];
+                        let labels = MODES.map(|(_, label)| label);
+                        let now = MODES.iter().position(|(mode, _)| *mode == s.startup_mode).unwrap_or(usize::MAX);
+                        if let Some(i) = segmented(ui, &labels, now).filter(|&i| i != now) {
+                            s.startup_mode = MODES[i].0.to_string();
+                            dirty = true;
                         }
                     },
                 );
@@ -369,7 +422,7 @@ impl App {
                     }
                 }
                 if let Some(warning) = java_path_warning(custom.as_deref()) {
-                    ui.label(RichText::new(warning).color(c_warn()).size(12.0));
+                    ui.add(egui::Label::new(RichText::new(warning).color(c_warn()).size(FS_META)).wrap());
                 }
                 r.gap(ui);
                 if let Some(args) =
@@ -464,6 +517,7 @@ impl App {
         if dirty {
             self.save_settings();
             self.sync_tray();
+            mark_saved(ui.ctx());
         }
     }
 
@@ -526,6 +580,35 @@ mod tests {
         assert_eq!(entered.as_deref(), Some("/opt/jdk"), "Enter hands the typed text back");
         // once left, the field shows the saved value again
         assert_eq!(frame(&ctx, vec![], "saved").0, None);
+    }
+
+    #[test]
+    fn saved_shows_for_two_seconds_and_fades_out() {
+        assert_eq!(saved_alpha(Duration::ZERO), Some(1.0));
+        assert_eq!(saved_alpha(Duration::from_millis(1500)), Some(1.0));
+        let fading = saved_alpha(Duration::from_millis(1800)).unwrap();
+        assert!(fading > 0.0 && fading < 1.0, "fading at 1.8 s: {fading}");
+        assert_eq!(saved_alpha(Duration::from_millis(2000)), None);
+        assert_eq!(saved_alpha(Duration::from_secs(60)), None);
+    }
+
+    #[test]
+    fn the_stamp_is_painted_once_settings_were_saved() {
+        let ctx = egui::Context::default();
+        let texts = |ctx: &egui::Context| {
+            let mut found = Vec::new();
+            let mut out = ctx.run_ui(egui::RawInput::default(), |ui| saved_stamp(ui));
+            for clipped in &out.shapes {
+                if let egui::Shape::Text(t) = &clipped.shape {
+                    found.push(t.galley.text().to_string());
+                }
+            }
+            out.textures_delta.clear();
+            found
+        };
+        assert!(!texts(&ctx).iter().any(|t| t == "Saved"), "nothing was saved yet");
+        mark_saved(&ctx);
+        assert!(texts(&ctx).iter().any(|t| t == "Saved"), "shown right after a save");
     }
 
     #[test]

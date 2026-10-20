@@ -27,14 +27,20 @@ pub fn valid_player_name(n: &str) -> bool {
     (3..=16).contains(&n.len()) && n.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
-/// One of the two ways in. The Microsoft one is the filled, main choice; the offline one is plain.
+/// One of the two ways in. The Microsoft one is the filled, main choice (ink, like every main action: green is for
+/// Play); the offline one is plain.
 fn choice(ui: &mut Ui, width: f32, icon: Icon, title: &str, sub: &str, main: bool) -> bool {
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, 96.0), Sense::click());
     let hovered = resp.hovered();
     let (bg, line, fg, sub_fg) = if main {
-        (if hovered { c_accent_hover() } else { c_accent() }, egui::Color32::TRANSPARENT, c_on_accent(), c_on_accent())
+        (
+            if hovered { c_ink_hover() } else { c_ink() },
+            egui::Color32::TRANSPARENT,
+            c_on_ink(),
+            c_on_ink().gamma_multiply(0.75),
+        )
     } else {
-        (if hovered { c_field_hover() } else { c_field() }, c_control(), c_text(), c_muted())
+        (if hovered { c_hover() } else { c_field() }, c_control(), c_text(), c_muted())
     };
     ui.painter().rect(
         rect,
@@ -43,19 +49,19 @@ fn choice(ui: &mut Ui, width: f32, icon: Icon, title: &str, sub: &str, main: boo
         egui::Stroke::new(1.0, line),
         egui::StrokeKind::Inside,
     );
-    icons::paint(ui.painter(), icon, rect.left_top() + egui::vec2(34.0, 30.0), 20.0, fg);
+    icons::paint(ui.painter(), icon, rect.left_top() + egui::vec2(32.0, 28.0), 20.0, fg);
     ui.painter().text(
         rect.left_top() + egui::vec2(20.0, 58.0),
         egui::Align2::LEFT_CENTER,
         title,
-        super::fonts::semibold(15.0),
+        super::fonts::semibold(FS_SECTION),
         fg,
     );
     ui.painter().text(
-        rect.left_top() + egui::vec2(20.0, 77.0),
+        rect.left_top() + egui::vec2(20.0, 78.0),
         egui::Align2::LEFT_CENTER,
         sub,
-        egui::FontId::proportional(13.0),
+        egui::FontId::proportional(FS_META),
         sub_fg,
     );
     focus_ring(ui, &resp, rect, R_CARD);
@@ -78,14 +84,13 @@ impl App {
             .map(|a| (a.uuid.clone(), a.name().to_string(), a.kind(), a.offline))
             .collect();
         let modal = egui::Modal::new(egui::Id::unique("who")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
-            ui.set_width(500.0);
+            ui.set_width(super::services::modal_width(ctx, 480.0));
             if !st.name_step {
-                ui.label(RichText::new("Who's playing?").size(18.0).semibold());
-                muted(ui, "Sign in with your Microsoft account, or play offline with any name.");
-                ui.add_space(12.0);
+                ui.label(RichText::new("Who's playing?").size(FS_SECTION).semibold());
+                ui.add_space(8.0);
                 let w = ((ui.available_width() - 8.0) / 2.0).floor();
                 ui.horizontal(|ui| {
-                    if choice(ui, w, Icon::User, "Sign in", "Use your Microsoft account", true) {
+                    if choice(ui, w, Icon::User, "Sign in with Microsoft", "Use your Microsoft account", true) {
                         sign_in = true;
                     }
                     if choice(ui, w, Icon::Play, "Play offline", "Pick any player name", false) {
@@ -94,7 +99,7 @@ impl App {
                 });
                 if !accounts.is_empty() {
                     ui.add_space(16.0);
-                    ui.label(RichText::new("Continue as").size(13.0).color(c_muted()));
+                    ui.label(RichText::new("Continue as").size(FS_META).color(c_faint()));
                     for (uuid, name, kind, offline) in &accounts {
                         // the row's fill is put in behind its contents once it is known whether it is pointed at
                         let fill = ui.painter().add(egui::Shape::Noop);
@@ -121,7 +126,7 @@ impl App {
                             egui::Shape::rect_filled(
                                 resp.rect,
                                 egui::CornerRadius::same(R_CONTROL),
-                                if resp.hovered() { c_field_hover() } else { c_field() },
+                                if resp.hovered() { c_hover() } else { c_field() },
                             ),
                         );
                         if resp.clicked() {
@@ -130,20 +135,24 @@ impl App {
                     }
                 }
             } else {
-                ui.label(RichText::new("Play offline").size(18.0).semibold());
+                ui.label(RichText::new("Play offline").size(FS_SECTION).semibold());
                 muted(ui, "3-16 letters, numbers or underscores. No account needed.");
                 ui.add_space(12.0);
                 let r = ui.add_sized(
-                    [ui.available_width(), 36.0],
+                    [ui.available_width(), 32.0],
                     egui::TextEdit::singleline(&mut st.name)
                         .hint_text(RichText::new("Player name").color(c_faint()))
-                        .margin(egui::Margin::symmetric(12, 9))
+                        .margin(egui::Margin::symmetric(10, 7))
                         .background_color(c_field()),
                 );
                 // typing can start at once
                 focus_when_shown(ui, &r);
-                if st.error {
-                    ui.label(RichText::new("Use 3-16 letters, numbers or underscores.").color(c_danger()));
+                // the rule is said as soon as what is typed breaks it, and when Continue is pressed on nothing
+                let typed = st.name.trim();
+                if (typed.is_empty() && st.error) || (!typed.is_empty() && !valid_player_name(typed)) {
+                    ui.label(
+                        RichText::new("Use 3-16 letters, numbers or underscores.").size(FS_META).color(c_danger()),
+                    );
                 }
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {

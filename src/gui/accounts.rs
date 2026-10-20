@@ -7,6 +7,9 @@ use super::theme::*;
 use super::widgets::*;
 use crate::msauth::DeviceCode;
 
+/// The widest the page's content gets.
+const COLUMN: f32 = 720.0;
+
 #[derive(Default)]
 pub struct AcctState {
     pub offline_name: String,
@@ -28,8 +31,8 @@ impl App {
         let mut change_skin: Option<String> = None;
         let current = self.current_account().map(|a| a.uuid.clone());
         ScrollArea::vertical().id_salt("accounts").auto_shrink(false).show(ui, |ui| {
-            // at most 760 wide, but never wider than the window
-            ui.set_max_width((ui.available_width() - 14.0).min(760.0));
+            // at most 720 wide, but never wider than the window
+            ui.set_max_width((ui.available_width() - 14.0).min(COLUMN));
             let accounts = self.accounts.clone();
             if accounts.is_empty() {
                 card(ui, |ui| {
@@ -51,7 +54,7 @@ impl App {
                                 ui.set_max_width((ui.available_width() - buttons_w - 12.0).max(120.0));
                                 ui.spacing_mut().item_spacing.y = 2.0;
                                 ui.horizontal_wrapped(|ui| {
-                                    ui.label(RichText::new(acc.name()).semibold().size(15.0));
+                                    ui.label(RichText::new(acc.name()).semibold());
                                     tag(ui, acc.kind(), c_muted());
                                     if current.as_ref() == Some(&acc.uuid) {
                                         ink_tag(ui, "Playing as");
@@ -94,8 +97,7 @@ impl App {
                 });
             }
 
-            ui.add_space(16.0);
-            section(ui, "Add an account");
+            super::settings::section_head(ui, "Add an account", "");
             card(ui, |ui| {
                 super::settings::wide_row(
                     ui,
@@ -120,7 +122,7 @@ impl App {
                                 .corner_radius(egui::CornerRadius::same(R_CONTROL))
                                 .inner_margin(egui::Margin::symmetric(16, 8))
                                 .show(ui, |ui| {
-                                    ui.label(RichText::new(&code.user_code).size(30.0).semibold().monospace());
+                                    ui.label(RichText::new(&code.user_code).size(FS_TITLE).semibold().monospace());
                                 });
                             ui.vertical(|ui| {
                                 ui.spacing_mut().item_spacing.y = 6.0;
@@ -157,7 +159,7 @@ impl App {
                     None => {}
                 }
                 ui.add_space(8.0);
-                super::settings::hairline(ui);
+                rule(ui);
                 ui.add_space(8.0);
                 super::settings::wide_row(
                     ui,
@@ -219,13 +221,8 @@ impl App {
 
 /// A small filled label in the ink colour: what is true of this one row (the account that is playing).
 fn ink_tag(ui: &mut Ui, text: &str) {
-    let galley = ui.painter().layout_no_wrap(text.to_string(), super::fonts::medium(12.0), c_on_ink());
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(galley.size().x + 14.0, 20.0), egui::Sense::hover());
+    let galley = ui.painter().layout_no_wrap(text.to_string(), super::fonts::medium(FS_META), c_on_ink());
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(galley.size().x + 12.0, 20.0), egui::Sense::hover());
     ui.painter().rect_filled(rect, egui::CornerRadius::same(R_TAG), c_ink());
     ui.painter().galley(rect.center() - galley.size() / 2.0, galley, c_on_ink());
-}
-
-/// A neutral button that can be switched off (greyed, and it does nothing).
-fn secondary_enabled(ui: &mut Ui, text: &str, enabled: bool) -> egui::Response {
-    if enabled { secondary(ui, text) } else { danger_enabled(ui, text, false) }
 }
