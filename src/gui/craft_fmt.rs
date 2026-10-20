@@ -75,13 +75,74 @@ pub fn clip(text: &str, max: usize) -> String {
     s
 }
 
-/// A number with a caption under it, in a soft tile.
-pub fn stat_tile(ui: &mut Ui, width: f32, value: &str, label: &str) {
-    let (rect, _) = ui.allocate_exact_size(vec2(width, 62.0), Sense::hover());
-    let p = ui.painter();
-    p.rect(rect, CornerRadius::same(10), c_field(), Stroke::NONE, egui::StrokeKind::Inside);
-    p.text(rect.left_top() + vec2(12.0, 11.0), egui::Align2::LEFT_TOP, value, FontId::proportional(20.0), c_text());
-    p.text(rect.left_top() + vec2(12.0, 38.0), egui::Align2::LEFT_TOP, label, FontId::proportional(12.0), c_muted());
+/// Numbers as type: a small grey caption over a value, the cells divided by hairlines.
+pub fn stat_strip(ui: &mut Ui, cells: &[(String, &str)]) {
+    let width = ui.available_width();
+    let (rect, _) = ui.allocate_exact_size(vec2(width, 46.0), Sense::hover());
+    let cell_w = width / cells.len().max(1) as f32;
+    let painter = ui.painter();
+    for (i, (value, label)) in cells.iter().enumerate() {
+        let left = rect.left() + cell_w * i as f32;
+        let pad = if i == 0 { 0.0 } else { 14.0 };
+        if i > 0 {
+            painter.vline(left, rect.y_range(), Stroke::new(1.0, c_border()));
+        }
+        let cell = egui::Rect::from_min_max(
+            egui::pos2(left + pad, rect.top()),
+            egui::pos2(left + cell_w - 6.0, rect.bottom()),
+        );
+        let clipped = painter.with_clip_rect(cell);
+        clipped.text(cell.left_top(), egui::Align2::LEFT_TOP, label, FontId::proportional(12.0), c_muted());
+        clipped.text(
+            cell.left_top() + vec2(0.0, 18.0),
+            egui::Align2::LEFT_TOP,
+            value,
+            super::fonts::semibold(18.0),
+            c_text(),
+        );
+    }
+}
+
+/// A card whose rows sit closer together than the page's blocks do.
+pub fn panel<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
+    super::widgets::card(ui, |ui| {
+        ui.spacing_mut().item_spacing.y = 6.0;
+        add(ui)
+    })
+}
+
+/// A hairline across the width of the card, for dividing rows.
+pub fn rule(ui: &mut Ui) {
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 1.0), Sense::hover());
+    ui.painter().hline(rect.x_range(), rect.center().y, Stroke::new(1.0, c_border()));
+}
+
+/// A tick box: plain and neutral, green only once it is ticked. The hit area is larger than the box.
+pub fn check_box(ui: &mut Ui, on: &mut bool, enabled: bool) -> egui::Response {
+    let (rect, mut resp) =
+        ui.allocate_exact_size(vec2(24.0, 24.0), if enabled { Sense::click() } else { Sense::hover() });
+    if enabled && resp.clicked() {
+        *on = !*on;
+        resp.mark_changed();
+    }
+    let boxed = egui::Rect::from_center_size(rect.center(), vec2(18.0, 18.0));
+    let radius = CornerRadius::same(5);
+    if *on {
+        let fill = if enabled { c_accent() } else { c_faint() };
+        ui.painter().rect_filled(boxed, radius, fill);
+        let c = boxed.center();
+        let stroke = Stroke::new(1.8, c_on_accent());
+        ui.painter().line_segment([c + vec2(-4.0, 0.5), c + vec2(-1.0, 3.5)], stroke);
+        ui.painter().line_segment([c + vec2(-1.0, 3.5), c + vec2(4.5, -3.0)], stroke);
+    } else {
+        let fill = if resp.hovered() && enabled { c_field_hover() } else { c_field() };
+        let edge = if enabled { c_control() } else { c_border() };
+        ui.painter().rect(boxed, radius, fill, Stroke::new(1.0, edge), egui::StrokeKind::Inside);
+    }
+    super::widgets::focus_ring(ui, &resp, boxed, 5);
+    let state = *on;
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, enabled, state, ""));
+    if enabled { resp.on_hover_cursor(egui::CursorIcon::PointingHand) } else { resp }
 }
 
 /// A small round cross button; true when clicked.
@@ -112,15 +173,15 @@ pub fn arrow(ui: &mut Ui) {
 
 /// A card title.
 pub fn card_title(ui: &mut Ui, text: &str) {
-    ui.label(RichText::new(text).size(16.0).semibold());
+    ui.label(RichText::new(text).size(15.0).semibold());
 }
 
 /// A calm box with a coloured edge, for notes and warnings.
 pub fn note_box<R>(ui: &mut Ui, color: Color32, add: impl FnOnce(&mut Ui) -> R) -> R {
     egui::Frame::new()
-        .fill(color.gamma_multiply(0.12))
-        .stroke(Stroke::new(1.0, color.gamma_multiply(0.4)))
-        .corner_radius(CornerRadius::same(12))
+        .fill(color.gamma_multiply(0.10))
+        .stroke(Stroke::new(1.0, color.gamma_multiply(0.35)))
+        .corner_radius(CornerRadius::same(R_CARD))
         .inner_margin(egui::Margin::same(14))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());

@@ -10,7 +10,7 @@ use super::theme::*;
 use super::widgets::*;
 use crate::craft::{Category, ItemId};
 
-const ROW_H: f32 = 44.0;
+const ROW_H: f32 = 40.0;
 
 /// The entries matching `query` (and the category), best first; at most `limit`. An empty query matches all.
 pub(super) fn search_entries(book: &Book, query: &str, cat: Option<Category>, limit: usize) -> Vec<u32> {
@@ -43,20 +43,27 @@ pub(super) fn search_entries(book: &Book, query: &str, cat: Option<Category>, li
 }
 
 impl CraftState {
-    /// The card that picks the item and the amount.
+    /// The cards that pick the item and the amount: the amount of what was picked on top, the search under it.
     pub(super) fn left_pick(&mut self, ui: &mut Ui, book: &Arc<Book>, list_h: f32) {
-        card(ui, |ui| {
+        if self.target.is_some() {
+            panel(ui, |ui| self.quantity_block(ui, book, false));
+        }
+        panel(ui, |ui| {
             card_title(ui, "What do you want to make?");
             ui.add_space(2.0);
             let hint = format!("Search {} items", thousands(book.entries.len() as u64));
-            ui.add_sized(
-                [ui.available_width(), 36.0],
+            let field = ui.add_sized(
+                [ui.available_width(), 32.0],
                 egui::TextEdit::singleline(&mut self.search)
                     .id(egui::Id::unique("craft-search"))
-                    .hint_text(format!("{hint}   (press / to jump here)"))
-                    .margin(egui::Margin::symmetric(12, 8))
+                    .hint_text(RichText::new(format!("{hint}   (press / to jump here)")).color(c_faint()))
+                    .margin(egui::Margin::symmetric(10, 7))
                     .background_color(c_field()),
             );
+            if self.target.is_none() {
+                // nothing is picked yet: typing can start at once
+                focus_when_shown(ui, &field);
+            }
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
                 if chip(ui, "All", self.category.is_none()).clicked() {
@@ -88,41 +95,30 @@ impl CraftState {
                 },
             );
             let mut pick: Option<ItemId> = None;
-            egui::Frame::new()
-                .fill(c_field())
-                .stroke(Stroke::new(1.0, c_border()))
-                .corner_radius(CornerRadius::same(10))
-                .inner_margin(egui::Margin::same(4))
-                .show(ui, |ui| {
-                    ui.set_width(ui.available_width());
-                    if n == 0 {
-                        ui.add_space(24.0);
-                        ui.vertical_centered(|ui| muted(ui, "Nothing matches that. Try fewer letters."));
-                        ui.add_space(24.0);
-                        return;
-                    }
-                    ui.spacing_mut().item_spacing.y = 2.0;
-                    egui::ScrollArea::vertical()
-                        .id_salt("craft-items")
-                        .max_height(list_h)
-                        .auto_shrink([false, false])
-                        .show_rows(ui, ROW_H, n, |ui, range| {
-                            for k in range {
-                                let e = &book.entries[self.filtered[k] as usize];
-                                let selected = self.target.as_deref() == Some(e.id.as_str());
-                                if self.item_row(ui, e, selected) {
-                                    pick = Some(e.id.clone());
-                                }
+            if n == 0 {
+                ui.add_space(16.0);
+                ui.vertical_centered(|ui| muted(ui, "Nothing matches that. Try fewer letters."));
+                ui.add_space(16.0);
+            } else {
+                ui.spacing_mut().item_spacing.y = 0.0;
+                egui::ScrollArea::vertical()
+                    .id_salt("craft-items")
+                    .max_height(list_h)
+                    .auto_shrink([false, false])
+                    .show_rows(ui, ROW_H, n, |ui, range| {
+                        for k in range {
+                            let e = &book.entries[self.filtered[k] as usize];
+                            let selected = self.target.as_deref() == Some(e.id.as_str());
+                            if self.item_row(ui, e, selected) {
+                                pick = Some(e.id.clone());
                             }
-                        });
-                });
+                        }
+                    });
+            }
             if let Some(id) = pick {
                 self.set_target(&id);
             }
         });
-        if self.target.is_some() {
-            card(ui, |ui| self.quantity_block(ui, book, false));
-        }
     }
 
     /// One row of the item list: picture, name, and a small line under it. True when clicked.
@@ -132,28 +128,28 @@ impl CraftState {
             return false;
         }
         let bg = if selected {
-            c_accent_soft()
+            c_field_hover()
         } else if resp.hovered() {
             c_card_hover()
         } else {
             egui::Color32::TRANSPARENT
         };
-        ui.painter().rect_filled(rect, CornerRadius::same(9), bg);
-        let icon = egui::Rect::from_min_size(rect.left_top() + vec2(8.0, (ROW_H - 32.0) / 2.0), vec2(32.0, 32.0));
+        ui.painter().rect_filled(rect, CornerRadius::same(R_CONTROL), bg);
+        let icon = egui::Rect::from_min_size(rect.left_top() + vec2(8.0, (ROW_H - 28.0) / 2.0), vec2(28.0, 28.0));
         self.paint_icon(ui, icon, &e.id, &e.name);
         let short = e.id.rsplit(':').next().unwrap_or(&e.id);
         let sub = if e.stack > 1 { format!("{short}  \u{00B7}  stacks of {}", e.stack) } else { short.to_string() };
         let clip = rect.shrink2(vec2(2.0, 0.0));
         let p = ui.painter().with_clip_rect(clip);
-        let color = if selected { c_accent() } else { c_text() };
-        p.text(rect.left_top() + vec2(50.0, 9.0), egui::Align2::LEFT_TOP, &e.name, FontId::proportional(14.5), color);
-        p.text(rect.left_top() + vec2(50.0, 26.0), egui::Align2::LEFT_TOP, sub, FontId::proportional(11.5), c_muted());
-        focus_ring(ui, &resp, rect, 9);
+        let font = if selected { super::fonts::semibold(14.0) } else { FontId::proportional(14.0) };
+        p.text(rect.left_top() + vec2(46.0, 7.0), egui::Align2::LEFT_TOP, &e.name, font, c_text());
+        p.text(rect.left_top() + vec2(46.0, 24.0), egui::Align2::LEFT_TOP, sub, FontId::proportional(11.5), c_faint());
+        focus_ring(ui, &resp, rect, R_CONTROL);
         resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, &e.name));
         resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked()
     }
 
-    /// Under the list: what was picked and how many of it.
+    /// What was picked and how many of it.
     pub(super) fn quantity_block(&mut self, ui: &mut Ui, book: &Arc<Book>, change: bool) {
         let Some(target) = self.target.clone() else { return };
         let item = book.ds.item(&target);
@@ -175,17 +171,17 @@ impl CraftState {
             }
         });
         ui.add_space(4.0);
-        ui.label(RichText::new("How many?").size(15.0).semibold());
+        ui.label(RichText::new("How many?").semibold());
         let parsed = parse_qty(&self.qty_text);
         ui.horizontal(|ui| {
             let mut edit = egui::TextEdit::singleline(&mut self.qty_text)
                 .id(egui::Id::unique("craft-qty"))
-                .margin(egui::Margin::symmetric(12, 8))
+                .margin(egui::Margin::symmetric(10, 7))
                 .background_color(c_field());
             if parsed.is_err() {
                 edit = edit.text_color(c_danger());
             }
-            let r = ui.add_sized([140.0, 36.0], edit);
+            let r = ui.add_sized([140.0, 32.0], edit);
             if r.changed() {
                 self.touch_plan();
             }
@@ -225,12 +221,12 @@ impl CraftState {
     /// The card with what the player already has.
     pub(super) fn left_stock(&mut self, ui: &mut Ui, book: &Arc<Book>) {
         let version = self.version.clone().unwrap_or_default();
-        card(ui, |ui| {
+        panel(ui, |ui| {
             let count = self.stock().map_or(0, |s| s.len());
             ui.horizontal(|ui| {
                 card_title(ui, "Items I already have");
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if count > 0 && ui.button("Clear").clicked() {
+                    if count > 0 && secondary(ui, "Clear").clicked() {
                         self.dialog = Some(Dialog::ClearStock);
                     }
                 });
@@ -238,12 +234,15 @@ impl CraftState {
             small_muted(ui, format!("Kept for Minecraft {version} and taken off the list."));
             ui.add_space(2.0);
             ui.horizontal(|ui| {
-                let mut on = self.use_stock;
-                if toggle(ui, &mut on).changed() {
-                    self.use_stock = on;
-                    self.touch_plan();
-                }
+                ui.set_min_height(32.0);
                 ui.label("Use my items in the plan");
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    let mut on = self.use_stock;
+                    if toggle(ui, &mut on).changed() {
+                        self.use_stock = on;
+                        self.touch_plan();
+                    }
+                });
             });
             ui.add_space(2.0);
             // the rows
@@ -279,7 +278,9 @@ impl CraftState {
                         } else if !r.has_focus() {
                             *self.stock_bufs.entry(id.clone()).or_default() = value.to_string();
                         }
-                        ui.add(egui::Label::new(name.as_str()).truncate());
+                        ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                            ui.add(egui::Label::new(name.as_str()).truncate());
+                        });
                     });
                 });
             }
@@ -302,10 +303,10 @@ impl CraftState {
     /// The small form that adds an item to the stock.
     fn stock_adder(&mut self, ui: &mut Ui, book: &Arc<Book>) {
         ui.add_sized(
-            [ui.available_width(), 34.0],
+            [ui.available_width(), 32.0],
             egui::TextEdit::singleline(&mut self.stock_search)
-                .hint_text("Add an item you have")
-                .margin(egui::Margin::symmetric(12, 7))
+                .hint_text(RichText::new("Add an item you have").color(c_faint()))
+                .margin(egui::Margin::symmetric(10, 7))
                 .background_color(c_field()),
         );
         if self.stock_search != self.stock_hits_for {
@@ -368,7 +369,9 @@ impl CraftState {
                         edit = edit.text_color(c_danger());
                     }
                     ui.add_sized([76.0, 30.0], edit);
-                    ui.add(egui::Label::new(name.as_str()).truncate());
+                    ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                        ui.add(egui::Label::new(name.as_str()).truncate());
+                    });
                 });
             });
             if add {
@@ -394,7 +397,7 @@ impl CraftState {
         if self.supplied.is_empty() {
             return;
         }
-        card(ui, |ui| {
+        panel(ui, |ui| {
             card_title(ui, "Items I will bring");
             small_muted(ui, "The plan stops at these and lists them to gather.");
             ui.add_space(2.0);
@@ -407,7 +410,7 @@ impl CraftState {
                     egui::Frame::new()
                         .fill(c_card_hover())
                         .stroke(Stroke::new(1.0, c_border()))
-                        .corner_radius(CornerRadius::same(15))
+                        .corner_radius(CornerRadius::same(R_CONTROL))
                         .inner_margin(egui::Margin { left: 6, right: 4, top: 2, bottom: 2 })
                         .show(ui, |ui| {
                             ui.spacing_mut().item_spacing.x = 6.0;
