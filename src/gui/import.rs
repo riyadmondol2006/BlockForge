@@ -279,7 +279,7 @@ impl App {
                     egui::Frame::new()
                         .fill(c_accent_soft())
                         .stroke(Stroke::new(2.0, c_accent()))
-                        .corner_radius(CornerRadius::same(18))
+                        .corner_radius(CornerRadius::same(R_CARD + 4))
                         .inner_margin(egui::Margin::symmetric(40, 28))
                         .show(ui, |ui| {
                             ui.label(RichText::new("Drop to import").size(22.0).semibold().color(c_accent()));
@@ -301,10 +301,10 @@ impl App {
         let mut pick_folder = false;
         let mut use_found: Option<ImportedInstance> = None;
         let (width, room) = super::curseforge::modal_size(ctx, 620.0, 360.0);
-        let modal = egui::Modal::new(egui::Id::new("import-modal")).show(ctx, |ui| {
+        let modal = egui::Modal::new(egui::Id::new("import-modal")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
             ui.set_width(width);
             ui.horizontal(|ui| {
-                ui.label(RichText::new("Import an instance").size(21.0).semibold());
+                ui.label(RichText::new("Import an instance").size(18.0).semibold());
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if secondary(ui, "Close").clicked() {
                         close = true;
@@ -312,15 +312,19 @@ impl App {
                 });
             });
             muted(ui, "Your files are copied. Nothing is changed or removed in the other launcher.");
-            ui.add_space(8.0);
+            ui.add_space(16.0);
 
-            ui.label(RichText::new("File, folder or link").semibold());
+            ui.label(RichText::new("File, folder or link").size(15.0).semibold());
+            ui.add_space(2.0);
             ui.horizontal(|ui| {
                 ui.add_sized(
-                    [(ui.available_width() - 214.0).max(160.0), 36.0],
+                    [(ui.available_width() - 214.0).max(160.0), 32.0],
                     egui::TextEdit::singleline(&mut self.import.input)
-                        .hint_text("Paste a link, or choose a .mrpack / .zip / instance folder")
-                        .margin(egui::Margin::symmetric(12, 8))
+                        .hint_text(
+                            RichText::new("Paste a link, or choose a .mrpack / .zip / instance folder")
+                                .color(c_faint()),
+                        )
+                        .margin(egui::Margin::symmetric(10, 7))
                         .background_color(c_field()),
                 );
                 if secondary(ui, "Choose file").clicked() {
@@ -341,18 +345,18 @@ impl App {
                 if self.import.detected == Detected::Empty {
                     small_muted(ui, text);
                 } else {
-                    ui.label(RichText::new(text).color(if ok { c_accent() } else { c_warn() }).size(13.0));
+                    ui.label(RichText::new(text).color(if ok { c_text() } else { c_warn() }).size(13.0));
                 }
             });
             if ok {
-                ui.add_space(4.0);
+                ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    muted(ui, "Name");
+                    super::discover::filter_label(ui, "Name");
                     ui.add_sized(
                         [280.0, 32.0],
                         egui::TextEdit::singleline(&mut self.import.name)
-                            .hint_text("Same as the original")
-                            .margin(egui::Margin::symmetric(10, 6))
+                            .hint_text(RichText::new("Same as the original").color(c_faint()))
+                            .margin(egui::Margin::symmetric(10, 7))
                             .background_color(c_field()),
                     );
                     if primary(ui, "Import").clicked() {
@@ -367,10 +371,11 @@ impl App {
                 small_muted(ui, format!("{} more dropped files are waiting", self.import.queue.len()));
             }
 
-            ui.add_space(10.0);
+            ui.add_space(16.0);
             ui.separator();
-            ui.add_space(6.0);
-            ui.label(RichText::new("Found on this computer").semibold());
+            ui.add_space(12.0);
+            ui.label(RichText::new("Found on this computer").size(15.0).semibold());
+            ui.add_space(4.0);
             match &self.import.scan {
                 None => {
                     ui.horizontal(|ui| {
@@ -387,51 +392,43 @@ impl App {
                         .max_height(room.min(260.0))
                         .auto_shrink([false, true])
                         .show(ui, |ui| {
-                            for i in found {
-                                egui::Frame::new()
-                                    .fill(c_card())
-                                    .stroke(Stroke::new(1.0, c_border()))
-                                    .corner_radius(CornerRadius::same(12))
-                                    .inner_margin(egui::Margin::same(10))
-                                    .show(ui, |ui| {
-                                        ui.set_width(ui.available_width());
-                                        ui.horizontal(|ui| {
-                                            ui.vertical(|ui| {
-                                                ui.set_max_width((ui.available_width() - 110.0).max(240.0));
-                                                ui.label(RichText::new(&i.name).semibold());
-                                                small_muted(
-                                                    ui,
-                                                    format!(
-                                                        "{}  \u{00B7}  Minecraft {}  \u{00B7}  {}",
-                                                        i.source,
-                                                        i.minecraft_version,
-                                                        i.loader_label()
-                                                    ),
-                                                );
-                                                match self.import.previews.get(&i.root) {
-                                                    Some(Some(p)) => small_muted(
-                                                        ui,
-                                                        format!(
-                                                            "{} mods  \u{00B7}  {} worlds  \u{00B7}  {}",
-                                                            p.mods,
-                                                            p.worlds,
-                                                            human_size(p.bytes)
-                                                        ),
-                                                    ),
-                                                    Some(None) => {
-                                                        small_muted(ui, "Couldn't read this instance's files")
-                                                    }
-                                                    None => small_muted(ui, " "),
-                                                }
-                                            });
-                                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                                if primary(ui, "Import").clicked() {
-                                                    use_found = Some(i.clone());
-                                                }
-                                            });
-                                        });
+                            for (n, i) in found.iter().enumerate() {
+                                if n > 0 {
+                                    ui.separator();
+                                }
+                                ui.horizontal(|ui| {
+                                    ui.vertical(|ui| {
+                                        ui.set_max_width((ui.available_width() - 110.0).max(240.0));
+                                        ui.label(RichText::new(&i.name).semibold());
+                                        small_muted(
+                                            ui,
+                                            format!(
+                                                "{}  \u{00B7}  Minecraft {}  \u{00B7}  {}",
+                                                i.source,
+                                                i.minecraft_version,
+                                                i.loader_label()
+                                            ),
+                                        );
+                                        match self.import.previews.get(&i.root) {
+                                            Some(Some(p)) => small_muted(
+                                                ui,
+                                                format!(
+                                                    "{} mods  \u{00B7}  {} worlds  \u{00B7}  {}",
+                                                    p.mods,
+                                                    p.worlds,
+                                                    human_size(p.bytes)
+                                                ),
+                                            ),
+                                            Some(None) => small_muted(ui, "Couldn't read this instance's files"),
+                                            None => small_muted(ui, " "),
+                                        }
                                     });
-                                ui.add_space(4.0);
+                                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                        if secondary(ui, "Import").clicked() {
+                                            use_found = Some(i.clone());
+                                        }
+                                    });
+                                });
                             }
                         });
                 }
