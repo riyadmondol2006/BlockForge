@@ -179,8 +179,8 @@ manager, the Windows setup replaces the install, and the macOS disk image opens 
   old launcher, or install the new package or setup over the old one. The new Windows setup finds the old Java install
   and removes it first; the deb and rpm replace the old package. Your instances, accounts and settings stay where they
   are, because BlockForge 4 uses the same folder and the same file formats.
-- **The plain `.jar` of BlockForge 3.x**: the update button downloads a small bridge jar. Running it once downloads the
-  native program next to your files and starts it; your data stays in the same folder.
+- **The plain `.jar` of BlockForge 3.x**: it is no longer built. Install the setup, disk image or package for your
+  system from the releases page; your data stays in the same folder.
 - **ATLauncher**: BlockForge keeps its own folder. Use **Import** to copy an ATLauncher instance in; nothing is moved or
   changed in ATLauncher's folder.
 

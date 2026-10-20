@@ -20,7 +20,6 @@ name: Build
 #   BlockForge-<version>-windows-x64-portable.zip   blockforge.exe on its own
 #   BlockForge-<version>-macos-arm64.dmg
 #   BlockForge-<version>-linux-x86_64.deb / .rpm / .AppImage
-#   BlockForge-<version>.jar                        bridge that moves old jar installs to the native build
 #   SHA256SUMS.txt
 on:
   push:
@@ -202,29 +201,6 @@ jobs:
           path: dist/BlockForge-${{ env.VERSION }}-macos-arm64.dmg
           if-no-files-found: error
 
-  bridge:
-    name: Bridge jar for old installs
-    needs: checks
-    runs-on: ubuntu-22.04
-    timeout-minutes: 15
-    env:
-      VERSION: ${{ needs.checks.outputs.version }}
-    steps:
-      - uses: actions/checkout@v7
-      - name: Use the version of this build
-        shell: bash
-        run: .github/scripts/version.sh apply "$VERSION"
-      - uses: actions/setup-java@v6
-        with:
-          distribution: temurin
-          java-version: 21
-      - run: OUT="$PWD/dist" ./packaging/bridge/build.sh "$VERSION"
-      - uses: actions/upload-artifact@v7
-        with:
-          name: BlockForge-bridge
-          path: dist/BlockForge-${{ env.VERSION }}.jar
-          if-no-files-found: error
-
   agents:
     # the two helpers the launcher starts the game with (packaging/boost and packaging/lite) run inside the game's
     # Java on the player's computer, so they are checked on every system with every Java Minecraft uses
@@ -286,7 +262,7 @@ jobs:
 
   release:
     name: Publish
-    needs: [checks, linux, windows, macos, bridge, agents]
+    needs: [checks, linux, windows, macos, agents]
     runs-on: ubuntu-22.04
     timeout-minutes: 15
     if: >-
@@ -320,15 +296,14 @@ jobs:
       - name: Check that every file is there
         working-directory: artifacts
         run: |
-          for f in "BlockForge-$VERSION.jar" \
-              "BlockForge-$VERSION-windows-x64-setup.exe" "BlockForge-$VERSION-windows-x64-portable.zip" \
+          for f in "BlockForge-$VERSION-windows-x64-setup.exe" "BlockForge-$VERSION-windows-x64-portable.zip" \
               "BlockForge-$VERSION-macos-arm64.dmg" \
               "BlockForge-$VERSION-linux-x86_64.deb" "BlockForge-$VERSION-linux-x86_64.rpm" \
               "BlockForge-$VERSION-linux-x86_64.AppImage"; do
             [ -f "$f" ] || { echo "::error::$f is missing"; exit 1; }
           done
           # the updater of older versions takes the one file with the right ending, so no ending may appear twice
-          for ext in exe dmg deb rpm jar; do
+          for ext in exe dmg deb rpm; do
             n="$(ls -1 ./*."$ext" 2>/dev/null | wc -l)"
             [ "$n" -eq 1 ] || { echo "::error::expected exactly one .$ext file, found $n"; exit 1; }
           done

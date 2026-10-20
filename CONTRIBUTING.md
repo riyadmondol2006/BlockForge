@@ -40,7 +40,7 @@ Installers are built by the scripts in `packaging/` and by `.github/workflows/bu
 | `src/imports/`, `src/export.rs` | bringing in instances from other launchers, and exporting |
 | `src/accounts.rs`, `src/msauth.rs`, `src/skins.rs` | accounts, Microsoft sign-in, skins |
 | `src/update/`, `src/update.rs` | the launcher's own updates |
-| `packaging/` | Linux packages, Windows installer, macOS disk image, the bridge jar |
+| `packaging/` | Linux packages, Windows installer, macOS disk image |
 | `legacy-launch/` | source of the small Java wrapper that starts Minecraft older than 1.6 (`assets/legacy-launch.jar`) |
 
 Files the Java edition wrote (`instance.json`, `accounts.json`, `BlockForge.json`) must keep working in both directions:

@@ -46,6 +46,9 @@ A new look for the whole launcher: calmer, flatter and easier to scan, with one 
 - Inter Regular, Medium and SemiBold are built into the program as small Latin subsets with aligned digits (about 135 KB,
   SIL Open Font License, see NOTICE.md).
 - Each instance now remembers the days it was played in its `instance.json` (`playDays`, the last 120 days).
+- The bridge jar (`BlockForge-<version>.jar`) that carried plain 3.x jar installs to the native program is no longer
+  built or added to releases (its source, `packaging/bridge/`, is removed too); BlockForge is built and released as
+  native programs only.
 - `tools/screenshots/` makes a throwaway sample data folder and takes the screenshots of every page on a private virtual
   display, so the pictures in `docs/` can be remade without touching a real desktop.
 
