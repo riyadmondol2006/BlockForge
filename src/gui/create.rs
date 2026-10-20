@@ -114,7 +114,7 @@ impl App {
         let mut create = false;
         ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
             card(ui, |ui| {
-                ui.label(RichText::new("Name").strong());
+                ui.label(RichText::new("Name").semibold());
                 let c = &mut self.create;
                 // the hint is the name the instance gets when the field is left empty
                 let hint = if c.mc.is_empty() { "My instance".to_string() } else { default_name(&c.mc, c.loader) };
@@ -129,8 +129,8 @@ impl App {
             ui.add_space(6.0);
             card(ui, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("Minecraft version").strong());
-                    ui.label(RichText::new(&self.create.mc).color(c_accent()).strong());
+                    ui.label(RichText::new("Minecraft version").semibold());
+                    ui.label(RichText::new(&self.create.mc).color(c_accent()).semibold());
                 });
                 match (&self.manifest, &self.manifest_error) {
                     (Some(m), _) => {
@@ -187,7 +187,7 @@ impl App {
             });
             ui.add_space(6.0);
             card(ui, |ui| {
-                ui.label(RichText::new("Mod loader").strong());
+                ui.label(RichText::new("Mod loader").semibold());
                 ui.horizontal(|ui| {
                     for l in Loader::ALL {
                         if chip(ui, l.label(), self.create.loader == l).clicked() && self.create.loader != l {

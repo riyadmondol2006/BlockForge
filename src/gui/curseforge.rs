@@ -418,7 +418,7 @@ impl App {
                             ui.vertical(|ui| {
                                 ui.set_max_width((ui.available_width() - 190.0).max(120.0));
                                 ui.horizontal_wrapped(|ui| {
-                                    ui.label(RichText::new(&p.name).strong().size(16.0));
+                                    ui.label(RichText::new(&p.name).semibold().size(16.0));
                                     small_muted(ui, format!("by {}", p.author_names()));
                                 });
                                 ui.add(egui::Label::new(RichText::new(&p.summary).color(c_muted())).truncate());
@@ -1038,7 +1038,7 @@ impl App {
 
         let modal = egui::Modal::new(Id::unique("cf-file-dialog")).show(ctx, |ui| {
             ui.set_width(width);
-            ui.add(egui::Label::new(RichText::new(format!("Installing {}", d.project.name)).size(19.0).strong()).wrap());
+            ui.add(egui::Label::new(RichText::new(format!("Installing {}", d.project.name)).size(19.0).semibold()).wrap());
             if let Some((_, name)) = &target {
                 small_muted(ui, format!("into {name}"));
             } else if is_pack {
@@ -1129,7 +1129,7 @@ impl App {
                             });
                         } else if !d.deps.is_empty() {
                             ui.add_space(6.0);
-                            ui.label(RichText::new("These mods go with it").strong());
+                            ui.label(RichText::new("These mods go with it").semibold());
                             small_muted(ui, "Required ones are ticked. Tick the others to add them too.");
                             ScrollArea::vertical().max_height(170.0).id_salt("cf-deps").show(ui, |ui| {
                                 for (dep, on) in d.deps.iter_mut() {
@@ -1138,7 +1138,7 @@ impl App {
                                         ui.add_enabled(usable, egui::Checkbox::new(on, ""));
                                         ui.vertical(|ui| {
                                             ui.horizontal(|ui| {
-                                                ui.label(RichText::new(&dep.project.name).strong());
+                                                ui.label(RichText::new(&dep.project.name).semibold());
                                                 if dep.is_required() {
                                                     tag(ui, "Required", c_accent());
                                                 } else {
@@ -1162,7 +1162,7 @@ impl App {
                         match &d.changelog {
                             Some((id, Ok(text))) if *id == fid => {
                                 ui.add_space(6.0);
-                                ui.label(RichText::new("What changed").strong());
+                                ui.label(RichText::new("What changed").semibold());
                                 ScrollArea::vertical().max_height(150.0).id_salt("cf-changelog").show(ui, |ui| {
                                     ui.label(text.as_str());
                                 });
@@ -1280,7 +1280,7 @@ impl App {
         let (width, list_height) = modal_size(ctx, 660.0, 300.0);
         egui::Modal::new(Id::unique("cf-browser-dialog")).show(ctx, |ui| {
             ui.set_width(width);
-            ui.label(RichText::new("Download these in your browser").size(19.0).strong());
+            ui.label(RichText::new("Download these in your browser").size(19.0).semibold());
             ui.add_space(4.0);
             ui.label("The authors of these files do not let launchers download them. Open each one in your browser and save it to your Downloads folder; BlockForge notices it there and carries on by itself.");
             small_muted(ui, format!("Watching: {}", user_folder.display()));
@@ -1292,7 +1292,7 @@ impl App {
                         ui.horizontal(|ui| {
                             ui.vertical(|ui| {
                                 ui.set_max_width((ui.available_width() - 260.0).max(120.0));
-                                ui.add(egui::Label::new(RichText::new(&it.request.label).strong()).truncate());
+                                ui.add(egui::Label::new(RichText::new(&it.request.label).semibold()).truncate());
                                 ui.add(egui::Label::new(RichText::new(&it.request.file_name).color(c_muted()).size(12.0)).truncate());
                             });
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| match &it.state {
@@ -1376,7 +1376,7 @@ impl App {
         let (width, list_height) = modal_size(ctx, 620.0, 220.0);
         let modal = egui::Modal::new(Id::unique("cf-updates")).show(ctx, |ui| {
             ui.set_width(width);
-            ui.label(RichText::new(&w.title).size(19.0).strong());
+            ui.label(RichText::new(&w.title).size(19.0).semibold());
             ui.add_space(6.0);
             if w.loading {
                 ui.horizontal(|ui| {
@@ -1396,7 +1396,7 @@ impl App {
                         ui.horizontal(|ui| {
                             ui.vertical(|ui| {
                                 ui.set_max_width((ui.available_width() - 110.0).max(160.0));
-                                ui.label(RichText::new(&u.project.name).strong());
+                                ui.label(RichText::new(&u.project.name).semibold());
                                 small_muted(ui, format!("{}  ->  {}", u.installed_file, u.latest.label()));
                             });
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -1412,7 +1412,7 @@ impl App {
                         ui.horizontal(|ui| {
                             ui.vertical(|ui| {
                                 ui.set_max_width((ui.available_width() - 170.0).max(160.0));
-                                ui.label(RichText::new(name).strong());
+                                ui.label(RichText::new(name).semibold());
                                 small_muted(ui, format!("New version: {}", u.latest.label()));
                                 if u.ignored {
                                     small_muted(ui, "You chose to ignore this update");

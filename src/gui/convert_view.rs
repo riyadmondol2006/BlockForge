@@ -21,7 +21,7 @@ const START_BAR: f32 = 50.0;
 
 /// The small capitals over a card.
 fn label_over(ui: &mut Ui, text: &str) {
-    ui.label(RichText::new(text).size(11.0).strong().color(c_accent()));
+    ui.label(RichText::new(text).size(11.0).semibold().color(c_accent()));
     ui.add_space(2.0);
 }
 
@@ -143,7 +143,7 @@ impl ConvertState {
                     ui.horizontal_top(|ui| {
                         ui.vertical(|ui| {
                             ui.set_max_width((ui.available_width() - 120.0).max(160.0));
-                            ui.add(egui::Label::new(RichText::new(&d.name).size(17.0).strong()).truncate());
+                            ui.add(egui::Label::new(RichText::new(&d.name).size(17.0).semibold()).truncate());
                             ui.horizontal(|ui| {
                                 tag(ui, d.edition.label(), edition_color(d.edition));
                                 tag(ui, &d.version, c_muted());
@@ -199,7 +199,7 @@ impl ConvertState {
             egui::Grid::new("convert-target").num_columns(2).spacing([20.0, 10.0]).show(ui, |ui| {
                 muted(ui, tr!("Game"));
                 // the target is always Java Edition: there is nothing to choose
-                ui.label(RichText::new(Edition::Java.label()).strong());
+                ui.label(RichText::new(Edition::Java.label()).semibold());
                 ui.end_row();
 
                 muted(ui, tr!("Version"));
@@ -339,7 +339,7 @@ impl ConvertState {
         let mut confirmed = false;
         card(ui, |ui| {
             label_over(ui, &tr!("CONVERTING"));
-            ui.add(egui::Label::new(RichText::new(&name).size(17.0).strong()).truncate());
+            ui.add(egui::Label::new(RichText::new(&name).size(17.0).semibold()).truncate());
             ui.horizontal(|ui| {
                 tag(ui, &format!("{} {}", run.job.target.edition.label(), run.job.target.version), c_accent());
             });
@@ -392,12 +392,12 @@ impl ConvertState {
             label_over(ui, &tr!("DONE"));
             match &dest {
                 Some(d) => {
-                    ui.label(RichText::new(tr!("Your world was added to {0}", &d.name)).size(19.0).strong());
+                    ui.label(RichText::new(tr!("Your world was added to {0}", &d.name)).size(19.0).semibold());
                     ui.add_space(2.0);
                     muted(ui, tr!("It is in the instance's saves folder and shows up in Singleplayer."));
                 }
                 None => {
-                    ui.label(RichText::new(tr!("Your world was converted")).size(19.0).strong());
+                    ui.label(RichText::new(tr!("Your world was converted")).size(19.0).semibold());
                 }
             }
             ui.add_space(6.0);
@@ -443,7 +443,7 @@ impl ConvertState {
         if !s.warnings.is_empty() {
             ui.add_space(8.0);
             card(ui, |ui| {
-                egui::CollapsingHeader::new(RichText::new(tr_n_warnings(s.warnings.len())).strong())
+                egui::CollapsingHeader::new(RichText::new(tr_n_warnings(s.warnings.len())).semibold())
                     .id_salt("convert-warnings")
                     .default_open(false)
                     .show(ui, |ui| {
@@ -461,7 +461,7 @@ impl ConvertState {
         if !s.unmapped_blocks.is_empty() {
             ui.add_space(8.0);
             card(ui, |ui| {
-                ui.label(RichText::new(tr!("Blocks without an exact match")).strong());
+                ui.label(RichText::new(tr!("Blocks without an exact match")).semibold());
                 small_muted(ui, tr!("These blocks have no exact equivalent in the new version."));
                 ui.add_space(4.0);
                 unmapped_row(ui, &tr!("Block"), &tr!("Count"), true, false);
@@ -481,7 +481,7 @@ impl ConvertState {
 
     fn failed(&mut self, ui: &mut Ui, acts: &mut Vec<Act>) {
         card(ui, |ui| {
-            ui.label(RichText::new(tr!("THE WORLD COULD NOT BE CONVERTED")).size(11.0).strong().color(c_danger()));
+            ui.label(RichText::new(tr!("THE WORLD COULD NOT BE CONVERTED")).size(11.0).semibold().color(c_danger()));
             ui.add_space(2.0);
             let message = self.error.clone().unwrap_or_default();
             ui.add(egui::Label::new(RichText::new(message).size(15.0)).wrap());
@@ -512,7 +512,7 @@ fn stop_modal(ctx: &egui::Context) -> Option<bool> {
     let mut answer = None;
     egui::Modal::new(egui::Id::unique("convert-stop")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
         ui.set_width(super::services::modal_width(ctx, 420.0));
-        ui.label(RichText::new(tr!("Cancel the conversion?")).size(19.0).strong());
+        ui.label(RichText::new(tr!("Cancel the conversion?")).size(19.0).semibold());
         ui.add_space(4.0);
         muted(ui, tr!("The new world is not finished and will not work properly. The original world is not changed."));
         ui.add_space(12.0);

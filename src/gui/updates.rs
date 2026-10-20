@@ -244,7 +244,7 @@ impl App {
                     Stage::Offer => {
                         let can_install = self.can_install_update();
                         ui.horizontal_wrapped(|ui| {
-                            ui.label(RichText::new(format!("BlockForge {version} is available")).strong());
+                            ui.label(RichText::new(format!("BlockForge {version} is available")).semibold());
                             small_muted(ui, format!("You have {}", crate::VERSION));
                         });
                         ui.add_space(6.0);
@@ -270,7 +270,7 @@ impl App {
                     Stage::Downloading { progress, .. } => {
                         let (done, total) =
                             (progress.done.load(Ordering::Relaxed), progress.total.load(Ordering::Relaxed));
-                        ui.label(RichText::new(format!("Downloading BlockForge {version}")).strong());
+                        ui.label(RichText::new(format!("Downloading BlockForge {version}")).semibold());
                         ui.add_space(4.0);
                         let bar = egui::ProgressBar::new(progress.fraction())
                             .desired_height(8.0)
@@ -291,7 +291,7 @@ impl App {
                         ui.ctx().request_repaint_after(Duration::from_millis(100));
                     }
                     Stage::Installing => {
-                        ui.label(RichText::new(installing_text(self.upd.kind, &version)).strong());
+                        ui.label(RichText::new(installing_text(self.upd.kind, &version)).semibold());
                         ui.add_space(4.0);
                         ui.add(
                             egui::ProgressBar::new(0.0)
@@ -303,10 +303,10 @@ impl App {
                         ui.ctx().request_repaint_after(Duration::from_millis(100));
                     }
                     Stage::Restarting => {
-                        ui.label(RichText::new(closing_text(self.upd.kind, &version)).strong());
+                        ui.label(RichText::new(closing_text(self.upd.kind, &version)).semibold());
                     }
                     Stage::Note { message, command } => {
-                        ui.label(RichText::new(message).strong());
+                        ui.label(RichText::new(message).semibold());
                         if let Some(command) = command {
                             ui.add_space(4.0);
                             ui.add(egui::Label::new(RichText::new(command).monospace().color(c_text())).wrap());
@@ -326,7 +326,7 @@ impl App {
                     Stage::Failed(error) => {
                         ui.label(
                             RichText::new(format!("Couldn't update to BlockForge {version}"))
-                                .strong()
+                                .semibold()
                                 .color(c_danger()),
                         );
                         ui.label(RichText::new(error).color(c_muted()).size(12.5));

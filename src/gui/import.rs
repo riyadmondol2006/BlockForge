@@ -282,7 +282,7 @@ impl App {
                         .corner_radius(CornerRadius::same(18))
                         .inner_margin(egui::Margin::symmetric(40, 28))
                         .show(ui, |ui| {
-                            ui.label(RichText::new("Drop to import").size(22.0).strong().color(c_accent()));
+                            ui.label(RichText::new("Drop to import").size(22.0).semibold().color(c_accent()));
                         });
                 });
         }
@@ -304,7 +304,7 @@ impl App {
         let modal = egui::Modal::new(egui::Id::new("import-modal")).show(ctx, |ui| {
             ui.set_width(width);
             ui.horizontal(|ui| {
-                ui.label(RichText::new("Import an instance").size(21.0).strong());
+                ui.label(RichText::new("Import an instance").size(21.0).semibold());
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if secondary(ui, "Close").clicked() {
                         close = true;
@@ -314,7 +314,7 @@ impl App {
             muted(ui, "Your files are copied. Nothing is changed or removed in the other launcher.");
             ui.add_space(8.0);
 
-            ui.label(RichText::new("File, folder or link").strong());
+            ui.label(RichText::new("File, folder or link").semibold());
             ui.horizontal(|ui| {
                 ui.add_sized(
                     [(ui.available_width() - 214.0).max(160.0), 36.0],
@@ -370,7 +370,7 @@ impl App {
             ui.add_space(10.0);
             ui.separator();
             ui.add_space(6.0);
-            ui.label(RichText::new("Found on this computer").strong());
+            ui.label(RichText::new("Found on this computer").semibold());
             match &self.import.scan {
                 None => {
                     ui.horizontal(|ui| {
@@ -398,7 +398,7 @@ impl App {
                                         ui.horizontal(|ui| {
                                             ui.vertical(|ui| {
                                                 ui.set_max_width((ui.available_width() - 110.0).max(240.0));
-                                                ui.label(RichText::new(&i.name).strong());
+                                                ui.label(RichText::new(&i.name).semibold());
                                                 small_muted(
                                                     ui,
                                                     format!(

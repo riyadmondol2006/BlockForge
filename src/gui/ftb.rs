@@ -292,7 +292,7 @@ impl App {
         let mut update_folder: Option<String> = None;
         if !updates.is_empty() {
             card(ui, |ui| {
-                ui.label(RichText::new("Updates available").strong());
+                ui.label(RichText::new("Updates available").semibold());
                 for (folder, name, v) in &updates {
                     ui.horizontal(|ui| {
                         ui.label(name);
@@ -341,7 +341,7 @@ impl App {
             if let Some(sel) = sel {
                 card(ui, |ui| {
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new(&sel.pack.name).size(20.0).strong());
+                        ui.label(RichText::new(&sel.pack.name).size(20.0).semibold());
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             if secondary(ui, "Close").clicked() {
                                 close_details = true;
@@ -446,7 +446,7 @@ impl App {
                             }
                             ui.vertical(|ui| {
                                 ui.set_max_width((ui.available_width() - 150.0).max(120.0));
-                                ui.label(RichText::new(&pack.name).strong().size(16.0));
+                                ui.label(RichText::new(&pack.name).semibold().size(16.0));
                                 ui.add(
                                     egui::Label::new(
                                         RichText::new(pack.synopsis.clone().unwrap_or_default()).color(c_muted()),
@@ -493,7 +493,7 @@ impl App {
         let mut retry = false;
         let mut dismiss = false;
         card(ui, |ui| {
-            ui.label(RichText::new("Some mods need to be downloaded by hand").strong().color(c_warn()));
+            ui.label(RichText::new("Some mods need to be downloaded by hand").semibold().color(c_warn()));
             small_muted(
                 ui,
                 "The authors of these mods don't allow other launchers to download them. Open each page, save the file to your Downloads folder, then press Try again.",

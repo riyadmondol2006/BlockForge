@@ -84,7 +84,7 @@ fn wide_row(ui: &mut Ui, title: &str, control_width: f32, hint: &str, control: i
     ui.horizontal(|ui| {
         ui.vertical(|ui| {
             ui.set_max_width((ui.available_width() - control_width).max(200.0));
-            ui.label(RichText::new(title).strong());
+            ui.label(RichText::new(title).semibold());
             if !hint.is_empty() {
                 small_muted(ui, hint);
             }
@@ -132,7 +132,7 @@ impl SettingsView {
         let mut dirty = false;
         ui.add_space(6.0);
         ui.separator();
-        ui.label(RichText::new("Performance").strong().color(c_accent()));
+        ui.label(RichText::new("Performance").semibold().color(c_accent()));
         setting_row(
             ui,
             "Fast start",
@@ -175,7 +175,7 @@ impl SettingsView {
         egui::Grid::new("perf-patches").num_columns(3).spacing([16.0, 4.0]).show(ui, |ui| {
             for p in patches {
                 ui.label(RichText::new(&p.id).monospace());
-                ui.label(RichText::new(p.state.label()).color(state_color(p.state)).strong());
+                ui.label(RichText::new(p.state.label()).color(state_color(p.state)).semibold());
                 ui.vertical(|ui| {
                     // what it is, in plain words, then what happened in that game
                     if !p.description.is_empty() {
@@ -278,7 +278,7 @@ impl App {
         let s = &self.settings;
         ui.add_space(8.0);
         card(ui, |ui| {
-            ui.label(RichText::new("PERFORMANCE").size(11.0).strong().color(c_accent()));
+            ui.label(RichText::new("PERFORMANCE").size(11.0).semibold().color(c_accent()));
             small_muted(ui, "These apply right away, from the next start of the game.");
             let fast_own = crate::launch::boost::instance_override(inst);
             wide_row(
@@ -361,7 +361,7 @@ impl App {
             ui.horizontal(|ui| {
                 ui.vertical(|ui| {
                     ui.set_max_width((ui.available_width() - 260.0).max(220.0));
-                    ui.label(RichText::new("This computer looks slow").strong());
+                    ui.label(RichText::new("This computer looks slow").semibold());
                     small_muted(
                         ui,
                         format!(
@@ -448,7 +448,7 @@ impl App {
         let (mut off, mut keep) = (false, false);
         egui::Modal::new(egui::Id::unique("helpers-blame")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
             ui.set_width(460.0);
-            ui.label(RichText::new("Minecraft closed early").size(19.0).strong());
+            ui.label(RichText::new("Minecraft closed early").size(19.0).semibold());
             muted(
                 ui,
                 format!(

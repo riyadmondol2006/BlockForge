@@ -1,5 +1,6 @@
 //! Small helpers of the crafting page: number formats and little widgets.
 
+use super::fonts::TextExt;
 use egui::{Color32, CornerRadius, FontId, RichText, Sense, Stroke, Ui, vec2};
 
 use super::theme::*;
@@ -111,7 +112,7 @@ pub fn arrow(ui: &mut Ui) {
 
 /// A card title.
 pub fn card_title(ui: &mut Ui, text: &str) {
-    ui.label(RichText::new(text).size(16.0).strong());
+    ui.label(RichText::new(text).size(16.0).semibold());
 }
 
 /// A calm box with a coloured edge, for notes and warnings.

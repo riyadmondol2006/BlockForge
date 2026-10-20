@@ -200,7 +200,7 @@ impl App {
 
         egui::Modal::new(egui::Id::unique("skin-dialog")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
             ui.set_width(modal_width(ctx, if d.offline { 460.0 } else { 600.0 }));
-            ui.label(RichText::new("Change skin").size(22.0).strong());
+            ui.label(RichText::new("Change skin").size(22.0).semibold());
             if d.offline {
                 muted(ui, format!("{} is an offline player", d.name));
                 ui.add_space(8.0);
@@ -234,7 +234,7 @@ impl App {
                 ui.add_space(14.0);
                 ui.vertical(|ui| {
                     ui.set_width(ui.available_width().clamp(160.0, 330.0));
-                    ui.label(RichText::new("1. Choose a skin").strong());
+                    ui.label(RichText::new("1. Choose a skin").semibold());
                     small_muted(ui, "Pick a 64x64 PNG skin file, or drag one onto this window. Need one? Browse a skin site and download a PNG.");
                     ui.add_space(4.0);
                     ui.horizontal(|ui| {
@@ -266,7 +266,7 @@ impl App {
                         small_muted(ui, "Showing your current skin");
                     }
                     ui.add_space(10.0);
-                    ui.label(RichText::new("2. Arm width").strong());
+                    ui.label(RichText::new("2. Arm width").semibold());
                     small_muted(ui, "Skins are made for one of two arm widths. Pick the one that looks right in the preview.");
                     ui.horizontal(|ui| {
                         if chip(ui, "Classic arms", !d.slim).clicked() {

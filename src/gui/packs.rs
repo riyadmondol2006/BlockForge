@@ -542,7 +542,7 @@ impl App {
                     ui.vertical(|ui| {
                         ui.set_max_width((ui.available_width() - 150.0).max(120.0));
                         ui.horizontal(|ui| {
-                            ui.label(RichText::new(&pack.name).strong().size(16.0));
+                            ui.label(RichText::new(&pack.name).semibold().size(16.0));
                             if pack.is_private() {
                                 tag(ui, "Private", c_warn());
                             } else if pack.is_semi_public() {
@@ -634,7 +634,7 @@ impl App {
                         }
                         ui.vertical(|ui| {
                             ui.set_max_width((ui.available_width() - 150.0).max(120.0));
-                            ui.label(RichText::new(&m.name).strong().size(16.0));
+                            ui.label(RichText::new(&m.name).semibold().size(16.0));
                             small_muted(ui, &m.slug);
                         });
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -691,13 +691,13 @@ impl App {
             }
             card(ui, |ui| {
                 if d.reinstall.is_none() {
-                    ui.label(RichText::new("Name").strong());
+                    ui.label(RichText::new("Name").semibold());
                     ui.add(egui::TextEdit::singleline(&mut d.name).desired_width(400.0));
                     ui.add_space(8.0);
                 } else {
                     small_muted(ui, format!("Updating {}", d.name));
                 }
-                ui.label(RichText::new("Version").strong());
+                ui.label(RichText::new("Version").semibold());
                 let current = d.versions.get(d.selected).map(|v| v.label.clone()).unwrap_or_else(|| if d.loading { "Loading".into() } else { "No versions".into() });
                 let before = d.selected;
                 egui::ComboBox::from_id_salt("pack-version").selected_text(current).width(400.0).show_ui(ui, |ui| {
@@ -732,7 +732,7 @@ impl App {
                 }
                 if !d.loader_versions.is_empty() {
                     ui.add_space(8.0);
-                    ui.label(RichText::new(format!("{} version", d.loader_kind.map(|k| k.type_name()).unwrap_or("Loader"))).strong());
+                    ui.label(RichText::new(format!("{} version", d.loader_kind.map(|k| k.type_name()).unwrap_or("Loader"))).semibold());
                     let current = d.loader_versions.get(d.loader_pick).map(|l| l.version.clone()).unwrap_or_default();
                     egui::ComboBox::from_id_salt("pack-loader").selected_text(current).width(400.0).show_ui(ui, |ui| {
                         for (i, l) in d.loader_versions.iter().enumerate() {
@@ -753,7 +753,7 @@ impl App {
             if let Some(e) = &d.error {
                 ui.add_space(6.0);
                 card(ui, |ui| {
-                    ui.label(RichText::new("Couldn't read this version").color(c_danger()).strong());
+                    ui.label(RichText::new("Couldn't read this version").color(c_danger()).semibold());
                     muted(ui, e.clone());
                 });
             }
@@ -761,7 +761,7 @@ impl App {
                 if let Some(text) = if d.reinstall.is_some() { msg.update } else { msg.install } {
                     ui.add_space(6.0);
                     card(ui, |ui| {
-                        ui.label(RichText::new("Message from the pack").strong());
+                        ui.label(RichText::new("Message from the pack").semibold());
                         muted(ui, plain_text(&text));
                     });
                 }
@@ -801,7 +801,7 @@ impl App {
 /// The optional-mod boxes: required mods on one side, optional on the other, with the Java window's buttons.
 fn choices_ui(ui: &mut Ui, choices: &mut ModChoices, prepared: &Prepared) {
     card(ui, |ui| {
-        ui.label(RichText::new("Optional mods").strong().size(16.0));
+        ui.label(RichText::new("Optional mods").semibold().size(16.0));
         ui.horizontal(|ui| {
             let label = if choices.has_recommended() { "Select recommended" } else { "Select all" };
             if secondary(ui, label).clicked() {

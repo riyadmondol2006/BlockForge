@@ -220,7 +220,7 @@ fn tri(ui: &mut Ui, id: &str, value: &mut Option<bool>) {
 /// A row with the title above a full-width text field (long paths and commands).
 fn stacked(ui: &mut Ui, title: &str, hint: &str, value: &mut String, placeholder: &str) {
     ui.add_space(4.0);
-    ui.label(RichText::new(title).strong());
+    ui.label(RichText::new(title).semibold());
     if !hint.is_empty() {
         small_muted(ui, hint);
     }
@@ -318,7 +318,7 @@ impl App {
             match d.tab {
                 0 => {
                     card(ui, |ui| {
-                        ui.label(RichText::new("ACCOUNT").size(11.0).strong().color(c_accent()));
+                        ui.label(RichText::new("ACCOUNT").size(11.0).semibold().color(c_accent()));
                         setting_row(ui, "Play as", "The account used to start this instance. The launcher default is whichever account is selected in the launcher", |ui| {
                             let shown = match &d.account {
                                 None => "Use launcher default".to_string(),
@@ -334,7 +334,7 @@ impl App {
                     });
                     ui.add_space(8.0);
                     card(ui, |ui| {
-                        ui.label(RichText::new("QUICK PLAY").size(11.0).strong().color(c_accent()));
+                        ui.label(RichText::new("QUICK PLAY").size(11.0).semibold().color(c_accent()));
                         setting_row(ui, "Start in", "Skip the title screen and go straight into a world, server or realm", |ui| {
                             let label = |k: QuickKind| match k {
                                 QuickKind::Disabled => "The title screen",
@@ -371,7 +371,7 @@ impl App {
                     helper_change = self.instance_performance_card(ui, inst);
                     ui.add_space(8.0);
                     card(ui, |ui| {
-                        ui.label(RichText::new("INSTANCE").size(11.0).strong().color(c_accent()));
+                        ui.label(RichText::new("INSTANCE").size(11.0).semibold().color(c_accent()));
                         ui.horizontal(|ui| {
                             if secondary(ui, "Rename").clicked() {
                                 rename = true;
@@ -384,7 +384,7 @@ impl App {
                 }
                 1 => {
                     card(ui, |ui| {
-                        ui.label(RichText::new("MEMORY").size(11.0).strong().color(c_accent()));
+                        ui.label(RichText::new("MEMORY").size(11.0).semibold().color(c_accent()));
                         let hint = if total_mb == 0 {
                             "The most memory Minecraft may use".to_string()
                         } else {
@@ -421,7 +421,7 @@ impl App {
                     });
                     ui.add_space(8.0);
                     card(ui, |ui| {
-                        ui.label(RichText::new("JAVA").size(11.0).strong().color(c_accent()));
+                        ui.label(RichText::new("JAVA").size(11.0).semibold().color(c_accent()));
                         if inst.file.version.java_version.is_some() {
                             setting_row(ui, "Use Java provided by Minecraft", "Recommended. Turning this off may stop Minecraft from starting", |ui| tri(ui, "use-mc-java", &mut d.use_mc_java));
                         }
@@ -468,7 +468,7 @@ impl App {
                     });
                     ui.add_space(8.0);
                     card(ui, |ui| {
-                        ui.label(RichText::new("ADVANCED").size(11.0).strong().color(c_accent()));
+                        ui.label(RichText::new("ADVANCED").size(11.0).semibold().color(c_accent()));
                         setting_row(ui, "Turn off legacy launching", "For Minecraft older than 1.6. Only change this if an old version won't start", |ui| tri(ui, "legacy", &mut d.disable_legacy));
                         setting_row(ui, "Use system GLFW", "Use the GLFW library installed on this computer instead of Minecraft's own", |ui| tri(ui, "glfw", &mut d.system_glfw));
                         setting_row(ui, "Use system OpenAL", "Use the OpenAL sound library installed on this computer instead of Minecraft's own", |ui| tri(ui, "openal", &mut d.system_openal));
@@ -476,7 +476,7 @@ impl App {
                 }
                 _ => {
                     card(ui, |ui| {
-                        ui.label(RichText::new("COMMANDS").size(11.0).strong().color(c_accent()));
+                        ui.label(RichText::new("COMMANDS").size(11.0).semibold().color(c_accent()));
                         setting_row(ui, "Run commands", "Turn the commands below on or off for this instance", |ui| tri(ui, "commands", &mut d.enable_commands));
                         stacked(ui, "Before launch", "Runs before the game starts. The game waits until it has finished", &mut d.pre, "");
                         stacked(ui, "After exit", "Runs after the game closes, even if it crashed or was stopped", &mut d.post, "");
@@ -484,8 +484,8 @@ impl App {
                     });
                     ui.add_space(8.0);
                     card(ui, |ui| {
-                        ui.label(RichText::new("VARIABLES").size(11.0).strong().color(c_accent()));
-                        ui.label(RichText::new("Available in every command").strong());
+                        ui.label(RichText::new("VARIABLES").size(11.0).semibold().color(c_accent()));
+                        ui.label(RichText::new("Available in every command").semibold());
                         small_muted(ui, "Commands run in the folder of the instance that is launched or exited");
                         for (k, v) in [
                             ("$INST_NAME", "The name of the instance"),
@@ -543,7 +543,7 @@ impl App {
         let mut apply = false;
         let modal = egui::Modal::new(egui::Id::unique("rename")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
             ui.set_width(380.0);
-            ui.label(RichText::new("Rename instance").size(19.0).strong());
+            ui.label(RichText::new("Rename instance").size(19.0).semibold());
             ui.add_space(6.0);
             let r = ui.add_sized(
                 [ui.available_width(), 38.0],

@@ -88,7 +88,7 @@ impl App {
                 });
                 if !accounts.is_empty() {
                     ui.add_space(10.0);
-                    ui.label(RichText::new("CONTINUE AS").size(11.0).strong().color(c_muted()));
+                    ui.label(RichText::new("CONTINUE AS").size(11.0).semibold().color(c_muted()));
                     for (uuid, name, kind, offline) in &accounts {
                         let row = egui::Frame::new()
                             .fill(c_card())
@@ -101,7 +101,7 @@ impl App {
                                     // the player's face, like on the sidebar and the Accounts page
                                     self.account_avatar(ui, uuid, name, *offline, 34.0);
                                     ui.vertical(|ui| {
-                                        ui.label(RichText::new(name).strong());
+                                        ui.label(RichText::new(name).semibold());
                                         small_muted(ui, *kind);
                                     });
                                 });

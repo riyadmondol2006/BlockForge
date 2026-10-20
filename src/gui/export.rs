@@ -229,7 +229,7 @@ impl App {
             ui.set_width(width);
             let Some(d) = self.export.dialog.as_mut() else { return };
             ui.horizontal(|ui| {
-                ui.label(RichText::new(&d.title).size(21.0).strong());
+                ui.label(RichText::new(&d.title).size(21.0).semibold());
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if secondary(ui, "Close").clicked() {
                         close = true;
@@ -242,7 +242,7 @@ impl App {
             if d.note.is_some() {
                 // Modrinth: which files were packed into the archive
                 card(ui, |ui| {
-                    ui.label(RichText::new("Overrides included").strong());
+                    ui.label(RichText::new("Overrides included").semibold());
                     small_muted(ui, "Your exported instance contains mods not on Modrinth, so they were put in the overrides folder. If you upload this to Modrinth, make sure you have permission to distribute the mods below, or your modpack will be denied.");
                     let note = d.note.clone().unwrap_or_default();
                     ScrollArea::vertical().id_salt("override-note").max_height(140.0).show(ui, |ui| {
@@ -300,7 +300,7 @@ impl App {
             }
 
             ui.add_space(6.0);
-            ui.label(RichText::new("Folders and files to include").strong());
+            ui.label(RichText::new("Folders and files to include").semibold());
             small_muted(ui, "Mods that Modrinth or CurseForge know are listed by id, so they don't make the file bigger.");
             egui::Frame::new().fill(c_field()).stroke(Stroke::new(1.0, c_border())).corner_radius(CornerRadius::same(10)).inner_margin(egui::Margin::same(8)).show(ui, |ui| {
                 ui.set_width(ui.available_width());

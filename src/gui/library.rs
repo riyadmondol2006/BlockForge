@@ -37,7 +37,7 @@ impl App {
         top.vertical(|ui| {
             ui.spacing_mut().item_spacing.y = 1.0;
             ui.set_max_width(inner.width() - 40.0 - 10.0 - 30.0);
-            ui.add(egui::Label::new(RichText::new(inst.name()).strong().size(14.5)).truncate());
+            ui.add(egui::Label::new(RichText::new(inst.name()).semibold().size(14.5)).truncate());
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 5.0;
                 ui.label(RichText::new(inst.mc_version().to_string()).size(12.5).color(c_muted()));
@@ -107,7 +107,7 @@ impl App {
                     "Ready to play".to_string()
                 };
                 ui.label(RichText::new(when).size(12.5).color(c_muted()));
-                ui.add(egui::Label::new(RichText::new(h.name()).size(20.0).strong()).truncate());
+                ui.add(egui::Label::new(RichText::new(h.name()).size(20.0).semibold()).truncate());
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 6.0;
                     match h.loader() {
@@ -132,7 +132,7 @@ impl App {
                     ui.set_max_width(ui.available_width() - w - 16.0);
                 }
                 ui.add_space(2.0);
-                ui.add(egui::Label::new(RichText::new(inst.name()).size(22.0).strong()).truncate());
+                ui.add(egui::Label::new(RichText::new(inst.name()).size(22.0).semibold()).truncate());
                 ui.horizontal(|ui| {
                     match inst.loader() {
                         Some((kind, ver)) => tag(ui, &format!("{kind} {ver}"), loader_color(kind)),
@@ -170,7 +170,7 @@ impl App {
                 card(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.vertical(|ui| {
-                            ui.label(RichText::new("Choose who plays").strong());
+                            ui.label(RichText::new("Choose who plays").semibold());
                             small_muted(
                                 ui,
                                 "Sign in with Microsoft, or play offline with any name. You only do this once.",
@@ -231,7 +231,7 @@ impl App {
                 }
                 None => {
                     card(ui, |ui| {
-                        ui.label(RichText::new("No instances yet").size(18.0).strong());
+                        ui.label(RichText::new("No instances yet").size(18.0).semibold());
                         muted(ui, "An instance is one copy of Minecraft with its own worlds and mods.");
                         ui.add_space(6.0);
                         ui.horizontal(|ui| {
@@ -253,7 +253,7 @@ impl App {
                 let (cols, width) = grid_columns(ui.available_width(), 250.0, 12.0);
                 let shown = self.instances.len().min(cols * 2);
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("Your instances").size(15.0).strong());
+                    ui.label(RichText::new("Your instances").size(15.0).semibold());
                     ui.label(RichText::new(self.instances.len().to_string()).size(13.0).color(c_faint()));
                     if self.instances.len() > shown {
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -348,7 +348,7 @@ impl App {
         if list.is_empty() {
             card(ui, |ui| {
                 if self.instances.is_empty() {
-                    ui.label(RichText::new("Nothing here yet").size(18.0).strong());
+                    ui.label(RichText::new("Nothing here yet").size(18.0).semibold());
                     muted(ui, "Create an instance, or drop a Modrinth modpack (.mrpack) onto this window.");
                 } else {
                     muted(ui, "No instance matches your search.");
@@ -519,7 +519,7 @@ impl App {
             });
             ui.add_space(6.0);
             card(ui, |ui| {
-                ui.label(RichText::new("Join a server on start").strong());
+                ui.label(RichText::new("Join a server on start").semibold());
                 small_muted(ui, "Enter an address like play.example.com or play.example.com:25566");
                 ui.horizontal(|ui| {
                     let mut s = std::mem::take(&mut self.quick_server);

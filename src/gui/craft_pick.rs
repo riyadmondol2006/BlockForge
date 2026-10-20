@@ -163,7 +163,7 @@ impl CraftState {
             self.icon(ui, &target, &name, 32.0);
             ui.vertical(|ui| {
                 ui.spacing_mut().item_spacing.y = 0.0;
-                ui.label(RichText::new(&name).size(16.0).strong());
+                ui.label(RichText::new(&name).size(16.0).semibold());
                 small_muted(ui, if stack > 1 { format!("Stacks of {stack}") } else { "Does not stack".to_string() });
             });
             if change {
@@ -175,7 +175,7 @@ impl CraftState {
             }
         });
         ui.add_space(4.0);
-        ui.label(RichText::new("How many?").size(15.0).strong());
+        ui.label(RichText::new("How many?").size(15.0).semibold());
         let parsed = parse_qty(&self.qty_text);
         ui.horizontal(|ui| {
             let mut edit = egui::TextEdit::singleline(&mut self.qty_text)

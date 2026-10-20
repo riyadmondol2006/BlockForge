@@ -40,7 +40,7 @@ impl App {
                         ui.vertical(|ui| {
                             ui.set_max_width((ui.available_width() - buttons_w - 12.0).max(120.0));
                             ui.horizontal(|ui| {
-                                ui.label(RichText::new(acc.name()).strong().size(16.0));
+                                ui.label(RichText::new(acc.name()).semibold().size(16.0));
                                 tag(ui, acc.kind(), if acc.offline { c_warn() } else { c_accent() });
                                 if acc.must_login {
                                     tag(ui, "Sign in again", c_danger());
@@ -85,12 +85,12 @@ impl App {
             ui.add_space(8.0);
             section(ui, "Add an account");
             card(ui, |ui| {
-                ui.label(RichText::new("Microsoft").strong());
+                ui.label(RichText::new("Microsoft").semibold());
                 small_muted(ui, "Your browser opens a Microsoft page; enter the code shown here to sign in.");
                 ui.add_space(4.0);
                 match self.acct.device.clone() {
                     Some(code) => {
-                        ui.label(RichText::new(&code.user_code).size(34.0).strong().monospace().color(c_accent()));
+                        ui.label(RichText::new(&code.user_code).size(34.0).semibold().monospace().color(c_accent()));
                         ui.horizontal(|ui| {
                             if secondary(ui, "Copy code").clicked() {
                                 ui.ctx().copy_text(code.user_code.clone());
@@ -126,7 +126,7 @@ impl App {
             });
             ui.add_space(4.0);
             card(ui, |ui| {
-                ui.label(RichText::new("Offline player").strong());
+                ui.label(RichText::new("Offline player").semibold());
                 small_muted(ui, "Just a name. Works for single player and offline-mode servers.");
                 ui.horizontal(|ui| {
                     let mut name = std::mem::take(&mut self.acct.offline_name);

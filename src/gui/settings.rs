@@ -11,7 +11,7 @@ use super::widgets::*;
 fn section(ui: &mut Ui, heading: &str, rows: impl FnOnce(&mut Ui)) {
     ui.add_space(8.0);
     card(ui, |ui| {
-        ui.label(RichText::new(heading.to_uppercase()).size(11.0).strong().color(c_accent()));
+        ui.label(RichText::new(heading.to_uppercase()).size(11.0).semibold().color(c_accent()));
         rows(ui);
     });
 }
@@ -21,7 +21,7 @@ fn section(ui: &mut Ui, heading: &str, rows: impl FnOnce(&mut Ui)) {
 pub(super) fn wide_row(ui: &mut Ui, title: &str, hint: &str, control_width: f32, control: impl FnOnce(&mut Ui)) {
     let room = ui.available_width();
     if room < control_width + 240.0 {
-        ui.label(RichText::new(title).strong());
+        ui.label(RichText::new(title).semibold());
         if !hint.is_empty() {
             small_muted(ui, hint);
         }
@@ -32,7 +32,7 @@ pub(super) fn wide_row(ui: &mut Ui, title: &str, hint: &str, control_width: f32,
     ui.horizontal(|ui| {
         ui.vertical(|ui| {
             ui.set_max_width(room - control_width - 16.0);
-            ui.label(RichText::new(title).strong());
+            ui.label(RichText::new(title).semibold());
             if !hint.is_empty() {
                 small_muted(ui, hint);
             }
@@ -237,7 +237,7 @@ impl App {
                     }
                     ui.label("Automatic");
                     if !auto {
-                        ui.label(RichText::new(memory_text(s.maximum_memory)).strong().color(c_accent()));
+                        ui.label(RichText::new(memory_text(s.maximum_memory)).semibold().color(c_accent()));
                         ui.spacing_mut().slider_width = 200.0;
                         let mut mb = s.maximum_memory.clamp(1024, max_mb);
                         if ui.add(egui::Slider::new(&mut mb, 1024..=max_mb).step_by(256.0).show_value(false)).changed()

@@ -33,8 +33,17 @@ pub fn install(ctx: &egui::Context) {
     ctx.set_fonts(fonts);
 }
 
-// The weight helpers are used by the pages as they adopt them.
-#[allow(dead_code)]
+/// `text.semibold()` for the weight that stands in for `strong()`: real Inter SemiBold, not just a brighter colour.
+pub trait TextExt {
+    fn semibold(self) -> RichText;
+}
+
+impl TextExt for RichText {
+    fn semibold(self) -> RichText {
+        self.family(FontFamily::Name(SEMIBOLD_FAMILY.into()))
+    }
+}
+
 /// Inter Medium (500) at `size` points.
 pub fn medium(size: f32) -> FontId {
     FontId::new(size, FontFamily::Name(MEDIUM_FAMILY.into()))

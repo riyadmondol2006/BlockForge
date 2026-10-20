@@ -127,7 +127,7 @@ impl App {
                 ui.add(egui::Image::from_texture(&self.logo).fit_to_exact_size(vec2(84.0, 84.0)));
                 ui.vertical(|ui| {
                     ui.add_space(6.0);
-                    ui.label(RichText::new(crate::NAME).size(30.0).strong());
+                    ui.label(RichText::new(crate::NAME).size(30.0).semibold());
                     muted(ui, "A fast, modern Minecraft launcher, written in Rust.");
                     ui.horizontal(|ui| {
                         tag(ui, &format!("Version {}", version_text()), c_accent());
@@ -138,7 +138,7 @@ impl App {
             ui.add_space(8.0);
 
             card(ui, |ui| {
-                ui.label(RichText::new("UPDATES").size(11.0).strong().color(c_accent()));
+                ui.label(RichText::new("UPDATES").size(11.0).semibold().color(c_accent()));
                 ui.horizontal(|ui| {
                     if busy {
                         ui.spinner();
@@ -166,7 +166,7 @@ impl App {
             ui.add_space(6.0);
 
             card(ui, |ui| {
-                ui.label(RichText::new("BUILT ON ATLAUNCHER").size(11.0).strong().color(c_accent()));
+                ui.label(RichText::new("BUILT ON ATLAUNCHER").size(11.0).semibold().color(c_accent()));
                 ui.label(
                     "BlockForge is a fork of ATLauncher, rewritten in Rust. The way instances, accounts and modpacks \
                      are stored, and how games are launched, follow ATLauncher's, so your existing instances keep \
@@ -189,7 +189,7 @@ impl App {
             ui.add_space(6.0);
 
             card(ui, |ui| {
-                ui.label(RichText::new(crate::tr!("CREDITS")).size(11.0).strong().color(c_accent()));
+                ui.label(RichText::new(crate::tr!("CREDITS")).size(11.0).semibold().color(c_accent()));
                 ui.horizontal_top(|ui| {
                     ui.label(RichText::new("\u{2022}").color(c_accent()));
                     ui.add(
@@ -227,7 +227,7 @@ impl App {
             ui.add_space(6.0);
 
             card(ui, |ui| {
-                ui.label(RichText::new("WHAT IT DOES").size(11.0).strong().color(c_accent()));
+                ui.label(RichText::new("WHAT IT DOES").size(11.0).semibold().color(c_accent()));
                 for line in [
                     "Play offline with any name, or sign in with Microsoft.",
                     "ATLauncher, CurseForge, Modrinth, FTB and Technic modpacks in one place, or any version with \
@@ -246,7 +246,7 @@ impl App {
             ui.add_space(6.0);
 
             card(ui, |ui| {
-                ui.label(RichText::new("THIS COPY").size(11.0).strong().color(c_accent()));
+                ui.label(RichText::new("THIS COPY").size(11.0).semibold().color(c_accent()));
                 egui::Grid::new("about-grid").num_columns(2).spacing([24.0, 8.0]).show(ui, |ui| {
                     for (k, v) in [
                         ("Installed as", install_label(kind).to_string()),
@@ -272,7 +272,7 @@ impl App {
             ui.add_space(6.0);
 
             card(ui, |ui| {
-                ui.label(RichText::new("HELP").size(11.0).strong().color(c_accent()));
+                ui.label(RichText::new("HELP").size(11.0).semibold().color(c_accent()));
                 ui.horizontal(|ui| {
                     if secondary(ui, "GitHub").clicked() {
                         link = Some(REPO.to_string());

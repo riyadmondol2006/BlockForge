@@ -84,7 +84,7 @@ pub fn render_spans(ui: &mut Ui, spans: &[Span]) {
                     None => {
                         let mut t = RichText::new(text).color(c_text());
                         if span.bold {
-                            t = t.strong();
+                            t = t.semibold();
                         }
                         if span.italic {
                             t = t.italics();
@@ -139,7 +139,7 @@ impl App {
                         .show(ui, |ui| {
                             ui.set_width(ui.available_width());
                             ui.horizontal_wrapped(|ui| {
-                                ui.label(RichText::new(&item.title).strong().size(15.0));
+                                ui.label(RichText::new(&item.title).semibold().size(15.0));
                                 if !item.date.is_empty() {
                                     small_muted(ui, &item.date);
                                 }
@@ -171,7 +171,7 @@ impl App {
         let mut close = false;
         egui::Modal::new(egui::Id::unique("news-article")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
             ui.set_width(modal_width(ctx, 620.0));
-            ui.add(egui::Label::new(RichText::new(&item.title).size(21.0).strong()).wrap());
+            ui.add(egui::Label::new(RichText::new(&item.title).size(21.0).semibold()).wrap());
             if !item.date.is_empty() {
                 small_muted(ui, &item.date);
             }

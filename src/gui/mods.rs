@@ -954,7 +954,7 @@ impl App {
             match self.mods.shader_setup.unwrap_or_else(|| install::shader_setup(inst, target)) {
                 versions::ShaderSetup::AddIris => {
                     card(ui, |ui| {
-                        ui.label(RichText::new("Shaders need Iris to work").strong());
+                        ui.label(RichText::new("Shaders need Iris to work").semibold());
                         small_muted(ui, "Iris and Sodium will be added from Modrinth. They make shaders run fast.");
                         if primary_icon(ui, Icon::Plus, "Add Iris").clicked() {
                             acts.push(Act::ShaderLoader);
@@ -963,7 +963,7 @@ impl App {
                 }
                 versions::ShaderSetup::AddOculus => {
                     card(ui, |ui| {
-                        ui.label(RichText::new("Shaders on Forge need Oculus or OptiFine").strong());
+                        ui.label(RichText::new("Shaders on Forge need Oculus or OptiFine").semibold());
                         small_muted(
                             ui,
                             format!(
@@ -978,7 +978,7 @@ impl App {
                 }
                 versions::ShaderSetup::NeedsModLoader => {
                     card(ui, |ui| {
-                        ui.label(RichText::new("Shaders need a mod loader").strong());
+                        ui.label(RichText::new("Shaders need a mod loader").semibold());
                         small_muted(
                             ui,
                             "Plain Minecraft can't show shaders. They work once the instance has Fabric and Iris.",
@@ -1033,7 +1033,7 @@ impl App {
                         ui.set_max_width((ui.available_width() - 250.0).max(200.0));
                         ui.horizontal(|ui| {
                             ui.add(
-                                egui::Label::new(RichText::new(&name).strong().color(if off {
+                                egui::Label::new(RichText::new(&name).semibold().color(if off {
                                     c_muted()
                                 } else {
                                     c_text()
@@ -1245,7 +1245,7 @@ impl App {
             let (mut yes, mut no) = (false, false);
             egui::Modal::new(egui::Id::unique("mods-confirm-remove")).show(ctx, |ui| {
                 ui.set_width(380.0);
-                ui.label(RichText::new(format!("Remove {label}?")).size(19.0).strong());
+                ui.label(RichText::new(format!("Remove {label}?")).size(19.0).semibold());
                 ui.add_space(4.0);
                 muted(ui, "The file is deleted from this instance. You can add it again at any time.");
                 ui.add_space(12.0);
@@ -1283,7 +1283,7 @@ impl App {
             let (mut yes, mut no) = (false, false);
             egui::Modal::new(egui::Id::unique("mods-confirm-restore")).show(ctx, |ui| {
                 ui.set_width(420.0);
-                ui.label(RichText::new("Restore this snapshot?").size(19.0).strong());
+                ui.label(RichText::new("Restore this snapshot?").size(19.0).semibold());
                 ui.add_space(4.0);
                 muted(ui, format!("Puts the mods and configs of \"{}\" back to how they were. Your worlds are not changed, and the current state is saved first so you can undo this.", inst.name()));
                 ui.add_space(12.0);
@@ -1319,7 +1319,7 @@ impl App {
             let (mut yes, mut no) = (false, false);
             egui::Modal::new(egui::Id::unique("mods-confirm-pack")).show(ctx, |ui| {
                 ui.set_width(420.0);
-                ui.label(RichText::new("Make Minecraft run faster").size(19.0).strong());
+                ui.label(RichText::new("Make Minecraft run faster").size(19.0).semibold());
                 ui.add_space(4.0);
                 muted(
                     ui,
@@ -1366,7 +1366,7 @@ impl App {
         if let Some(d) = &self.mods.versions {
             egui::Modal::new(egui::Id::unique("mods-versions")).show(ctx, |ui| {
                 ui.set_width(560.0);
-                ui.label(RichText::new(format!("Versions of {}", d.name)).size(19.0).strong());
+                ui.label(RichText::new(format!("Versions of {}", d.name)).size(19.0).semibold());
                 small_muted(ui, "Pick one to install it in place of the current one. Older versions are fine if a newer one gives you trouble.");
                 ui.add_space(8.0);
                 match &d.list {
@@ -1389,7 +1389,7 @@ impl App {
                                 ui.horizontal(|ui| {
                                     ui.vertical(|ui| {
                                         ui.set_max_width(380.0);
-                                        ui.add(egui::Label::new(RichText::new(v.label()).strong()).truncate());
+                                        ui.add(egui::Label::new(RichText::new(v.label()).semibold()).truncate());
                                         small_muted(ui, format!("{}  ·  {}", v.date_published.get(..10).unwrap_or(&v.date_published), v.game_versions.iter().take(4).cloned().collect::<Vec<_>>().join(", ")));
                                     });
                                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {

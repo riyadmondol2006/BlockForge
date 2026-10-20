@@ -88,7 +88,7 @@ const PAGE: u32 = 20;
 pub(super) fn fetch_error_card(ui: &mut Ui, title: &str, detail: &str) -> bool {
     let mut retry = false;
     card(ui, |ui| {
-        ui.label(RichText::new(title).color(c_danger()).strong());
+        ui.label(RichText::new(title).color(c_danger()).semibold());
         muted(ui, "Check your internet connection, or try again in a few minutes.");
         ui.add(egui::Label::new(RichText::new(detail).color(c_muted()).size(11.5)).wrap());
         ui.add_space(4.0);
@@ -337,7 +337,7 @@ impl App {
                             ui.vertical(|ui| {
                                 ui.set_max_width((ui.available_width() - 150.0).max(120.0));
                                 ui.horizontal_wrapped(|ui| {
-                                    ui.label(RichText::new(&hit.title).strong().size(16.0));
+                                    ui.label(RichText::new(&hit.title).semibold().size(16.0));
                                     small_muted(ui, format!("by {}", hit.author));
                                 });
                                 ui.add(egui::Label::new(RichText::new(&hit.description).color(c_muted())).truncate());

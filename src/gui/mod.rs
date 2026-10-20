@@ -993,7 +993,7 @@ impl App {
         ui.horizontal(|ui| {
             ui.add_space(4.0);
             ui.add(egui::Image::from_texture(&self.logo).fit_to_exact_size(vec2(28.0, 28.0)).corner_radius(7));
-            ui.label(RichText::new(crate::NAME).size(15.0).strong());
+            ui.label(RichText::new(crate::NAME).size(15.0).semibold());
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 ui.label(RichText::new(format!("v{}", crate::VERSION)).size(11.5).color(c_faint()));
             });
@@ -1085,7 +1085,7 @@ impl App {
                     self.account_avatar(&mut inner, uuid, name, *offline, 30.0);
                     inner.vertical(|ui| {
                         ui.spacing_mut().item_spacing.y = 0.0;
-                        ui.add(egui::Label::new(RichText::new(name).strong()).truncate());
+                        ui.add(egui::Label::new(RichText::new(name).semibold()).truncate());
                         ui.label(RichText::new(*kind).size(12.0).color(c_muted()));
                     });
                 }
@@ -1093,7 +1093,7 @@ impl App {
                     avatar(&mut inner, "?", 30.0);
                     inner.vertical(|ui| {
                         ui.spacing_mut().item_spacing.y = 0.0;
-                        ui.label(RichText::new("No account").strong());
+                        ui.label(RichText::new("No account").semibold());
                         ui.label(RichText::new("Choose who plays").size(12.0).color(c_muted()));
                     });
                 }
@@ -1114,7 +1114,7 @@ impl App {
             // running downloads
             for t in self.tasks.iter().take(3) {
                 card(ui, |ui| {
-                    ui.label(RichText::new(&t.label).strong().size(13.0));
+                    ui.label(RichText::new(&t.label).semibold().size(13.0));
                     let stage = t.progress.stage_text();
                     if !stage.is_empty() {
                         small_muted(ui, stage);
@@ -1160,7 +1160,7 @@ impl App {
             rect.left_center() + vec2(40.0, 0.0),
             egui::Align2::LEFT_CENTER,
             label,
-            egui::FontId::proportional(14.0),
+            if active { fonts::medium(14.0) } else { egui::FontId::proportional(14.0) },
             color,
         );
         focus_ring(ui, &resp, rect, R_CONTROL);
@@ -1212,7 +1212,7 @@ impl App {
         let mut delete = false;
         let modal = egui::Modal::new(egui::Id::unique("confirm-delete")).frame(modal_frame(ctx)).show(ctx, |ui| {
             ui.set_width(380.0);
-            ui.label(RichText::new(format!("Delete \"{name}\"?")).size(19.0).strong());
+            ui.label(RichText::new(format!("Delete \"{name}\"?")).size(19.0).semibold());
             ui.add_space(4.0);
             if playing {
                 ui.label(

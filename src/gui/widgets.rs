@@ -2,6 +2,7 @@
 
 use egui::{Align, Color32, CornerRadius, FontId, Layout, Response, RichText, Sense, Stroke, Ui, Vec2, vec2};
 
+pub use super::fonts::TextExt;
 use super::icons::{self, Icon};
 use super::theme::*;
 
@@ -20,13 +21,13 @@ pub fn card<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
 
 /// The title of a page: a noun, 22px, no greeting.
 pub fn heading(ui: &mut Ui, text: &str) {
-    ui.label(RichText::new(text).size(22.0).strong());
+    ui.label(RichText::new(text).size(22.0).semibold());
 }
 
 /// The title of a block on a page.
 pub fn section(ui: &mut Ui, text: &str) {
     ui.add_space(4.0);
-    ui.label(RichText::new(text).size(15.0).strong());
+    ui.label(RichText::new(text).size(15.0).semibold());
 }
 
 pub fn muted(ui: &mut Ui, text: impl Into<String>) {
@@ -48,7 +49,7 @@ fn styled_button(
     min: Vec2,
     enabled: bool,
 ) -> Response {
-    let galley = ui.painter().layout_no_wrap(text.to_string(), FontId::proportional(14.0), fg);
+    let galley = ui.painter().layout_no_wrap(text.to_string(), super::fonts::medium(14.0), fg);
     let icon_w = if icon.is_some() { 22.0 } else { 0.0 };
     let size = vec2((galley.size().x + icon_w + 28.0).max(min.x), min.y.max(32.0));
     let sense = if enabled { Sense::click() } else { Sense::hover() };
@@ -70,7 +71,7 @@ fn styled_button(
             if enabled { stroke } else { Stroke::NONE },
             egui::StrokeKind::Inside,
         );
-        let galley = ui.painter().layout_no_wrap(text.to_string(), FontId::proportional(14.0), fg);
+        let galley = ui.painter().layout_no_wrap(text.to_string(), super::fonts::medium(14.0), fg);
         let content_w = galley.size().x + icon_w;
         let left = rect.center().x - content_w / 2.0;
         if let Some(icon) = icon {
@@ -203,7 +204,7 @@ pub fn danger_big(ui: &mut Ui, icon: Icon, text: &str) -> Response {
 /// A filter or a choice that can be switched on. Selected is ink on the ground, not colour.
 pub fn chip(ui: &mut Ui, text: &str, selected: bool) -> Response {
     let fg = if selected { c_on_ink() } else { c_text() };
-    let galley = ui.painter().layout_no_wrap(text.to_string(), FontId::proportional(13.0), fg);
+    let galley = ui.painter().layout_no_wrap(text.to_string(), super::fonts::medium(13.0), fg);
     let size = vec2(galley.size().x + 24.0, 28.0);
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
     let bg = if selected {
@@ -245,7 +246,7 @@ pub fn tab_bar<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
 /// One tab of a [`tab_bar`].
 pub fn tab(ui: &mut Ui, text: &str, selected: bool) -> Response {
     let color = if selected { c_text() } else { c_muted() };
-    let galley = ui.painter().layout_no_wrap(text.to_string(), FontId::proportional(14.0), color);
+    let galley = ui.painter().layout_no_wrap(text.to_string(), super::fonts::medium(14.0), color);
     let (rect, resp) = ui.allocate_exact_size(vec2(galley.size().x, 34.0), Sense::click());
     let color = if selected || resp.hovered() { c_text() } else { c_muted() };
     ui.painter().galley(egui::pos2(rect.left(), rect.center().y - galley.size().y / 2.0 - 1.0), galley, color);
@@ -400,7 +401,7 @@ pub fn setting_row(ui: &mut Ui, title: &str, hint: &str, control: impl FnOnce(&m
     ui.horizontal(|ui| {
         ui.vertical(|ui| {
             ui.set_max_width((ui.available_width() - control_w - 12.0).max(140.0));
-            ui.label(RichText::new(title).strong());
+            ui.label(RichText::new(title).semibold());
             if !hint.is_empty() {
                 small_muted(ui, hint);
             }

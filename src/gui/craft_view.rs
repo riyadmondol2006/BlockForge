@@ -70,7 +70,7 @@ impl CraftState {
                         ui.label(
                             RichText::new(if bad { "Check the amount" } else { "Pick something to build" })
                                 .size(19.0)
-                                .strong(),
+                                .semibold(),
                         );
                         ui.add_space(2.0);
                         muted(
@@ -87,7 +87,7 @@ impl CraftState {
             }
             Some(Err(e)) => {
                 note_box(ui, c_danger(), |ui| {
-                    ui.label(RichText::new("This can't be worked out").strong().color(c_danger()));
+                    ui.label(RichText::new("This can't be worked out").semibold().color(c_danger()));
                     ui.label(e);
                 });
             }
@@ -99,7 +99,7 @@ impl CraftState {
         self.result_header(ui, book, v, acts);
         if !v.plan.warnings.is_empty() || !v.plan.complete {
             note_box(ui, c_warn(), |ui| {
-                ui.label(RichText::new("Worth a look").strong().color(c_warn()));
+                ui.label(RichText::new("Worth a look").semibold().color(c_warn()));
                 for w in &v.plan.warnings {
                     ui.label(w);
                 }
@@ -135,7 +135,7 @@ impl CraftState {
                 ui.vertical(|ui| {
                     ui.spacing_mut().item_spacing.y = 3.0;
                     ui.label(
-                        RichText::new(format!("{} x {}", thousands(plan.request.quantity), name)).size(22.0).strong(),
+                        RichText::new(format!("{} x {}", thousands(plan.request.quantity), name)).size(22.0).semibold(),
                     );
                     ui.horizontal_wrapped(|ui| {
                         if plan.complete && plan.warnings.is_empty() {
@@ -454,7 +454,7 @@ impl CraftState {
                         ui.spacing_mut().item_spacing.y = 1.0;
                         let title = RichText::new(format!("{} {}x", step.kind.verb(), thousands(step.operations)))
                             .size(16.0)
-                            .strong();
+                            .semibold();
                         ui.horizontal(|ui| {
                             ui.label(if ticked { title.color(c_muted()) } else { title });
                             ui.label(RichText::new(format!("at {}", step.kind.station())).color(c_muted()));
@@ -479,7 +479,7 @@ impl CraftState {
                     }
                     arrow(ui);
                     self.icon(ui, &step.item, &out_name, 24.0);
-                    ui.label(RichText::new(format!("{} {}", thousands(step.output), out_name)).strong());
+                    ui.label(RichText::new(format!("{} {}", thousands(step.output), out_name)).semibold());
                 });
                 // notes
                 ui.horizontal_wrapped(|ui| {
@@ -640,7 +640,7 @@ impl CraftState {
         let name = book.ds.name(&n.item);
         ui.set_min_height(30.0);
         self.icon(ui, &n.item, &name, 24.0);
-        ui.label(RichText::new(&name).strong());
+        ui.label(RichText::new(&name).semibold());
         small_muted(ui, format!("need {}", thousands(n.required)));
         match n.stop {
             Some(Stop::Inventory) => tag(ui, "from your items", c_accent()),
@@ -721,7 +721,7 @@ impl CraftState {
                             self.icon(ui, &r.item, &name, 24.0);
                             ui.label(name);
                         });
-                        ui.label(RichText::new(thousands(r.quantity)).strong());
+                        ui.label(RichText::new(thousands(r.quantity)).semibold());
                         let text = if r.stack <= 1 {
                             format!("{} slot{}", thousands(r.slots), if r.slots == 1 { "" } else { "s" })
                         } else if r.partial > 0 {
@@ -806,7 +806,7 @@ impl CraftState {
         let mut open = true;
         let m = egui::Modal::new(egui::Id::unique("craft-get")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
             ui.set_width(modal_width(ctx, 460.0));
-            ui.label(RichText::new("Get another version").size(19.0).strong());
+            ui.label(RichText::new("Get another version").size(19.0).semibold());
             ui.add_space(2.0);
             muted(ui, "Only the game file is downloaded, to read its recipes. You can play it later or never.");
             ui.add_space(8.0);
@@ -826,7 +826,7 @@ impl CraftState {
         let m = egui::Modal::new(egui::Id::unique("craft-save")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
             ui.set_width(modal_width(ctx, 420.0));
             ui.label(
-                RichText::new(if existing { "Update your saved plan" } else { "Save this plan" }).size(19.0).strong(),
+                RichText::new(if existing { "Update your saved plan" } else { "Save this plan" }).size(19.0).semibold(),
             );
             ui.add_space(2.0);
             muted(ui, "It keeps the item, the amount, your choices and what you ticked.");
@@ -866,7 +866,7 @@ impl CraftState {
         let mut done = false;
         let m = egui::Modal::new(egui::Id::unique("craft-rename")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
             ui.set_width(modal_width(ctx, 420.0));
-            ui.label(RichText::new("Rename the plan").size(19.0).strong());
+            ui.label(RichText::new("Rename the plan").size(19.0).semibold());
             ui.add_space(8.0);
             let r = ui.add_sized(
                 [ui.available_width(), 36.0],
@@ -907,7 +907,7 @@ impl CraftState {
         let book = self.book.clone();
         let m = egui::Modal::new(egui::Id::unique("craft-saved")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
             ui.set_width(modal_width(ctx, 600.0));
-            ui.label(RichText::new("Saved plans").size(19.0).strong());
+            ui.label(RichText::new("Saved plans").size(19.0).semibold());
             ui.add_space(2.0);
             muted(ui, "Plans live on this computer. Open one to carry on where you stopped.");
             ui.add_space(8.0);
@@ -961,7 +961,7 @@ impl CraftState {
                                             ui.vertical(|ui| {
                                                 ui.set_width(ui.available_width());
                                                 ui.spacing_mut().item_spacing.y = 1.0;
-                                                ui.add(egui::Label::new(RichText::new(&p.name).strong()).truncate());
+                                                ui.add(egui::Label::new(RichText::new(&p.name).semibold()).truncate());
                                                 small_muted(
                                                     ui,
                                                     format!(

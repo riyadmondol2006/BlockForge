@@ -90,7 +90,7 @@ impl App {
         ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
             if self.svc.servers.is_empty() {
                 card(ui, |ui| {
-                    ui.label(RichText::new("No servers yet").size(18.0).strong());
+                    ui.label(RichText::new("No servers yet").size(18.0).semibold());
                     muted(ui, "Servers are installed from a modpack's server files. Ones the Java edition installed show up here too.");
                 });
             }
@@ -250,7 +250,7 @@ impl App {
 
 /// A server's name and its tags.
 fn server_title(ui: &mut Ui, s: &Server, row: &ServerRow) {
-    ui.add(egui::Label::new(RichText::new(&s.name).strong().size(16.0)).wrap());
+    ui.add(egui::Label::new(RichText::new(&s.name).semibold().size(16.0)).wrap());
     ui.horizontal_wrapped(|ui| {
         match s.loader_label() {
             Some(l) => tag(ui, &l, widgets_loader(&l)),

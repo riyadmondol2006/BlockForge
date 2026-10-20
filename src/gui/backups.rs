@@ -82,7 +82,7 @@ impl App {
 
         card(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.label(RichText::new("Backups").strong().size(16.0));
+                ui.label(RichText::new("Backups").semibold().size(16.0));
                 if svc.enable_automatic_backup_after_launch {
                     tag(ui, "Automatic after playing", c_accent());
                 }

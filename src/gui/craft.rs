@@ -856,7 +856,7 @@ impl CraftState {
     /// No game is on this computer: explain, and offer to fetch one.
     fn no_game(&mut self, ui: &mut Ui, env: &Env, acts: &mut Vec<Act>) {
         card(ui, |ui| {
-            ui.label(RichText::new("The recipes come from your game files").size(19.0).strong());
+            ui.label(RichText::new("The recipes come from your game files").size(19.0).semibold());
             ui.add_space(2.0);
             muted(
                 ui,
@@ -873,7 +873,7 @@ impl CraftState {
     fn failed(&mut self, ui: &mut Ui, error: &str, acts: &mut Vec<Act>) {
         let version = self.version.clone().unwrap_or_default();
         card(ui, |ui| {
-            ui.label(RichText::new(format!("Couldn't read the recipes of Minecraft {version}")).size(19.0).strong());
+            ui.label(RichText::new(format!("Couldn't read the recipes of Minecraft {version}")).size(19.0).semibold());
             ui.add_space(2.0);
             ui.label(RichText::new(error).color(c_danger()));
             ui.add_space(6.0);
@@ -931,7 +931,7 @@ impl CraftState {
                             let busy = self.downloading.contains(&v.id);
                             ui.horizontal(|ui| {
                                 ui.set_height(40.0);
-                                ui.label(RichText::new(&v.id).strong());
+                                ui.label(RichText::new(&v.id).semibold());
                                 if v.id == latest {
                                     tag(ui, "Latest", c_accent());
                                 }

@@ -352,7 +352,7 @@ impl App {
             let (mut save, mut close) = (false, false);
             let modal = egui::Modal::new(egui::Id::unique("desc")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
                 ui.set_width(440.0);
-                ui.label(RichText::new("Change description").size(19.0).strong());
+                ui.label(RichText::new("Change description").size(19.0).semibold());
                 ui.add_space(6.0);
                 ui.add_sized(
                     [ui.available_width(), 90.0],
@@ -391,7 +391,7 @@ impl App {
             let (mut go, mut close) = (false, false);
             let modal = egui::Modal::new(egui::Id::unique("offline")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
                 ui.set_width(400.0);
-                ui.label(RichText::new("Play offline with another name").size(19.0).strong());
+                ui.label(RichText::new("Play offline with another name").size(19.0).semibold());
                 muted(ui, "3-16 letters, numbers or underscores. No account needed.");
                 ui.add_space(6.0);
                 let r = ui.add_sized(
@@ -445,7 +445,7 @@ impl App {
             let current = self.instance(&d.folder).and_then(|i| i.loader().map(|(k, v)| format!("{k} {v}")));
             let modal = egui::Modal::new(egui::Id::unique("loader")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
                 ui.set_width(440.0);
-                ui.label(RichText::new("Mod loader").size(19.0).strong());
+                ui.label(RichText::new("Mod loader").size(19.0).semibold());
                 muted(ui, format!("Now: {}", current.clone().unwrap_or_else(|| "None (vanilla)".into())));
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {

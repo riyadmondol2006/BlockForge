@@ -91,7 +91,7 @@ pub fn confirm_modal(ctx: &Context, id: &str, title: &str, body: &str, confirm: 
     let mut answer = None;
     egui::Modal::new(egui::Id::unique(id)).frame(super::modal_frame(ctx)).show(ctx, |ui| {
         ui.set_width(modal_width(ctx, 420.0));
-        ui.label(RichText::new(title).size(19.0).strong());
+        ui.label(RichText::new(title).size(19.0).semibold());
         ui.add_space(4.0);
         muted(ui, body);
         ui.add_space(12.0);
@@ -267,7 +267,7 @@ impl App {
         let mut folder_error: Option<String> = None;
         ui.add_space(8.0);
         card(ui, |ui| {
-            egui::CollapsingHeader::new(RichText::new("Network, folders and backups").strong().size(16.0))
+            egui::CollapsingHeader::new(RichText::new("Network, folders and backups").semibold().size(16.0))
                 .default_open(false)
                 .show(ui, |ui| {
                     small_muted(ui, "Connection changes apply the next time BlockForge starts.");

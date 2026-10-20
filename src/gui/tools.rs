@@ -194,7 +194,7 @@ impl App {
                     let mut answer = None;
                     egui::Modal::new(egui::Id::unique("tool-confirm")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
                         ui.set_width(modal_width(ctx, 460.0));
-                        ui.label(RichText::new("Network checker").size(19.0).strong());
+                        ui.label(RichText::new("Network checker").size(19.0).semibold());
                         ui.add_space(4.0);
                         muted(ui, tools::NETWORK_CHECKER_WARNING);
                         ui.add_space(6.0);
@@ -250,7 +250,7 @@ impl App {
             if let Some(report) = &self.svc.net_report {
                 egui::Modal::new(egui::Id::unique("net-report")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
                     ui.set_width(modal_width(ctx, 680.0));
-                    ui.label(RichText::new("Network checker").size(21.0).strong());
+                    ui.label(RichText::new("Network checker").size(21.0).semibold());
                     match (&report.link, &report.error) {
                         (Some(link), _) => {
                             small_muted(ui, "The result was shared so problems can be diagnosed. Link:");
@@ -323,7 +323,7 @@ pub(super) fn card_frame(
             ui.set_width(CARD_WIDTH - 34.0);
             ui.set_min_height(130.0);
             ui.vertical(|ui| {
-                ui.label(RichText::new(name).strong().size(15.5));
+                ui.label(RichText::new(name).semibold().size(15.5));
                 ui.add(egui::Label::new(RichText::new(description).color(c_muted()).size(12.5)).wrap());
                 if let Some(h) = hint {
                     ui.add_space(2.0);
