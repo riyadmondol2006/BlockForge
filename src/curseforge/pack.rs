@@ -102,13 +102,7 @@ pub async fn resolve_loader(dirs: &Dirs, manifest: &Manifest) -> Result<(Loader,
             };
             let Some(want) = want else { bail!("Forge has no version for Minecraft {mc}") };
             // the list holds the full names ("1.20.1-47.2.0"); old versions carry a suffix
-            let full = list
-                .iter()
-                .find(|v| **v == format!("{mc}-{want}"))
-                .or_else(|| list.iter().find(|v| v.starts_with(&format!("{mc}-{want}-"))))
-                .cloned()
-                .unwrap_or_else(|| format!("{mc}-{want}"));
-            Ok((Loader::Forge, Some(full)))
+            Ok((Loader::Forge, Some(loaders::full_forge_version(&list, mc, &want))))
         }
         Loader::NeoForge => {
             let list = loaders::versions(dirs, Loader::NeoForge, mc).await.unwrap_or_default();
@@ -331,6 +325,7 @@ pub async fn populate(
                 let mut job = Job::new(url, dest);
                 job.sha1 = e.file.sha1().map(str::to_string);
                 job.size = Some(e.file.file_length).filter(|s| *s > 0).map(|s| s as u64);
+                job.keep_on_mismatch = true;
                 jobs.push(job);
             }
             Route::Browser => by_hand.push(i),
@@ -345,8 +340,9 @@ pub async fn populate(
     {
         let p = root.join(e.folder()).join(&e.file.file_name);
         if p.is_file() && !super::browser::contents_match(&p, e.file.md5(), None) {
-            let _ = std::fs::remove_file(&p);
-            bail!("{} arrived damaged; try the install again", e.file.file_name);
+            // kept, like a file whose SHA-1 disagrees (see `Job::keep_on_mismatch`), and said when the install ends
+            crate::logs::warn(format!("Kept {} although its MD5 doesn't match CurseForge's", e.file.file_name));
+            progress.note(e.file.file_name.clone());
         }
     }
 

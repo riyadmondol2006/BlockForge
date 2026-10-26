@@ -5,7 +5,6 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
@@ -288,17 +287,23 @@ fn find_instance(dirs: &Dirs, key: &str) -> Result<instances::Instance> {
         .with_context(|| format!("no instance called \"{key}\" (try `blockforge list`)"))
 }
 
+/// Says which pack files were kept although their checksum disagreed, once the job is over.
+fn print_notes(progress: &Progress) {
+    let kept = progress.take_notes();
+    if !kept.is_empty() {
+        eprintln!("warning: {}", install::kept_files_message(&kept));
+    }
+}
+
 fn show_progress(progress: Arc<Progress>) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut last = String::new();
         loop {
             tokio::time::sleep(Duration::from_millis(250)).await;
             let stage = progress.stage_text();
-            let (d, t) = (progress.files_done.load(Ordering::Relaxed), progress.files_total.load(Ordering::Relaxed));
-            let line = if t > 0 {
-                format!("{stage}  {d}/{t} files  {:.0} MB", progress.bytes_done.load(Ordering::Relaxed) as f64 / 1e6)
-            } else {
-                stage
+            let line = match progress.summary() {
+                Some((sizes, files)) => format!("{stage}  {sizes}  ({files})"),
+                None => stage,
             };
             if line != last {
                 eprintln!("  {line}");
@@ -366,11 +371,21 @@ async fn run(cmd: Cmd, dirs: Dirs) -> Result<()> {
                     .cloned()
                     .context("Mojang's version list names no latest release; pass --mc <version>")?,
             };
+            // Forge names its versions with the Minecraft version in front ("1.12.2-14.23.5.2860"); the short form
+            // ("14.23.5.2860", as packs and the Forge site write it) is looked up in its list
+            let loader_version = match (loader, loader_version) {
+                (Loader::Forge, Some(v)) if !v.starts_with(&format!("{mc}-")) => {
+                    let list = loaders::versions(&dirs, Loader::Forge, &mc).await.unwrap_or_default();
+                    Some(loaders::full_forge_version(&list, &mc, &v))
+                }
+                (_, v) => v,
+            };
             let progress = Progress::new();
             let printer = show_progress(progress.clone());
             let t = Instant::now();
             let inst = instances::create(&dirs, &name, &mc, loader, loader_version.as_deref(), &progress).await;
             printer.abort();
+            print_notes(&progress);
             let inst = inst?;
             println!("created \"{}\" in {:.1}s: {}", inst.name(), t.elapsed().as_secs_f64(), inst.root.display());
         }
@@ -398,6 +413,7 @@ async fn run(cmd: Cmd, dirs: Dirs) -> Result<()> {
             let extras = launch::LaunchExtras { realm, offline_name, screen_size: None };
             let prepared = launch::prepare_ext(&dirs, &settings, &inst, &acc, &progress, &options, &extras).await;
             printer.abort();
+            print_notes(&progress);
             let prepared = match prepared {
                 Ok(p) => p,
                 Err(e) => match e.downcast_ref::<launch::prompts::LaunchProblem>() {
@@ -520,6 +536,7 @@ async fn run(cmd: Cmd, dirs: Dirs) -> Result<()> {
             let printer = show_progress(progress.clone());
             let added = modrinth::install_into(&inst, &project, modrinth::Kind::from_api(&kind), &progress).await;
             printer.abort();
+            print_notes(&progress);
             for f in added? {
                 println!("added {f}");
             }
@@ -534,6 +551,7 @@ async fn run(cmd: Cmd, dirs: Dirs) -> Result<()> {
                 modrinth::install_modpack(&dirs, &source, &progress).await
             };
             printer.abort();
+            print_notes(&progress);
             let inst = inst?;
             println!("created \"{}\" at {}", inst.name(), inst.root.display());
         }
@@ -549,6 +567,7 @@ async fn run(cmd: Cmd, dirs: Dirs) -> Result<()> {
             let printer = show_progress(progress.clone());
             let repaired = instances::repair(&dirs, &inst, &progress).await;
             printer.abort();
+            print_notes(&progress);
             repaired?;
             println!("checked every file of {}; anything damaged or missing was downloaded again", inst.name());
         }

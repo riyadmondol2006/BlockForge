@@ -417,6 +417,7 @@ async fn fill_mrpack(
         let mut job = Job::new(&url, instance.root.join(rel));
         job.sha1 = sha1;
         job.size = size;
+        job.keep_on_mismatch = true;
         jobs.push(job);
     }
     progress.stage(format!("Downloading {} files from the modpack", jobs.len()));

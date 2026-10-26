@@ -21,19 +21,27 @@ pub struct Reply {
     pub body: Vec<u8>,
     /// Send only this many bytes of the body and then hang up, while announcing all of it (a dropped connection).
     pub cut_after: Option<usize>,
+    /// Wait this long before answering (a far-away server).
+    pub delay_ms: u64,
 }
 
 impl Reply {
     pub fn ok(body: impl Into<Vec<u8>>) -> Reply {
-        Reply { status: 200, body: body.into(), cut_after: None }
+        Reply { status: 200, body: body.into(), cut_after: None, delay_ms: 0 }
     }
 
     pub fn status(status: u16) -> Reply {
-        Reply { status, body: Vec::new(), cut_after: None }
+        Reply { status, body: Vec::new(), cut_after: None, delay_ms: 0 }
     }
 
     pub fn cut(body: impl Into<Vec<u8>>, after: usize) -> Reply {
-        Reply { status: 200, body: body.into(), cut_after: Some(after) }
+        Reply { status: 200, body: body.into(), cut_after: Some(after), delay_ms: 0 }
+    }
+
+    /// The same answer, given after `ms` milliseconds.
+    pub fn slow(mut self, ms: u64) -> Reply {
+        self.delay_ms = ms;
+        self
     }
 }
 
@@ -43,6 +51,9 @@ pub struct Server {
     routes: Arc<Mutex<HashMap<String, Reply>>>,
     hits: Arc<Mutex<HashMap<String, usize>>>,
     total: Arc<AtomicUsize>,
+    /// Requests being answered right now, and the most there ever were at once.
+    busy: Arc<AtomicUsize>,
+    most_busy: Arc<AtomicUsize>,
 }
 
 impl Server {
@@ -54,11 +65,12 @@ impl Server {
         let routes: Arc<Mutex<HashMap<String, Reply>>> = Arc::default();
         let hits: Arc<Mutex<HashMap<String, usize>>> = Arc::default();
         let total = Arc::new(AtomicUsize::new(0));
-        let (r, h, t) = (routes.clone(), hits.clone(), total.clone());
+        let (busy, most_busy) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+        let (r, h, t, b, m) = (routes.clone(), hits.clone(), total.clone(), busy.clone(), most_busy.clone());
         tokio::spawn(async move {
             loop {
                 let Ok((mut socket, _)) = listener.accept().await else { return };
-                let (r, h, t) = (r.clone(), h.clone(), t.clone());
+                let (r, h, t, b, m) = (r.clone(), h.clone(), t.clone(), b.clone(), m.clone());
                 tokio::spawn(async move {
                     let mut request = Vec::new();
                     let mut buf = [0u8; 4096];
@@ -73,6 +85,12 @@ impl Server {
                     t.fetch_add(1, Ordering::SeqCst);
                     *h.lock().unwrap().entry(path.clone()).or_insert(0) += 1;
                     let reply = r.lock().unwrap().get(&path).cloned().unwrap_or(Reply::status(404));
+                    let now = b.fetch_add(1, Ordering::SeqCst) + 1;
+                    m.fetch_max(now, Ordering::SeqCst);
+                    if reply.delay_ms > 0 {
+                        tokio::time::sleep(std::time::Duration::from_millis(reply.delay_ms)).await;
+                    }
+                    b.fetch_sub(1, Ordering::SeqCst);
                     let head = format!(
                         "HTTP/1.1 {} X\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                         reply.status,
@@ -85,7 +103,13 @@ impl Server {
                 });
             }
         });
-        Server { base, routes, hits, total }
+        Server { base, routes, hits, total, busy, most_busy }
+    }
+
+    /// The most requests that were being answered at the same moment.
+    pub fn most_at_once(&self) -> usize {
+        let _ = &self.busy;
+        self.most_busy.load(Ordering::SeqCst)
     }
 
     /// Answer `path` (starting with `/`) with `reply` from now on, and return its full address.

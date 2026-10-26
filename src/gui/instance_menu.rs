@@ -115,8 +115,11 @@ pub(super) fn menu_items(ui: &mut Ui) {
 }
 
 /// Opens `add` as a menu under `resp` when it is clicked, in the look of the app.
-pub(super) fn open_menu<R>(resp: &Response, add: impl FnOnce(&mut Ui) -> R) -> Option<R> {
+/// Closing as `close` says: on any click, or (a menu of switches, which stays open while they are flipped) only on a
+/// click outside it.
+fn open_menu_closing<R>(resp: &Response, close: egui::PopupCloseBehavior, add: impl FnOnce(&mut Ui) -> R) -> Option<R> {
     egui::Popup::menu(resp)
+        .close_behavior(close)
         .gap(4.0)
         .frame(menu_frame(&resp.ctx))
         .show(|ui| {
@@ -129,6 +132,24 @@ pub(super) fn open_menu<R>(resp: &Response, add: impl FnOnce(&mut Ui) -> R) -> O
 /// A neutral button with a chevron that opens a menu (the "Play as" of the header). Returns what the menu returned
 /// while it is open.
 pub(super) fn secondary_menu<R>(ui: &mut Ui, text: &str, add: impl FnOnce(&mut Ui) -> R) -> (Response, Option<R>) {
+    secondary_menu_closing(ui, text, egui::PopupCloseBehavior::CloseOnClick, add)
+}
+
+/// [`secondary_menu`] for a menu of switches: it stays open while they are flipped and closes on a click outside it.
+pub(super) fn secondary_switch_menu<R>(
+    ui: &mut Ui,
+    text: &str,
+    add: impl FnOnce(&mut Ui) -> R,
+) -> (Response, Option<R>) {
+    secondary_menu_closing(ui, text, egui::PopupCloseBehavior::CloseOnClickOutside, add)
+}
+
+fn secondary_menu_closing<R>(
+    ui: &mut Ui,
+    text: &str,
+    close: egui::PopupCloseBehavior,
+    add: impl FnOnce(&mut Ui) -> R,
+) -> (Response, Option<R>) {
     let font = super::fonts::medium(FS_BODY);
     let w = ui.painter().layout_no_wrap(text.to_string(), font.clone(), c_text()).size().x;
     let (rect, resp) = ui.allocate_exact_size(vec2(w + 28.0 + 18.0, 32.0), Sense::click());
@@ -150,7 +171,7 @@ pub(super) fn secondary_menu<R>(ui: &mut Ui, text: &str, add: impl FnOnce(&mut U
     focus_ring(ui, &resp, rect, R_CONTROL);
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, text));
     let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
-    let out = open_menu(&resp, add);
+    let out = open_menu_closing(&resp, close, add);
     (resp, out)
 }
 

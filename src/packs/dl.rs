@@ -17,8 +17,6 @@ use tokio::io::AsyncWriteExt;
 use crate::http::client;
 use crate::install::Progress;
 
-/// How many files are fetched at the same time. Pack servers are fast, but mods are big, so this stays modest.
-const CONCURRENCY: usize = 16;
 const ATTEMPTS: u32 = 3;
 
 #[derive(Clone, Debug)]
@@ -30,6 +28,9 @@ pub struct Dl {
     pub size: Option<u64>,
     /// A file that fails its checksum is kept if it is not empty (the Java edition's `ignoreFailures`).
     pub ignore_failures: bool,
+    /// A pack's mod: kept when it arrives whole every time but its checksum still disagrees, and the player is told
+    /// (see `install::Job::keep_on_mismatch`). Libraries and installers never are.
+    pub keep_on_mismatch: bool,
     /// After the file is in place, unpack it into this folder (Technic Solder mods are zips that unpack into the
     /// instance).
     pub unzip_to: Option<PathBuf>,
@@ -37,7 +38,15 @@ pub struct Dl {
 
 impl Dl {
     pub fn new(url: impl Into<String>, dest: impl Into<PathBuf>) -> Dl {
-        Dl { url: url.into(), dest: dest.into(), hash: None, size: None, ignore_failures: false, unzip_to: None }
+        Dl {
+            url: url.into(),
+            dest: dest.into(),
+            hash: None,
+            size: None,
+            ignore_failures: false,
+            keep_on_mismatch: false,
+            unzip_to: None,
+        }
     }
 
     pub fn hash(mut self, hash: Option<&str>) -> Dl {
@@ -52,6 +61,11 @@ impl Dl {
 
     pub fn ignore_failures(mut self) -> Dl {
         self.ignore_failures = true;
+        self
+    }
+
+    pub fn keep_on_mismatch(mut self) -> Dl {
+        self.keep_on_mismatch = true;
         self
     }
 
@@ -174,7 +188,18 @@ pub async fn download_all(jobs: Vec<Dl>, progress: &Arc<Progress>) -> Result<usi
     progress.bytes_total.store(missing.iter().map(|j| j.size.unwrap_or(65_536)).sum(), Ordering::Relaxed);
 
     let count = missing.len();
-    let results: Vec<Result<()>> = futures::stream::iter(jobs.clone())
+    // as many at once as the game's downloader (the setting), the biggest first: a large file begun last is what
+    // everything else waits for
+    let threads = crate::net::download_threads(
+        crate::http::concurrency(),
+        std::thread::available_parallelism().map_or(4, |n| n.get()),
+        jobs.len(),
+    );
+    let sizes: Vec<u64> = jobs.iter().map(|(j, current)| if *current { 0 } else { j.size.unwrap_or(0) }).collect();
+    let mut slots: Vec<Option<(Dl, bool)>> = jobs.into_iter().map(Some).collect();
+    let jobs: Vec<(Dl, bool)> =
+        crate::net::start_order(&sizes, threads).into_iter().filter_map(|i| slots[i].take()).collect();
+    let results: Vec<Result<()>> = futures::stream::iter(jobs)
         .map(|(job, current)| {
             let progress = progress.clone();
             async move {
@@ -193,7 +218,7 @@ pub async fn download_all(jobs: Vec<Dl>, progress: &Arc<Progress>) -> Result<usi
                 Ok(())
             }
         })
-        .buffer_unordered(CONCURRENCY)
+        .buffer_unordered(threads)
         .collect()
         .await;
 
@@ -215,7 +240,8 @@ async fn download_one(job: &Dl, progress: &Progress) -> Result<()> {
     let mut last: Option<anyhow::Error> = None;
     for attempt in 0..ATTEMPTS {
         if attempt > 0 {
-            tokio::time::sleep(Duration::from_millis(500 * 2u64.pow(attempt - 1))).await;
+            let base = if cfg!(test) { 5 } else { 500 };
+            tokio::time::sleep(Duration::from_millis(base * 2u64.pow(attempt - 1))).await;
         }
         if progress.cancelled.load(Ordering::Relaxed) {
             bail!("cancelled");
@@ -231,10 +257,16 @@ async fn download_one(job: &Dl, progress: &Progress) -> Result<()> {
                 progress
                     .bytes_done
                     .fetch_sub(counted.min(progress.bytes_done.load(Ordering::Relaxed)), Ordering::Relaxed);
-                if attempt + 1 == ATTEMPTS && job.ignore_failures && counted > 0 {
+                let whole = counted > 0 && job.size.is_none_or(|s| counted == s);
+                if attempt + 1 == ATTEMPTS && counted > 0 && (job.ignore_failures || (job.keep_on_mismatch && whole)) {
                     tokio::fs::rename(&part, &job.dest)
                         .await
                         .with_context(|| format!("saving {}", job.dest.display()))?;
+                    if !job.ignore_failures {
+                        let name = job.dest.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+                        crate::logs::warn(format!("Kept {name} although its checksum is {got}, not {expected}"));
+                        progress.note(name);
+                    }
                     return Ok(());
                 }
                 let _ = tokio::fs::remove_file(&part).await;
@@ -274,7 +306,8 @@ async fn fetch(url: &str, part: &Path, hash: Option<&str>, counted: &mut u64, pr
         bail!("HTTP {}", r.status());
     }
     let mut hasher = hash.and_then(HashKind::of).map(Hasher::new);
-    let mut file = tokio::fs::File::create(part).await?;
+    let mut file =
+        tokio::io::BufWriter::with_capacity(crate::install::WRITE_BUFFER, tokio::fs::File::create(part).await?);
     let mut stream = r.bytes_stream();
     while let Some(chunk) = stream.next().await {
         let chunk = chunk?;
@@ -301,6 +334,35 @@ async fn fetch(url: &str, part: &Path, hash: Option<&str>, counted: &mut u64, pr
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An ATLauncher or Technic mod that arrives whole every time but with another checksum than the pack lists is
+    /// kept and said; one that doesn't have the listed size is refused.
+    #[test]
+    fn a_pack_mod_with_an_out_of_date_checksum_is_kept_and_said() {
+        use crate::testutil::{Reply, Server, runtime, scratch};
+        runtime().block_on(async {
+            let server = Server::start().await;
+            let dir = scratch("packdl-keep");
+            let served = b"the mod the site serves now".to_vec();
+            let url = server.route("/mod.jar", Reply::ok(served.clone()));
+            let md5_of_another = "5d41402abc4b2a76b9719d911017c592";
+            let job = Dl::new(&url, dir.join("mod.jar")).hash(Some(md5_of_another)).size(served.len() as i64);
+            let progress = Progress::new();
+            download_all(vec![job.clone().keep_on_mismatch()], &progress).await.unwrap();
+            assert_eq!(std::fs::read(dir.join("mod.jar")).unwrap(), served);
+            assert_eq!(progress.take_notes(), vec!["mod.jar".to_string()]);
+
+            // listed as a different size: not the same file, so not kept
+            let other = Dl::new(&url, dir.join("other.jar")).hash(Some(md5_of_another)).size(9999).keep_on_mismatch();
+            assert!(download_all(vec![other], &Progress::new()).await.is_err());
+            assert!(!dir.join("other.jar").exists());
+            // a library or an installer (no keep_on_mismatch) is never kept on a wrong checksum
+            let strict = Dl::new(&url, dir.join("lib.jar")).hash(Some(md5_of_another));
+            assert!(download_all(vec![strict], &Progress::new()).await.is_err());
+            assert!(!dir.join("lib.jar").exists());
+            let _ = std::fs::remove_dir_all(&dir);
+        });
+    }
 
     #[test]
     fn checksum_kind_comes_from_the_length() {

@@ -3,6 +3,31 @@
 The section for a version is used as the text of its release on GitHub. Older releases (the Java versions, up to
 3.4.42.x) are on the [releases page](https://github.com/riyadmondol2006/BlockForge/releases).
 
+## 4.8.0
+
+Quicker downloads you can follow, modpacks that don't fail over a stale checksum, and the speed switches next to Play.
+
+### What is new
+
+- **Performance next to Play.** A button beside Play (on the instance page and on Home) switches Fast start and the
+  smoothness helper and picks Low-end mode for that instance, without opening its settings.
+- **Downloads say how far they are:** the per cent, how much of how much ("66% · 210.3 MB of 318.0 MB"), the files
+  and the speed, in the sidebar and on the command line.
+
+### Fixed
+
+- Downloads ask for more files at once (32 by default, 16 on small computers, or the number set in Settings): the
+  number no longer drops with fewer processor cores, which made thousands of small files (the game's assets, big
+  modpacks) slow on a far-away connection. The biggest files start first, so one large file no longer holds up the
+  end, and files are written to the disk in larger pieces.
+- A modpack file that arrives whole but with another checksum than the pack lists (the pack's list is out of date,
+  common in big packs) no longer fails the install: after the usual retries it is kept and named in a warning. A file
+  that arrives cut short is still refused, and the game's own files, Java and libraries are checked as strictly as
+  before.
+- `blockforge create --loader forge --loader-version 14.23.5.2860` (the short form) finds Forge's full version name
+  instead of failing with a 404.
+- Home: the strip of played days gets shorter on a narrow line instead of cutting off when the game was last played.
+
 ## 4.7.0
 
 A friendlier launcher: it asks before what can't be undone, keeps what you typed, says why a button is greyed out and

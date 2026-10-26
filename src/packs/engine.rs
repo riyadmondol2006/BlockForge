@@ -558,7 +558,7 @@ async fn run(ctx: &Ctx, req: &mut Request, root: &Path, progress: &Arc<Progress>
             .iter()
             .map(|pm| {
                 let mut d = Dl::new(pm.download_url(), dir.join(pm.file_name())).size(pm.filesize).unzip_to(root);
-                d = d.hash(pm.md5.as_deref());
+                d = d.hash(pm.md5.as_deref()).keep_on_mismatch();
                 d
             })
             .collect();
@@ -679,7 +679,7 @@ async fn run(ctx: &Ctx, req: &mut Request, root: &Path, progress: &Arc<Progress>
                 if m.ignore_failures {
                     d = d.ignore_failures();
                 }
-                d
+                d.keep_on_mismatch()
             })
             .collect();
         dl::download_all(jobs, progress).await.context("downloading the pack's mods")?;

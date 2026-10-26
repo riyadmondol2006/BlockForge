@@ -464,3 +464,50 @@ async fn restricted_file_is_picked_up_from_the_downloads_folder() {
     assert!(skipped.is_none());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A big pack (RLCraft, about 190 files): every file a launcher may fetch arrives and passes its checksum, and how
+/// fast. Files the authors only allow in a browser are left: the run stops once only those are waiting.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore]
+async fn a_big_modpack_downloads_completely() {
+    use std::sync::atomic::Ordering;
+    let dir = work_dir("rlcraft");
+    let dirs = Dirs::at(&dir);
+    dirs.ensure().unwrap();
+    let cf = CfSettings::default();
+    let project = api::project(285109).await.unwrap(); // RLCraft
+    let file = pack::choose_pack_file(&cf, &project).await.unwrap();
+    let zip =
+        super::install::fetch_file(&dirs, &cf, &project, &file, &Progress::new(), None, false).await.unwrap().unwrap();
+    let manifest = pack::read_manifest(&zip).unwrap();
+    println!("{}: {} files for Minecraft {}", project.name, manifest.files.len(), manifest.minecraft.version);
+    let root = dirs.instance_dir("Pack");
+    std::fs::create_dir_all(&root).unwrap();
+    let progress = Progress::new();
+    let started = std::time::Instant::now();
+    let (d, c, r, m, z, p) = (dirs.clone(), cf.clone(), root.clone(), manifest.clone(), zip.clone(), progress.clone());
+    let job = tokio::spawn(async move { pack::populate(&d, &c, &r, &m.minecraft.version, &m, &z, &p, None).await });
+    let outcome = loop {
+        if job.is_finished() {
+            break match job.await.unwrap() {
+                Ok(p) => format!("done, {} records", p.records.len()),
+                Err(e) => format!("failed: {e:#}"),
+            };
+        }
+        if progress.stage_text().contains("browser") {
+            job.abort();
+            break "every launcher download done; the rest waits for a browser".to_string();
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    };
+    let secs = started.elapsed().as_secs_f64();
+    let bytes = progress.bytes_done.load(Ordering::Relaxed);
+    let (done, total) = (progress.files_done.load(Ordering::Relaxed), progress.files_total.load(Ordering::Relaxed));
+    println!(
+        "{outcome}: {done} of {total} files, {:.1} MB in {secs:.1} s = {:.1} MB/s",
+        bytes as f64 / 1e6,
+        bytes as f64 / 1e6 / secs
+    );
+    assert!(!outcome.starts_with("failed"), "{outcome}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

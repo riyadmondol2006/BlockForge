@@ -79,6 +79,18 @@ fn meta_base(loader: Loader) -> &'static str {
     if loader == Loader::Quilt { "https://meta.quiltmc.org/v3" } else { "https://meta.fabricmc.net/v2" }
 }
 
+/// A Forge version in the form Forge's server names it ("1.12.2-14.23.5.2860"; old ones carry a suffix too,
+/// "1.7.10-10.13.4.1614-1.7.10"), from the short form packs and the Forge site use ("14.23.5.2860"). `list` is
+/// Forge's list of versions for `mc`; a version not in it is given the Minecraft version in front.
+pub fn full_forge_version(list: &[String], mc: &str, short: &str) -> String {
+    let full = format!("{mc}-{short}");
+    list.iter()
+        .find(|v| **v == full)
+        .or_else(|| list.iter().find(|v| v.starts_with(&format!("{full}-"))))
+        .cloned()
+        .unwrap_or(full)
+}
+
 /// Loader versions that fit `mc`, newest first.
 pub async fn versions(dirs: &Dirs, loader: Loader, mc: &str) -> Result<Vec<String>> {
     let cache = dirs.cache.join("http");
@@ -301,6 +313,15 @@ impl Drop for RemoveOnDrop {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_short_forge_version_gets_its_full_name() {
+        let list: Vec<String> = ["1.12.2-14.23.5.2860", "1.12.2-14.23.5.2859"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(full_forge_version(&list, "1.12.2", "14.23.5.2860"), "1.12.2-14.23.5.2860");
+        let old = vec!["1.7.10-10.13.4.1614-1.7.10".to_string()];
+        assert_eq!(full_forge_version(&old, "1.7.10", "10.13.4.1614"), "1.7.10-10.13.4.1614-1.7.10");
+        assert_eq!(full_forge_version(&[], "1.20.1", "47.2.0"), "1.20.1-47.2.0", "the list couldn't be read");
+    }
+
     use super::*;
 
     #[test]

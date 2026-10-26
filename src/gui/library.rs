@@ -133,16 +133,21 @@ impl App {
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 12.0;
-                    let days = self.play_days(h, 28);
+                    // four weeks of days, or fewer (down to two) when the buttons beside leave less room: the strip
+                    // gives up its oldest days before the time is cut short
+                    const DAY: f32 = 13.0;
+                    const WHEN: f32 = 100.0;
+                    let n = ((ui.available_width() - 12.0 - WHEN) / DAY).floor().clamp(14.0, 28.0) as usize;
+                    let days = self.play_days(h, n);
                     let played = days.iter().filter(|d| **d > 0).count();
                     super::strip::play_strip(ui, &days, Self::strip_hue(h), 10.0, 3.0);
                     // the words "Last played" go when the line is too short for them
-                    let room = ui.available_width() - 361.0 - 12.0;
+                    let room = ui.available_width();
                     let when = if h.last_played() > 0 {
                         let ago = time_ago(h.last_played()).to_lowercase();
-                        if room >= 150.0 { format!("Last played {ago}") } else { ago }
+                        if room >= 170.0 { format!("Last played {ago}") } else { ago }
                     } else {
-                        super::strip::caption(played, 28)
+                        super::strip::caption(played, n)
                     };
                     ui.add(egui::Label::new(RichText::new(when).size(FS_META).color(c_faint())).truncate());
                 });
@@ -218,6 +223,10 @@ impl App {
                                     self.hero_title(ui, h, Some(buttons_w));
                                 }
                                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                    // laid out from the right: Performance, then Play as, then Play
+                                    if let Some(a) = self.performance_button(ui, h) {
+                                        action = Some(a);
+                                    }
                                     if let Some(a) = self.play_as_menu(ui, &h.folder) {
                                         action = Some(a);
                                     }
@@ -508,6 +517,10 @@ impl App {
                 _ => {}
             }
             if !compact {
+                // a narrow header has these in its menu (Play as, and Performance…)
+                if let Some(a) = self.performance_button(ui, inst) {
+                    *action = Some(a);
+                }
                 if let Some(a) = self.play_as_menu(ui, &folder) {
                     *action = Some(a);
                 }

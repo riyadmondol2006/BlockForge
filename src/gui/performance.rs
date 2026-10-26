@@ -249,20 +249,39 @@ impl App {
     pub(super) fn helpers_menu(&self, ui: &mut Ui, inst: &Instance) -> Option<Act> {
         let mut act = None;
         ui.menu_button("Performance\u{2026}", |ui| {
-            ui.set_min_width(220.0);
-            let mut fast = crate::launch::fast_start_enabled(&self.settings, inst);
-            if menu_switch(ui, &mut fast, "Fast start", "Opens the game sooner") {
-                act = Some(Act::FastStart(inst.folder.clone(), fast));
-            }
-            let mut smooth = lite::enabled(&self.settings, inst);
-            if menu_switch(ui, &mut smooth, "Smoothness helper", LITE_HINT) {
-                act = Some(Act::Helper(inst.folder.clone(), HelperChange::Lite(Some(smooth))));
-            }
-            ui.separator();
-            if let Some(a) = self.low_end_choices(ui, inst) {
-                act = Some(a);
-            }
+            act = self.helpers_contents(ui, inst);
         });
+        act
+    }
+
+    /// The "Performance" button next to Play: the same switches, one click away. The current state is on hover.
+    pub(super) fn performance_button(&self, ui: &mut Ui, inst: &Instance) -> Option<Act> {
+        let (resp, act) = super::instance_menu::secondary_switch_menu(ui, "Performance", |ui| {
+            let act = self.helpers_contents(ui, inst);
+            ui.add_space(2.0);
+            small_muted(ui, "Changes apply the next time the game starts.");
+            act
+        });
+        resp.on_hover_text(self.speed_summary(inst));
+        act.flatten()
+    }
+
+    /// Fast start, the smoothness helper and Low-end mode of one instance, as switches and choices in a menu.
+    fn helpers_contents(&self, ui: &mut Ui, inst: &Instance) -> Option<Act> {
+        let mut act = None;
+        ui.set_min_width(240.0);
+        let mut fast = crate::launch::fast_start_enabled(&self.settings, inst);
+        if menu_switch(ui, &mut fast, "Fast start", "Opens the game sooner") {
+            act = Some(Act::FastStart(inst.folder.clone(), fast));
+        }
+        let mut smooth = lite::enabled(&self.settings, inst);
+        if menu_switch(ui, &mut smooth, "Smoothness helper", LITE_HINT) {
+            act = Some(Act::Helper(inst.folder.clone(), HelperChange::Lite(Some(smooth))));
+        }
+        ui.separator();
+        if let Some(a) = self.low_end_choices(ui, inst) {
+            act = Some(a);
+        }
         act
     }
 

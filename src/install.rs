@@ -30,9 +30,98 @@ pub struct Progress {
     pub bytes_total: AtomicU64,
     pub bytes_done: AtomicU64,
     pub cancelled: AtomicBool,
+    /// Things the player should hear about once the job is done (a file kept although its checksum disagreed).
+    pub notes: std::sync::Mutex<Vec<String>>,
+    /// How fast the bytes come in, worked out now and then from `bytes_done` (see [`Progress::speed`]).
+    speed: std::sync::Mutex<Speed>,
+}
+
+#[derive(Default)]
+struct Speed {
+    at: Option<std::time::Instant>,
+    bytes: u64,
+    per_sec: f64,
+}
+
+/// What to tell the player about pack files kept although their checksum disagreed (see `Job::keep_on_mismatch`).
+pub fn kept_files_message(files: &[String]) -> String {
+    const SHOWN: usize = 5;
+    let mut names = files.iter().take(SHOWN).cloned().collect::<Vec<_>>().join(", ");
+    if files.len() > SHOWN {
+        names.push_str(&format!(" and {} more", files.len() - SHOWN));
+    }
+    let what = if files.len() == 1 { "1 file didn't".to_string() } else { format!("{} files didn't", files.len()) };
+    format!(
+        "{what} match the checksum the pack lists and were kept anyway: {names}. They downloaded completely; the \
+         pack's own list is likely out of date. If something doesn't work, install the pack again."
+    )
+}
+
+/// A number of bytes for people: 845 KB, 12.3 MB, 1.42 GB.
+pub fn human_bytes(n: u64) -> String {
+    let b = n as f64;
+    if b >= 1e9 {
+        format!("{:.2} GB", b / 1e9)
+    } else if b >= 1e6 {
+        format!("{:.1} MB", b / 1e6)
+    } else {
+        format!("{:.0} KB", (b / 1e3).max(if n > 0 { 1.0 } else { 0.0 }))
+    }
 }
 
 impl Progress {
+    /// Something to tell the player when the job ends.
+    pub fn note(&self, text: impl Into<String>) {
+        self.notes.lock().unwrap_or_else(|e| e.into_inner()).push(text.into());
+    }
+
+    /// The notes so far, emptied.
+    pub fn take_notes(&self) -> Vec<String> {
+        std::mem::take(&mut *self.notes.lock().unwrap_or_else(|e| e.into_inner()))
+    }
+
+    /// Bytes per second lately: measured again when half a second has passed since the last look, and smoothed so
+    /// the figure doesn't jump with every file.
+    pub fn speed(&self) -> f64 {
+        let now = std::time::Instant::now();
+        let bytes = self.bytes_done.load(Ordering::Relaxed);
+        let mut s = self.speed.lock().unwrap_or_else(|e| e.into_inner());
+        match s.at {
+            Some(at) if now.duration_since(at) >= Duration::from_millis(500) => {
+                // a new set of files starts the counter again: nothing to measure across that
+                let fresh = bytes.saturating_sub(s.bytes) as f64 / now.duration_since(at).as_secs_f64();
+                s.per_sec = if s.per_sec == 0.0 || bytes < s.bytes { fresh } else { 0.6 * s.per_sec + 0.4 * fresh };
+                s.at = Some(now);
+                s.bytes = bytes;
+            }
+            Some(_) => {}
+            None => {
+                s.at = Some(now);
+                s.bytes = bytes;
+            }
+        }
+        s.per_sec
+    }
+
+    /// How far a download is, for people: `(percent and sizes, files and speed)`, such as ("66% · 210.3 MB of
+    /// 318.0 MB", "120 of 187 files · 12.3 MB/s"). `None` while no files are being downloaded.
+    pub fn summary(&self) -> Option<(String, String)> {
+        let (done, total) = (self.files_done.load(Ordering::Relaxed), self.files_total.load(Ordering::Relaxed));
+        if total == 0 {
+            return None;
+        }
+        let (got, of) = (self.bytes_done.load(Ordering::Relaxed), self.bytes_total.load(Ordering::Relaxed));
+        let percent = (self.fraction() * 100.0).floor() as u32;
+        let sizes =
+            format!("{percent}% \u{00B7} {} of {}", human_bytes(got.min(of.max(got))), human_bytes(of.max(got)));
+        let speed = self.speed();
+        let mut files = format!("{done} of {total} files");
+        if done < total && speed >= 1000.0 {
+            files.push_str(&format!(" \u{00B7} {}/s", human_bytes(speed as u64)));
+        }
+        Some((sizes, files))
+    }
+
     pub fn new() -> Arc<Progress> {
         Arc::new(Progress::default())
     }
@@ -69,11 +158,15 @@ pub struct Job {
     pub sha1: Option<String>,
     pub size: Option<u64>,
     pub executable: bool,
+    /// A modpack's file: when it arrives complete every time but its checksum still disagrees, it is kept and the
+    /// player is told, rather than failing the whole install (a pack's record of a file can be out of date when the
+    /// file was replaced on the site). The game's own files, Java and libraries never are.
+    pub keep_on_mismatch: bool,
 }
 
 impl Job {
     pub fn new(url: impl Into<String>, dest: impl Into<PathBuf>) -> Job {
-        Job { url: url.into(), dest: dest.into(), sha1: None, size: None, executable: false }
+        Job { url: url.into(), dest: dest.into(), sha1: None, size: None, executable: false, keep_on_mismatch: false }
     }
 
     pub fn checked(mut self, sha1: Option<&str>, size: Option<i64>) -> Job {
@@ -123,6 +216,17 @@ pub async fn download_all(jobs: Vec<Job>, progress: &Arc<Progress>, verify: bool
     progress.bytes_total.store(missing.iter().map(|j| j.size.unwrap_or(65_536)).sum(), Ordering::Relaxed);
 
     let count = missing.len();
+    // the number from the settings (`http::configure`), but never more than there are files
+    let threads = crate::net::download_threads(
+        http::concurrency(),
+        std::thread::available_parallelism().map_or(4, |n| n.get()),
+        count,
+    );
+    // the biggest files start first, one per thread: a large file begun last is what everything else waits for
+    let sizes: Vec<u64> = missing.iter().map(|j| j.size.unwrap_or(0)).collect();
+    let mut slots: Vec<Option<Job>> = missing.into_iter().map(Some).collect();
+    let missing: Vec<Job> =
+        crate::net::start_order(&sizes, threads).into_iter().filter_map(|i| slots[i].take()).collect();
     let results: Vec<Result<()>> = futures::stream::iter(missing)
         .map(|job| {
             let progress = progress.clone();
@@ -135,12 +239,7 @@ pub async fn download_all(jobs: Vec<Job>, progress: &Arc<Progress>, verify: bool
                 r
             }
         })
-        // the number from the settings (`http::configure`), but never more than there are files
-        .buffer_unordered(crate::net::download_threads(
-            http::concurrency(),
-            std::thread::available_parallelism().map_or(4, |n| n.get()),
-            count,
-        ))
+        .buffer_unordered(threads)
         .collect()
         .await;
 
@@ -185,15 +284,17 @@ struct Failed {
     error: anyhow::Error,
     /// How many tries in all are worth making for this kind of failure.
     tries: u32,
+    /// The whole file arrived (as long as it should be), only its checksum disagrees.
+    mismatch: bool,
 }
 
 impl Failed {
     fn retry(error: impl Into<anyhow::Error>) -> Failed {
-        Failed { error: error.into(), tries: DOWNLOAD_TRIES }
+        Failed { error: error.into(), tries: DOWNLOAD_TRIES, mismatch: false }
     }
 
     fn fatal(error: impl Into<anyhow::Error>) -> Failed {
-        Failed { error: error.into(), tries: 1 }
+        Failed { error: error.into(), tries: 1, mismatch: false }
     }
 }
 
@@ -202,6 +303,9 @@ impl Failed {
 const CONNECT_TRIES: u32 = 2;
 
 const DOWNLOAD_TRIES: u32 = 4;
+
+/// How much of a download is gathered before it is written to the disk.
+pub(crate) const WRITE_BUFFER: usize = 512 * 1024;
 
 async fn download_one_now(job: &Job, progress: &Progress) -> Result<()> {
     if job.url.is_empty() {
@@ -237,6 +341,16 @@ async fn download_one_now(job: &Job, progress: &Progress) -> Result<()> {
                 return Ok(());
             }
             Err(failed) => {
+                if failed.mismatch && job.keep_on_mismatch && attempt + 1 >= failed.tries {
+                    // the same complete file every time: the pack's record of it is off, not the download
+                    tokio::fs::rename(&part, &job.dest)
+                        .await
+                        .with_context(|| format!("saving {}", job.dest.display()))?;
+                    let name = job.dest.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+                    crate::logs::warn(format!("Kept {name} although {:#}", failed.error));
+                    progress.note(name);
+                    return Ok(());
+                }
                 progress
                     .bytes_done
                     .fetch_sub(counted.min(progress.bytes_done.load(Ordering::Relaxed)), Ordering::Relaxed);
@@ -272,16 +386,18 @@ async fn fetch_to(
             } else {
                 1
             };
-            return Err(Failed { error: e.into(), tries });
+            return Err(Failed { error: e.into(), tries, mismatch: false });
         }
     };
     if !r.status().is_success() {
         let tries = if crate::net::is_transient_status(r.status().as_u16()) { DOWNLOAD_TRIES } else { 1 };
-        return Err(Failed { error: anyhow::anyhow!("HTTP {}", r.status()), tries });
+        return Err(Failed { error: anyhow::anyhow!("HTTP {}", r.status()), tries, mismatch: false });
     }
-    let mut file = tokio::fs::File::create(part)
+    let file = tokio::fs::File::create(part)
         .await
         .map_err(|e| Failed::fatal(anyhow::Error::from(e).context(format!("writing {}", part.display()))))?;
+    // the network hands over small pieces: written as they come, each would be a trip to the disk thread of its own
+    let mut file = tokio::io::BufWriter::with_capacity(WRITE_BUFFER, file);
     let mut hasher = Sha1::new();
     // pack libraries carry an MD5 in the checksum field (the Java edition tells them apart by length)
     let mut md5 = if sha1.is_some_and(|h| h.len() == 32) { Some(md5::Md5::new()) } else { None };
@@ -319,7 +435,13 @@ async fn fetch_to(
             None => hex::encode(hasher.finalize()),
         };
         if !got.eq_ignore_ascii_case(expected) {
-            return Err(Failed::retry(anyhow::anyhow!("the file arrived damaged (expected {expected}, got {got})")));
+            // cut short is damaged; complete but different may only be an out-of-date record of the file
+            let complete = size.is_none_or(|s| *counted == s);
+            return Err(Failed {
+                error: anyhow::anyhow!("the file arrived damaged (expected {expected}, got {got})"),
+                tries: DOWNLOAD_TRIES,
+                mismatch: complete,
+            });
         }
     }
     Ok(())
@@ -645,6 +767,48 @@ mod stamp_tests {
 /// Downloads as they go wrong in real life: servers that answer 404 or 503, connections that drop half way, files
 /// that arrive damaged, a player pressing Cancel, two jobs wanting one file.
 #[cfg(test)]
+mod progress_tests {
+    use super::*;
+
+    #[test]
+    fn sizes_read_like_people_write_them() {
+        assert_eq!(human_bytes(0), "0 KB");
+        assert_eq!(human_bytes(300), "1 KB");
+        assert_eq!(human_bytes(845_000), "845 KB");
+        assert_eq!(human_bytes(12_345_678), "12.3 MB");
+        assert_eq!(human_bytes(1_420_000_000), "1.42 GB");
+    }
+
+    #[test]
+    fn a_download_says_how_far_it_is_in_per_cent_and_sizes() {
+        let p = Progress::new();
+        assert_eq!(p.summary(), None, "nothing to download yet");
+        p.files_total.store(187, Ordering::Relaxed);
+        p.files_done.store(120, Ordering::Relaxed);
+        p.bytes_total.store(318_000_000, Ordering::Relaxed);
+        p.bytes_done.store(210_300_000, Ordering::Relaxed);
+        let (sizes, files) = p.summary().unwrap();
+        assert_eq!(sizes, "66% \u{00B7} 210.3 MB of 318.0 MB");
+        assert_eq!(files, "120 of 187 files", "no speed before there is anything to measure it by");
+        // more arrived than was planned (a file without a size): never "110%" or "330 of 318"
+        p.bytes_done.store(330_000_000, Ordering::Relaxed);
+        assert_eq!(p.summary().unwrap().0, "100% \u{00B7} 330.0 MB of 330.0 MB");
+    }
+
+    #[test]
+    fn notes_are_handed_over_once() {
+        let p = Progress::new();
+        p.note("a.jar");
+        p.note("b.jar");
+        assert_eq!(p.take_notes(), vec!["a.jar", "b.jar"]);
+        assert!(p.take_notes().is_empty());
+        assert!(kept_files_message(&["a.jar".into()]).starts_with("1 file didn't match"));
+        let many: Vec<String> = (0..7).map(|i| format!("m{i}.jar")).collect();
+        assert!(kept_files_message(&many).contains("m4.jar and 2 more"));
+    }
+}
+
+#[cfg(test)]
 mod download_robustness_tests {
     use super::*;
     use crate::testutil::{Reply, Server, runtime, scratch, sha1};
@@ -654,6 +818,69 @@ mod download_robustness_tests {
         j.sha1 = Some(sha1(body));
         j.size = Some(body.len() as u64);
         j
+    }
+
+    /// A modpack's file that arrives whole every time but with another checksum than the pack lists is kept and
+    /// said (the pack's list is out of date); one that arrives cut short is still refused, and a game file with a
+    /// wrong checksum is never kept.
+    #[test]
+    fn a_pack_file_with_an_out_of_date_checksum_is_kept_and_said() {
+        runtime().block_on(async {
+            let server = Server::start().await;
+            let dir = scratch("dl-keep");
+            let listed = b"the file the pack lists".to_vec();
+            let served = b"the file the site serves".to_vec();
+            assert_eq!(listed.len() + 1, served.len());
+            let mut pack_job = job(&server.route("/mod.jar", Reply::ok(served.clone())), &dir.join("mod.jar"), &listed);
+            pack_job.size = Some(served.len() as u64);
+            pack_job.keep_on_mismatch = true;
+            let progress = Progress::new();
+            download_all(vec![pack_job.clone()], &progress, false).await.unwrap();
+            assert_eq!(std::fs::read(dir.join("mod.jar")).unwrap(), served);
+            assert_eq!(progress.take_notes(), vec!["mod.jar".to_string()]);
+            assert_eq!(server.hits("/mod.jar"), DOWNLOAD_TRIES as usize, "asked again before it is believed");
+
+            // cut short: damaged, not out of date
+            let mut cut = pack_job.clone();
+            cut.url = server.route("/cut.jar", Reply::cut(served.clone(), 5));
+            cut.dest = dir.join("cut.jar");
+            assert!(download_all(vec![cut], &Progress::new(), false).await.is_err());
+            assert!(!dir.join("cut.jar").exists());
+
+            // the game's own files are never kept on a wrong checksum
+            let mut game = pack_job.clone();
+            game.keep_on_mismatch = false;
+            game.dest = dir.join("library.jar");
+            assert!(download_all(vec![game], &Progress::new(), false).await.is_err());
+            assert!(!dir.join("library.jar").exists());
+            let _ = std::fs::remove_dir_all(&dir);
+        });
+    }
+
+    /// Many small files from a slow server (the game's assets for a far-away player) are asked for many at once,
+    /// whatever the processor count, and the biggest file is asked for first.
+    #[test]
+    fn small_files_from_a_slow_server_are_fetched_many_at_once() {
+        runtime().block_on(async {
+            let server = Server::start().await;
+            let dir = scratch("dl-many");
+            let mut jobs = Vec::new();
+            for i in 0..120 {
+                let body = format!("asset {i}").into_bytes();
+                let url = server.route(&format!("/a{i}"), Reply::ok(body.clone()).slow(150));
+                jobs.push(job(&url, &dir.join(format!("a{i}")), &body));
+            }
+            let big = vec![7u8; 300_000];
+            let url = server.route("/big.jar", Reply::ok(big.clone()));
+            jobs.push(job(&url, &dir.join("big.jar"), &big));
+            let started = std::time::Instant::now();
+            assert_eq!(download_all(jobs, &Progress::new(), false).await.unwrap(), 121);
+            let took = started.elapsed();
+            // 120 answers of 150 ms each: one at a time 18 s, 8 at a time 2.3 s, 32 at a time about 0.6 s
+            assert!(server.most_at_once() >= 24, "only {} at once", server.most_at_once());
+            assert!(took < Duration::from_secs(5), "took {took:?}");
+            let _ = std::fs::remove_dir_all(&dir);
+        });
     }
 
     #[test]

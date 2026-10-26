@@ -678,7 +678,12 @@ impl App {
         self.tasks.push(Task { id, label: label.into(), progress: progress.clone() });
         let n = self.notifier();
         self.rt.spawn(async move {
-            let result = work(progress, n.clone()).await.map_err(|e| format!("{e:#}"));
+            let result = work(progress.clone(), n.clone()).await.map_err(|e| format!("{e:#}"));
+            // pack files kept although their checksum disagreed are said when the job ends
+            let kept = progress.take_notes();
+            if !kept.is_empty() {
+                n.send(Msg::Toast(crate::install::kept_files_message(&kept), true));
+            }
             n.send(Msg::TaskDone { id, result });
         });
     }
@@ -1701,12 +1706,11 @@ fn zoom_that_fits(zoom: f32, monitor: egui::Vec2) -> Option<f32> {
 /// One job in the sidebar (or in its "+N more" list): what it is, how far it got, and its Cancel.
 fn task_row(ui: &mut egui::Ui, t: &Task) {
     ui.add(egui::Label::new(RichText::new(&t.label).size(FS_META).medium_weight()).truncate());
-    let (d, total) = (t.progress.files_done.load(Ordering::Relaxed), t.progress.files_total.load(Ordering::Relaxed));
-    if total > 0 {
+    if let Some((sizes, files)) = t.progress.summary() {
+        // how much of how much, in per cent, then the files and the speed
         progress_bar(ui, Some(t.progress.fraction()), 4.0);
-        let note =
-            format!("{d} / {total} files  \u{00B7}  {}", human_size(t.progress.bytes_done.load(Ordering::Relaxed)));
-        ui.label(RichText::new(note).size(FS_META).color(c_faint()));
+        ui.add(egui::Label::new(RichText::new(sizes).size(FS_META).color(c_muted())).truncate());
+        ui.add(egui::Label::new(RichText::new(files).size(FS_META).color(c_faint())).truncate());
     } else {
         progress_bar(ui, None, 4.0);
         let stage = t.progress.stage_text();

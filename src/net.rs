@@ -159,21 +159,27 @@ pub async fn test_proxy(proxy: &ProxyConfig, url: &str) -> Result<()> {
 // ---------------------------------------------------------------------------------------------------------
 // How many downloads at once (DownloadPool)
 
-/// What the player set, or when it is still the default, what suits this computer: 8 with two cores or 4 GB of
-/// memory or less, otherwise the default.
+/// What the player set, or when it is still the default (16, the Java edition's), what suits this computer: 32 at
+/// once, or 16 with two cores or 4 GB of memory or less. Waiting on the network costs no processor time: what limits
+/// a download of thousands of small files (the game's assets, a modpack) is the time each request takes to answer,
+/// which a far-away player feels most, so more of them at once is quicker.
 pub fn for_computer(configured: usize, default_configured: usize, total_mb: u64, cores: usize) -> usize {
     if configured != default_configured {
         return configured;
     }
     let small = (total_mb > 0 && total_mb <= 4608) || (cores > 0 && cores <= 2);
-    if small { configured.min(8) } else { configured }
+    if small { configured.max(16) } else { configured.max(32) }
 }
 
-/// How many files to fetch at once: the configured number, but no more than there are files, and on computers
-/// with few cores no more than 4 per core (but never below 8).
+/// The most files fetched at once, whatever the setting says.
+pub const MAX_DOWNLOAD_THREADS: usize = 64;
+
+/// How many files to fetch at once: the configured number (at most [`MAX_DOWNLOAD_THREADS`]), but no more than there
+/// are files. `processors` is no longer a limit (a download waits on the network, not on the processor) and is kept
+/// for the callers.
 pub fn download_threads(configured: usize, processors: usize, files: usize) -> usize {
-    let threads = configured.max(1).min(8.max(processors * 4));
-    threads.min(files).max(1)
+    let _ = processors;
+    configured.clamp(1, MAX_DOWNLOAD_THREADS).min(files).max(1)
 }
 
 /// How many files to check on disk at once.
@@ -386,16 +392,16 @@ mod tests {
 
     #[test]
     fn thread_counts_follow_the_download_pool() {
-        // default setting on a small computer drops to 8; an explicit setting is kept
-        assert_eq!(for_computer(16, 16, 4096, 8), 8);
-        assert_eq!(for_computer(16, 16, 16384, 2), 8);
-        assert_eq!(for_computer(16, 16, 16384, 8), 16);
+        // the default setting fetches 32 at once, 16 on a small computer; an explicit setting is kept
+        assert_eq!(for_computer(16, 16, 4096, 8), 16);
+        assert_eq!(for_computer(16, 16, 16384, 2), 16);
+        assert_eq!(for_computer(16, 16, 16384, 8), 32);
         assert_eq!(for_computer(32, 16, 2048, 2), 32);
         assert_eq!(for_computer(4, 16, 2048, 2), 4);
-        // never more threads than files, nor more than 4 per core (at least 8)
+        // never more threads than files, nor more than the cap; the processor count doesn't limit it
         assert_eq!(download_threads(16, 8, 100), 16);
-        assert_eq!(download_threads(100, 2, 1000), 8);
-        assert_eq!(download_threads(100, 16, 1000), 64);
+        assert_eq!(download_threads(32, 2, 1000), 32);
+        assert_eq!(download_threads(100, 16, 1000), MAX_DOWNLOAD_THREADS);
         assert_eq!(download_threads(16, 8, 3), 3);
         assert_eq!(download_threads(0, 8, 0), 1);
         assert_eq!(check_threads(8, 100), 16);
