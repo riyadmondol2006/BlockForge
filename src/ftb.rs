@@ -983,16 +983,25 @@ async fn plan_mods(
             Some(x) => x.clone(),
             None => cf.file(project_id, file_id).await.with_context(|| format!("finding {} on CurseForge", f.name))?,
         };
+        // the folder comes from FTB's manifest, like for the files FTB hosts itself: without it the jar landed in
+        // the instance folder, where the game never loads it
+        let dir = match f.dir() {
+            d if d.is_empty() => "mods/".to_string(),
+            d => d,
+        };
         let mut record = ModRecord::new(&project.name, &file.file_name, "mods");
         record.version = file.display_name.clone();
         record.description = project.summary.clone();
+        record.optional = f.optional;
+        record.path = Some(dir.clone());
+        record.user_added = false;
         record.curse_forge_project_id = Some(project.id);
         record.curse_forge_file_id = Some(file.id);
         record.curse_forge_project = Some(project.raw.clone());
         record.curse_forge_file = Some(file.for_instance_json());
         let plan = ModPlan {
             file: file.file_name.clone(),
-            dir: String::new(),
+            dir,
             url: file.download_url.clone().unwrap_or_default(),
             sha1: file.sha1.clone(),
             size: Some(file.file_length).filter(|s| *s > 0),
@@ -1016,7 +1025,7 @@ async fn plan_mods(
         for (mut plan, file, project) in need_modrinth {
             let version = file.sha1.as_deref().and_then(|h| versions.get(h));
             let url = version
-                .and_then(|v| modcheck::modrinth_file_by_sha1(v, file.sha1.as_deref().unwrap_or("")))
+                .and_then(|v| modcheck::modrinth_file_with_sha1(v, file.sha1.as_deref().unwrap_or("")))
                 .and_then(|f| f["url"].as_str());
             if let (Some(url), Some(version)) = (url, version) {
                 plan.url = url.to_string();
@@ -1371,6 +1380,48 @@ mod tests {
 
         let mods = mods_manifest(&dirs, 100, 2276).await.unwrap();
         assert!(mods.mods.iter().any(|m| m.curse_project.is_some()));
+    }
+
+    /// CurseForge as far as one test needs it: every file can be downloaded.
+    struct FakeCurseForge;
+
+    impl CurseForgeSource for FakeCurseForge {
+        fn file(
+            &self,
+            project_id: i64,
+            file_id: i64,
+        ) -> futures::future::BoxFuture<'_, Result<(crate::cf_seam::CfProject, crate::cf_seam::CfFile)>> {
+            Box::pin(async move {
+                let project = crate::cf_seam::CfProject::from_json(
+                    &serde_json::json!({"id": project_id, "name": "AE2 Wireless Terminals", "summary": "s"}),
+                );
+                let file = crate::cf_seam::CfFile::from_json(&serde_json::json!({
+                    "id": file_id, "modId": project_id, "displayName": "11.5.0", "fileName": "AE2WTLib-11.5.0.jar",
+                    "downloadUrl": "https://edge.forgecdn.net/files/AE2WTLib-11.5.0.jar", "fileLength": 211920,
+                    "isAvailable": true
+                }));
+                Ok((project, file))
+            })
+        }
+
+        fn fingerprints(
+            &self,
+            _fingerprints: Vec<u32>,
+        ) -> futures::future::BoxFuture<'_, Result<Vec<crate::cf_seam::CfMatch>>> {
+            Box::pin(async { Ok(Vec::new()) })
+        }
+    }
+
+    #[tokio::test]
+    async fn mods_hosted_on_curseforge_go_into_the_mods_folder() {
+        let vm: VersionManifest = serde_json::from_str(VERSION).unwrap();
+        let dirs = Dirs::at(std::env::temp_dir().join(format!("bf-ftb-plan-{}", std::process::id())));
+        let plans = plan_mods(&dirs, &vm, None, &FakeCurseForge, &Progress::new()).await.unwrap();
+        let ae2 = plans.iter().find(|p| p.file == "AE2WTLib-11.5.0.jar").expect("the CurseForge mod is planned");
+        assert_eq!(ae2.dir, "mods/", "not the instance folder, where the game never loads it");
+        assert_eq!(ae2.record.path.as_deref(), Some("mods/"));
+        let x = plans.iter().find(|p| p.file == "x.jar").unwrap();
+        assert_eq!(x.dir, ae2.dir, "both kinds of mod end up together");
     }
 
     #[tokio::test]

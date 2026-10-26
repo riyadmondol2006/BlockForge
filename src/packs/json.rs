@@ -409,48 +409,46 @@ pub struct PathRule {
 }
 
 impl PathRule {
-    fn has_unsafe_parts(&self) -> bool {
-        self.target.contains("./")
-            || self.target.contains(".\\")
-            || self.target.contains("~/")
-            || self.target.contains("~\\")
+    /// The target as a path that stays below its base: `%s%` turned into separators first, then anything empty,
+    /// absolute, with a drive letter or with `..` refused. (Rust's `join` replaces the whole path with an absolute
+    /// one, where Java's `new File(parent, child)` didn't, so the Java edition's text checks are not enough here.)
+    fn relative(&self) -> Option<std::path::PathBuf> {
+        let target = self.target.replace("%s%", "/");
+        if target.contains('~') {
+            return None;
+        }
+        crate::packutil::safe_relative(&target)
     }
 
     /// Deleting: nothing that could reach worlds, `instance.json` or outside the instance.
     pub fn delete_allowed(&self) -> bool {
-        if self.base.eq_ignore_ascii_case("root") {
-            return !self.target.starts_with("world")
-                && !self.target.starts_with("DIM")
-                && !self.target.starts_with("saves")
-                && !self.target.starts_with("instance.json")
-                && !self.has_unsafe_parts();
-        }
-        true
+        self.relative().is_some_and(|rel| !self.reaches_player_data(&rel))
     }
 
-    /// Keeping a file through a reinstall has the same limits, and always refuses paths that climb out.
+    /// Keeping a file through a reinstall has the same limits.
     pub fn keep_allowed(&self) -> bool {
-        if self.base.eq_ignore_ascii_case("root")
-            && (self.target.starts_with("world")
-                || self.target.starts_with("DIM")
-                || self.target.starts_with("saves")
-                || self.target.starts_with("instance.json")
-                || self.has_unsafe_parts())
-        {
+        self.delete_allowed()
+    }
+
+    /// Whether a rule below the instance folder points at worlds or the instance's own file, whatever the case
+    /// (`Saves` is the same folder as `saves` on Windows and macOS).
+    fn reaches_player_data(&self, rel: &std::path::Path) -> bool {
+        if !self.base.eq_ignore_ascii_case("root") && !self.base.is_empty() {
             return false;
         }
-        !self.has_unsafe_parts()
+        crate::packs::is_player_data(rel)
     }
 
-    /// The path below `root` (or below `<root>/config` for `base: config`).
-    pub fn resolve(&self, root: &std::path::Path) -> std::path::PathBuf {
+    /// The path below `root` (or below `<root>/config` for `base: config`); `None` when the target would lead
+    /// anywhere else.
+    pub fn resolve(&self, root: &std::path::Path) -> Option<std::path::PathBuf> {
         let base = if self.base.eq_ignore_ascii_case("config") { root.join("config") } else { root.to_path_buf() };
-        base.join(self.target.replace("%s%", std::path::MAIN_SEPARATOR_STR))
+        self.relative().map(|rel| base.join(rel))
     }
 
     /// The same target, but below a temporary folder (no `config` prefix: kept files are stored by target).
-    pub fn resolve_flat(&self, temp: &std::path::Path) -> std::path::PathBuf {
-        temp.join(self.target.replace("%s%", std::path::MAIN_SEPARATOR_STR))
+    pub fn resolve_flat(&self, temp: &std::path::Path) -> Option<std::path::PathBuf> {
+        self.relative().map(|rel| temp.join(rel))
     }
 }
 
@@ -588,7 +586,46 @@ impl Default for PackJson {
 
 impl PackJson {
     pub fn parse(bytes: &[u8]) -> anyhow::Result<PackJson> {
-        Ok(serde_json::from_slice(bytes)?)
+        let json: PackJson = serde_json::from_slice(bytes)?;
+        json.check_paths()?;
+        Ok(json)
+    }
+
+    /// Refuse a pack whose file names or folders would put files outside the place they belong (an absolute
+    /// path, a drive letter, `..`). Every later step joins these to a folder as they are, so this is the one check.
+    pub fn check_paths(&self) -> anyhow::Result<()> {
+        use crate::packutil::{safe_file_name, safe_relative};
+        // empty or "this folder" (`./`, which Java read as the folder itself) is the default folder
+        let here = |p: &str| matches!(p, "" | "." | "./" | ".\\");
+        let folder_ok = |p: &Option<String>| p.as_deref().is_none_or(|p| here(p) || safe_relative(p).is_some());
+        let name_ok = |n: &str| n.is_empty() || safe_file_name(n);
+        for m in &self.mods {
+            // with `filePattern` the file is a pattern to look for, not a name to write
+            let file_ok = m.file_pattern || name_ok(&m.file_name());
+            let server_ok = m.server_file.as_deref().is_none_or(name_ok);
+            if !(file_ok
+                && server_ok
+                && folder_ok(&m.path)
+                && folder_ok(&m.extract_folder)
+                && folder_ok(&m.decomp_file))
+            {
+                anyhow::bail!(
+                    "the pack's mod \"{}\" has a file name or folder that points outside the instance",
+                    m.name
+                );
+            }
+        }
+        for a in &self.actions {
+            if !a.save_as.as_deref().is_none_or(name_ok) {
+                anyhow::bail!("one of the pack's actions saves to a name that isn't allowed");
+            }
+        }
+        for l in &self.libraries {
+            if !(name_ok(&l.file) && folder_ok(&l.path) && folder_ok(&l.server)) {
+                anyhow::bail!("the pack's library {} has a path that points outside the libraries folder", l.file);
+            }
+        }
+        Ok(())
     }
 
     /// The colour a mod asked for (a key of `colours`), as red, green, blue.
@@ -686,7 +723,66 @@ mod tests {
         assert!(r("config", "NEI.cfg").keep_allowed());
         assert_eq!(
             r("config", "a%s%b.cfg").resolve(std::path::Path::new("/i")),
-            std::path::Path::new("/i/config").join("a").join("b.cfg")
+            Some(std::path::Path::new("/i/config").join("a").join("b.cfg"))
         );
+    }
+
+    /// Ways a bad or hostile pack definition got past the checks before: each would have deleted worlds or files
+    /// outside the instance on a reinstall.
+    #[test]
+    fn delete_and_keep_rules_cannot_escape_or_reach_worlds() {
+        let r = |base: &str, target: &str| PathRule { base: base.into(), target: target.into() };
+        let root = std::path::Path::new("/i");
+        for (base, target) in [
+            ("config", "../saves"),
+            ("config", "..%s%saves"),
+            ("root", "..%s%..%s%Documents"),
+            ("root", "/home/u"),
+            ("root", "%s%home%s%u"),
+            ("root", ""),
+            ("root", "."),
+            ("root", "Saves"),
+            ("root", "SAVES%s%World"),
+            ("root", "World_nether"),
+            ("root", "dim-1"),
+            ("root", "Instance.JSON"),
+            ("root", "~/x"),
+            ("root", "a%s%..%s%..%s%x"),
+        ] {
+            let rule = r(base, target);
+            assert!(!rule.delete_allowed(), "delete {base}:{target}");
+            assert!(!rule.keep_allowed(), "keep {base}:{target}");
+            if let Some(p) = rule.resolve(root) {
+                assert!(p.starts_with(root) && p != root, "{base}:{target} -> {}", p.display());
+            }
+        }
+        // ordinary rules still work
+        assert!(r("root", "scripts%s%old.zs").delete_allowed());
+        assert!(r("config", "saves.cfg").delete_allowed(), "below config/ a name like saves is just a file");
+    }
+
+    #[test]
+    fn packs_whose_files_would_land_outside_are_refused() {
+        let bad = [
+            r#"{"mods":[{"name":"m","file":"../../evil.jar"}]}"#,
+            r#"{"mods":[{"name":"m","file":"a.jar","path":"/home/u/.config/autostart"}]}"#,
+            r#"{"mods":[{"name":"m","file":"a.jar","path":"..\..\x"}]}"#,
+            r#"{"mods":[{"name":"m","file":"a.jar","filePrefix":"../"}]}"#,
+            r#"{"mods":[{"name":"m","file":"a.jar","serverFile":"C:x.jar"}]}"#,
+            r#"{"mods":[{"name":"m","file":"a.zip","extractFolder":"/etc"}]}"#,
+            r#"{"mods":[{"name":"m","file":"a.zip","decompFile":"../../../etc/passwd"}]}"#,
+            r#"{"actions":[{"action":"createZip","mod":["a","b"],"saveAs":"../../x.jar"}]}"#,
+            r#"{"libraries":[{"file":"x.jar","path":"/usr/lib/x.jar"}]}"#,
+            r#"{"libraries":[{"file":"x.jar","server":"../../x.jar"}]}"#,
+        ];
+        for json in bad {
+            assert!(PackJson::parse(json.as_bytes()).is_err(), "{json}");
+        }
+        // a file pattern is a pattern, not a name, and ordinary packs still read
+        assert!(PackJson::parse(br#"{"mods":[{"name":"m","file":"jei-.*\\.jar","filePattern":true}]}"#).is_ok());
+        assert!(PackJson::parse(br#"{"mods":[{"name":"m","file":"a b.jar","path":"mods/sub/"}]}"#).is_ok());
+        assert!(PackJson::parse(br#"{"mods":[{"name":"m","file":"a.jar","path":""}]}"#).is_ok());
+        assert!(PackJson::parse(br#"{"mods":[{"name":"m","file":"a.zip","extractFolder":"./","path":"."}]}"#).is_ok());
+        assert!(PackJson::parse(br#"{"mods":[{"name":"m","file":"a.zip","extractFolder":"/"}]}"#).is_err());
     }
 }

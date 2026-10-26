@@ -285,7 +285,13 @@ impl JavaWorldWriter {
         for portal in self.level.portals.iter().filter(|p| p.dimension == *dim) {
             for (x, y0, z) in portal.horizontal_blocks(chunk) {
                 let mut y = y0;
-                while column.block(x, y, z).block_type() == Some(BlockType::NETHER_PORTAL) {
+                // never taller than a world: a column whose lookups wrap round must not keep this going for ever
+                let mut steps = 0;
+                while steps < 512
+                    && y < i32::MAX
+                    && column.block(x, y, z).block_type() == Some(BlockType::NETHER_PORTAL)
+                {
+                    steps += 1;
                     let mut record = Compound::with_capacity(3);
                     record.insert("type", Tag::String("minecraft:nether_portal".into()));
                     record.insert("pos", Tag::IntArray(vec![x, y, z]));
@@ -356,22 +362,34 @@ impl JavaWorldWriter {
         self.finish_with_summary().map(|_| ())
     }
 
-    /// [`JavaWorldWriter::finish`] that also returns the counters.
+    /// [`JavaWorldWriter::finish`] that also returns the counters. When the last files can't be written (a full
+    /// disk), what was written is removed like [`JavaWorldWriter::abort`] does: a world without its `level.dat` is
+    /// no use, and it would keep the folder from being used again ("not empty").
     pub fn finish_with_summary(self) -> Result<WriterSummary, ConvertError> {
         let mut this = self;
-        this.regions.flush().map_err(io_error)?;
-        let summary = this.summary();
+        match this.write_last_files() {
+            Ok(summary) => Ok(summary),
+            Err(e) => {
+                this.abort();
+                Err(e)
+            }
+        }
+    }
+
+    fn write_last_files(&mut self) -> Result<WriterSummary, ConvertError> {
+        self.regions.flush().map_err(io_error)?;
+        let summary = self.summary();
         super::level_writer::write_level_files(&super::level_writer::LevelFiles {
-            format: &this.format,
-            dirs: &this.dirs,
-            level: &this.level,
-            settings: &this.settings,
-            items: &this.items,
-            biomes: &this.biomes,
-            player_items: &this.player_items,
-            icon: this.icon.as_deref(),
-            dimensions: &this.dimensions_seen,
-            tall_overworld: this.tall_overworld,
+            format: &self.format,
+            dirs: &self.dirs,
+            level: &self.level,
+            settings: &self.settings,
+            items: &self.items,
+            biomes: &self.biomes,
+            player_items: &self.player_items,
+            icon: self.icon.as_deref(),
+            dimensions: &self.dimensions_seen,
+            tall_overworld: self.tall_overworld,
         })?;
         Ok(summary)
     }

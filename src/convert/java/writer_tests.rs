@@ -632,3 +632,21 @@ fn timing_one_region() {
     w.finish().unwrap();
     eprintln!("1024 columns of 25 sections: {:?}", start.elapsed());
 }
+
+#[test]
+fn a_world_whose_last_files_cant_be_written_is_removed_not_left_half_made() {
+    let base = std::env::temp_dir().join(format!("bf-writer-finish-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(&base).unwrap();
+    let out = base.join("World");
+    let mut w =
+        JavaWorldWriter::create(&out, Version::new(1, 21, 4), &level(), &ConversionSettings::default()).unwrap();
+    let dim = Dimension::overworld();
+    w.write_column(&dim, &sample_column(0, 0)).unwrap();
+    w.finish_dimension(&dim).unwrap();
+    // something in the way of level.dat, as a full disk or a locked file would be
+    std::fs::create_dir_all(out.join("level.dat").join("blocked")).unwrap();
+    assert!(w.finish_with_summary().is_err());
+    assert!(!out.exists(), "the half-made world was removed, so the folder can be used again");
+    let _ = std::fs::remove_dir_all(&base);
+}

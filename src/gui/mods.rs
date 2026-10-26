@@ -509,6 +509,10 @@ impl App {
         }
         let Some(folder) = self.selected.clone() else { return false };
         let detected = metadata::detect(path);
+        // a modpack becomes an instance of its own: the window's usual drop handling imports it
+        if detected.kind.is_modpack() {
+            return false;
+        }
         let record_type = match detected.kind {
             metadata::FileKind::DataPack => "datapack",
             k => match k.content_kind() {
@@ -850,7 +854,7 @@ impl App {
                         acts.push(Act::Snapshot);
                         ui.close();
                     }
-                    let saved = snapshots::latest(&snapshots::folder_for(&this.dirs, inst), 8);
+                    let saved = snapshots::latest(&snapshots::folder_among(&this.dirs, inst, &this.instances), 8);
                     if saved.is_empty() {
                         ui.add_enabled(false, egui::Button::new("No snapshots yet"));
                     }

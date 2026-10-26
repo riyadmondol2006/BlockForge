@@ -203,9 +203,8 @@ pub fn is_transient_status(code: u16) -> bool {
 /// Errors that tend to go away on their own (a timeout, a dropped connection). Being offline (no route, no such
 /// host, connection refused) is not one of them, so offline use fails at once instead of waiting.
 pub fn is_transient_error(e: &reqwest::Error) -> bool {
-    if e.is_timeout() {
-        return true;
-    }
+    // checked before the timeout: a connection that times out (a network that drops everything, a portal not yet
+    // accepted) is reported as both, and waiting the whole timeout five times over makes offline use crawl
     if e.is_connect() || e.is_builder() || e.is_redirect() {
         return false;
     }

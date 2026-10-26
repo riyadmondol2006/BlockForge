@@ -24,6 +24,11 @@ pub const MAX_LIST_LENGTH: usize = 16 * 16 * 4096;
 pub const MAX_COMPOUND_LENGTH: usize = 16 * 16 * 4096;
 /// Deepest nesting of lists and compounds (Minecraft's own limit).
 pub const MAX_DEPTH: usize = 512;
+/// The most values (list elements and compound entries, counted over the whole document) one document may hold.
+/// Each costs some 80 bytes in memory however few bytes it took in the file (an empty compound is one byte), so
+/// without a total a world of a few hundred KB could ask for gigabytes. Real chunks and block entities hold far
+/// fewer.
+pub const MAX_TOTAL_VALUES: usize = 4 * 1024 * 1024;
 
 /// The two byte layouts of NBT.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -103,11 +108,23 @@ struct Decoder<I> {
     inp: I,
     le: bool,
     java: bool,
+    /// Values decoded so far, against [`MAX_TOTAL_VALUES`].
+    values: usize,
 }
 
 impl<I: Input> Decoder<I> {
     fn new(inp: I, flavor: Flavor) -> Self {
-        Decoder { inp, le: flavor == Flavor::Bedrock, java: flavor == Flavor::Java }
+        Decoder { inp, le: flavor == Flavor::Bedrock, java: flavor == Flavor::Java, values: 0 }
+    }
+
+    /// Count one more value, failing when the document holds more than any real one does.
+    #[inline]
+    fn count_value(&mut self) -> Result<(), NbtError> {
+        self.values += 1;
+        if self.values > MAX_TOTAL_VALUES {
+            return Err(NbtError::LimitExceeded { what: "values", len: self.values as i64, max: MAX_TOTAL_VALUES });
+        }
+        Ok(())
     }
 
     #[inline]
@@ -236,9 +253,12 @@ impl<I: Input> Decoder<I> {
                 if elem == TagType::End || len == 0 {
                     return Ok(Tag::List(Vec::new()));
                 }
-                let cap = len.min(self.inp.remaining().unwrap_or(4096));
+                // room for what the rest of the input can hold at most, and never more than a modest start: each
+                // element is far bigger in memory than its smallest form in the file
+                let cap = len.min(self.inp.remaining().unwrap_or(4096)).min(4096);
                 let mut items = Vec::with_capacity(cap);
                 for _ in 0..len {
+                    self.count_value()?;
                     items.push(self.value(elem, depth + 1)?);
                 }
                 Tag::List(items)
@@ -247,8 +267,10 @@ impl<I: Input> Decoder<I> {
                 if depth >= MAX_DEPTH {
                     return Err(NbtError::TooDeep);
                 }
-                let mut map = Compound::with_capacity(8);
+                // no room set aside up front: an empty compound is a single byte in the file
+                let mut map = Compound::new();
                 while let Some((name, tag)) = self.named(depth + 1)? {
+                    self.count_value()?;
                     map.0.insert(name, tag);
                     if map.0.len() > MAX_COMPOUND_LENGTH {
                         return Err(NbtError::LimitExceeded {
@@ -496,5 +518,55 @@ pub fn decompress_auto(bytes: &[u8]) -> Result<Vec<u8>, NbtError> {
         [id, ..] if (1..=12).contains(id) => Ok(bytes.to_vec()),
         [] => Ok(Vec::new()),
         _ => inflate_raw(bytes).or_else(|_| Ok(bytes.to_vec())),
+    }
+}
+
+#[cfg(test)]
+mod amplification_tests {
+    use super::*;
+
+    /// A Bedrock document: a root compound with `lists` lists, each of `len` empty compounds.
+    fn empty_compound_lists(lists: usize, len: usize) -> Vec<u8> {
+        let mut b = vec![TagType::Compound as u8, 0, 0];
+        for i in 0..lists {
+            b.push(TagType::List as u8);
+            let name = format!("l{i}");
+            b.extend_from_slice(&(name.len() as i16).to_le_bytes());
+            b.extend_from_slice(name.as_bytes());
+            b.push(TagType::Compound as u8);
+            b.extend_from_slice(&(len as i32).to_le_bytes());
+            b.extend(std::iter::repeat_n(0u8, len)); // each element: an empty compound, one END byte
+        }
+        b.push(0);
+        b
+    }
+
+    #[test]
+    fn millions_of_empty_compounds_are_refused_instead_of_eating_the_memory() {
+        // about 5 MB of file (a few KB once zipped in a .mcworld) that used to ask for several GB
+        let bytes = empty_compound_lists(5, MAX_LIST_LENGTH);
+        let err = from_slice(&bytes, Flavor::Bedrock).unwrap_err();
+        assert!(matches!(err, NbtError::LimitExceeded { what: "values", .. }), "{err:?}");
+    }
+
+    #[test]
+    fn ordinary_documents_with_many_values_still_read() {
+        let bytes = empty_compound_lists(2, 1000);
+        let (_, tag) = from_slice(&bytes, Flavor::Bedrock).unwrap();
+        let Tag::Compound(c) = tag else { panic!("not a compound") };
+        assert_eq!(c.0.len(), 2);
+        assert!(matches!(&c.0["l0"], Tag::List(items) if items.len() == 1000));
+    }
+
+    #[test]
+    fn truncated_and_garbage_documents_are_errors() {
+        let full = empty_compound_lists(1, 10);
+        for cut in 0..full.len() {
+            assert!(from_slice(&full[..cut], Flavor::Bedrock).is_err(), "cut at {cut}");
+        }
+        for garbage in [&[0xffu8][..], &[10, 0xff, 0xff], &[9, 0, 0, 10, 0xff, 0xff, 0xff, 0x7f]] {
+            let _ = from_slice(garbage, Flavor::Bedrock);
+            let _ = from_slice(garbage, Flavor::Java);
+        }
     }
 }

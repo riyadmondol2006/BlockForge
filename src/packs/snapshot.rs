@@ -33,10 +33,10 @@ impl Snapshot {
     }
 }
 
-/// `<data>/snapshots/<instance folder name with letters and digits only>`
+/// `<data>/snapshots/<instance folder>`, the same folder the Mods page lists and restores from (see
+/// [`crate::snapshots::folder_for`]).
 pub fn folder_for(dirs: &Dirs, instance: &Instance) -> PathBuf {
-    let name = if instance.file.launcher.name.is_empty() { &instance.folder } else { &instance.file.launcher.name };
-    dirs.base.join("snapshots").join(super::safe_name(name))
+    crate::snapshots::folder_for(dirs, instance)
 }
 
 /// Save the instance as it is, ahead of something that changes it. A failure is only returned, never fatal to the
@@ -51,8 +51,10 @@ pub fn create(root: &Path, dir: &Path, label: &str) -> Result<Snapshot> {
     let safe: String =
         label.chars().map(|c| if c.is_ascii_alphanumeric() || "_.-".contains(c) { c } else { '_' }).collect();
     let zip_path = dir.join(format!("{stamp}-{safe}.zip"));
+    // written under another name and renamed when whole, so a crash never leaves a broken newest snapshot
+    let part = zip_path.with_extension("zip.part");
     let result = (|| -> Result<()> {
-        let mut writer = zip::ZipWriter::new(File::create(&zip_path)?);
+        let mut writer = zip::ZipWriter::new(File::create(&part)?);
         // mods are already compressed jars, so a light level is fast and hardly larger
         let opts = SimpleFileOptions::default().compression_level(Some(1));
         for name in MANAGED {
@@ -63,10 +65,12 @@ pub fn create(root: &Path, dir: &Path, label: &str) -> Result<Snapshot> {
             }
             add_tree(&mut writer, root, &entry, opts)?;
         }
-        writer.finish()?;
+        writer.finish()?.sync_all()?;
+        std::fs::rename(&part, &zip_path)?;
         Ok(())
     })();
     if let Err(e) = result {
+        let _ = std::fs::remove_file(&part);
         let _ = std::fs::remove_file(&zip_path);
         return Err(e).context("saving a snapshot");
     }

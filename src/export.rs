@@ -336,9 +336,28 @@ pub struct ExportOutcome {
     pub overrides_note: String,
 }
 
-/// Characters that can't be in a file name on some system are dropped from the archive's name.
+/// Characters that can't be in a file name on some system are dropped from the archive's name: the ones Windows
+/// refuses, `/` (a name like "1.20.1 w/ Create" would otherwise point into a folder that doesn't exist, after every
+/// lookup had been done) and control characters; spaces and dots at the ends go too (Windows drops them silently).
 pub fn safe_file_name(name: &str) -> String {
-    name.chars().filter(|c| !matches!(c, '\\' | '"' | '?' | ':' | '*' | '<' | '>' | '|')).collect()
+    let cleaned = cleaned_name(name);
+    if cleaned.is_empty() { "Export".to_string() } else { cleaned }
+}
+
+fn cleaned_name(name: &str) -> String {
+    let kept: String = name
+        .chars()
+        .filter(|c| !matches!(c, '\\' | '/' | '"' | '?' | ':' | '*' | '<' | '>' | '|') && !c.is_control())
+        .collect();
+    kept.trim_matches(|c: char| c == ' ' || c == '.').to_string()
+}
+
+/// The name of an export archive: the pack's name and, when there is one, its version, both made safe.
+fn archive_name(name: &str, version: &str, ext: &str) -> String {
+    match cleaned_name(version) {
+        v if v.is_empty() => format!("{}.{ext}", safe_file_name(name)),
+        v => format!("{} {v}.{ext}", safe_file_name(name)),
+    }
 }
 
 /// Export `instance`. The mods Modrinth and CurseForge recognise are looked up first (and remembered in the
@@ -546,7 +565,7 @@ async fn export_curseforge(
 ) -> Result<PathBuf> {
     let _ = dirs;
     let safe = safe_file_name(&opts.name);
-    let to = opts.save_to.join(format!("{safe} {}.zip", opts.version));
+    let to = opts.save_to.join(archive_name(&opts.name, &opts.version, "zip"));
     let root = instance.root.clone();
     let mc = instance.mc_version().to_string();
 
@@ -693,7 +712,7 @@ async fn export_modrinth(
 ) -> Result<(PathBuf, String)> {
     let _ = dirs;
     let safe = safe_file_name(&opts.name);
-    let to = opts.save_to.join(format!("{safe} {}.mrpack", opts.version));
+    let to = opts.save_to.join(archive_name(&opts.name, &opts.version, "mrpack"));
     let root = instance.root.clone();
     let mc = instance.mc_version().to_string();
 
@@ -717,13 +736,16 @@ async fn export_modrinth(
         .collect();
     let mut seen = HashSet::new();
     let mut files = Vec::new();
+    // the files listed by address; every other file is stored in the archive, so none is left out of both
+    let mut listed_paths: HashSet<PathBuf> = HashSet::new();
     for m in listed.into_iter().filter(|m| seen.insert(m.modrinth_version_id().map(str::to_string))) {
         let Some(path) = modcheck::enabled_file(&root, &mc, m) else { continue };
         let (sha1, sha512, size) = hash_file(&path)?;
         let Some(version) = m.modrinth_version.as_ref() else { continue };
-        let Some(url) = modcheck::modrinth_file_by_sha1(version, &sha1).and_then(|f| f["url"].as_str()) else {
+        let Some(url) = modcheck::modrinth_file_with_sha1(version, &sha1).and_then(|f| f["url"].as_str()) else {
             continue;
         };
+        listed_paths.insert(path.clone());
         let mut env = BTreeMap::new();
         // mods are always required on the client ALWAYS ALWAYS ALWAYS (for now)
         env.insert("client".to_string(), "required".to_string());
@@ -758,14 +780,10 @@ async fn export_modrinth(
         dependencies,
     };
 
-    // files Modrinth lists by hash are not stored in the archive
-    let mut skip: HashSet<PathBuf> = HashSet::new();
+    // files listed by address are not stored in the archive (and only those: one whose hash matches none of its
+    // recorded version's files is stored, not dropped)
+    let mut skip: HashSet<PathBuf> = listed_paths;
     skip.insert(to.clone());
-    for m in records.iter().filter(|m| !m.disabled && m.modrinth_version.as_ref().is_some_and(|v| !v.is_null())) {
-        if let Some(f) = modcheck::enabled_file(&root, &mc, m) {
-            skip.insert(f);
-        }
-    }
     progress.stage("Writing the archive");
     let mut entries = vec![Entry { name: "modrinth.index.json".into(), content: Content::Bytes(pretty(&manifest)?) }];
     entries.extend(collect(&root, &overrides_without_output(overrides, &safe), "overrides/", &skip));
@@ -1397,6 +1415,61 @@ mod tests {
         let mut s = String::new();
         e.read_to_string(&mut s).ok()?;
         Some(s)
+    }
+
+    #[test]
+    fn archive_names_are_one_plain_file_name_whatever_was_typed() {
+        assert_eq!(safe_file_name("1.20.1 w/ Create"), "1.20.1 w Create");
+        assert_eq!(safe_file_name("  .hidden. "), "hidden");
+        assert_eq!(safe_file_name("///"), "Export");
+        assert_eq!(safe_file_name("tab\there\nnewline"), "tabherenewline");
+        for (name, version) in [("../../evil", "1.0"), ("Pack", "../../../x"), ("a/b", "c\\d"), ("", "")] {
+            let file = archive_name(name, version, "zip");
+            assert!(!file.contains('/') && !file.contains('\\'), "{file}");
+            assert!(Path::new("/out").join(&file).parent() == Some(Path::new("/out")), "{file}");
+        }
+        assert_eq!(archive_name("My Pack", "", "zip"), "My Pack.zip", "no stray space without a version");
+        assert_eq!(archive_name("My Pack", " 2.0 ", "mrpack"), "My Pack 2.0.mrpack");
+    }
+
+    #[test]
+    fn a_modrinth_file_is_only_matched_by_its_own_hash() {
+        let v = serde_json::json!({"files":[{"hashes":{"sha1":"aa"},"primary":true,"url":"u1"},{"hashes":{"sha1":"bb"},"url":"u2"}]});
+        assert_eq!(modcheck::modrinth_file_with_sha1(&v, "BB").unwrap()["url"], "u2");
+        assert!(modcheck::modrinth_file_with_sha1(&v, "zz").is_none(), "never another file's address");
+        assert!(modcheck::modrinth_file_with_sha1(&serde_json::json!({}), "aa").is_none());
+    }
+
+    /// The jar was replaced by hand after the record was made: its hashes match none of the recorded version's files.
+    #[tokio::test]
+    async fn a_jar_that_isnt_the_recorded_file_is_stored_not_dropped() {
+        let t = temp();
+        let root = t.join("inst");
+        write(&root.join("mods/replaced.jar"), "my own build");
+        let mut inst = instance(&root, "Fabric", "0.16.0");
+        let mut rec = crate::modrecord::ModRecord::new("Thing", "replaced.jar", "mods");
+        rec.modrinth_project = Some(serde_json::json!({"id": "proj"}));
+        rec.modrinth_version = Some(serde_json::json!({"id": "ver", "project_id": "proj", "files": [
+            {"hashes": {"sha1": "0000000000000000000000000000000000000000"}, "primary": true,
+             "url": "https://cdn.modrinth.com/data/proj/versions/ver/other.jar", "filename": "other.jar"}]}));
+        inst.set_mod_records(&[rec]);
+        let opts = ExportOptions {
+            name: "Pack".into(),
+            version: "1".into(),
+            author: "".into(),
+            format: ExportFormat::Modrinth,
+            save_to: t.join("out"),
+            overrides: vec!["mods".into()],
+        };
+        let dirs = Dirs::at(&t);
+        let done =
+            export(&dirs, &Settings::default(), &mut inst, &opts, &crate::cf_seam::MinimalCurseForge, &Progress::new())
+                .await
+                .unwrap();
+        let index: Value = serde_json::from_str(&read_zip_entry(&done.path, "modrinth.index.json").unwrap()).unwrap();
+        assert_eq!(index["files"].as_array().unwrap().len(), 0, "not listed with another file's address");
+        assert_eq!(read_zip_entry(&done.path, "overrides/mods/replaced.jar").as_deref(), Some("my own build"));
+        let _ = std::fs::remove_dir_all(&t);
     }
 
     #[tokio::test]

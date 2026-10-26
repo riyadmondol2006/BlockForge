@@ -92,6 +92,9 @@ pub const LOCALES: &[LocaleInfo] = &[
 /// The language that needs no file.
 pub const DEFAULT_LANGUAGE: &str = "English";
 
+/// The most plural forms a translation entry may have (Arabic, with six, has the most of any language).
+const MAX_PLURAL_FORMS: usize = 16;
+
 impl LocaleInfo {
     /// `de-DE`, the name of the translation file without its `.po`. English has none.
     pub fn tag(&self) -> String {
@@ -241,6 +244,12 @@ impl Catalog {
                         .and_then(|r| r.strip_suffix(']'))
                         .and_then(|n| n.parse::<usize>().ok())
                         .unwrap_or(0);
+                    // no language has more than six plural forms; a damaged file saying `msgstr[99999999999]` would
+                    // otherwise ask for all the memory there is (or overflow)
+                    if index >= MAX_PLURAL_FORMS {
+                        field = Field::None;
+                        continue;
+                    }
                     if strings.len() <= index {
                         strings.resize(index + 1, String::new());
                     }
@@ -1593,5 +1602,25 @@ msgstr ""
         assert_eq!(title_format_setting(&s), "%1$s");
         s.extras.insert("showPackNameAndVersion".into(), true.into());
         assert_eq!(title_format_setting(&s), "%1$s (%2$s %3$s)");
+    }
+}
+
+#[cfg(test)]
+mod damaged_po_tests {
+    use super::*;
+
+    #[test]
+    fn a_damaged_translation_file_never_crashes_or_eats_the_memory() {
+        let po = "msgid \"\"\nmsgstr \"Plural-Forms: nplurals=2; plural=(n != 1);\\n\"\n\n\
+                  msgid \"file\"\nmsgid_plural \"files\"\nmsgstr[0] \"Datei\"\nmsgstr[18446744073709551615] \"x\"\n\
+                  msgstr[99999999999] \"y\"\nmsgstr[1] \"Dateien\"\n\n\
+                  msgid \"unterminated\nmsgstr[abc] \"?\"\nmsgstr[\nmsgstr \"\n\"\"\"\n\n\
+                  msgid \"ok\"\nmsgstr \"gut\"\n";
+        let cat = Catalog::parse(po);
+        // the good entries around the damage are still there
+        assert!(cat.len() >= 2, "{cat:?}");
+        for text in ["", "\"", "msgstr[", "msgid", "msgstr[1]\n", &"msgstr[3] \"x\"\n".repeat(1000)] {
+            let _ = Catalog::parse(text);
+        }
     }
 }

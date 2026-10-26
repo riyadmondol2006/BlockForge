@@ -140,9 +140,15 @@ pub fn files_for(dirs: &Dirs, settings: &Settings, instance: &Instance) -> Vec<P
     files
 }
 
-/// The Java edition's `getSafeName`: the instance name with everything but letters and digits removed.
+/// The Java edition's `getSafeName`: the instance name with everything but letters and digits removed. A name with no
+/// ASCII letters or digits at all (`Сборка`, `世界`) gets a short code made from its folder instead of nothing: with
+/// nothing, every such instance shared one class cache, and each start threw away the other's.
 pub fn safe_name(instance: &Instance) -> String {
-    instance.name().chars().filter(|c| c.is_ascii_alphanumeric()).collect()
+    let ascii: String = instance.name().chars().filter(|c| c.is_ascii_alphanumeric()).collect();
+    if !ascii.is_empty() {
+        return ascii;
+    }
+    format!("instance{}", &crate::http::sha1_hex(instance.folder.as_bytes())[..10])
 }
 
 /// The asset index and the assets every start reads: the sound list and the language files of the game's language.
@@ -398,5 +404,32 @@ mod tests {
         assert!(!names.iter().any(|n| n.contains("112233")));
         assert!(!names.iter().any(|n| n.ends_with("readme.txt")));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod key_tests {
+    use super::*;
+    use crate::instances::InstanceFile;
+
+    fn inst(folder: &str, name: &str) -> Instance {
+        let mut file = InstanceFile::default();
+        file.launcher.name = name.into();
+        Instance { folder: folder.into(), mod_count: 0, root: "/x".into(), file }
+    }
+
+    #[test]
+    fn instances_named_outside_ascii_get_cache_names_of_their_own() {
+        let a = safe_name(&inst("Сборка", "Сборка"));
+        let b = safe_name(&inst("Мир", "Мир"));
+        assert_ne!(a, b);
+        assert!(a.chars().all(|c| c.is_ascii_alphanumeric()), "{a}");
+        assert_eq!(a, safe_name(&inst("Сборка", "Сборка")), "the same instance keeps its name");
+        // ASCII names are as before, so existing caches are still found
+        assert_eq!(safe_name(&inst("MyPack", "My Pack!")), "MyPack");
+        assert_ne!(
+            crate::launch::lite::instance_key(&inst("Сборка", "Сборка")),
+            crate::launch::lite::instance_key(&inst("Мир", "Мир"))
+        );
     }
 }

@@ -65,7 +65,8 @@ pub fn instance_key(instance: &Instance) -> String {
     [plain(instance.name()), plain(&instance.folder)]
         .into_iter()
         .find(|k| !k.is_empty())
-        .unwrap_or_else(|| "instance".to_string())
+        // folders named outside ASCII are told apart too (see `warmer::safe_name`)
+        .unwrap_or_else(|| super::warmer::safe_name(instance))
 }
 
 /// The folder the helper's files are kept in (reports, mod lists, failure counts).

@@ -674,8 +674,17 @@ fn apply_inner(game_directory: &Path, minor: u32, presets: bool, on: bool) -> Re
     Ok(outcome)
 }
 
-/// Writes through a file beside it and a rename, so the game never reads half a file.
+/// Writes through a file beside it and a rename, so the game never reads half a file. An `options.txt` that is a
+/// link (one settings file shared by several instances) stays a link: the file it points to is the one replaced.
 fn write_replacing(path: &Path, bytes: &[u8]) -> Result<()> {
+    let is_link = std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink());
+    let real;
+    let path = if is_link {
+        real = std::fs::canonicalize(path).with_context(|| format!("following the link {}", path.display()))?;
+        real.as_path()
+    } else {
+        path
+    };
     let temp = path.with_extension(format!("txt.blockforge-{}", std::process::id()));
     std::fs::write(&temp, bytes).with_context(|| format!("writing {}", temp.display()))?;
     if let Err(e) = std::fs::rename(&temp, path) {
@@ -1002,5 +1011,25 @@ mod tests {
         drop(first);
         let (_again, others) = InUse::claim(dir);
         assert!(!others);
+    }
+}
+
+#[cfg(all(test, unix))]
+mod link_tests {
+    use super::*;
+
+    #[test]
+    fn a_shared_options_file_stays_shared() {
+        let dir = crate::testutil::scratch("lowend-link");
+        let shared = dir.join("shared/options.txt");
+        std::fs::create_dir_all(shared.parent().unwrap()).unwrap();
+        std::fs::write(&shared, "renderDistance:16\n").unwrap();
+        let inst = dir.join("inst");
+        std::fs::create_dir_all(&inst).unwrap();
+        std::os::unix::fs::symlink(&shared, inst.join("options.txt")).unwrap();
+        write_replacing(&inst.join("options.txt"), b"renderDistance:6\n").unwrap();
+        assert!(std::fs::symlink_metadata(inst.join("options.txt")).unwrap().file_type().is_symlink());
+        assert_eq!(std::fs::read_to_string(&shared).unwrap(), "renderDistance:6\n");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

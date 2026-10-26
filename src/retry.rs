@@ -49,7 +49,7 @@ pub fn parse_retry_after(header: Option<&str>) -> Option<u64> {
         return None;
     }
     if let Ok(secs) = value.parse::<i64>() {
-        return Some(secs.max(0) as u64 * 1000);
+        return Some((secs.max(0) as u64).saturating_mul(1000));
     }
     let date = chrono::DateTime::parse_from_rfc2822(value).ok()?;
     Some((date.timestamp_millis() - chrono::Utc::now().timestamp_millis()).max(0) as u64)
@@ -191,5 +191,19 @@ mod tests {
         let (url, count) = serve(100, 404, None).await;
         assert_eq!(send(|| crate::http::client().get(&url)).await.unwrap().status().as_u16(), 404);
         assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+}
+
+#[cfg(test)]
+mod overflow_tests {
+    use super::*;
+
+    #[test]
+    fn absurd_retry_after_values_never_overflow() {
+        assert_eq!(parse_retry_after(Some("99999999999999999")), Some(u64::MAX));
+        assert_eq!(parse_retry_after(Some("-5")), Some(0));
+        assert_eq!(parse_retry_after(Some(&i64::MAX.to_string())), Some(u64::MAX));
+        assert_eq!(delay_millis(1, parse_retry_after(Some("99999999999999999"))), MAX_DELAY_MS);
+        assert!(delay_millis(u32::MAX, None) <= MAX_DELAY_MS * 2);
     }
 }

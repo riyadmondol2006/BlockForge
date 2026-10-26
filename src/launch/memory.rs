@@ -385,6 +385,18 @@ pub fn plan(configured_mb: u32, recommended_mb: u32, physical_mb: i64, is_64_bit
         }
         heap = raised;
     }
+    // a 32-bit Java can't reserve more than this at all and refuses to start: give it what it can take
+    if !is_64_bit && heap > MAX_32_BIT_MB {
+        warnings.push(format!(
+            "This Java is 32-bit and can't use {heap} MB of memory, so the game gets {MAX_32_BIT_MB} MB. Install a 64-bit Java to give it more."
+        ));
+        heap = MAX_32_BIT_MB;
+    }
+    // a few MB (a settings file edited by hand) is too little for the game even to show its window
+    if heap < MINIMUM_MB {
+        warnings.push(format!("{heap} MB of memory is too little for Minecraft to start, so it gets {MINIMUM_MB} MB."));
+        heap = MINIMUM_MB;
+    }
     // what the person set themselves is respected, but they should know when it's more than is good
     if physical_mb > 0 && heap > safe {
         warnings.push(format!(
@@ -1138,5 +1150,32 @@ mod tests {
         assert!(!is_32_bit_arch("aarch64"));
         assert!(!is_32_bit_arch("amd64"));
         assert!(!is_32_bit_arch("x86_64"));
+    }
+}
+
+#[cfg(test)]
+mod limit_tests {
+    use super::*;
+
+    #[test]
+    fn a_32_bit_java_never_gets_more_than_it_can_take() {
+        let p = plan(4096, 0, 16_384, false);
+        assert_eq!(p.heap_mb, MAX_32_BIT_MB);
+        assert!(p.warnings.iter().any(|w| w.contains("32-bit")));
+        // a pack asking for more doesn't push it over either
+        assert_eq!(plan(0, 8192, 16_384, false).heap_mb, MAX_32_BIT_MB);
+        assert_eq!(plan(4096, 0, 16_384, true).heap_mb, 4096, "64-bit is unchanged");
+    }
+
+    #[test]
+    fn hand_edited_tiny_or_huge_amounts_are_kept_sane() {
+        assert_eq!(plan(1, 0, 16_384, true).heap_mb, MINIMUM_MB);
+        let huge = plan(u32::MAX, 0, 16_384, true);
+        assert_eq!(huge.heap_mb, u32::MAX, "the player's choice is kept, with a warning");
+        assert!(!huge.warnings.is_empty());
+        for physical in [0, -5, 1, i64::MAX] {
+            let p = plan(0, 0, physical, true);
+            assert!(p.heap_mb >= MINIMUM_MB, "{physical}");
+        }
     }
 }

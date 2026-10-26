@@ -123,6 +123,16 @@ pub fn modrinth_file_by_sha1<'a>(version: &'a Value, sha1: &str) -> Option<&'a V
         .or_else(|| files.first())
 }
 
+/// The file in a Modrinth version object whose SHA-1 is `sha1`, and no other: when the file on disk is not one of
+/// the version's (it was replaced by hand after the record was made), its hashes must not be paired with another
+/// file's address.
+pub fn modrinth_file_with_sha1<'a>(version: &'a Value, sha1: &str) -> Option<&'a Value> {
+    version["files"]
+        .as_array()?
+        .iter()
+        .find(|f| f["hashes"]["sha1"].as_str().is_some_and(|h| h.eq_ignore_ascii_case(sha1)))
+}
+
 /// Fill in the Modrinth project and version of every record in `records` whose file Modrinth recognises.
 /// Records that already have them are left alone. Returns how many were found.
 pub async fn attach_modrinth(root: &Path, mc: &str, records: &mut [ModRecord], only_enabled: bool) -> Result<usize> {

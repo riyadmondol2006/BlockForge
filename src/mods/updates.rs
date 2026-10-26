@@ -18,7 +18,7 @@ use super::identify;
 use super::install;
 use super::metadata::ContentKind;
 use super::versions;
-use super::{AddModRestriction, ModContext, ModSettings};
+use super::{ModContext, ModSettings};
 use crate::install::Progress;
 use crate::instances::Instance;
 use crate::modrecord::ModRecord;
@@ -168,7 +168,7 @@ pub async fn find_updates_with(
         }
         let hashes: Vec<String> = by_hash.iter().map(|(h, _)| h.clone()).collect();
         let loaders = if kind == ContentKind::Mods { ctx.target.accepted_loaders() } else { Vec::new() };
-        let game_versions = ctx.allowed_game_versions().unwrap_or_default();
+        let game_versions = ctx.update_game_versions();
         let latest = ctx.api.latest_from_sha1(&hashes, &loaders, &game_versions).await?;
         for (hash, rec) in by_hash {
             let Some(newest) = latest.get(&hash) else { continue };
@@ -251,13 +251,13 @@ pub async fn install_over(
         }
     };
     let was_disabled = rec.disabled;
-    if was_disabled {
-        // the install only clears out the switched-on copy of the old version
-        if let Some(p) = files::disabled_path(instance, &rec).filter(|p| p.exists()) {
-            std::fs::remove_file(p)?;
-        }
-    }
+    // the install only clears out the switched-on copy of the old version; the switched-off one is removed once
+    // the new version is downloaded, so a failed update keeps the old file
+    let old_disabled = if was_disabled { files::disabled_path(instance, &rec).filter(|p| p.exists()) } else { None };
     let new_key = install::install_version(instance, &project, version, Some(&rec.kind), progress).await?;
+    if let Some(p) = old_disabled.filter(|p| p.exists()) {
+        std::fs::remove_file(&p).with_context(|| format!("removing the old {}", p.display()))?;
+    }
     if was_disabled {
         files::set_enabled(instance, &new_key, false)?;
     }
@@ -322,8 +322,8 @@ pub async fn check_single(instance: &Instance, ctx: &ModContext, key: &ModKey) -
         .context("that mod isn't in this instance")?;
     let project_id = rec.modrinth_project_id().context("this mod didn't come from Modrinth")?.to_string();
     let installed = rec.modrinth_version.clone().and_then(MrVersion::from_value);
-    let mc_filter = (ctx.settings.add_mod_restriction == AddModRestriction::Strict)
-        .then_some(ctx.target.minecraft_version.as_str());
+    // updates are always for this instance's Minecraft version, whatever the browser is set to show
+    let mc_filter = Some(ctx.target.minecraft_version.as_str());
     let loaders =
         loaders_for_listing(ctx.target.loader_key, &ctx.target.minecraft_version, &ctx.target.neoforge_forge_versions);
     let all = ctx.api.versions(&project_id, mc_filter, &loaders).await?;

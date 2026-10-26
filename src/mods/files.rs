@@ -160,8 +160,18 @@ pub fn all_entries(instance: &Instance) -> Vec<ModEntry> {
 
 /// Modrinth projects that are in the instance, counting stand-ins (Quilt's QSL does the job of Fabric API).
 pub fn installed_project_ids(instance: &Instance) -> HashSet<String> {
+    project_ids(instance, true)
+}
+
+/// [`installed_project_ids`] without the switched-off ones: what the game will actually load. A dependency that is
+/// switched off doesn't count as there (with Fabric API switched off, a mod that needs it is missing it).
+pub fn enabled_project_ids(instance: &Instance) -> HashSet<String> {
+    project_ids(instance, false)
+}
+
+fn project_ids(instance: &Instance, with_disabled: bool) -> HashSet<String> {
     let mut ids = HashSet::new();
-    for m in instance.mod_records() {
+    for m in instance.mod_records().into_iter().filter(|m| with_disabled || !m.disabled) {
         if is_from_modrinth(&m) {
             if let Some(id) = m.modrinth_project_id() {
                 ids.insert(id.to_string());
@@ -226,7 +236,22 @@ pub fn set_enabled(instance: &mut Instance, key: &ModKey, enabled: bool) -> Resu
             std::fs::create_dir_all(dir)?;
         }
         if to.exists() {
-            std::fs::remove_file(&to).with_context(|| format!("replacing {}", to.display()))?;
+            // every kind shares `disabledmods/`: a data pack and a resource pack of the same name must not replace
+            // each other's file
+            let owner = snapshot.mod_records().into_iter().find(|m| {
+                !(m.file == rec.file && m.kind == rec.kind) && current_path(&snapshot, m).as_deref() == Some(&to)
+            });
+            if let Some(owner) = owner {
+                bail!(
+                    "{} can't be switched {}: {} ({}) already uses that file name. Rename one of them first.",
+                    rec.file,
+                    if enabled { "on" } else { "off" },
+                    owner.name,
+                    owner.kind
+                );
+            }
+            // a leftover no record knows about goes to the recycle bin, not away for good
+            crate::mods::trash::delete(&to, true).with_context(|| format!("replacing {}", to.display()))?;
         }
         move_file(&from, &to)?;
         rec.disabled = !enabled;
@@ -311,7 +336,9 @@ pub fn add_file(instance: &mut Instance, source: &Path, kind: &str, settings: &M
     }
     let target = if rec.disabled { disabled_path(instance, &rec) } else { enabled_path(instance, &rec) }
         .with_context(|| format!("there is no folder for {kind} files"))?;
-    if target.exists() {
+    // the same file switched off (or on) counts too: two records of one file would fight over it
+    let other = if rec.disabled { enabled_path(instance, &rec) } else { disabled_path(instance, &rec) };
+    if target.exists() || other.is_some_and(|p| p.exists()) {
         return Ok(AddOutcome::AlreadyThere);
     }
     if let Some(dir) = target.parent() {
@@ -676,5 +703,73 @@ mod tests {
         r.name = String::new();
         r.modrinth_project = None;
         assert_eq!(name_of(&r), "a.jar");
+    }
+}
+
+#[cfg(test)]
+mod shared_folder_tests {
+    use super::tests_support::temp_instance;
+    use super::*;
+
+    #[test]
+    fn switching_off_two_items_with_one_file_name_never_deletes_either() {
+        let mut inst = temp_instance("shared-off");
+        std::fs::create_dir_all(inst.root.join("datapacks")).unwrap();
+        std::fs::create_dir_all(inst.root.join("resourcepacks")).unwrap();
+        std::fs::write(inst.root.join("datapacks/VanillaTweaks.zip"), b"data").unwrap();
+        std::fs::write(inst.root.join("resourcepacks/VanillaTweaks.zip"), b"looks").unwrap();
+        inst.set_mod_records(&[
+            ModRecord::new("Tweaks data", "VanillaTweaks.zip", "datapack"),
+            ModRecord::new("Tweaks looks", "VanillaTweaks.zip", "resourcepack"),
+        ]);
+        let data = ModKey { file: "VanillaTweaks.zip".into(), kind: "datapack".into() };
+        let looks = ModKey { file: "VanillaTweaks.zip".into(), kind: "resourcepack".into() };
+        set_enabled(&mut inst, &data, false).unwrap();
+        let err = set_enabled(&mut inst, &looks, false).unwrap_err();
+        assert!(err.to_string().contains("already uses that file name"), "{err}");
+        // both files are where they should be, and both can still be switched back
+        assert_eq!(std::fs::read(inst.root.join("disabledmods/VanillaTweaks.zip")).unwrap(), b"data");
+        assert_eq!(std::fs::read(inst.root.join("resourcepacks/VanillaTweaks.zip")).unwrap(), b"looks");
+        set_enabled(&mut inst, &data, true).unwrap();
+        assert_eq!(std::fs::read(inst.root.join("datapacks/VanillaTweaks.zip")).unwrap(), b"data");
+        let _ = std::fs::remove_dir_all(&inst.root);
+    }
+
+    #[test]
+    fn a_file_already_switched_off_is_not_added_a_second_time() {
+        let mut inst = temp_instance("add-twice");
+        std::fs::create_dir_all(inst.disabled_mods_dir()).unwrap();
+        std::fs::write(inst.disabled_mods_dir().join("a.jar"), b"off").unwrap();
+        let source = inst.root.join("a.jar");
+        std::fs::write(&source, b"new copy").unwrap();
+        let out = add_file(&mut inst, &source, "mods", &ModSettings::default()).unwrap();
+        assert_eq!(out, AddOutcome::AlreadyThere);
+        assert!(!inst.mods_dir().join("a.jar").exists());
+        let _ = std::fs::remove_dir_all(&inst.root);
+    }
+}
+
+#[cfg(test)]
+mod enabled_ids_tests {
+    use super::tests_support::temp_instance;
+    use super::*;
+
+    #[test]
+    fn a_switched_off_dependency_doesnt_count_as_there() {
+        let mut inst = temp_instance("enabled-ids");
+        let mut fabric_api = ModRecord::new("Fabric API", "fabric-api.jar", "mods");
+        fabric_api.modrinth_project = Some(serde_json::json!({"id": versions::MODRINTH_FABRIC_MOD_ID}));
+        fabric_api.modrinth_version = Some(serde_json::json!({"id": "v"}));
+        fabric_api.disabled = true;
+        let mut sodium = ModRecord::new("Sodium", "sodium.jar", "mods");
+        sodium.modrinth_project = Some(serde_json::json!({"id": "AANobbMI"}));
+        sodium.modrinth_version = Some(serde_json::json!({"id": "w"}));
+        inst.set_mod_records(&[fabric_api, sodium]);
+        let all = installed_project_ids(&inst);
+        let on = enabled_project_ids(&inst);
+        assert!(all.contains(versions::MODRINTH_FABRIC_MOD_ID), "the browser still shows it as installed");
+        assert!(!on.contains(versions::MODRINTH_FABRIC_MOD_ID), "but a mod needing it gets it switched back on");
+        assert!(on.contains("AANobbMI"));
+        let _ = std::fs::remove_dir_all(&inst.root);
     }
 }

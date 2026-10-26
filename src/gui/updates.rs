@@ -189,7 +189,7 @@ impl App {
         let (folder, n) = (update::apply::update_folder(&self.dirs.temp), self.notifier());
         self.rt.spawn(async move {
             let outcome: anyhow::Result<Installed> = async {
-                let expected = update::download::expected_sha256(&release, &asset).await;
+                let expected = update::download::expected_sha256(&release, &asset).await?;
                 if expected.is_none() {
                     crate::logs::warn(format!(
                         "The release has no checksum for {}; only its size is checked",

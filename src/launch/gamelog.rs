@@ -53,6 +53,35 @@ pub fn inspect_line(line: &str, minecraft_version: &str) -> LineFindings {
     f
 }
 
+/// Watches a game's output for the well known crashes; the last one seen is the cause to explain if the game then
+/// closes with an error.
+#[derive(Clone, Debug, Default)]
+pub struct CrashWatch {
+    minecraft_version: String,
+    pub cause: Option<GameError>,
+    pub crashed: bool,
+}
+
+impl CrashWatch {
+    pub fn new(minecraft_version: &str) -> CrashWatch {
+        CrashWatch { minecraft_version: minecraft_version.to_string(), ..Default::default() }
+    }
+
+    pub fn line(&mut self, line: &str) {
+        let f = inspect_line(line, &self.minecraft_version);
+        if f.error.is_some() {
+            self.cause = f.error;
+        }
+        self.crashed |= f.crashed;
+    }
+
+    /// What to tell the player after the game closed with `code`: nothing after a clean exit or an unknown crash.
+    pub fn advice(&self, code: Option<i32>) -> Option<Prompt> {
+        let failed = code.is_some_and(|c| c != 0) || self.crashed;
+        self.cause.filter(|_| failed).map(explain)
+    }
+}
+
 /// The "About Your Crash" explanation for a known crash.
 pub fn explain(error: GameError) -> Prompt {
     let title = i18n::tr("About Your Crash");
@@ -267,5 +296,34 @@ mod tests {
         assert_eq!(hide_ip_addresses("v1.2.3.4"), "v1.2.3.4");
         assert_eq!(hide_ip_addresses("héllo 8.8.8.8"), "héllo **IPADDRESS**");
         assert_eq!(hide_ip_addresses("1234.5.6.7"), "1234.5.6.7");
+    }
+}
+
+#[cfg(test)]
+mod crash_watch_tests {
+    use super::*;
+
+    #[test]
+    fn a_known_crash_is_explained_only_when_the_game_failed() {
+        let mut w = CrashWatch::new("1.20.1");
+        w.line("[main/INFO]: Loading");
+        w.line("Exception in thread \"Render thread\" java.lang.OutOfMemoryError: Java heap space");
+        assert_eq!(w.cause, Some(GameError::OutOfMemory));
+        let advice = w.advice(Some(1)).expect("explained");
+        assert!(advice.message.to_lowercase().contains("memory"), "{}", advice.message);
+        // a game that recovered and closed normally needs no explanation
+        assert!(w.advice(Some(0)).is_none());
+        // a crash report counts as failing even with a 0 exit code
+        w.line("#@!@# Game crashed! Crash report saved to: #@!@# crash-reports/crash.txt");
+        assert!(w.advice(Some(0)).is_some());
+    }
+
+    #[test]
+    fn the_wrong_java_is_recognised() {
+        let mut w = CrashWatch::new("1.18.2");
+        w.line("java.lang.UnsupportedClassVersionError: net/minecraft/client/main/Main has been compiled by a more recent version of the Java Runtime (class file version 61.0)");
+        assert_eq!(w.cause, Some(GameError::NeedJava17OrNewer));
+        assert!(w.advice(Some(1)).unwrap().message.contains("17"));
+        assert!(CrashWatch::new("1.20.1").advice(Some(1)).is_none(), "an unknown crash has nothing to say");
     }
 }

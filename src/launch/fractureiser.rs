@@ -9,8 +9,6 @@ use std::collections::HashSet;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use sha1::{Digest, Sha1};
-
 use crate::paths::Dirs;
 
 /// One real instruction of a method, as far as the patterns care.
@@ -425,16 +423,23 @@ pub fn class_is_suspicious(class: &[u8]) -> bool {
     methods_of(class).is_some_and(|methods| methods.iter().any(|m| method_is_suspicious(m)))
 }
 
+/// The biggest class file that is read; Java itself can't load anything near this size, so a bigger "class" is not
+/// one (and its size in the zip's header could be anything, damaged or made up).
+const MAX_CLASS_BYTES: u64 = 16 * 1024 * 1024;
+
 /// If any class in a jar or zip matches. Unreadable entries are skipped.
 pub fn jar_is_suspicious(path: &Path) -> std::io::Result<bool> {
     let mut zip = zip::ZipArchive::new(std::fs::File::open(path)?).map_err(std::io::Error::other)?;
     for i in 0..zip.len() {
         let Ok(mut entry) = zip.by_index(i) else { continue };
-        if !entry.name().is_ok_and(|n| n.ends_with(".class")) {
+        if !entry.name().is_ok_and(|n| n.ends_with(".class")) || entry.size() > MAX_CLASS_BYTES {
             continue;
         }
-        let mut bytes = Vec::with_capacity(entry.size() as usize);
-        if entry.read_to_end(&mut bytes).is_err() {
+        // never more memory than the cap, whatever the header says or the entry really unpacks to
+        let mut bytes = Vec::with_capacity(entry.size().min(MAX_CLASS_BYTES) as usize);
+        if (&mut entry).take(MAX_CLASS_BYTES + 1).read_to_end(&mut bytes).is_err()
+            || bytes.len() as u64 > MAX_CLASS_BYTES
+        {
             continue;
         }
         if class_is_suspicious(&bytes) {
@@ -491,12 +496,12 @@ pub fn scan(dirs: &Dirs, files: &[PathBuf]) -> Vec<PathBuf> {
                 loop {
                     let i = next.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                     let Some(path) = files.get(i) else { break };
-                    let Ok(bytes) = std::fs::read(path) else { continue };
-                    let hash = hex::encode(Sha1::digest(&bytes));
+                    // hashed as it is read: four 500 MB resource packs at once must not be held in memory whole
+                    let Ok(hash) = crate::mods::identify::sha1_file(path) else { continue };
+                    let hash = hash.to_ascii_lowercase();
                     if known.contains(&hash) {
                         continue;
                     }
-                    drop(bytes);
                     match jar_is_suspicious(path) {
                         Ok(true) => found.lock().unwrap_or_else(|e| e.into_inner()).push(path.clone()),
                         Ok(false) => learned.lock().unwrap_or_else(|e| e.into_inner()).push(hash),
@@ -634,6 +639,37 @@ mod tests {
         assert_eq!(saved.len(), 1);
         // the second time the clean one is not read again, the bad one is still reported
         assert_eq!(scan(&dirs, &files), vec![mods.join("bad.jar")]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod size_tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn an_enormous_class_entry_is_skipped_without_using_the_memory() {
+        let dir = crate::testutil::scratch("fracture-bomb");
+        let jar = dir.join("bomb.jar");
+        {
+            let mut z = zip::ZipWriter::new(std::fs::File::create(&jar).unwrap());
+            let o = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+            // 64 MB of zeros, a few dozen KB once compressed
+            z.start_file("a/Big.class", o).unwrap();
+            let zeros = vec![0u8; 1024 * 1024];
+            for _ in 0..64 {
+                z.write_all(&zeros).unwrap();
+            }
+            z.start_file("a/Small.class", o).unwrap();
+            z.write_all(b"\xca\xfe\xba\xbe not really a class").unwrap();
+            z.finish().unwrap();
+        }
+        assert!(std::fs::metadata(&jar).unwrap().len() < 1024 * 1024);
+        assert!(!jar_is_suspicious(&jar).unwrap());
+        // a file that isn't a zip is an error, not a crash
+        std::fs::write(dir.join("broken.jar"), b"PK\x03\x04 truncated").unwrap();
+        assert!(jar_is_suspicious(&dir.join("broken.jar")).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

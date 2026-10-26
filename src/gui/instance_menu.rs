@@ -37,6 +37,7 @@ pub(super) enum Act {
     Duplicate(String),
     Export(String),
     ChangeLoader(String),
+    Repair(String),
     Delete(String),
 }
 
@@ -307,6 +308,17 @@ impl App {
                     self.desc_edit = Some((f.clone(), i.file.launcher.description.clone()));
                 }
             }
+            Act::Repair(f) => {
+                if self.is_playing(&f) {
+                    self.toast_err("Close the game first: its files can't be checked while it runs.");
+                } else if let Some(inst) = self.instance(&f).cloned() {
+                    let dirs = self.dirs.clone();
+                    self.start_task(format!("Repairing {}", inst.name()), move |p, _| async move {
+                        instances::repair(&dirs, &inst, &p).await?;
+                        Ok(format!("Checked {}: anything damaged was downloaded again", inst.name()))
+                    });
+                }
+            }
             Act::Duplicate(f) => {
                 if let Some(inst) = self.instance(&f).cloned() {
                     let name = format!("{} copy", inst.name());
@@ -423,6 +435,7 @@ impl App {
         item(ui, "Edit mods", Act::Mods);
         let helpers = self.helpers_menu(ui, inst);
         item(ui, "Settings", Act::Settings);
+        item(ui, "Repair game files", Act::Repair);
         ui.separator();
         let delete = ui.button(RichText::new("Delete instance").color(c_danger())).clicked();
         if delete {

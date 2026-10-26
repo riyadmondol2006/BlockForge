@@ -107,6 +107,8 @@ enum Cmd {
     Java,
     /// Delete an instance
     Delete { instance: String },
+    /// Check an instance's game files and Java against their checksums and download again what is damaged
+    Repair { instance: String },
     /// Write the list of texts to translate (a .pot template) from the program's source code
     #[command(hide = true)]
     Pot {
@@ -229,6 +231,13 @@ fn main() -> Result<()> {
 fn files_from_arguments() -> Vec<PathBuf> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.is_empty() {
+        return Vec::new();
+    }
+    // `blockforge list` in a folder that happens to hold a file called `list` is still the command
+    use clap::CommandFactory;
+    if Cli::command().get_subcommands().any(|c| c.get_name() == args[0] || c.get_all_aliases().any(|a| a == args[0]))
+        || args[0] == "help"
+    {
         return Vec::new();
     }
     let mut files = Vec::new();
@@ -429,11 +438,16 @@ async fn run(cmd: Cmd, dirs: Dirs) -> Result<()> {
                 }
             };
             inst.mark_played()?;
+            let mut watch = launch::gamelog::CrashWatch::new(inst.mc_version());
             while let Some(line) = running.lines.recv().await {
+                watch.line(&line);
                 println!("{line}");
             }
             let status = running.child.wait().await?;
             prepared.cleanup();
+            if let Some(advice) = watch.advice(launch::exit_code(&status)) {
+                eprintln!("\n{}: {}", advice.title, advice.message);
+            }
             if launch::classcache::builders_running() > 0 {
                 eprintln!("  making the class cache for quicker starts next time (20-50 seconds)...");
                 launch::classcache::wait_for_builders();
@@ -454,6 +468,10 @@ async fn run(cmd: Cmd, dirs: Dirs) -> Result<()> {
                 }
             }
             Some(AccountCmd::Offline { name }) => {
+                let name = name.trim().to_string();
+                if !accounts::valid_offline_name(&name) {
+                    anyhow::bail!("\"{name}\" can't be a player name: use 3 to 16 letters, numbers or underscores");
+                }
                 let mut all = accounts::load(&dirs);
                 all.retain(|a| !(a.offline && a.name() == name));
                 let acc = Account::offline(&name);
@@ -524,6 +542,15 @@ async fn run(cmd: Cmd, dirs: Dirs) -> Result<()> {
             for j in java::detect_installed() {
                 println!("Java {:<4} {}", j.major.map(|m| m.to_string()).unwrap_or("?".into()), j.home.display());
             }
+        }
+        Cmd::Repair { instance } => {
+            let inst = find_instance(&dirs, &instance)?;
+            let progress = Progress::new();
+            let printer = show_progress(progress.clone());
+            let repaired = instances::repair(&dirs, &inst, &progress).await;
+            printer.abort();
+            repaired?;
+            println!("checked every file of {}; anything damaged or missing was downloaded again", inst.name());
         }
         Cmd::Delete { instance } => {
             let inst = find_instance(&dirs, &instance)?;

@@ -614,16 +614,28 @@ fn the_checksum_comes_from_the_checksum_file_when_the_asset_has_no_digest() {
         let mut rel = release(&["BlockForge-4.1.0-linux-x86_64.deb"]);
         rel.assets.push(Asset::new("SHA256SUMS.txt", &format!("{url}/SHA256SUMS.txt"), 0));
         let asset = rel.assets[0].clone();
-        assert_eq!(download::expected_sha256(&rel, &asset).await.unwrap(), dir_hash);
+        assert_eq!(download::expected_sha256(&rel, &asset).await.unwrap().unwrap(), dir_hash);
 
         // the asset's own digest is preferred
         let mut with_digest = asset.clone();
         with_digest.digest = Some(format!("sha256:{}", "c".repeat(64)));
-        assert_eq!(download::expected_sha256(&rel, &with_digest).await.unwrap(), "c".repeat(64));
+        assert_eq!(download::expected_sha256(&rel, &with_digest).await.unwrap().unwrap(), "c".repeat(64));
 
         // no digest and no checksum file: nothing promised
         let bare = release(&["BlockForge-4.1.0-linux-x86_64.deb"]);
-        assert_eq!(download::expected_sha256(&bare, &bare.assets[0]).await, None);
+        assert_eq!(download::expected_sha256(&bare, &bare.assets[0]).await.unwrap(), None);
+    });
+}
+
+#[test]
+fn a_checksum_file_that_cant_be_read_stops_the_update_instead_of_skipping_the_check() {
+    runtime().block_on(async {
+        // the release lists a checksum file, but its address answers nothing (a dropped connection, a 404)
+        let mut rel = release(&["BlockForge-4.1.0-linux-x86_64.deb"]);
+        rel.assets.push(Asset::new("SHA256SUMS.txt", "http://127.0.0.1:9/SHA256SUMS.txt", 0));
+        let asset = rel.assets[0].clone();
+        let err = download::expected_sha256(&rel, &asset).await.unwrap_err();
+        assert!(format!("{err:#}").contains("can't be checked"), "{err:#}");
     });
 }
 
@@ -643,7 +655,7 @@ fn fake_release_end_to_end() {
         println!("found {} with {} files", release.tag_name, release.assets.len());
         let asset = pick_asset(&release, Kind::AppImage, std::env::consts::ARCH).expect("an AppImage in the release");
         println!("picked {}", asset.name);
-        let expected = download::expected_sha256(&release, asset).await;
+        let expected = download::expected_sha256(&release, asset).await.unwrap();
         println!("expected sha256 {expected:?}");
         assert!(expected.is_some());
         let progress = DownloadProgress::default();

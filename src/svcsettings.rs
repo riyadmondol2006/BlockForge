@@ -30,9 +30,15 @@ pub struct ServiceSettings {
     // Folders
     pub custom_downloads_path: Option<String>,
     pub backups_path: Option<String>,
+    /// A folder the player set that isn't there right now (a drive that isn't plugged in). The default is used
+    /// meanwhile, but the setting is kept and written back, so plugging the drive in again is all it takes.
+    pub unavailable_downloads_path: Option<String>,
+    pub unavailable_backups_path: Option<String>,
     // Backups
     pub enable_automatic_backup_after_launch: bool,
     pub backup_mode: BackupMode,
+    /// How many backups of each instance are kept; older ones are removed when a new one is made. 0 keeps them all.
+    pub backups_to_keep: u32,
     // Logging and speed
     pub enable_logs: bool,
     pub enable_analytics: bool,
@@ -53,8 +59,11 @@ impl Default for ServiceSettings {
             proxy_type: ProxyType::Http,
             custom_downloads_path: None,
             backups_path: None,
+            unavailable_downloads_path: None,
+            unavailable_backups_path: None,
             enable_automatic_backup_after_launch: false,
             backup_mode: BackupMode::Normal,
+            backups_to_keep: 0,
             enable_logs: false,
             enable_analytics: false,
             analytics_client_id: uuid::Uuid::new_v4().to_string(),
@@ -65,6 +74,9 @@ impl Default for ServiceSettings {
 }
 
 /// The analytics id that older Java builds shipped; it is replaced like a missing one.
+/// The most backups per instance the setting can keep (more is the same as keeping them all).
+pub const MAX_BACKUPS_TO_KEEP: u32 = 500;
+
 const OLD_SHARED_ANALYTICS_ID: &str = "30662333-d88f-4e21-8d77-95739af9bf78";
 
 fn get_u32(settings: &Settings, key: &str) -> Option<i64> {
@@ -142,15 +154,19 @@ impl ServiceSettings {
         s.custom_downloads_path = get_string(settings, "customDownloadsPath").filter(|p| !p.is_empty());
         if let Some(p) = &s.custom_downloads_path {
             if !std::path::Path::new(p).is_dir() {
-                warnings.push("Custom Downloads Path Is Incorrect! Deleting setting!".to_string());
-                s.custom_downloads_path = None;
+                warnings.push(format!(
+                    "Custom Downloads Path Is Incorrect! {p} isn't available, so the default is used until it is."
+                ));
+                s.unavailable_downloads_path = s.custom_downloads_path.take();
             }
         }
         s.backups_path = get_string(settings, "backupsPath").filter(|p| !p.is_empty());
         if let Some(p) = &s.backups_path {
             if !std::path::Path::new(p).is_dir() {
-                warnings.push("Backups Path Is Incorrect! Deleting setting!".to_string());
-                s.backups_path = None;
+                warnings.push(format!(
+                    "Backups Path Is Incorrect! {p} isn't available (is its drive connected?); backups wait until it is."
+                ));
+                s.unavailable_backups_path = s.backups_path.take();
             }
         }
 
@@ -159,6 +175,7 @@ impl ServiceSettings {
         if let Some(mode) = get_string(settings, "backupMode").as_deref().and_then(BackupMode::from_key) {
             s.backup_mode = mode;
         }
+        s.backups_to_keep = get_u32(settings, "backupsToKeep").unwrap_or(0).clamp(0, MAX_BACKUPS_TO_KEEP as i64) as u32;
 
         s.enable_logs = get_bool(settings, "enableLogs").unwrap_or(false);
         s.enable_analytics = get_bool(settings, "enableAnalytics").unwrap_or(false);
@@ -189,10 +206,19 @@ impl ServiceSettings {
         e.insert("proxyHost".into(), Value::from(self.proxy_host.clone()));
         e.insert("proxyPort".into(), Value::from(self.proxy_port));
         e.insert("proxyType".into(), Value::from(self.proxy_type.key()));
-        set_optional(e, "customDownloadsPath", self.custom_downloads_path.as_deref());
-        set_optional(e, "backupsPath", self.backups_path.as_deref());
+        set_optional(
+            e,
+            "customDownloadsPath",
+            self.custom_downloads_path.as_deref().or(self.unavailable_downloads_path.as_deref()),
+        );
+        set_optional(e, "backupsPath", self.backups_path.as_deref().or(self.unavailable_backups_path.as_deref()));
         e.insert("enableAutomaticBackupAfterLaunch".into(), Value::from(self.enable_automatic_backup_after_launch));
         e.insert("backupMode".into(), Value::from(self.backup_mode.key()));
+        if self.backups_to_keep > 0 {
+            e.insert("backupsToKeep".into(), Value::from(self.backups_to_keep));
+        } else {
+            e.remove("backupsToKeep");
+        }
         settings.enable_logs = self.enable_logs;
         settings.enable_analytics = self.enable_analytics;
         let e = &mut settings.extras;
@@ -357,6 +383,47 @@ mod tests {
         let old: Vec<_> = std::fs::read_dir(crate::logs::old_logs_dir(&dirs)).unwrap().flatten().collect();
         assert_eq!(old.len(), 1);
         assert_eq!(std::fs::read_to_string(old[0].path()).unwrap(), "last run\n");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+}
+
+#[cfg(test)]
+mod unplugged_drive_tests {
+    use super::*;
+
+    #[test]
+    fn a_folder_on_an_unplugged_drive_is_kept_in_the_settings() {
+        let mut st: Settings =
+            serde_json::from_str(r#"{"backupsPath":"/media/usb/backups","customDownloadsPath":"/media/usb/dl"}"#)
+                .unwrap();
+        let (mut s, warnings) = ServiceSettings::read(&st);
+        assert!(s.backups_path.is_none(), "the default is used while it isn't there");
+        assert_eq!(s.unavailable_backups_path.as_deref(), Some("/media/usb/backups"));
+        assert!(warnings.iter().any(|w| w.contains("/media/usb/backups")));
+        // the player changes an unrelated setting in the same section, which saves the section
+        s.enable_automatic_backup_after_launch = true;
+        s.write_to(&mut st);
+        let v = serde_json::to_value(&st).unwrap();
+        assert_eq!(v["backupsPath"], "/media/usb/backups", "plugging the drive back in is all it takes");
+        assert_eq!(v["customDownloadsPath"], "/media/usb/dl");
+        // the player clearing the field on purpose does remove it
+        s.unavailable_backups_path = None;
+        s.write_to(&mut st);
+        assert!(serde_json::to_value(&st).unwrap().get("backupsPath").is_none());
+    }
+
+    #[test]
+    fn a_backup_isnt_quietly_put_on_the_wrong_disk() {
+        let base = crate::testutil::scratch("unplugged-backup");
+        let dirs = Dirs::at(base.join("data"));
+        let root = base.join("inst");
+        std::fs::create_dir_all(root.join("saves/W")).unwrap();
+        std::fs::write(root.join("saves/W/level.dat"), b"w").unwrap();
+        let mut s = ServiceSettings::default();
+        s.unavailable_backups_path = Some("/media/usb/backups".into());
+        let err = crate::backups::create(&dirs, &s, &root, "Pack", crate::backups::BackupMode::Normal).unwrap_err();
+        assert!(err.to_string().contains("isn't available"), "{err}");
+        assert!(!dirs.base.join("backups").exists());
         let _ = std::fs::remove_dir_all(&base);
     }
 }

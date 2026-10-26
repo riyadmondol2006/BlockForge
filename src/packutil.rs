@@ -69,6 +69,17 @@ pub fn safe_relative(path: &str) -> Option<PathBuf> {
     if out.as_os_str().is_empty() { None } else { Some(out) }
 }
 
+/// Whether a file name from someone else (a mod site, a modpack) is one plain name in every operating system: no
+/// folders, no `..`, no drive letter or Windows stream (`C:x.jar`, `a.jar:evil`), no control characters.
+pub fn safe_file_name(name: &str) -> bool {
+    !name.is_empty()
+        && name != "."
+        && name != ".."
+        && !name.contains(['/', '\\', ':', '\0'])
+        && !name.chars().any(char::is_control)
+        && Path::new(name).components().all(|c| matches!(c, Component::Normal(_)))
+}
+
 /// A name for a new instance that no existing instance has: `wanted`, or `wanted (2)`, `wanted (3)` ...
 /// A name with no letters or digits is replaced by "Imported instance" (the Java edition's rule).
 pub fn unique_name(wanted: &str, taken: impl Fn(&str) -> bool) -> String {
@@ -182,5 +193,30 @@ mod tests {
         assert_eq!(unique_name("Other", taken), "Other");
         assert_eq!(unique_name("My Pack", taken), "My Pack (3)");
         assert_eq!(unique_name("***", taken), "Imported instance");
+    }
+}
+
+#[cfg(test)]
+mod file_name_tests {
+    use super::*;
+
+    #[test]
+    fn file_names_from_mod_sites_must_be_one_plain_name() {
+        for ok in ["sodium-fabric-0.5.8+mc1.20.1.jar", "Complementary Shaders r5.zip", "日本語.jar", "a (2).jar"] {
+            assert!(safe_file_name(ok), "{ok}");
+        }
+        for bad in ["", ".", "..", "../x.jar", "a/b.jar", "a\\b.jar", "C:x.jar", "x.jar:ads", "a\0b", "a\nb.jar", "/x"]
+        {
+            assert!(!safe_file_name(bad), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn archive_paths_cannot_reach_outside_on_any_system() {
+        for bad in ["/Users/Public/evil.bat", "\\evil.bat", "..\\..\\x", "a/../../x", "./../x", "//server/share/x"] {
+            assert!(safe_relative(bad).is_none(), "{bad}");
+        }
+        assert_eq!(safe_relative("overrides/../mods/a.jar"), None);
+        assert_eq!(safe_relative("mods/./a.jar"), Some(PathBuf::from("mods/a.jar")));
     }
 }

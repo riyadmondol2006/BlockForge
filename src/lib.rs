@@ -46,6 +46,7 @@ pub mod install;
 pub mod instances;
 pub mod java;
 pub mod launch;
+pub mod leftovers;
 pub mod loaders;
 pub mod logs;
 pub mod modcheck;
@@ -69,6 +70,8 @@ pub mod skins;
 mod skins_data;
 pub mod snapshots;
 pub mod svcsettings;
+#[cfg(test)]
+pub mod testutil;
 pub mod tools;
 pub mod update;
 pub mod warmer;

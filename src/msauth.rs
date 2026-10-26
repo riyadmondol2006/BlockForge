@@ -104,22 +104,39 @@ pub async fn refresh(account: &mut Account) -> Result<()> {
         ])
         .send()
         .await?;
-    let ok = r.status().is_success();
-    let body: Value = r.json().await?;
-    if !ok {
-        account.must_login = true;
-        bail!(
-            "Microsoft no longer accepts the saved sign-in ({}). Sign in again.",
-            body["error"].as_str().unwrap_or("unknown")
-        );
+    let status = r.status();
+    let body: Value = r.json().await.unwrap_or(Value::Null);
+    if !status.is_success() {
+        let error = body["error"].as_str().unwrap_or("unknown");
+        // only Microsoft saying no to the saved sign-in means signing in again; a busy or broken server doesn't
+        if sign_in_rejected(status.as_u16(), error) {
+            account.must_login = true;
+            bail!("Microsoft no longer accepts the saved sign-in ({error}). Sign in again.");
+        }
+        bail!("Microsoft's sign-in service didn't answer properly ({status}). Try again in a little while.");
     }
     let mut oauth = oauth_from_json(&body)?;
     if oauth.refresh_token.is_empty() {
         oauth.refresh_token = old.refresh_token;
     }
+    // Microsoft may have just replaced the refresh token: keep the new one even if a later step fails, or the next
+    // try would send one that is no longer good
+    account.oauth_token = Some(oauth.clone());
     let fresh = account_from_oauth(oauth, Some(account)).await?;
     *account = fresh;
     Ok(())
+}
+
+/// Whether Microsoft's answer to a token refresh means the saved sign-in is no good any more (revoked, expired,
+/// the password changed), as opposed to a busy or failing server.
+pub fn sign_in_rejected(status: u16, error: &str) -> bool {
+    matches!(status, 400 | 401)
+        && matches!(error, "invalid_grant" | "interaction_required" | "unauthorized_client" | "invalid_client")
+}
+
+/// Whether an error only means there is no connection (no network, a dropped line, a timeout).
+pub fn is_offline_error(e: &anyhow::Error) -> bool {
+    e.chain().any(|c| c.downcast_ref::<reqwest::Error>().is_some_and(|r| r.is_connect() || r.is_timeout()))
 }
 
 async fn post_json(url: &str, body: Value, what: &str) -> Result<Value> {
@@ -218,4 +235,34 @@ fn dashed(id: &str) -> String {
         return id.to_string();
     }
     format!("{}-{}-{}-{}-{}", &id[0..8], &id[8..12], &id[12..16], &id[16..20], &id[20..32])
+}
+
+#[cfg(test)]
+mod refresh_answer_tests {
+    use super::*;
+
+    #[test]
+    fn only_a_real_rejection_means_signing_in_again() {
+        assert!(sign_in_rejected(400, "invalid_grant"));
+        assert!(sign_in_rejected(400, "interaction_required"));
+        // busy, broken or unknown answers keep the account as it is
+        for (status, error) in [
+            (429, "invalid_grant"),
+            (503, "unknown"),
+            (500, ""),
+            (400, "temporarily_unavailable"),
+            (502, "invalid_grant"),
+        ] {
+            assert!(!sign_in_rejected(status, error), "{status} {error}");
+        }
+    }
+
+    #[tokio::test]
+    async fn no_connection_is_recognised_as_being_offline() {
+        // nothing listens on port 9 of this computer: the connection is refused at once
+        let e = client().get("http://127.0.0.1:9/").send().await.unwrap_err();
+        let e = anyhow::Error::from(e).context("renewing the sign-in");
+        assert!(is_offline_error(&e));
+        assert!(!is_offline_error(&anyhow::anyhow!("Microsoft no longer accepts the saved sign-in")));
+    }
 }

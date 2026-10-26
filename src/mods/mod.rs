@@ -196,6 +196,13 @@ impl ModContext {
         }
     }
 
+    /// The Minecraft versions an update may be made for: only the instance's own. The `addModRestriction` setting
+    /// decides what the mod browser shows; for updates it let builds for other versions through (with "Lax", the
+    /// 1.20.6 build for a 1.20.1 instance; with "None", any), and "Update all" put mods in that crash the game.
+    pub fn update_game_versions(&self) -> Vec<String> {
+        vec![self.target.minecraft_version.clone()]
+    }
+
     /// The Minecraft versions a mod may be made for, per the `addModRestriction` setting: `None` means any.
     pub fn allowed_game_versions(&self) -> Option<Vec<String>> {
         match self.settings.add_mod_restriction {

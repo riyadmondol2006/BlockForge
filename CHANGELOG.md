@@ -3,6 +3,63 @@
 The section for a version is used as the text of its release on GitHub. Older releases (the Java versions, up to
 3.4.42.x) are on the [releases page](https://github.com/riyadmondol2006/BlockForge/releases).
 
+## Unreleased
+
+A reliability release: what happens when a download breaks off, a file is damaged, a pack is badly made or the
+computer goes off at the wrong moment.
+
+### What is new
+
+- **Repair game files.** In an instance's menu (and `blockforge repair <instance>`): every library, asset, the game
+  itself and Mojang's Java for it are checked against their checksums, and whatever is damaged or missing is
+  downloaded again. Worlds, mods and settings are not touched.
+- **Cancel a running job** from the sidebar: downloads, installs and pack updates stop at their next step, big files
+  included.
+- **Backups to keep.** Settings > Backups can keep only the newest backups of each instance (all of them, as before,
+  unless set). Backups whose names could also be another instance's are never removed.
+- **Crash hints.** When the game closes with one of the well known crashes (too little memory, the wrong Java), the
+  Logs tab and a message say what to do.
+- **Leftovers are swept** when the launcher starts: half-written backups and snapshots, temporary copies of settings
+  files and unpacking folders from work that was interrupted.
+
+### Fixed
+
+- Settings and accounts survive a damaged file: a value of the wrong kind no longer resets every setting or signs out
+  every account, and a file that can't be read is kept as `<name>.broken-<time>`. Saves are atomic, flushed to the
+  disk and never share a temporary file; `accounts.json` is private from the moment it exists.
+- Modpacks can no longer write or delete files outside the instance (Modrinth paths, ATLauncher `deletes`/`keeps`,
+  file names, folders and libraries in pack definitions, version and asset ids), and pack updates never overwrite or
+  delete worlds the pack shipped, nor take an `instance.json` from the pack.
+- Mod updates download the new file before the old one is removed, so a failed update keeps the mod working; a data
+  pack and a resource pack of the same project, or of the same file name, no longer delete each other.
+- Updates are only offered for the instance's own Minecraft version, whatever the mod browser is set to show.
+- CurseForge pack updates take a snapshot first and put the instance back if the update fails; a cancelled
+  ATLauncher reinstall no longer marks the instance as corrupted.
+- FTB packs put mods that come from CurseForge into `mods/` (they landed in the instance folder and never loaded).
+- Imports keep resource packs' `assets`, world icons and `config.json` files deeper in the instance; commands in an
+  imported MultiMC or Prism instance are imported switched off, and Prism's override switches are respected.
+- Downloads: a missing file (404), a refused connection or a full disk fail at once instead of being tried again; a
+  file without a checksum is checked by its size; two jobs needing one file share one download.
+- A Java runtime or a Java for loader installers that was cut off half way is fetched again instead of being trusted
+  for ever; a broken Forge or NeoForge installer is downloaded again.
+- Playing with a Microsoft account without internet starts the game with the saved sign-in (singleplayer works); a
+  busy sign-in server no longer asks for a new sign-in, and a renewed sign-in is never written over.
+- The game log keeps going after a line that isn't UTF-8 (Windows), and the sign-in token is hidden from the log,
+  copies and uploads.
+- Starting the game: a starting heap (`-Xms`) bigger than the game may use, too much memory for a 32-bit Java, and
+  quoted paths in a wrapper command no longer stop Java from starting; Stop works while the game is being got ready
+  and is no longer reported as a crash; a crash in native code is.
+- Crashes on: backup names in other alphabets, short asset hashes, a version folder called `0.0`, huge NBT files and
+  bad portal records in worlds being converted.
+- Backups, snapshots and class caches of instances named outside ASCII (or with look-alike names) are kept apart; two
+  restores at once no longer get in each other's way; a failed snapshot restore never deletes the files it moved aside.
+- Instance folders avoid names Windows can't use (`CON`, `NUL` ...) and very long names; a copy or a new instance that
+  fails half way is removed; an instance deleted while a job runs stays deleted.
+- Exports: a pack name with `/` works, and a jar that isn't the file its record names is stored instead of dropped.
+- `blockforge account offline` and `--offline-name` check the player name, and `--offline-name` plays as a real
+  offline player; `blockforge list` (and the other commands) work next to a file of the same name.
+- Starting a pack server on Windows works again.
+
 ## 4.5.0
 
 A new look for the whole launcher: calmer, flatter and easier to scan, with one rule at its heart: green means Play.

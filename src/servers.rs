@@ -226,6 +226,15 @@ pub fn provided_java(dirs: &Dirs, server: &Server, use_java_provided_by_minecraf
     dir.is_dir().then_some(dir)
 }
 
+/// A server's name as the title of a cmd window, inside quotes: the characters that would end the quotes or that cmd
+/// expands even inside them (`"`, `%`) are left out, and so are the ones that start another command when quotes are
+/// unbalanced (`&`, `|`, `<`, `>`, `^`).
+fn window_title(name: &str) -> String {
+    let t: String =
+        name.chars().filter(|c| !matches!(c, '"' | '%' | '&' | '|' | '<' | '>' | '^') && !c.is_control()).collect();
+    if t.trim().is_empty() { "Minecraft server".to_string() } else { t }
+}
+
 /// Work out the command that opens a terminal running the server's script, the way the Java edition does for
 /// each system. `in_path` says whether a program can be found.
 pub fn launch_plan(
@@ -243,7 +252,7 @@ pub fn launch_plan(
     let (program, args_out): (String, Vec<String>) = match os {
         Os::Windows => {
             let mut a: Vec<String> = ["/K", "start"].iter().map(|s| s.to_string()).collect();
-            a.push(format!("\"{}\"", server.name));
+            a.push(format!("\"{}\"", window_title(&server.name)));
             a.push("/D".into());
             a.push(format!("\"{}\"", root.display()));
             if script.ends_with(".ps1") {
@@ -380,8 +389,19 @@ pub fn launch(
         }
     }
     crate::logs::info(format!("Launching server with the following arguments: {:?}", plan.args));
-    std::process::Command::new(&plan.program)
-        .args(&plan.args)
+    let mut command = std::process::Command::new(&plan.program);
+    // on Windows the arguments are already written for cmd, quotes included: passed as they are, the way Java's
+    // ProcessBuilder did (Rust's own quoting turns them into \" , which cmd doesn't understand, and start failed)
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        for a in &plan.args {
+            command.raw_arg(a);
+        }
+    }
+    #[cfg(not(windows))]
+    command.args(&plan.args);
+    command
         .current_dir(&plan.workdir)
         .stdin(std::process::Stdio::null())
         .spawn()
@@ -601,5 +621,20 @@ mod tests {
             }
         }
         println!("read {seen} real server folders");
+    }
+}
+
+#[cfg(test)]
+mod title_tests {
+    use super::*;
+
+    #[test]
+    fn server_names_cant_break_out_of_the_window_title() {
+        assert_eq!(window_title("Rock & Stone"), "Rock  Stone");
+        let t = window_title(r#"x" & calc & echo "#);
+        assert!(!t.contains(['"', '&']), "{t}");
+        assert_eq!(window_title("%PATH%"), "PATH");
+        assert_eq!(window_title("\"\"\""), "Minecraft server");
+        assert_eq!(window_title("Minecraft 1.21.11 with Fabric"), "Minecraft 1.21.11 with Fabric");
     }
 }

@@ -17,6 +17,24 @@ use super::versions::{self, FABRIC, FORGE, LITELOADER, NEOFORGE, QUILT};
 pub const MAX_TEXT: u64 = 512 * 1024;
 /// At most this many names are read from a zip; enough to recognise any pack.
 pub const MAX_ENTRIES: usize = 4000;
+
+/// The files that tell what an archive is. Zips keep their entries in the order they were written, so in a big
+/// resource pack zipped in name order `pack.mcmeta` comes after thousands of `assets/` files, past [`MAX_ENTRIES`]:
+/// these are looked up by name as well.
+const MARKER_FILES: [&str; 12] = [
+    "modrinth.index.json",
+    "manifest.json",
+    "instance.cfg",
+    "mmc-pack.json",
+    "litemod.json",
+    "pack.mcmeta",
+    "pack.png",
+    "quilt.mod.json",
+    "fabric.mod.json",
+    "META-INF/neoforge.mods.toml",
+    "META-INF/mods.toml",
+    "mcmod.info",
+];
 /// Pictures bigger than this are not extracted.
 const MAX_ICON: u64 = 4 * 1024 * 1024;
 
@@ -229,8 +247,15 @@ pub fn detect(file: &Path) -> Detected {
     let Ok(f) = std::fs::File::open(file) else { return Detected::plain(file, &name, FileKind::Unknown) };
     // not a zip at all: a .jar or .litemod that isn't one can't be a working mod either
     let Ok(mut zip) = zip::ZipArchive::new(f) else { return Detected::plain(file, &name, FileKind::Unknown) };
-    let entries: Vec<String> =
+    let mut entries: Vec<String> =
         zip.file_names().take(MAX_ENTRIES).filter_map(|n| n.ok().map(|c| c.to_string())).collect();
+    if zip.len() > MAX_ENTRIES {
+        for marker in MARKER_FILES {
+            if zip.index_for_name(marker).is_some() && !entries.iter().any(|e| e == marker) {
+                entries.push(marker.to_string());
+            }
+        }
+    }
     let mut cache: Vec<(String, Option<String>)> = Vec::new();
     let mut detected = {
         let mut reader = |entry: &str| -> Option<String> {
@@ -1321,5 +1346,50 @@ mod tests {
             ModInfo { id: Some("xray".into()), icon_path: Some("assets/xray/icon.png".into()), ..ModInfo::default() };
         assert_eq!(read_icon(&path, &info), Some(jpeg));
         let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+#[cfg(test)]
+mod big_archive_tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn a_big_resource_pack_zipped_in_name_order_is_still_a_resource_pack() {
+        let dir = crate::testutil::scratch("big-pack");
+        let path = dir.join("Faithful 64x.zip");
+        {
+            let mut z = zip::ZipWriter::new(std::fs::File::create(&path).unwrap());
+            let o = zip::write::SimpleFileOptions::default();
+            for i in 0..(MAX_ENTRIES + 1000) {
+                z.start_file(format!("assets/minecraft/textures/block/b{i:05}.png"), o).unwrap();
+            }
+            z.start_file("pack.mcmeta", o).unwrap();
+            z.write_all(br#"{"pack":{"pack_format":34,"description":"Big pack"}}"#).unwrap();
+            z.finish().unwrap();
+        }
+        let d = detect(&path);
+        assert_eq!(d.kind, FileKind::ResourcePack);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_big_mod_with_its_metadata_written_last_keeps_its_loader() {
+        let dir = crate::testutil::scratch("big-mod");
+        let path = dir.join("huge-mod.jar");
+        {
+            let mut z = zip::ZipWriter::new(std::fs::File::create(&path).unwrap());
+            let o = zip::write::SimpleFileOptions::default();
+            for i in 0..(MAX_ENTRIES + 10) {
+                z.start_file(format!("com/example/C{i}.class"), o).unwrap();
+            }
+            z.start_file("fabric.mod.json", o).unwrap();
+            z.write_all(br#"{"id":"huge","name":"Huge Mod","version":"2.0"}"#).unwrap();
+            z.finish().unwrap();
+        }
+        let d = detect(&path);
+        assert_eq!(d.kind, FileKind::Mod);
+        assert_eq!(d.version.as_deref(), Some("2.0"), "{d:?}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

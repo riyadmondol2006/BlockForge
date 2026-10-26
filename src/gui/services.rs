@@ -350,7 +350,11 @@ impl App {
                     rows.gap(ui);
                     ui.label(RichText::new("Downloads folder").semibold());
                     small_muted(ui, "Where support bundles are saved. Empty uses your Downloads folder.");
-                    let downloads = s.custom_downloads_path.clone().unwrap_or_default();
+                    let downloads = s
+                        .custom_downloads_path
+                        .clone()
+                        .or_else(|| s.unavailable_downloads_path.clone())
+                        .unwrap_or_default();
                     let typed_downloads = super::settings::draft_text(
                         ui,
                         "downloads-folder",
@@ -366,21 +370,24 @@ impl App {
                         ui,
                         "Where instance backups are saved. Empty uses the backups folder in the data folder.",
                     );
-                    let backups = s.backups_path.clone().unwrap_or_default();
+                    let backups =
+                        s.backups_path.clone().or_else(|| s.unavailable_backups_path.clone()).unwrap_or_default();
                     let typed_backups =
                         super::settings::draft_text(ui, "backups-folder", &backups, "Default", [width, 32.0], margin);
                     folder_error_line(ui, "backups");
                     // a typed path is only taken once it names a folder that exists, as the Java edition does; when it
                     // doesn't, that is said under the field
-                    for (typed, slot, what) in [
-                        (typed_downloads, &mut s.custom_downloads_path, "downloads"),
-                        (typed_backups, &mut s.backups_path, "backups"),
+                    for (typed, slot, unavailable, what) in [
+                        (typed_downloads, &mut s.custom_downloads_path, &mut s.unavailable_downloads_path, "downloads"),
+                        (typed_backups, &mut s.backups_path, &mut s.unavailable_backups_path, "backups"),
                     ] {
                         let Some(text) = typed else { continue };
                         let key = folder_error_id(what);
                         match folder_setting(&text) {
                             Ok(value) => {
                                 *slot = value;
+                                // a folder typed by the player replaces one that wasn't there
+                                *unavailable = None;
                                 ui.data_mut(|d| d.remove::<String>(key));
                             }
                             Err(()) => {
@@ -394,6 +401,19 @@ impl App {
                     setting_row(ui, "Back up after playing", "Makes a backup every time a game closes", |ui| {
                         toggle(ui, &mut s.enable_automatic_backup_after_launch);
                     });
+                    rows.gap(ui);
+                    setting_row(
+                        ui,
+                        "Backups to keep",
+                        "Per instance; the oldest go when a new one is made. 0 keeps them all",
+                        |ui| {
+                            ui.add(
+                                egui::DragValue::new(&mut s.backups_to_keep)
+                                    .range(0..=crate::svcsettings::MAX_BACKUPS_TO_KEEP)
+                                    .custom_formatter(|n, _| if n == 0.0 { "All".to_string() } else { format!("{n}") }),
+                            );
+                        },
+                    );
                     rows.gap(ui);
                     setting_row(ui, "Backup contents", "What the automatic backup holds", |ui| {
                         egui::ComboBox::from_id_salt("backup-mode")

@@ -80,6 +80,9 @@ pub struct Prepared {
     lwjgl_natives_dir: Option<PathBuf>,
     custom_jar: Option<PathBuf>,
     secrets: Vec<String>,
+    /// Hides the sign-in token in the game's output (old versions print it as their "Session ID"), so it never
+    /// reaches the log view, the console, a copy or an upload.
+    censor: gamelog::LineCensor,
     /// What was decided on the way, for the log.
     pub notes: Vec<String>,
     /// The same worries as data a window can show (a toast, a dialog).
@@ -216,15 +219,39 @@ pub async fn refresh_if_expiring(dirs: &Dirs, account: &Account, seconds: i64) -
     if !current.needs_refresh_within(seconds) {
         return Ok(current);
     }
-    let mut renewed = current;
-    msauth::refresh(&mut renewed).await?;
-    let mut all = accounts::load(dirs);
-    match all.iter_mut().find(|a| a.uuid == renewed.uuid) {
-        Some(slot) => *slot = renewed.clone(),
-        None => all.push(renewed.clone()),
+    let mut renewed = current.clone();
+    if let Err(e) = msauth::refresh(&mut renewed).await {
+        // what the attempt learnt is kept: a rotated refresh token, or that Microsoft wants a new sign-in
+        let learnt = renewed.must_login != current.must_login
+            || renewed.oauth_token.as_ref().map(|o| &o.refresh_token)
+                != current.oauth_token.as_ref().map(|o| &o.refresh_token);
+        if learnt {
+            save_account(dirs, &renewed)?;
+        }
+        // with no connection the game still starts for singleplayer with the saved sign-in, the way the official
+        // launcher does; servers will turn it away until it is renewed
+        if msauth::is_offline_error(&e) && !renewed.must_login {
+            crate::logs::warn(format!(
+                "Couldn't renew the sign-in of {} (no connection); starting with the saved one, so only singleplayer will work",
+                renewed.name()
+            ));
+            return Ok(renewed);
+        }
+        return Err(e);
     }
-    accounts::save(dirs, &all)?;
+    save_account(dirs, &renewed)?;
     Ok(renewed)
+}
+
+/// Put `account` in place of the saved account with its id (or add it), keeping every other account as it is on
+/// disk.
+fn save_account(dirs: &Dirs, account: &Account) -> Result<()> {
+    let mut all = accounts::load(dirs);
+    match all.iter_mut().find(|a| a.uuid == account.uuid) {
+        Some(slot) => *slot = account.clone(),
+        None => all.push(account.clone()),
+    }
+    accounts::save(dirs, &all)
 }
 
 /// Which account an instance is played with: the one it names (`launcher.account`), else the one chosen in the launcher
@@ -562,8 +589,11 @@ pub async fn prepare_ext(
 
     // ---- who is playing
     let t = Instant::now();
-    let name =
-        extras.offline_name.clone().filter(|n| !n.trim().is_empty()).unwrap_or_else(|| account.name().to_string());
+    // playing under another name means playing offline as that player: sending a Microsoft account's token and id
+    // under a name that isn't theirs only gets the game turned away by servers ("Failed to verify username")
+    let offline_as = offline_player(extras.offline_name.as_deref())?;
+    let account = offline_as.as_ref().unwrap_or(account);
+    let name = account.name().to_string();
     let uuid = account.uuid_nodashes();
     let token = account.access_token.clone().unwrap_or_else(|| "0".into());
     let player = command::Player {
@@ -778,7 +808,9 @@ pub async fn prepare_ext(
     env.sort();
 
     let dashed_uuid = account.uuid.clone();
+    let censor = gamelog::LineCensor::new(&[], "", Some(token.as_str()).filter(|t| *t != "0"), false);
     Ok(Prepared {
+        censor,
         program,
         args,
         cwd: instance.root.clone(),
@@ -857,6 +889,88 @@ pub fn combine_jars(main: &Path, add: &Path, out: &Path) -> Result<()> {
     Ok(())
 }
 
+/// The game's exit code, or for a game that was ended by a signal (a crash in the graphics driver makes Java abort)
+/// `128 + signal`, the way a shell reports it: such an end has no code of its own and used to count as a clean exit,
+/// so the player was never told the game had crashed.
+pub fn exit_code(status: &std::process::ExitStatus) -> Option<i32> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        if let Some(signal) = status.signal() {
+            return Some(128 + signal);
+        }
+    }
+    status.code()
+}
+
+/// The offline player to start the game as when a name to play under was given (`--offline-name`), with that
+/// name's own offline id and no token; `None` when no name was given. A name Minecraft wouldn't take is refused.
+fn offline_player(name: Option<&str>) -> Result<Option<Account>> {
+    match name.map(str::trim).filter(|n| !n.is_empty()) {
+        Some(n) if accounts::valid_offline_name(n) => Ok(Some(Account::offline(n))),
+        Some(n) => anyhow::bail!("\"{n}\" can't be a player name: use 3 to 16 letters, numbers or underscores"),
+        None => Ok(None),
+    }
+}
+
+/// The longest line of game output kept whole; the rest of a longer one is cut off (a mod printing megabytes on one
+/// line would otherwise fill the memory).
+const MAX_LINE_BYTES: usize = 64 * 1024;
+
+/// Send the game's output on, one line at a time, with the sign-in token hidden. The bytes are read as they come:
+/// on Windows Java writes in the system's code page, not UTF-8, and a line that isn't valid UTF-8 (a path with
+/// `José` in it) used to end the reading for good, losing everything after it, crash reports included.
+async fn forward_lines<R: tokio::io::AsyncRead + Unpin>(
+    stream: R,
+    tx: tokio::sync::mpsc::UnboundedSender<String>,
+    censor: gamelog::LineCensor,
+) {
+    let mut reader = BufReader::new(stream);
+    let mut buf = Vec::new();
+    loop {
+        buf.clear();
+        match read_line_capped(&mut reader, &mut buf, MAX_LINE_BYTES).await {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {}
+        }
+        while buf.last().is_some_and(|b| *b == b'\n' || *b == b'\r') {
+            buf.pop();
+        }
+        let line = censor.apply(&String::from_utf8_lossy(&buf));
+        if tx.send(line).is_err() {
+            break;
+        }
+    }
+}
+
+/// Read up to and including the next `\n` into `buf`, keeping at most `max` bytes of it (the rest of a longer line
+/// is read and dropped). Returns how many bytes were read, 0 at the end.
+async fn read_line_capped<R: tokio::io::AsyncBufRead + Unpin>(
+    reader: &mut R,
+    buf: &mut Vec<u8>,
+    max: usize,
+) -> std::io::Result<usize> {
+    let mut total = 0;
+    loop {
+        let available = reader.fill_buf().await?;
+        if available.is_empty() {
+            return Ok(total);
+        }
+        let (chunk, done) = match available.iter().position(|b| *b == b'\n') {
+            Some(i) => (&available[..=i], true),
+            None => (available, false),
+        };
+        let room = max.saturating_sub(buf.len());
+        buf.extend_from_slice(&chunk[..chunk.len().min(room)]);
+        let used = chunk.len();
+        total += used;
+        reader.consume(used);
+        if done {
+            return Ok(total);
+        }
+    }
+}
+
 pub struct Running {
     pub child: tokio::process::Child,
     /// Game output, one line at a time, ending when the game closes both its output streams.
@@ -909,25 +1023,10 @@ pub fn spawn(prepared: &Prepared) -> Result<Running> {
     let mut child = cmd.spawn().with_context(|| format!("starting {}", prepared.program.display()))?;
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     if let Some(out) = child.stdout.take() {
-        let tx = tx.clone();
-        tokio::spawn(async move {
-            let mut lines = BufReader::new(out).lines();
-            while let Ok(Some(l)) = lines.next_line().await {
-                if tx.send(l).is_err() {
-                    break;
-                }
-            }
-        });
+        tokio::spawn(forward_lines(out, tx.clone(), prepared.censor.clone()));
     }
     if let Some(err) = child.stderr.take() {
-        tokio::spawn(async move {
-            let mut lines = BufReader::new(err).lines();
-            while let Ok(Some(l)) = lines.next_line().await {
-                if tx.send(l).is_err() {
-                    break;
-                }
-            }
-        });
+        tokio::spawn(forward_lines(err, tx, prepared.censor.clone()));
     }
     let workers = if prepared.lower_workers { child.id().and_then(workers::Watcher::start) } else { None };
     Ok(Running { child, lines: rx, _workers: workers })
@@ -1109,5 +1208,99 @@ mod tests {
         let mut v = HashMap::new();
         v.insert("auth_player_name", "Steve".to_string());
         assert_eq!(substitute("--username ${auth_player_name} ${nope}", &v), "--username Steve ${nope}");
+    }
+}
+
+#[cfg(test)]
+mod output_tests {
+    use super::*;
+
+    async fn lines_of(bytes: &[u8], token: Option<&str>) -> Vec<String> {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        forward_lines(bytes, tx, gamelog::LineCensor::new(&[], "", token, false)).await;
+        let mut out = Vec::new();
+        while let Ok(l) = rx.try_recv() {
+            out.push(l);
+        }
+        out
+    }
+
+    #[tokio::test]
+    async fn a_line_that_is_not_utf8_doesnt_stop_the_log() {
+        // Java on Windows writes in the system code page: "José" in Windows-1252, then the crash that matters
+        let mut bytes = b"[main] Loading\r\n".to_vec();
+        bytes.extend_from_slice(b"C:\\Users\\Jos\xe9\\AppData\r\n");
+        bytes.extend_from_slice(b"java.lang.OutOfMemoryError: Java heap space\n");
+        bytes.extend_from_slice(b"last line without an ending");
+        let lines = lines_of(&bytes, None).await;
+        assert_eq!(lines.len(), 4, "{lines:?}");
+        assert_eq!(lines[0], "[main] Loading");
+        assert!(lines[1].starts_with("C:\\Users\\Jos") && lines[1].ends_with("AppData"));
+        assert_eq!(lines[2], "java.lang.OutOfMemoryError: Java heap space");
+        assert_eq!(lines[3], "last line without an ending");
+    }
+
+    #[tokio::test]
+    async fn the_sign_in_token_never_reaches_the_log() {
+        let token = "eyJhbGciOiJIUzI1NiJ9.secret-token.value";
+        let text = format!("[Client thread/INFO]: (Session ID is token:{token}:0123abcd)\nnormal line\n");
+        let lines = lines_of(text.as_bytes(), Some(token)).await;
+        assert!(!lines.iter().any(|l| l.contains(token)), "{lines:?}");
+        assert!(lines[0].contains("**ACCESSTOKEN**"));
+        assert_eq!(lines[1], "normal line");
+        // an offline player's "0" is not a secret and must not blank out every zero
+        let lines = lines_of(b"version 1.20.1 build 0\n", Some("0")).await;
+        assert_eq!(lines[0], "version 1.20.1 build 0");
+    }
+
+    #[tokio::test]
+    async fn a_gigantic_line_is_cut_and_the_next_one_still_arrives() {
+        let mut bytes = vec![b'x'; MAX_LINE_BYTES * 5];
+        bytes.extend_from_slice(b"\nafter\n");
+        let lines = lines_of(&bytes, None).await;
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].len(), MAX_LINE_BYTES);
+        assert_eq!(lines[1], "after");
+    }
+
+    #[tokio::test]
+    async fn empty_output_and_blank_lines() {
+        assert!(lines_of(b"", None).await.is_empty());
+        assert_eq!(lines_of(b"\n\r\n\n", None).await, vec!["", "", ""]);
+    }
+}
+
+#[cfg(test)]
+mod offline_name_tests {
+    use super::*;
+
+    #[test]
+    fn playing_under_another_name_is_playing_offline_as_that_player() {
+        assert!(offline_player(None).unwrap().is_none());
+        assert!(offline_player(Some("   ")).unwrap().is_none());
+        let p = offline_player(Some(" Alex ")).unwrap().unwrap();
+        assert_eq!(p.name(), "Alex");
+        assert!(p.offline, "never the Microsoft account's token under a name that isn't theirs");
+        assert_eq!(p.uuid, accounts::offline_uuid("Alex"));
+        for bad in ["Steve Jobs", "ab", "seventeen_letters", "Ünïcode"] {
+            assert!(offline_player(Some(bad)).is_err(), "{bad}");
+        }
+    }
+}
+
+#[cfg(all(test, unix))]
+mod exit_code_tests {
+    use super::*;
+    use std::os::unix::process::ExitStatusExt;
+
+    #[test]
+    fn a_game_killed_by_a_signal_counts_as_a_crash_not_a_clean_exit() {
+        // what Java does after a crash in native code: abort, signal 6
+        assert_eq!(exit_code(&std::process::ExitStatus::from_raw(6)), Some(134));
+        // a segmentation fault
+        assert_eq!(exit_code(&std::process::ExitStatus::from_raw(11)), Some(139));
+        // ordinary exits keep their own code
+        assert_eq!(exit_code(&std::process::ExitStatus::from_raw(0)), Some(0));
+        assert_eq!(exit_code(&std::process::ExitStatus::from_raw(1 << 8)), Some(1));
     }
 }

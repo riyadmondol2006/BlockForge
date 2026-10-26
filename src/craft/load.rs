@@ -115,10 +115,12 @@ fn version_key(v: &str) -> Option<VersionKey> {
 
 /// Recipes became data files in 1.13 (snapshot 17w43a).
 fn has_recipe_files(key: &VersionKey) -> bool {
+    // a version folder named like `0.0` has no numbers left once the trailing zeros are gone
+    let num = |i: usize| key.nums.get(i).copied().unwrap_or(0);
     if key.group == 0 {
-        return (key.nums[0], key.nums[1]) >= (17, 43);
+        return (num(0), num(1)) >= (17, 43);
     }
-    key.nums[0] > 1 || key.nums.get(1).copied().unwrap_or(0) >= 13
+    num(0) > 1 || num(1) >= 13
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -919,4 +921,29 @@ fn fallback_category(id: &str) -> Category {
         return Category::Building;
     }
     Category::Misc
+}
+
+#[cfg(test)]
+mod odd_version_tests {
+    use super::*;
+
+    #[test]
+    fn version_folders_with_odd_names_never_crash_the_page() {
+        for v in ["0.0", "0.0.0", "1.0", "00.00", "1.20.1", "26.3", "1.0.0.0"] {
+            if let Some(key) = version_key(v) {
+                let _ = has_recipe_files(&key);
+            }
+        }
+        assert!(!has_recipe_files(&version_key("0.0").unwrap()));
+        assert!(has_recipe_files(&version_key("1.20.1").unwrap()));
+        let base = crate::testutil::scratch("craft-odd-versions");
+        let dirs = Dirs::at(&base);
+        for v in ["0.0", "1.21.1", "weird name", "..", "1."] {
+            let dir = dirs.libraries.join("net/minecraft/client").join(v);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join(format!("client-{v}.jar")), b"not a jar").unwrap();
+        }
+        let _ = installed_versions(&dirs);
+        let _ = std::fs::remove_dir_all(&base);
+    }
 }

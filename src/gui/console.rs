@@ -159,9 +159,14 @@ impl App {
             ConsoleAction::Upload => {
                 self.console_uploading = true;
                 let text: Vec<String> = self.console_lines.iter().map(|l| l.text.clone()).collect();
+                // the paste is public: sign-in tokens, e-mail addresses, the home folder and addresses are taken out
+                // first, whatever printed them (a mod, an old version's "Session ID")
+                let secrets: Vec<String> =
+                    self.accounts.iter().filter_map(|a| a.access_token.clone()).filter(|t| t.len() > 3).collect();
                 let n = self.notifier();
                 self.rt.spawn(async move {
-                    let body = serde_json::json!({"title": format!("{} - Log", crate::NAME), "text": text.join("\n")});
+                    let text = crate::diagnostics::scrub(&text.join("\n"), &secrets);
+                    let body = serde_json::json!({"title": format!("{} - Log", crate::NAME), "text": text});
                     let r = async {
                         let r = crate::http::client().post(PASTE_URL).json(&body).send().await?;
                         anyhow::ensure!(r.status().is_success(), "the paste service answered {}", r.status());

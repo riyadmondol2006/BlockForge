@@ -289,6 +289,8 @@ impl Library {
             if a.path.is_none() {
                 a.path = paths::maven_path(&self.name);
             }
+            // a path from the file that would lead out of `libraries/` is never used
+            a.path = a.path.filter(|p| crate::packutil::safe_relative(p).is_some());
             if a.path.is_some() {
                 return Some(a);
             }
@@ -312,6 +314,7 @@ impl Library {
         if a.path.is_none() {
             a.path = paths::maven_path(&format!("{}:{}", self.name, classifier));
         }
+        a.path = a.path.filter(|p| crate::packutil::safe_relative(p).is_some());
         Some(a)
     }
 

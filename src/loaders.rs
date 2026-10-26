@@ -205,7 +205,17 @@ async fn run_installer(
     };
     let installer = dirs.loaders.join(&name);
     progress.stage(format!("Downloading the {} installer", loader.label()));
-    install::download_all(vec![Job::new(url, &installer)], progress, false).await?;
+    // the maven server publishes each file's SHA-1 next to it: with it, a damaged or swapped download (a captive
+    // portal's page saved as the jar) is caught here instead of failing the installer every time after
+    let sha1 = crate::http::get_bytes(&format!("{url}.sha1"))
+        .await
+        .ok()
+        .map(|b| String::from_utf8_lossy(&b).trim().chars().take(40).collect::<String>())
+        .filter(|h| crate::install::is_hex_hash(h) && h.len() == 40);
+    let mut job = Job::new(url, &installer);
+    job.sha1 = sha1;
+    // an installer already on disk is checked against that SHA-1 (when there is one), not trusted by its size
+    install::download_all(vec![job], progress, true).await?;
 
     // the installer fetches Minecraft itself unless it finds it, so hand it what we already have
     progress.stage("Getting Minecraft for the installer");
@@ -213,6 +223,8 @@ async fn run_installer(
     let home = java::ensure_installer_java(dirs, progress).await?;
 
     let work = dirs.temp.join(format!("loader-{}", uuid::Uuid::new_v4().simple()));
+    // removed however this ends (an error half way left hundreds of MB of libraries in temp/)
+    let _work_guard = RemoveOnDrop(work.clone());
     let vdir = work.join("versions").join(mc);
     std::fs::create_dir_all(&vdir)?;
     std::fs::write(work.join("launcher_profiles.json"), json!({"profiles": {}, "version": 3}).to_string())?;
@@ -236,7 +248,8 @@ async fn run_installer(
     if !output.status.success() {
         let text = String::from_utf8_lossy(&output.stdout).to_string() + &String::from_utf8_lossy(&output.stderr);
         let tail: Vec<&str> = text.lines().rev().take(12).collect();
-        let _ = std::fs::remove_dir_all(&work);
+        // a broken installer jar would fail the same way every time; the next try downloads it again
+        let _ = std::fs::remove_file(&installer);
         bail!("the {} installer failed:\n{}", loader.label(), tail.into_iter().rev().collect::<Vec<_>>().join("\n"));
     }
 
@@ -275,6 +288,15 @@ fn move_tree(from: &Path, to: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Deletes a folder when dropped.
+struct RemoveOnDrop(std::path::PathBuf);
+
+impl Drop for RemoveOnDrop {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
 }
 
 #[cfg(test)]

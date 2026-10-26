@@ -374,7 +374,7 @@ pub fn preview(instance: &ImportedInstance) -> Result<Preview> {
         }
     }
     p.top_level.sort();
-    walk_counts(&instance.game_dir, &mut p);
+    walk_counts(&instance.game_dir, &mut p, true);
     Ok(p)
 }
 
@@ -391,16 +391,17 @@ fn count_files(dir: &Path, suffixes: &[&str]) -> usize {
         .unwrap_or(0)
 }
 
-fn walk_counts(dir: &Path, p: &mut Preview) {
+fn walk_counts(dir: &Path, p: &mut Preview, top: bool) {
     let Ok(rd) = std::fs::read_dir(dir) else { return };
     for e in rd.flatten() {
         let name = e.file_name().to_string_lossy().to_string();
         let Ok(ty) = e.file_type() else { continue };
-        if is_skipped(&name) || ty.is_symlink() {
+        // counted the way `copy_tree` copies: the skip list only at the top
+        if (top && is_skipped(&name)) || ty.is_symlink() {
             continue;
         }
         if ty.is_dir() {
-            walk_counts(&e.path(), p);
+            walk_counts(&e.path(), p, false);
         } else if ty.is_file() {
             p.files += 1;
             p.bytes += e.metadata().map(|m| m.len()).unwrap_or(0);
@@ -444,7 +445,10 @@ pub fn copy_game_dir(game_dir: &Path, target: &Path) -> Result<()> {
     result
 }
 
-/// Copies a file or folder; links are skipped, never followed, so nothing outside the instance is read.
+/// Copies a file or folder; links are skipped, never followed, so nothing outside the instance is read. The list
+/// of things not worth importing only applies at the top of the instance (the caller checks it): further down the
+/// same names are the player's own files (`resourcepacks/MyPack/assets`, a world's `icon.png`, a mod's
+/// `config/x/config.json`).
 fn copy_tree(from: &Path, to: &Path) -> Result<()> {
     let meta = std::fs::symlink_metadata(from)?;
     if meta.file_type().is_symlink() {
@@ -453,10 +457,6 @@ fn copy_tree(from: &Path, to: &Path) -> Result<()> {
     if meta.is_dir() {
         std::fs::create_dir_all(to)?;
         for e in std::fs::read_dir(from)?.flatten() {
-            let name = e.file_name().to_string_lossy().to_string();
-            if is_skipped(&name) {
-                continue;
-            }
             copy_tree(&e.path(), &to.join(e.file_name()))?;
         }
     } else if meta.is_file() {
@@ -1033,5 +1033,56 @@ mod tests {
         assert!(
             std::fs::read_dir(&t).unwrap().flatten().all(|e| !e.file_name().to_string_lossy().starts_with(".import-"))
         );
+    }
+}
+
+#[cfg(test)]
+mod copy_tests {
+    use super::*;
+
+    fn write(path: &Path, body: &str) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, body).unwrap();
+    }
+
+    #[test]
+    fn names_on_the_skip_list_are_only_skipped_at_the_top() {
+        let base = crate::testutil::scratch("import-depth");
+        let game = base.join("game");
+        // junk at the top that isn't worth importing
+        write(&game.join("logs/latest.log"), "log");
+        write(&game.join("assets/indexes/x.json"), "{}");
+        write(&game.join("config.json"), "{}");
+        write(&game.join("icon.png"), "png");
+        // the player's own files deeper down that share those names
+        write(&game.join("resourcepacks/MyPack/assets/minecraft/textures/a.png"), "tex");
+        write(&game.join("resourcepacks/MyPack/pack.mcmeta"), "{}");
+        write(&game.join("kubejs/assets/kubejs/lang/en_us.json"), "{}");
+        write(&game.join("config/somemod/config.json"), "{\"a\":1}");
+        write(&game.join("saves/World/icon.png"), "thumb");
+        write(&game.join("saves/World/level.dat"), "lvl");
+        write(&game.join("config/mod/cache/data.bin"), "data");
+        let target = base.join("instances/New");
+        copy_game_dir(&game, &target).unwrap();
+        for kept in [
+            "resourcepacks/MyPack/assets/minecraft/textures/a.png",
+            "kubejs/assets/kubejs/lang/en_us.json",
+            "config/somemod/config.json",
+            "saves/World/icon.png",
+            "saves/World/level.dat",
+            "config/mod/cache/data.bin",
+        ] {
+            assert!(target.join(kept).is_file(), "{kept} was lost in the import");
+        }
+        for skipped in ["logs", "assets", "config.json", "icon.png"] {
+            assert!(!target.join(skipped).exists(), "{skipped} should not be imported");
+        }
+        let leftovers: Vec<_> = std::fs::read_dir(base.join("instances"))
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().starts_with(".import-"))
+            .collect();
+        assert!(leftovers.is_empty());
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

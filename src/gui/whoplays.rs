@@ -24,7 +24,7 @@ impl WhoState {
 
 /// 3-16 letters, numbers or underscores.
 pub fn valid_player_name(n: &str) -> bool {
-    (3..=16).contains(&n.len()) && n.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    crate::accounts::valid_offline_name(n)
 }
 
 /// One of the two ways in. The Microsoft one is the filled, main choice (ink, like every main action: green is for

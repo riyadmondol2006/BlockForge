@@ -77,35 +77,38 @@ pub async fn install_version(
     let project_id = project.get("id").and_then(Value::as_str).unwrap_or(&version.project_id).to_string();
     let title = project.get("title").and_then(Value::as_str).unwrap_or(&file.filename).to_string();
     let record_type = record_type_for(project, version, requested);
-    if !plain_file_name(&file.filename) {
+    if !crate::packutil::safe_file_name(&file.filename) {
         bail!("{title} has a file name that isn't allowed: {}", file.filename);
     }
     let final_path = instance.root.join(folder_for(record_type)).join(&file.filename);
 
-    // an older version of the same project is replaced
+    // an older version of the same project, of the same sort (a project can be both a data pack and a resource
+    // pack, each installed on its own), is replaced
     let records = instance.mod_records();
-    let same: Vec<ModRecord> = records
-        .iter()
-        .filter(|m| m.modrinth_project_id().is_some_and(|id| id.eq_ignore_ascii_case(&project_id)))
-        .cloned()
-        .collect();
-
-    if final_path.exists() {
-        std::fs::remove_file(&final_path).with_context(|| format!("replacing {}", final_path.display()))?;
-    }
-    for old in &same {
-        if let Some(p) = files::enabled_path(instance, old).filter(|p| p.is_file()) {
-            let _ = std::fs::remove_file(p);
-        }
-    }
+    let is_same = |m: &ModRecord| {
+        m.modrinth_project_id().is_some_and(|id| id.eq_ignore_ascii_case(&project_id))
+            && folder_for(&m.kind) == folder_for(record_type)
+    };
+    let same: Vec<ModRecord> = records.iter().filter(|m| is_same(m)).cloned().collect();
 
     progress.stage(format!("Downloading {title}"));
     let mut job = Job::new(&file.url, &final_path);
     job.sha1 = file.hashes.get("sha1").cloned();
     job.size = Some(file.size).filter(|s| *s > 0);
+    // the download lands under another name and takes the place of a file of the same name only once it is whole
+    // and checked, so the old version is removed only after that: a failed or cancelled download leaves it working
     install::download_all(vec![job], progress, true)
         .await
         .with_context(|| format!("Couldn't download {}. Please try again later.", file.filename))?;
+    for old in &same {
+        if let Some(p) = files::enabled_path(instance, old).filter(|p| p.is_file() && *p != final_path) {
+            let _ = std::fs::remove_file(p);
+        }
+        // a switched-off copy of the old version is replaced too, not left behind with no record
+        if let Some(p) = files::disabled_path(instance, old).filter(|p| old.disabled && p.is_file()) {
+            let _ = std::fs::remove_file(p);
+        }
+    }
 
     let mut rec = ModRecord::new(&title, &file.filename, record_type);
     rec.version = version.name.clone();
@@ -119,18 +122,11 @@ pub async fn install_version(
     rec.modrinth_version = Some(version.raw.clone());
 
     let key = ModKey::of(&rec);
-    let mut list: Vec<ModRecord> = records
-        .into_iter()
-        .filter(|m| !m.modrinth_project_id().is_some_and(|id| id.eq_ignore_ascii_case(&project_id)))
-        .collect();
+    let mut list: Vec<ModRecord> = records.into_iter().filter(|m| !is_same(m)).collect();
     list.push(rec);
     instance.set_mod_records(&list);
     instance.save()?;
     Ok(key)
-}
-
-fn plain_file_name(name: &str) -> bool {
-    !name.is_empty() && !name.contains(['/', '\\']) && name != ".." && name != "."
 }
 
 /// The version that would be installed: the newest made for this instance, releases first.
@@ -242,7 +238,8 @@ pub async fn plan_dependencies(
             }
         }
     }
-    let provided = files::installed_project_ids(instance);
+    // only what the game will load counts as provided: a switched-off dependency is fetched (switched on) again
+    let provided = files::enabled_project_ids(instance);
 
     let mut wanted = ModVersion::from_modrinth(chosen);
     // the version was already picked for this instance, maybe from a nearby Minecraft version
@@ -517,6 +514,16 @@ mod tests {
     }
 
     #[test]
+    fn updates_are_only_ever_for_the_instances_own_minecraft() {
+        for r in [AddModRestriction::Strict, AddModRestriction::Lax, AddModRestriction::None] {
+            assert_eq!(ctx("Fabric", "1.20.1", r).update_game_versions(), vec!["1.20.1".to_string()]);
+        }
+        // the browser still follows the setting
+        assert_eq!(ctx("Fabric", "1.20.1", AddModRestriction::None).allowed_game_versions(), None);
+        assert_eq!(ctx("Fabric", "1.20.1", AddModRestriction::Lax).allowed_game_versions().unwrap().len(), 3);
+    }
+
+    #[test]
     fn types_follow_the_project() {
         let v = version("v", "2026-01-01", &["fabric"], &["1.20.1"]);
         assert_eq!(record_type_for(&json!({"project_type": "mod"}), &v, None), "mods");
@@ -574,5 +581,97 @@ mod tests {
         // packs ignore the loader
         let shader = version("sh", "2026-01-01", &["iris"], &["1.20.1"]);
         assert_eq!(pick(&c, ContentKind::Shaders, &[shader]).unwrap().id, "sh");
+    }
+}
+
+/// Installing and updating as it goes wrong for players: the download fails half way through "Update all", a
+/// project is both a data pack and a resource pack, a mod site sends a strange file name.
+#[cfg(test)]
+mod robustness_tests {
+    use super::*;
+    use crate::mods::files::tests_support::temp_instance;
+    use crate::testutil::{Reply, Server, runtime, sha1};
+    use serde_json::json;
+
+    fn version_with_file(url: &str, filename: &str, body: &[u8]) -> MrVersion {
+        MrVersion::from_value(json!({
+            "id": "v2", "project_id": "p", "name": "2.0", "date_published": "2026-01-01",
+            "files": [{"url": url, "filename": filename, "primary": true,
+                       "hashes": {"sha1": sha1(body)}, "size": body.len()}]
+        }))
+        .unwrap()
+    }
+
+    fn record(name: &str, file: &str, kind: &str) -> ModRecord {
+        let mut r = ModRecord::new(name, file, kind);
+        r.modrinth_project = Some(json!({"id": "p"}));
+        r
+    }
+
+    #[test]
+    fn a_failed_update_keeps_the_old_version_and_a_good_one_replaces_it() {
+        runtime().block_on(async {
+            let server = Server::start().await;
+            let mut inst = temp_instance("install-update");
+            std::fs::write(inst.root.join("mods/old.jar"), b"old").unwrap();
+            // the same Modrinth project, installed as a data pack too
+            std::fs::create_dir_all(inst.root.join("datapacks")).unwrap();
+            std::fs::write(inst.root.join("datapacks/p.zip"), b"data").unwrap();
+            inst.set_mod_records(&[record("P", "old.jar", "mods"), record("P data", "p.zip", "datapack")]);
+            let project = json!({"id": "p", "title": "P", "project_type": "mod"});
+            let body = b"new jar".to_vec();
+
+            // the server is down: the old version must still be there and still recorded
+            let url = server.route("/new.jar", Reply::status(500));
+            let v = version_with_file(&url, "new.jar", &body);
+            assert!(install_version(&mut inst, &project, &v, Some("mods"), &Progress::new()).await.is_err());
+            assert_eq!(std::fs::read(inst.root.join("mods/old.jar")).unwrap(), b"old");
+            assert!(inst.mod_records().iter().any(|m| m.file == "old.jar"));
+
+            // the server is back: the new version replaces the old one, and only the old mod
+            server.route("/new.jar", Reply::ok(body.clone()));
+            install_version(&mut inst, &project, &v, Some("mods"), &Progress::new()).await.unwrap();
+            assert!(!inst.root.join("mods/old.jar").exists());
+            assert_eq!(std::fs::read(inst.root.join("mods/new.jar")).unwrap(), body);
+            assert_eq!(std::fs::read(inst.root.join("datapacks/p.zip")).unwrap(), b"data", "the data pack stays");
+            let files: Vec<String> = inst.mod_records().iter().map(|m| m.file.clone()).collect();
+            assert!(files.contains(&"p.zip".to_string()) && files.contains(&"new.jar".to_string()), "{files:?}");
+            assert!(!files.contains(&"old.jar".to_string()));
+            let _ = std::fs::remove_dir_all(&inst.root);
+        });
+    }
+
+    #[test]
+    fn updating_to_a_file_of_the_same_name_keeps_it_when_the_download_fails() {
+        runtime().block_on(async {
+            let server = Server::start().await;
+            let mut inst = temp_instance("install-samename");
+            std::fs::write(inst.root.join("mods/same.jar"), b"v1").unwrap();
+            inst.set_mod_records(&[record("P", "same.jar", "mods")]);
+            let project = json!({"id": "p", "title": "P", "project_type": "mod"});
+            let url = server.route("/same.jar", Reply::cut(b"version two".to_vec(), 3));
+            let v = version_with_file(&url, "same.jar", b"version two");
+            assert!(install_version(&mut inst, &project, &v, Some("mods"), &Progress::new()).await.is_err());
+            assert_eq!(std::fs::read(inst.root.join("mods/same.jar")).unwrap(), b"v1");
+            let _ = std::fs::remove_dir_all(&inst.root);
+        });
+    }
+
+    #[test]
+    fn file_names_that_could_leave_the_folder_are_refused_before_downloading() {
+        runtime().block_on(async {
+            let server = Server::start().await;
+            let mut inst = temp_instance("install-names");
+            let project = json!({"id": "p", "title": "P", "project_type": "mod"});
+            for evil in
+                ["../evil.jar", "..\\evil.jar", "C:evil.jar", "a.jar:stream", "", "..", "/etc/x.jar", "a\nb.jar"]
+            {
+                let url = server.route("/f", Reply::ok(b"x".to_vec()));
+                let v = version_with_file(&url, evil, b"x");
+                assert!(install_version(&mut inst, &project, &v, None, &Progress::new()).await.is_err(), "{evil:?}");
+            }
+            assert_eq!(server.total(), 0, "nothing was downloaded");
+            let _ = std::fs::remove_dir_all(&inst.root);
+        });
     }
 }

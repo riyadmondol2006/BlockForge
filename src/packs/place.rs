@@ -320,15 +320,15 @@ pub fn backup_select_files(site: &Site, reinstall: bool, keeps: Option<&PathRule
     if reinstall {
         if let Some(keeps) = keeps {
             for k in keeps.files.iter().flatten().filter(|k| k.keep_allowed()) {
-                let from = k.resolve(root);
+                let (Some(from), Some(to)) = (k.resolve(root), k.resolve_flat(&temp.join("keeps"))) else { continue };
                 if from.is_file() {
-                    let _ = fsx::copy_file(&from, &k.resolve_flat(&temp.join("keeps")), true);
+                    let _ = fsx::copy_file(&from, &to, true);
                 }
             }
             for k in keeps.folders.iter().flatten().filter(|k| k.keep_allowed()) {
-                let from = k.resolve(root);
+                let (Some(from), Some(to)) = (k.resolve(root), k.resolve_flat(&temp.join("keeps"))) else { continue };
                 if from.is_dir() {
-                    let _ = fsx::copy_dir(&from, &k.resolve_flat(&temp.join("keeps")), false);
+                    let _ = fsx::copy_dir(&from, &to, false);
                 }
             }
         }
@@ -359,15 +359,15 @@ pub fn restore_select_files(site: &Site, saved: &Saved, reinstall: bool, keeps: 
     if reinstall {
         if let Some(keeps) = keeps {
             for k in keeps.files.iter().flatten().filter(|k| k.keep_allowed()) {
-                let from = k.resolve_flat(&temp.join("keeps"));
+                let (Some(from), Some(to)) = (k.resolve_flat(&temp.join("keeps")), k.resolve(root)) else { continue };
                 if from.is_file() {
-                    let _ = fsx::copy_file(&from, &k.resolve(root), true);
+                    let _ = fsx::copy_file(&from, &to, true);
                 }
             }
             for k in keeps.folders.iter().flatten().filter(|k| k.keep_allowed()) {
-                let from = k.resolve_flat(&temp.join("keeps"));
+                let (Some(from), Some(to)) = (k.resolve_flat(&temp.join("keeps")), k.resolve(root)) else { continue };
                 if from.is_dir() {
-                    let _ = fsx::copy_dir(&from, &k.resolve(root), false);
+                    let _ = fsx::copy_dir(&from, &to, false);
                 }
             }
         }
@@ -407,7 +407,10 @@ pub fn prepare_filesystem(
                 fsx::delete_with_filter(&root.join("jarmods"), &pack_files(records, &["forge"]), true);
             }
             for rel in override_paths {
-                if !super::fsx::is_safe_relative(rel) {
+                // never the instance itself (an empty path), never outside it, never worlds or instance.json: a
+                // pack's files there are the player's now
+                let Some(rel) = crate::packutil::safe_relative(rel) else { continue };
+                if super::is_player_data(&rel) {
                     continue;
                 }
                 let p = root.join(rel);
@@ -429,7 +432,7 @@ pub fn prepare_filesystem(
             if let Some(d) = deletes {
                 for rule in d.files.iter().flatten().chain(d.folders.iter().flatten()) {
                     if rule.delete_allowed() {
-                        let p = rule.resolve(root);
+                        let Some(p) = rule.resolve(root) else { continue };
                         if p.exists() {
                             fsx::delete_path(&p);
                         }

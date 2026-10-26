@@ -42,6 +42,43 @@ pub fn split(arguments: &str) -> Vec<String> {
     result
 }
 
+/// A Java memory size (`512m`, `4G`, `1048576k`, `2147483648`) in MB, as `-Xmx`/`-Xms` take it.
+pub fn memory_mb(value: &str) -> Option<u64> {
+    let value = value.trim();
+    let (digits, unit) = match value.char_indices().last()? {
+        (i, c) if c.is_ascii_alphabetic() => (&value[..i], c.to_ascii_lowercase()),
+        _ => (value, 'b'),
+    };
+    let n: u64 = digits.parse().ok()?;
+    Some(match unit {
+        'b' => n / (1024 * 1024),
+        'k' => n / 1024,
+        'm' => n,
+        'g' => n.saturating_mul(1024),
+        't' => n.saturating_mul(1024 * 1024),
+        _ => return None,
+    })
+}
+
+/// The person's own Java arguments with a starting heap (`-Xms`) that is bigger than the most the game may use taken
+/// out: Java refuses to start at all then ("Initial heap size set to a larger value than the maximum heap size").
+/// `max_mb` is what the launcher gives the game; a `-Xmx` among the arguments wins over it, as it does in Java.
+/// Returns a note for the log when something was taken out.
+pub fn drop_oversized_initial_heap(args: &mut Vec<String>, max_mb: u32) -> Option<String> {
+    let own_max = args.iter().rev().find_map(|a| a.strip_prefix("-Xmx").and_then(memory_mb));
+    let max = own_max.unwrap_or(max_mb as u64);
+    let too_big = |a: &String| a.strip_prefix("-Xms").and_then(memory_mb).is_some_and(|ms| ms > max);
+    let dropped: Vec<String> = args.iter().filter(|a| too_big(a)).cloned().collect();
+    if dropped.is_empty() {
+        return None;
+    }
+    args.retain(|a| !too_big(a));
+    Some(format!(
+        "Left out {} from the Java arguments: the game may only use {max} MB, and Java won't start when it is told to begin with more",
+        dropped.join(" ")
+    ))
+}
+
 /// If these are the person's own Java arguments, as opposed to nothing or the ones BlockForge ships with. Their own
 /// arguments are always used exactly as they are.
 pub fn is_custom(arguments: Option<&str>) -> bool {
@@ -366,5 +403,43 @@ mod tests {
             to_argument_file(&["a\\b".to_string(), "say \"hi\"".to_string()]),
             "\"a\\\\b\"\n\"say \\\"hi\\\"\"\n"
         );
+    }
+}
+
+#[cfg(test)]
+mod memory_arg_tests {
+    use super::*;
+
+    #[test]
+    fn memory_sizes_read_like_java_reads_them() {
+        assert_eq!(memory_mb("4G"), Some(4096));
+        assert_eq!(memory_mb("4g"), Some(4096));
+        assert_eq!(memory_mb("512m"), Some(512));
+        assert_eq!(memory_mb("1048576k"), Some(1024));
+        assert_eq!(memory_mb("2147483648"), Some(2048));
+        assert_eq!(memory_mb("1t"), Some(1024 * 1024));
+        for bad in ["", "G", "4x", "four", "-1G", "99999999999999999999999G"] {
+            assert_eq!(memory_mb(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_starting_heap_bigger_than_the_game_may_use_is_left_out() {
+        let mut args = split("-Xms4G -XX:+UseG1GC -Dx=1");
+        let note = drop_oversized_initial_heap(&mut args, 2560);
+        assert!(note.unwrap().contains("-Xms4G"));
+        assert_eq!(args, vec!["-XX:+UseG1GC", "-Dx=1"]);
+        // one that fits stays
+        let mut args = split("-Xms1G -XX:+UseG1GC");
+        assert!(drop_oversized_initial_heap(&mut args, 2560).is_none());
+        assert_eq!(args.len(), 2);
+        // a -Xmx of their own decides, as it does in Java (the last one wins)
+        let mut args = split("-Xmx8G -Xms6G");
+        assert!(drop_oversized_initial_heap(&mut args, 2560).is_none());
+        let mut args = split("-Xmx8G -Xmx1G -Xms6G");
+        assert!(drop_oversized_initial_heap(&mut args, 2560).is_some());
+        // values Java can't read are left for Java to complain about
+        let mut args = split("-Xmsbanana");
+        assert!(drop_oversized_initial_heap(&mut args, 2560).is_none());
     }
 }

@@ -352,6 +352,13 @@ impl App {
             let dirs = dirs.clone();
             std::thread::spawn(move || pictures::prune(&dirs));
         }
+        {
+            // what interrupted work left behind (half-written backups, temporary copies of settings files)
+            let dirs = dirs.clone();
+            let backups =
+                crate::backups::backups_dir(&dirs, &crate::svcsettings::ServiceSettings::from_settings(&settings));
+            std::thread::spawn(move || crate::leftovers::sweep(&dirs, &backups, crate::leftovers::MIN_AGE));
+        }
         let mut app = App {
             dirs,
             rt,
@@ -570,6 +577,8 @@ impl App {
     }
 
     pub fn save_accounts(&mut self) {
+        // tokens renewed in the background since the window read the file are kept, not written over
+        crate::accounts::merge_newer_tokens(&mut self.accounts, &crate::accounts::load(&self.dirs));
         if let Err(e) = crate::accounts::save(&self.dirs, &self.accounts) {
             self.toast_err(format!("Couldn't save accounts: {e:#}"));
         }
@@ -684,8 +693,21 @@ impl App {
         }
         self.start_task(label, move |progress, n| async move {
             let outcome: anyhow::Result<()> = async {
-                let account = launch::fresh_account(&dirs, &account).await?;
-                let prepared = launch::prepare(&dirs, &settings, &instance, &account, &progress, &options).await?;
+                let mut kill_rx = kill_rx;
+                // Stop works while the game is still being got ready (downloads, a Microsoft sign-in): before, it
+                // was only heard once the game had started, which then started and was killed at once
+                let getting_ready = async {
+                    let account = launch::fresh_account(&dirs, &account).await?;
+                    launch::prepare(&dirs, &settings, &instance, &account, &progress, &options).await
+                };
+                let prepared = tokio::select! {
+                    prepared = getting_ready => prepared?,
+                    _ = &mut kill_rx => {
+                        progress.cancelled.store(true, std::sync::atomic::Ordering::Relaxed);
+                        n.send(Msg::GameExit(folder_s.clone(), None));
+                        return Ok(());
+                    }
+                };
                 for note in &prepared.notes {
                     n.send(Msg::GameLog(
                         folder_s.clone(),
@@ -705,22 +727,45 @@ impl App {
                     folder_s.clone(),
                     LogLine { text: format!("[BlockForge] {}", prepared.display()), level: Level::Debug },
                 ));
-                let mut running = launch::spawn(&prepared)?;
+                let mut running = match launch::spawn(&prepared) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        // the natives folder, the class-cache claim and the combined jar are let go here too
+                        prepared.cleanup();
+                        return Err(e);
+                    }
+                };
                 n.send(Msg::GameRunning(folder_s.clone()));
-                let mut instance = instance.clone();
-                let _ = instance.mark_played();
-                n.send(Msg::Reload);
+                // the instance as it is on disk now, not as it was when Play was pressed: a rename or a settings
+                // change made while the game was getting ready must not be written over. Done on the side, so a mod
+                // job holding the instance for minutes doesn't hold up the log or Stop
+                {
+                    let (root, fallback, n) = (instance.root.clone(), instance.clone(), n.clone());
+                    tokio::spawn(async move {
+                        let lock = mods::instance_lock(&root);
+                        let _held = lock.lock().await;
+                        let mut fresh = instances::load_one(&root).unwrap_or(fallback);
+                        let _ = fresh.mark_played();
+                        n.send(Msg::Reload);
+                    });
+                }
                 let mut assembler = LogAssembler::default();
-                let mut kill_rx = kill_rx;
+                let mut stopped = false;
+                // the well known crashes (too little memory, the wrong Java) are spotted as the lines go by
+                let mut watch = launch::gamelog::CrashWatch::new(instance.mc_version());
                 loop {
                     tokio::select! {
                         line = running.lines.recv() => match line {
-                            Some(l) => if let Some(entry) = assembler.push(&l) {
-                                n.send(Msg::GameLog(folder_s.clone(), entry));
-                            },
+                            Some(l) => {
+                                watch.line(&l);
+                                if let Some(entry) = assembler.push(&l) {
+                                    n.send(Msg::GameLog(folder_s.clone(), entry));
+                                }
+                            }
                             None => break,
                         },
                         _ = &mut kill_rx => {
+                            stopped = true;
                             running.kill_tree().await;
                             break;
                         }
@@ -728,7 +773,17 @@ impl App {
                 }
                 let status = running.child.wait().await?;
                 prepared.cleanup();
-                n.send(Msg::GameExit(folder_s.clone(), status.code()));
+                // stopped by the player: not an error, whatever code the killed process left (1 on Windows)
+                let code = if stopped { None } else { launch::exit_code(&status) };
+                n.send(Msg::GameExit(folder_s.clone(), code));
+                if let Some(advice) = watch.advice(code).filter(|_| !stopped) {
+                    let text = advice.message.replace('\n', " ");
+                    n.send(Msg::GameLog(
+                        folder_s.clone(),
+                        LogLine { text: format!("[BlockForge] {}: {text}", advice.title), level: Level::Error },
+                    ));
+                    n.send(Msg::Toast(first_sentence(&advice.message), true));
+                }
                 Ok(())
             }
             .await;
@@ -872,14 +927,21 @@ impl App {
             }
             Msg::GameExit(f, code) => {
                 self.play_cache.forget();
+                // stopped while it was still being got ready: the game never ran, so there is nothing to back up and
+                // no early end to blame on the helpers
+                let ran = self.games.get(&f).is_some_and(|g| g.phase != Phase::Preparing);
                 if let Some(g) = self.games.get_mut(&f) {
                     g.phase = Phase::Exited(code);
                     g.kill = None;
                 }
-                self.helpers_after_exit(&f, code);
+                if ran {
+                    self.helpers_after_exit(&f, code);
+                }
                 self.ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
                 let folder = self.folder_of_session(&f);
-                self.svc_after_game_exit(&folder);
+                if ran {
+                    self.svc_after_game_exit(&folder);
+                }
                 if let Some(c) = code.filter(|c| *c != 0) {
                     self.toast_err(format!("Minecraft closed with an error (code {c}). The Logs tab has details."));
                 }
@@ -1139,6 +1201,17 @@ impl App {
                         ui.add(egui::Label::new(RichText::new(stage).size(FS_META).color(c_faint())).truncate());
                     }
                 }
+                // a long download or install can be stopped; the job stops at its next step and says it was cancelled
+                let cancelling = t.progress.cancelled.load(Ordering::Relaxed);
+                let text = if cancelling { "Cancelling\u{2026}" } else { "Cancel" };
+                let button = egui::Button::new(RichText::new(text).size(FS_META).color(c_faint())).frame(false);
+                let resp = ui.add_enabled(!cancelling, button);
+                resp.widget_info(|| {
+                    egui::WidgetInfo::labeled(egui::Role::Button, !cancelling, format!("Cancel {}", t.label))
+                });
+                if resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                    t.progress.cancelled.store(true, Ordering::Relaxed);
+                }
                 ui.add_space(8.0);
             }
             if self.tasks.len() > 2 {
@@ -1309,6 +1382,15 @@ fn elapsed_short(t: Duration) -> String {
 fn zoom_that_fits(zoom: f32, monitor: egui::Vec2) -> Option<f32> {
     let fits = zoom * (0.95 * monitor.x / MIN_WINDOW.x).min(0.95 * monitor.y / MIN_WINDOW.y);
     (zoom > 1.0 && zoom > fits + 0.01).then(|| fits.max(1.0))
+}
+
+/// The first sentence of a longer explanation, for a toast; the whole of it goes to the log.
+fn first_sentence(text: &str) -> String {
+    let line = text.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("");
+    match line.find(". ") {
+        Some(i) => line[..=i].to_string(),
+        None => line.to_string(),
+    }
 }
 
 #[cfg(test)]
@@ -1916,5 +1998,18 @@ impl App {
                 self.stop(&folder);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod first_sentence_tests {
+    use super::first_sentence;
+
+    #[test]
+    fn toasts_get_the_first_sentence() {
+        assert_eq!(first_sentence("Too little memory. Raise it in Settings."), "Too little memory.");
+        assert_eq!(first_sentence("\n\n  One line only  "), "One line only");
+        assert_eq!(first_sentence(""), "");
+        assert_eq!(first_sentence("Ünïcode first. Then more"), "Ünïcode first.");
     }
 }

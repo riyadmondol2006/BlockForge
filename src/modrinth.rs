@@ -265,6 +265,7 @@ pub async fn install_into(
     let mut queue: Vec<(String, Kind)> = vec![(project.to_string(), kind)];
     let mut added = Vec::new();
     let mut jobs = Vec::new();
+    let mut replaced = Vec::new();
 
     while let Some((id, k)) = queue.pop() {
         if !done.insert(id.clone()) || installed.files.contains_key(&id) && id != project {
@@ -282,15 +283,18 @@ pub async fn install_into(
             continue; // a dependency with no matching version: leave it to the player
         };
         let Some(file) = version.primary_file() else { continue };
+        if !crate::packutil::safe_file_name(&file.filename) {
+            bail!("{id} has a file name that isn't allowed: {}", file.filename);
+        }
         let dest = instance.root.join(k.folder()).join(&file.filename);
         let mut job = Job::new(&file.url, &dest);
         job.sha1 = file.hashes.get("sha1").cloned();
         job.size = Some(file.size).filter(|s| *s > 0);
         jobs.push(job);
-        // replace an older file of the same project
+        // an older file of the same project is replaced, once the new one is downloaded
         if let Some(old) = installed.files.get(&id) {
-            if old != &file.filename {
-                let _ = std::fs::remove_file(instance.root.join(k.folder()).join(old));
+            if old != &file.filename && crate::packutil::safe_file_name(old) {
+                replaced.push(instance.root.join(k.folder()).join(old));
             }
         }
         installed.files.insert(id.clone(), file.filename.clone());
@@ -304,6 +308,9 @@ pub async fn install_into(
         }
     }
     install::download_all(jobs, progress, true).await?;
+    for old in replaced {
+        let _ = std::fs::remove_file(old);
+    }
     crate::config::write_json_atomic(&installed_file(instance), &installed)?;
     Ok(added)
 }
@@ -360,9 +367,43 @@ pub async fn import_mrpack(dirs: &Dirs, pack: &Path, progress: &Arc<Progress>) -
         (Loader::Vanilla, None)
     };
 
+    // every path is checked before anything is made, so a bad pack is refused without leaving an instance behind
+    let mut planned = Vec::new();
+    for f in &index.files {
+        // files meant only for servers are left out
+        if f.env.as_ref().and_then(|e| e.get("client")).is_some_and(|c| c == "unsupported") {
+            continue;
+        }
+        // `safe_relative` also refuses what Windows would read as a place on the drive (`/Users/x`, `C:x`), which
+        // `is_absolute` alone lets through
+        let rel = crate::packutil::safe_relative(&f.path)
+            .with_context(|| format!("the modpack has a file path that points outside the instance: {}", f.path))?;
+        let Some(url) = f.downloads.first() else { continue };
+        planned.push((rel, url.clone(), f.hashes.get("sha1").cloned(), Some(f.file_size).filter(|s| *s > 0)));
+    }
+
     let name = if index.name.is_empty() { "Modpack".to_string() } else { index.name.clone() };
     let mut instance = instances::create(dirs, &name, &mc, loader, loader_version.as_deref(), progress).await?;
-    instance.file.launcher.pack = name.clone();
+    // a failed download half way through a 300-mod pack must not leave an instance that looks whole
+    match fill_mrpack(&mut instance, &index, planned, &mut archive, &name, progress).await {
+        Ok(()) => Ok(instance),
+        Err(e) => {
+            let _ = instances::delete(&instance);
+            Err(e)
+        }
+    }
+}
+
+/// The part of [`import_mrpack`] after the instance exists: the pack's downloads and its own files.
+async fn fill_mrpack(
+    instance: &mut Instance,
+    index: &PackIndex,
+    planned: Vec<(std::path::PathBuf, String, Option<String>, Option<u64>)>,
+    archive: &mut zip::ZipArchive<std::fs::File>,
+    name: &str,
+    progress: &Arc<Progress>,
+) -> Result<()> {
+    instance.file.launcher.pack = name.to_string();
     instance.file.launcher.vanilla_instance = false;
     if let Some(summary) = &index.summary {
         instance.file.launcher.description = summary.clone();
@@ -371,20 +412,11 @@ pub async fn import_mrpack(dirs: &Dirs, pack: &Path, progress: &Arc<Progress>) -
         instance.file.launcher.version = index.version_id.clone();
     }
 
-    // files meant only for servers are left out
     let mut jobs = Vec::new();
-    for f in &index.files {
-        if f.env.as_ref().and_then(|e| e.get("client")).is_some_and(|c| c == "unsupported") {
-            continue;
-        }
-        let rel = Path::new(&f.path);
-        if rel.is_absolute() || rel.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
-            bail!("the modpack has a file path that points outside the instance: {}", f.path);
-        }
-        let Some(url) = f.downloads.first() else { continue };
-        let mut job = Job::new(url, instance.root.join(rel));
-        job.sha1 = f.hashes.get("sha1").cloned();
-        job.size = Some(f.file_size).filter(|s| *s > 0);
+    for (rel, url, sha1, size) in planned {
+        let mut job = Job::new(&url, instance.root.join(rel));
+        job.sha1 = sha1;
+        job.size = size;
         jobs.push(job);
     }
     progress.stage(format!("Downloading {} files from the modpack", jobs.len()));
@@ -399,10 +431,7 @@ pub async fn import_mrpack(dirs: &Dirs, pack: &Path, progress: &Arc<Progress>) -
         if entry.is_dir() {
             continue;
         }
-        let rel = Path::new(rel);
-        if rel.is_absolute() || rel.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
-            continue;
-        }
+        let Some(rel) = crate::packutil::safe_relative(rel) else { continue };
         let out = instance.root.join(rel);
         if let Some(dir) = out.parent() {
             std::fs::create_dir_all(dir)?;
@@ -411,7 +440,7 @@ pub async fn import_mrpack(dirs: &Dirs, pack: &Path, progress: &Arc<Progress>) -
         std::io::copy(&mut entry, &mut f)?;
     }
     instance.save()?;
-    Ok(instance)
+    Ok(())
 }
 
 /// Download the newest version of a Modrinth modpack and import it.
@@ -448,5 +477,67 @@ mod tests {
         // resource packs don't have a loader
         assert_eq!(search_facets(Kind::ResourcePack, Some("1.21.1"), &loaders).len(), 2);
         assert_eq!(search_facets(Kind::Mod, None, &[]).len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod mrpack_tests {
+    use super::*;
+    use std::io::Write;
+
+    fn mrpack(path: &Path, index: &str, extra: &[(&str, &[u8])]) {
+        let mut z = zip::ZipWriter::new(std::fs::File::create(path).unwrap());
+        let o = zip::write::SimpleFileOptions::default();
+        z.start_file("modrinth.index.json", o).unwrap();
+        z.write_all(index.as_bytes()).unwrap();
+        for (name, body) in extra {
+            z.start_file(*name, o).unwrap();
+            z.write_all(body).unwrap();
+        }
+        z.finish().unwrap();
+    }
+
+    #[test]
+    fn a_pack_with_an_escaping_path_is_refused_before_any_instance_is_made() {
+        let base = crate::testutil::scratch("mrpack-evil");
+        let dirs = Dirs::at(base.join("data"));
+        dirs.ensure().unwrap();
+        for path in ["../../evil.jar", "/etc/evil", "mods/../../evil.jar", "\\\\server\\share\\x", "..\\x"] {
+            let pack = base.join("evil.mrpack");
+            let index = serde_json::json!({
+                "name": "Evil", "dependencies": {"minecraft": "1.20.1"},
+                "files": [{"path": path, "hashes": {}, "downloads": ["http://127.0.0.1:9/x"], "fileSize": 1}]
+            });
+            mrpack(&pack, &index.to_string(), &[]);
+            let err = crate::testutil::runtime().block_on(import_mrpack(&dirs, &pack, &Progress::new()));
+            assert!(err.is_err(), "{path}");
+            assert!(std::fs::read_dir(&dirs.instances).unwrap().next().is_none(), "{path}: no instance left");
+        }
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn broken_pack_files_give_errors_not_crashes() {
+        let base = crate::testutil::scratch("mrpack-broken");
+        let dirs = Dirs::at(base.join("data"));
+        dirs.ensure().unwrap();
+        let rt = crate::testutil::runtime();
+        let pack = base.join("p.mrpack");
+        // not a zip
+        std::fs::write(&pack, b"this is not a zip").unwrap();
+        assert!(rt.block_on(import_mrpack(&dirs, &pack, &Progress::new())).is_err());
+        // a zip without the index, with an index that isn't JSON, without a Minecraft version
+        for index in ["{", "[]", r#"{"name":"x","dependencies":{}}"#, r#"{"files":"nope","dependencies":{}}"#] {
+            mrpack(&pack, index, &[]);
+            assert!(rt.block_on(import_mrpack(&dirs, &pack, &Progress::new())).is_err(), "{index}");
+        }
+        let mut z = zip::ZipWriter::new(std::fs::File::create(&pack).unwrap());
+        z.start_file("readme.txt", zip::write::SimpleFileOptions::default()).unwrap();
+        z.finish().unwrap();
+        assert!(rt.block_on(import_mrpack(&dirs, &pack, &Progress::new())).is_err());
+        // a file that doesn't exist
+        assert!(rt.block_on(import_mrpack(&dirs, &base.join("missing.mrpack"), &Progress::new())).is_err());
+        assert!(std::fs::read_dir(&dirs.instances).unwrap().next().is_none());
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

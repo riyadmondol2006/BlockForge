@@ -6,7 +6,7 @@
 //! pack's actions, unpack its configs, and write `instance.json`. A new install that fails is removed; a
 //! reinstall that fails leaves the instance marked as not playable, as the Java edition does.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -205,6 +205,9 @@ pub struct Request {
     pub ui: Arc<dyn Interaction>,
     /// Save a snapshot of the instance first (updates and reinstalls).
     pub snapshot: bool,
+    /// Set the moment the install starts changing the instance's files: only a failure after that leaves it in a
+    /// state that can't be trusted.
+    files_touched: bool,
 }
 
 impl Request {
@@ -222,6 +225,7 @@ impl Request {
             solder: None,
             ui,
             snapshot: true,
+            files_touched: false,
         }
     }
 }
@@ -335,9 +339,11 @@ pub async fn install(ctx: &Ctx, mut req: Request, progress: &Arc<Progress>) -> R
         Ok(instance) => Ok(instance),
         Err(e) => {
             if req.is_reinstall {
-                // from the moment the old files were touched, the instance cannot be trusted
-                if let Some(mut inst) = crate::instances::load_one(&root) {
-                    if progress.stage_text().as_str() != "Reading the pack" {
+                // from the moment the old files were touched, the instance cannot be trusted; a reinstall that was
+                // cancelled or failed before that (offline, the player said no to the pack's message) changed
+                // nothing, and the instance stays playable
+                if req.files_touched {
+                    if let Some(mut inst) = crate::instances::load_one(&root) {
                         inst.file.launcher.extras.insert("isPlayable".into(), Value::Bool(false));
                         let _ = inst.save();
                     }
@@ -533,6 +539,7 @@ async fn run(ctx: &Ctx, req: &mut Request, root: &Path, progress: &Arc<Progress>
         .unwrap_or_default();
 
     // 7. keep what must survive, clear what the old install wrote
+    req.files_touched = true;
     let saved = place::backup_select_files(&site, req.is_reinstall, json.keeps.as_ref());
     place::prepare_filesystem(&site, req.is_reinstall, &existing_records, &override_paths, json.deletes.as_ref());
     std::fs::create_dir_all(super::downloads_dir(dirs))?;
@@ -679,24 +686,48 @@ async fn run(ctx: &Ctx, req: &mut Request, root: &Path, progress: &Arc<Progress>
     }
     let browser_mods: Vec<&PackMod> = selected.iter().filter(|m| m.download == Some(DownloadKind::Browser)).collect();
     let mut skipped: HashSet<String> = HashSet::new();
+    // a mod found by a pattern (`filePattern`) is saved under the name the player's browser gave it, and installed
+    // under that name: its `file` is the pattern, not a file that exists
+    let mut found_as: HashMap<String, String> = HashMap::new();
     for (i, m) in browser_mods.iter().enumerate() {
         if progress.cancelled.load(Ordering::Relaxed) {
             bail!("cancelled");
         }
         progress.stage(format!("Waiting for you to download {} ({}/{})", m.name, i + 1, browser_mods.len()));
-        let ok = fetch_browser_mod(ctx, req.ui.clone(), &site, m, i + 1, browser_mods.len()).await?;
-        if !ok {
-            skipped.insert(m.file_name());
-            if let Some(rec) = records.iter_mut().find(|r| r.file == cased_for_record(&json, m)) {
-                rec.skipped = true;
+        match fetch_browser_mod(ctx, req.ui.clone(), &site, m, i + 1, browser_mods.len()).await? {
+            Some(actual) => {
+                if m.file_pattern {
+                    if let Some(rec) = records.iter_mut().find(|r| r.file == cased_for_record(&json, m)) {
+                        rec.file = actual.clone();
+                    }
+                    found_as.insert(m.name.clone(), actual);
+                }
+            }
+            None => {
+                skipped.insert(m.file_name());
+                if let Some(rec) = records.iter_mut().find(|r| r.file == cased_for_record(&json, m)) {
+                    rec.skipped = true;
+                }
             }
         }
     }
 
     progress.stage("Installing mods");
     {
-        let (site2, chosen): (Site, Vec<PackMod>) =
-            (site.clone(), selected.iter().filter(|m| !skipped.contains(&m.file_name())).cloned().collect());
+        let chosen: Vec<PackMod> = selected
+            .iter()
+            .filter(|m| !skipped.contains(&m.file_name()))
+            .cloned()
+            .map(|mut m| {
+                if let Some(actual) = found_as.get(&m.name).filter(|_| m.file_pattern) {
+                    m.file = actual.clone();
+                    m.file_prefix = None;
+                    m.file_pattern = false;
+                }
+                m
+            })
+            .collect();
+        let site2 = site.clone();
         tokio::task::spawn_blocking(move || -> Result<()> {
             for m in &chosen {
                 place::install_mod(&site2, m)?;
@@ -1198,13 +1229,15 @@ async fn fetch_browser_mod(
     m: &PackMod,
     n: usize,
     of: usize,
-) -> Result<bool> {
+) -> Result<Option<String>> {
     let downloads = site.downloads.clone();
     let user_dir = super::user_downloads_dir(ctx.custom_downloads_path.as_deref());
     let m = m.clone();
     let is_server = site.is_server;
-    tokio::task::spawn_blocking(move || -> Result<bool> {
+    tokio::task::spawn_blocking(move || -> Result<Option<String>> {
         let name_wanted = downloaded_browser_name(&m, is_server);
+        // the name the file has in the downloads folder, once it is there and checked
+        let saved = |location: &Path| location.file_name().map(|n| n.to_string_lossy().to_string());
         let (url, hash) = if m.uses_server_file(is_server) {
             (m.server_url.clone().unwrap_or_default(), m.server_md5.clone())
         } else {
@@ -1218,12 +1251,12 @@ async fn fetch_browser_mod(
                     fsx::delete_path(&location);
                 } else if hash.as_deref().is_none_or(|h| h.is_empty()) {
                     if std::fs::metadata(&location).map(|x| x.len() > 0).unwrap_or(false) {
-                        return Ok(true);
+                        return Ok(saved(&location));
                     }
                 } else if dl::hash_file(&location, hash.as_deref().unwrap_or(""))
                     .is_some_and(|got| got.eq_ignore_ascii_case(hash.as_deref().unwrap_or("")))
                 {
-                    return Ok(true);
+                    return Ok(saved(&location));
                 } else {
                     fsx::delete_path(&location);
                 }
@@ -1257,7 +1290,7 @@ async fn fetch_browser_mod(
                 loop {
                     match ui.browser_download(&request) {
                         BrowserAnswer::Cancel => bail!("cancelled"),
-                        BrowserAnswer::Skip => return Ok(false),
+                        BrowserAnswer::Skip => return Ok(None),
                         BrowserAnswer::Downloaded => {}
                     }
                     if let Some(found) = find(&watch) {
@@ -1272,10 +1305,10 @@ async fn fetch_browser_mod(
             }
             // check it
             match hash.as_deref().filter(|h| !h.is_empty()) {
-                None => return Ok(true),
+                None => return Ok(saved(&location)),
                 Some(h) => {
                     if dl::hash_file(&location, h).is_some_and(|got| got.eq_ignore_ascii_case(h)) {
-                        return Ok(true);
+                        return Ok(saved(&location));
                     }
                     fsx::delete_path(&location);
                 }

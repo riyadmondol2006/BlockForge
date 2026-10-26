@@ -412,7 +412,13 @@ pub async fn populate(
     Ok(Populated { records, override_paths })
 }
 
-/// Copy `<overrides>/...` from the zip over the instance folder. Returns the files written, relative to it.
+/// Copy `<overrides>/...` from the zip over the instance folder. Returns the files written that belong to the pack,
+/// relative to it. Two kinds of file are treated differently:
+/// - `instance.json` is the launcher's, never the pack's: one shipped in a pack would replace the player's memory,
+///   Java and command settings, so it is never copied.
+/// - Worlds the pack ships (a skyblock map) become the player's once they are there: a file that already exists
+///   under `saves/` is never overwritten (an update would otherwise reset the player's progress), and none of them
+///   are listed as the pack's, so a later update doesn't delete them either.
 pub fn extract_overrides(zip_path: &Path, overrides: &str, root: &Path) -> Result<Vec<String>> {
     let mut archive = zip::ZipArchive::new(std::fs::File::open(zip_path)?).context("reading the modpack zip")?;
     let prefix = format!("{}/", overrides.trim_matches('/'));
@@ -426,16 +432,22 @@ pub fn extract_overrides(zip_path: &Path, overrides: &str, root: &Path) -> Resul
             continue;
         }
         let rel_path = Path::new(rel);
-        if !safe_relative(rel_path) {
+        if !safe_relative(rel_path) || rel.eq_ignore_ascii_case("instance.json") {
             continue;
         }
+        let player_data = crate::packs::is_player_data(rel_path);
         let out = root.join(rel_path);
+        if player_data && std::fs::symlink_metadata(&out).is_ok() {
+            continue;
+        }
         if let Some(dir) = out.parent() {
             std::fs::create_dir_all(dir)?;
         }
         let mut f = std::fs::File::create(&out).with_context(|| format!("writing {}", out.display()))?;
         std::io::copy(&mut entry, &mut f)?;
-        written.push(rel.to_string());
+        if !player_data {
+            written.push(rel.to_string());
+        }
     }
     Ok(written)
 }
@@ -920,7 +932,8 @@ fn remove_old_pack_files(inst: &Instance) {
         .unwrap_or_default();
     for rel in overrides {
         let p = Path::new(&rel);
-        if !safe_relative(p) {
+        // worlds are never removed, even when an older install listed them as the pack's
+        if !safe_relative(p) || crate::packs::is_player_data(p) {
             continue;
         }
         let full = inst.root.join(p);
@@ -985,27 +998,59 @@ pub async fn update_pack(
         let keep: Vec<(&str, Option<Vec<u8>>)> =
             ["options.txt", "servers.dat"].into_iter().map(|n| (n, std::fs::read(inst0.root.join(n)).ok())).collect();
         let user_records: Vec<ModRecord> = inst0.mod_records().into_iter().filter(|m| m.user_added).collect();
-        remove_old_pack_files(&inst0);
 
-        let populated = populate(dirs, cf, &inst0.root, &mc, &manifest, &zip_path, progress, hub).await?;
-        for (n, data) in keep {
-            if let Some(d) = data {
-                let _ = std::fs::write(inst0.root.join(n), d);
+        // the old pack files are removed before the new ones are fetched, and fetching can fail (the network, a
+        // file CurseForge won't hand out): a snapshot taken first puts the instance back as it was if it does
+        progress.stage("Saving a snapshot of the instance");
+        let snapshot = match crate::snapshots::save_before(dirs, &inst0, "before-update") {
+            Ok(s) => Some(s),
+            Err(e) => {
+                crate::logs::warn(format!("Couldn't save a snapshot before updating {}: {e:#}", inst0.name()));
+                None
             }
-        }
+        };
+        remove_old_pack_files(&inst0);
+        let replaced = async {
+            let populated = populate(dirs, cf, &inst0.root, &mc, &manifest, &zip_path, progress, hub).await?;
+            for (n, data) in &keep {
+                if let Some(d) = data {
+                    let _ = std::fs::write(inst0.root.join(n), d);
+                }
+            }
 
-        let mut inst = instances::load_one(&inst0.root).unwrap_or(inst0.clone());
-        if let Some((version, info)) = new_game {
-            inst.file.version = version;
-            inst.file.launcher.loader_version = info;
+            // read back from the disk, so settings changed while the update ran are kept (a pack can't ship an
+            // instance.json any more: `extract_overrides` leaves it out)
+            let mut inst = instances::load_one(&inst0.root).unwrap_or_else(|| inst0.clone());
+            if let Some((version, info)) = new_game {
+                inst.file.version = version;
+                inst.file.launcher.loader_version = info;
+            }
+            set_pack_fields(&mut inst, Some(&project), description, Some(file), &manifest, &project.name);
+            inst.file.launcher.extras.insert("overridePaths".into(), json!(populated.override_paths));
+            let mut records = populated.records;
+            records.retain(|r| !user_records.iter().any(|u| u.file == r.file && u.kind == r.kind));
+            records.extend(user_records);
+            inst.set_mod_records(&records);
+            inst.save().context("saving instance.json")?;
+            anyhow::Ok(inst)
         }
-        set_pack_fields(&mut inst, Some(&project), description, Some(file), &manifest, &project.name);
-        inst.file.launcher.extras.insert("overridePaths".into(), json!(populated.override_paths));
-        let mut records = populated.records;
-        records.retain(|r| !user_records.iter().any(|u| u.file == r.file && u.kind == r.kind));
-        records.extend(user_records);
-        inst.set_mod_records(&records);
-        inst.save().context("saving instance.json")?;
+        .await;
+        let inst = match replaced {
+            Ok(inst) => inst,
+            Err(e) => {
+                if let Some(s) = &snapshot {
+                    let dir = crate::snapshots::folder_for(dirs, &inst0);
+                    if let Err(back) = crate::snapshots::restore(s, &inst0.root, &dir) {
+                        return Err(e.context(format!(
+                            "the update failed, and putting the instance back failed too ({back:#}); the snapshot is {}",
+                            s.file.display()
+                        )));
+                    }
+                    return Err(e.context("the update failed; the instance was put back as it was"));
+                }
+                return Err(e);
+            }
+        };
         progress.stage("Checking the pack's own mods on CurseForge");
         let _ = install::identify_unknown_mods(cf, &inst).await;
         instances::load_one(&inst.root).context("reading the updated instance back")
@@ -1158,6 +1203,65 @@ mod tests {
         assert_eq!(recs.len(), 1);
         assert_eq!(recs[0].kind, "mods");
         assert_eq!(recs[0].file, "local.jar");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A skyblock-style pack ships a world and (by mistake or on purpose) an instance.json. Updating it must not
+    /// reset the player's world or replace their settings.
+    #[test]
+    fn overrides_never_overwrite_worlds_or_the_instance_file() {
+        use std::io::Write;
+        let dir = crate::testutil::scratch("cf-overrides-world");
+        let zip_path = dir.join("pack.zip");
+        {
+            let mut z = zip::ZipWriter::new(std::fs::File::create(&zip_path).unwrap());
+            let opts = zip::write::SimpleFileOptions::default();
+            for (name, body) in [
+                ("manifest.json", MANIFEST.as_bytes()),
+                ("overrides/saves/Sky/level.dat", b"pristine".as_slice()),
+                ("overrides/saves/Sky/region/r.0.0.mca", b"pristine region"),
+                ("overrides/instance.json", br#"{"launcher":{"javaArguments":"-Xmx1G","enableCommands":true}}"#),
+                ("overrides/config/a.toml", b"a=2"),
+            ] {
+                z.start_file(name, opts).unwrap();
+                z.write_all(body).unwrap();
+            }
+            z.finish().unwrap();
+        }
+        let root = dir.join("inst");
+        // first install: the world arrives, but it is the player's from now on
+        let written = extract_overrides(&zip_path, "overrides", &root).unwrap();
+        assert_eq!(std::fs::read(root.join("saves/Sky/level.dat")).unwrap(), b"pristine");
+        assert_eq!(written, vec!["config/a.toml".to_string()], "only the pack's own files are listed");
+        assert!(!root.join("instance.json").exists(), "a pack never ships the launcher's file");
+        // the player plays; then the pack is updated
+        std::fs::write(root.join("saves/Sky/level.dat"), b"hours of progress").unwrap();
+        std::fs::write(root.join("instance.json"), b"{\"mine\":true}").unwrap();
+        extract_overrides(&zip_path, "overrides", &root).unwrap();
+        assert_eq!(std::fs::read(root.join("saves/Sky/level.dat")).unwrap(), b"hours of progress");
+        assert_eq!(std::fs::read(root.join("instance.json")).unwrap(), b"{\"mine\":true}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn removing_the_old_pack_never_touches_worlds_or_escapes() {
+        let dir = crate::testutil::scratch("cf-remove-old");
+        let root = dir.join("inst");
+        for f in ["saves/W/level.dat", "config/old.toml", "options.txt"] {
+            std::fs::create_dir_all(root.join(f).parent().unwrap()).unwrap();
+            std::fs::write(root.join(f), b"x").unwrap();
+        }
+        std::fs::write(dir.join("outside.txt"), b"x").unwrap();
+        let mut inst = Instance { folder: "inst".into(), mod_count: 0, root: root.clone(), file: Default::default() };
+        inst.file.launcher.extras.insert(
+            "overridePaths".into(),
+            json!(["saves/W/level.dat", "config/old.toml", "../outside.txt", "", "/etc/hostname"]),
+        );
+        remove_old_pack_files(&inst);
+        assert!(root.join("saves/W/level.dat").exists());
+        assert!(!root.join("config/old.toml").exists());
+        assert!(dir.join("outside.txt").exists());
+        assert!(root.join("options.txt").exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

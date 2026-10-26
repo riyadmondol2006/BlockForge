@@ -70,14 +70,29 @@ fn freedesktop_trash(abs: &Path) -> Result<()> {
 }
 
 fn windows_recycle(abs: &Path) -> Result<()> {
-    let p = abs.to_string_lossy().replace('\'', "''");
     let call = if abs.is_dir() { "DeleteDirectory" } else { "DeleteFile" };
+    // the path goes in through the environment, never into the script's text: PowerShell also ends a quoted
+    // string at the curly quotes (’ ‘ ‚ ‛), so a file called `a’;Start-Process calc;’.zip` would otherwise run code
     let script = format!(
-        "Add-Type -AssemblyName Microsoft.VisualBasic; [Microsoft.VisualBasic.FileIO.FileSystem]::{call}('{p}', 'OnlyErrorDialogs', 'SendToRecycleBin')"
+        "Add-Type -AssemblyName Microsoft.VisualBasic; [Microsoft.VisualBasic.FileIO.FileSystem]::{call}($env:BLOCKFORGE_RECYCLE_PATH, 'OnlyErrorDialogs', 'SendToRecycleBin')"
     );
-    let status =
-        crate::platform::command("powershell").args(["-NoProfile", "-NonInteractive", "-Command", &script]).status()?;
+    let status = crate::platform::command("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+        .env("BLOCKFORGE_RECYCLE_PATH", without_verbatim_prefix(&abs.to_string_lossy()))
+        .status()?;
     if status.success() { Ok(()) } else { bail!("the recycle bin refused {}", abs.display()) }
+}
+
+/// `C:\x` for `\\?\C:\x` and `\\server\share` for `\\?\UNC\server\share`: Windows' `canonicalize` adds that
+/// prefix, and the recycle bin doesn't take paths that have it.
+fn without_verbatim_prefix(path: &str) -> String {
+    if let Some(rest) = path.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{rest}")
+    } else if let Some(rest) = path.strip_prefix(r"\\?\") {
+        rest.to_string()
+    } else {
+        path.to_string()
+    }
 }
 
 fn move_unique(from: &Path, dir: &Path) -> Result<PathBuf> {

@@ -136,7 +136,11 @@ pub async fn run(
 /// `%command%` stands, the game goes in; with `%"command"%` it goes in as one quoted string (for `sh -c`); with
 /// neither it is added at the end.
 pub fn wrap_arguments(wrapper: &str, args: Vec<String>) -> Vec<String> {
-    let mut wrap: Vec<String> = wrapper.split_whitespace().map(str::to_string).collect();
+    // split like Java arguments, so a quoted program (`"C:\Program Files\Tool\run.exe" %command%`) or value
+    // (`env FOO="a b" %command%`) stays one argument; `%"command"%` is kept apart first, its quotes are its name
+    const QUOTED: &str = "%\"command\"%";
+    const QUOTED_MARK: &str = "\u{1}blockforge-quoted-command\u{1}";
+    let mut wrap: Vec<String> = super::jvmargs::split(&wrapper.replace(QUOTED, QUOTED_MARK));
     // wrapper not set
     if wrap.is_empty() {
         return args;
@@ -145,9 +149,11 @@ pub fn wrap_arguments(wrapper: &str, args: Vec<String>) -> Vec<String> {
         wrap.splice(i..=i, args);
         return wrap;
     }
-    // the whole command as one string, useful in the case of ''
-    if let Some(i) = wrap.iter().position(|w| w == "%\"command\"%") {
-        wrap[i] = format!("'{}'", args.join("' '"));
+    // the whole command as one string for `sh -c`, each argument in single quotes (with any `'` inside it, as in
+    // a world called "Bob's World", written the way the shell reads it back)
+    if let Some(i) = wrap.iter().position(|w| w == QUOTED_MARK) {
+        let quoted: Vec<String> = args.iter().map(|a| format!("'{}'", a.replace('\'', "'\\''"))).collect();
+        wrap[i] = quoted.join(" ");
         return wrap;
     }
     // fall back to wrapping the command with the rest of the arguments added in
@@ -232,5 +238,47 @@ mod tests {
         let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
         assert!(rt.block_on(run(&i, "true", &ls, &java())).is_ok());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod wrapper_tests {
+    use super::*;
+
+    fn game() -> Vec<String> {
+        vec!["java".into(), "-Xmx2G".into(), "Main".into()]
+    }
+
+    #[test]
+    fn quoted_programs_and_values_stay_one_argument() {
+        assert_eq!(
+            wrap_arguments(r#""C:\Program Files\Tools\run.exe" %command%"#, game()),
+            vec![r"C:\Program Files\Tools\run.exe", "java", "-Xmx2G", "Main"]
+        );
+        assert_eq!(
+            wrap_arguments(r#""/home/me/My Scripts/wrap.sh" %command%"#, game())[0],
+            "/home/me/My Scripts/wrap.sh"
+        );
+        assert_eq!(wrap_arguments(r#"env FOO="a b" %command%"#, game())[..2], ["env".to_string(), "FOO=a b".into()]);
+        // an apostrophe in a path is just a letter
+        assert_eq!(wrap_arguments(r"/home/o'brien/w.sh %command%", game())[0], "/home/o'brien/w.sh");
+    }
+
+    #[test]
+    fn the_quoted_form_survives_apostrophes_in_arguments() {
+        let args = vec!["java".to_string(), "--quickPlaySingleplayer".into(), "Bob's World".into()];
+        let wrapped = wrap_arguments(r#"sh -c %"command"%"#, args);
+        assert_eq!(wrapped[..2], ["sh".to_string(), "-c".into()]);
+        assert_eq!(wrapped[2], r#"'java' '--quickPlaySingleplayer' 'Bob'\''s World'"#);
+        #[cfg(unix)]
+        {
+            // and the shell really reads it back as the three arguments
+            let out = std::process::Command::new("sh")
+                .arg("-c")
+                .arg(format!("printf '%s\\n' {}", wrapped[2].trim_start_matches("'java' ")))
+                .output()
+                .unwrap();
+            assert_eq!(String::from_utf8_lossy(&out.stdout), "--quickPlaySingleplayer\nBob's World\n");
+        }
     }
 }

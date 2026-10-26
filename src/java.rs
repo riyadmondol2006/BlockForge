@@ -67,14 +67,33 @@ pub fn java_binary(home: &Path) -> PathBuf {
     home.join("bin").join(platform::java_exe())
 }
 
+/// Whether Mojang's runtime `component` is here and whole. `bin/java` is one of the first of its hundreds of files
+/// to arrive, so its presence alone says nothing: a download that was cancelled, or stopped by a full disk or a lost
+/// connection, leaves the [`installing_marker`] behind, and such a runtime is fetched again (only what is missing or
+/// wrong) instead of being trusted for ever.
 pub fn runtime_ready(dirs: &Dirs, component: &str) -> bool {
-    java_binary(&runtime_home(dirs, component)).is_file()
+    java_binary(&runtime_home(dirs, component)).is_file() && !installing_marker(dirs, component).exists()
+}
+
+/// The file that says a runtime's download began and hasn't finished.
+fn installing_marker(dirs: &Dirs, component: &str) -> PathBuf {
+    dirs.runtimes.join(component).join(platform::java_runtime_platform()).join(".installing")
 }
 
 /// Download Mojang's runtime `component` if it isn't here yet. Returns its home folder.
 pub async fn ensure_runtime(dirs: &Dirs, component: &str, progress: &Arc<Progress>) -> Result<PathBuf> {
+    get_runtime(dirs, component, progress, false).await
+}
+
+/// Check every file of Mojang's runtime `component` against its SHA-1 and download again what is damaged or
+/// missing ("Repair game files"). Nothing is changed when the list of files can't be fetched (no connection).
+pub async fn repair_runtime(dirs: &Dirs, component: &str, progress: &Arc<Progress>) -> Result<PathBuf> {
+    get_runtime(dirs, component, progress, true).await
+}
+
+async fn get_runtime(dirs: &Dirs, component: &str, progress: &Arc<Progress>, repair: bool) -> Result<PathBuf> {
     let home = runtime_home(dirs, component);
-    if runtime_ready(dirs, component) {
+    if !repair && runtime_ready(dirs, component) {
         return Ok(home);
     }
     progress.stage(format!("Getting Java ({component})"));
@@ -98,7 +117,7 @@ pub async fn ensure_runtime(dirs: &Dirs, component: &str, progress: &Arc<Progres
     let mut jobs = Vec::new();
     let mut links = Vec::new();
     for (rel, file) in &manifest.files {
-        let dest = root.join(rel);
+        let Some(dest) = crate::paths::join_inside(&root, rel) else { continue };
         match file.kind.as_str() {
             "directory" => std::fs::create_dir_all(&dest)?,
             "file" => {
@@ -116,7 +135,20 @@ pub async fn ensure_runtime(dirs: &Dirs, component: &str, progress: &Arc<Progres
             _ => {}
         }
     }
-    install::download_all(jobs, progress, false).await?;
+    // a repair marks the runtime as being fixed only when something in it is damaged or missing: a whole runtime
+    // whose repair was cancelled stays trusted (and usable offline)
+    let needs_files = if repair {
+        let check = jobs.clone();
+        tokio::task::spawn_blocking(move || check.iter().any(|j| !install::is_good(j, true))).await?
+    } else {
+        true
+    };
+    if needs_files {
+        std::fs::write(installing_marker(dirs, component), b"")
+            .with_context(|| format!("writing in {}", root.display()))?;
+        // a repair hashes every file; otherwise the size is enough for the files already there
+        install::download_all(jobs, progress, repair).await?;
+    }
     #[cfg(unix)]
     for (dest, target) in links {
         if let Some(dir) = dest.parent() {
@@ -131,6 +163,13 @@ pub async fn ensure_runtime(dirs: &Dirs, component: &str, progress: &Arc<Progres
     let _ = std::fs::write(dirs.runtimes.join(component).join("manifest.json"), &manifest_bytes);
     if !java_binary(&home).is_file() {
         bail!("the Java runtime was installed but {} is missing", java_binary(&home).display());
+    }
+    // another job may have fetched the same runtime at the same time and finished first
+    match std::fs::remove_file(installing_marker(dirs, component)) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+            return Err(anyhow::Error::from(e).context(format!("finishing the Java runtime {component}")));
+        }
+        _ => {}
     }
     Ok(home)
 }
@@ -319,19 +358,55 @@ pub async fn ensure_installer_java(dirs: &Dirs, progress: &Arc<Progress>) -> Res
         return Err(e).context("couldn't download Java 21 for the loader installer, and no Java 17+ is installed");
     }
     let (archive2, root2) = (archive.clone(), root.clone());
-    tokio::task::spawn_blocking(move || -> Result<()> {
-        std::fs::create_dir_all(&root2)?;
-        if archive2.extension().is_some_and(|e| e == "zip") {
-            zip::ZipArchive::new(std::fs::File::open(&archive2)?)?.extract(&root2)?;
-        } else {
-            let gz = flate2::read::GzDecoder::new(std::fs::File::open(&archive2)?);
-            tar::Archive::new(gz).unpack(&root2)?;
-        }
-        Ok(())
-    })
-    .await??;
+    let unpacked = tokio::task::spawn_blocking(move || unpack_whole(&archive2, &root2)).await?;
+    // a damaged download (a portal's web page saved in its place) is not kept to be tried again and again
     let _ = std::fs::remove_file(&archive);
+    unpacked?;
     find_home(&root).context("the downloaded Java 21 has an unexpected layout")
+}
+
+/// Unpack a Java archive into `root` so that `root` is either missing or complete: it is unpacked next to it first
+/// and moved into place only when it holds a whole Java. Closing the launcher half way used to leave a `bin/java`
+/// without the rest, trusted from then on.
+fn unpack_whole(archive: &Path, root: &Path) -> Result<()> {
+    let parent = root.parent().context("no folder for Java")?;
+    std::fs::create_dir_all(parent)?;
+    let staging = parent.join(format!(".unpacking-{}", uuid::Uuid::new_v4().simple()));
+    let result = (|| -> Result<()> {
+        std::fs::create_dir_all(&staging)?;
+        if archive.extension().is_some_and(|e| e == "zip") {
+            zip::ZipArchive::new(std::fs::File::open(archive)?)?.extract(&staging)?;
+        } else {
+            let gz = flate2::read::GzDecoder::new(std::fs::File::open(archive)?);
+            tar::Archive::new(gz).unpack(&staging)?;
+        }
+        find_home(&staging).context("the downloaded Java is incomplete or not a Java")?;
+        // whatever is there is not a whole Java (`find_home` said so before the download)
+        if root.exists() {
+            std::fs::remove_dir_all(root).with_context(|| format!("replacing {}", root.display()))?;
+        }
+        rename_retrying(&staging, root).with_context(|| format!("moving Java into {}", root.display()))?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_dir_all(&staging);
+    }
+    result
+}
+
+/// `rename`, tried again for a few seconds on Windows, where a virus scanner looking at the hundreds of new `.exe`
+/// and `.dll` files of a Java just unpacked makes moving their folder fail with "access denied" for a moment.
+fn rename_retrying(from: &Path, to: &Path) -> std::io::Result<()> {
+    let mut tries = 0u64;
+    loop {
+        match std::fs::rename(from, to) {
+            Err(e) if cfg!(windows) && tries < 15 && e.kind() == std::io::ErrorKind::PermissionDenied => {
+                tries += 1;
+                std::thread::sleep(std::time::Duration::from_millis(200));
+            }
+            done => return done,
+        }
+    }
 }
 
 fn find_home(root: &Path) -> Option<PathBuf> {
@@ -340,7 +415,9 @@ fn find_home(root: &Path) -> Option<PathBuf> {
         if platform::os() == platform::Os::Mac && p.join("Contents/Home").is_dir() {
             p = p.join("Contents/Home");
         }
-        if java_binary(&p).is_file() {
+        // `lib/modules` is the biggest file of a Java and among the last to be unpacked: without it the unpacking
+        // never finished
+        if java_binary(&p).is_file() && p.join("lib").join("modules").is_file() {
             return Some(p);
         }
     }
@@ -357,4 +434,71 @@ pub async fn available_runtimes(dirs: &Dirs) -> Result<Vec<(String, String)>> {
         .unwrap_or_default();
     list.sort();
     Ok(list)
+}
+
+#[cfg(test)]
+mod runtime_tests {
+    use super::*;
+
+    #[test]
+    fn a_runtime_whose_download_stopped_half_way_is_not_ready() {
+        let base = crate::testutil::scratch("runtime-ready");
+        let dirs = Dirs::at(&base);
+        let home = runtime_home(&dirs, "java-runtime-delta");
+        assert!(!runtime_ready(&dirs, "java-runtime-delta"), "nothing there");
+        std::fs::create_dir_all(home.join("bin")).unwrap();
+        std::fs::write(java_binary(&home), b"#!").unwrap();
+        // a runtime from before the marker existed (or from the Java edition) counts as whole
+        assert!(runtime_ready(&dirs, "java-runtime-delta"));
+        // a download that began and never finished
+        std::fs::write(installing_marker(&dirs, "java-runtime-delta"), b"").unwrap();
+        assert!(!runtime_ready(&dirs, "java-runtime-delta"), "bin/java alone must not be trusted");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+}
+
+#[cfg(test)]
+mod unpack_tests {
+    use super::*;
+
+    fn tar_gz(path: &Path, files: &[(&str, &[u8])]) {
+        let gz = flate2::write::GzEncoder::new(std::fs::File::create(path).unwrap(), flate2::Compression::fast());
+        let mut t = tar::Builder::new(gz);
+        for (name, body) in files {
+            let mut h = tar::Header::new_gnu();
+            h.set_size(body.len() as u64);
+            h.set_mode(0o755);
+            h.set_cksum();
+            t.append_data(&mut h, name, *body).unwrap();
+        }
+        t.into_inner().unwrap().finish().unwrap();
+    }
+
+    #[test]
+    fn java_is_moved_into_place_only_when_it_is_whole() {
+        let base = crate::testutil::scratch("unpack-java");
+        let root = base.join("temurin-21");
+        let java = format!("jdk-21/bin/{}", platform::java_exe());
+        // an archive that stops before lib/modules (what an interrupted download unpacks to)
+        let partial = base.join("partial.tar.gz");
+        tar_gz(&partial, &[(&java, b"#!")]);
+        assert!(unpack_whole(&partial, &root).is_err());
+        assert!(!root.exists(), "nothing half unpacked is left to be trusted");
+        assert!(find_home(&root).is_none());
+        // a whole one
+        let whole = base.join("whole.tar.gz");
+        tar_gz(&whole, &[(&java, b"#!"), ("jdk-21/lib/modules", b"modules")]);
+        unpack_whole(&whole, &root).unwrap();
+        assert!(find_home(&root).is_some());
+        // not an archive at all
+        std::fs::write(base.join("page.tar.gz"), b"<html>Sign in to the Wi-Fi</html>").unwrap();
+        assert!(unpack_whole(&base.join("page.tar.gz"), &base.join("other")).is_err());
+        let leftovers: Vec<_> = std::fs::read_dir(&base)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().starts_with(".unpacking-"))
+            .collect();
+        assert!(leftovers.is_empty());
+        let _ = std::fs::remove_dir_all(&base);
+    }
 }

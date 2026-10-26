@@ -85,7 +85,7 @@ impl Job {
 
 /// Whether a file on disk can be trusted without downloading it again. By default size is the test, which is
 /// one `stat` per file; `verify` hashes it too.
-fn is_good(job: &Job, verify: bool) -> bool {
+pub(crate) fn is_good(job: &Job, verify: bool) -> bool {
     let Ok(meta) = std::fs::metadata(&job.dest) else { return false };
     if !meta.is_file() {
         return false;
@@ -151,7 +151,59 @@ pub async fn download_all(jobs: Vec<Job>, progress: &Arc<Progress>, verify: bool
     Ok(count)
 }
 
+/// The downloads running now, one lock per destination: two jobs that want the same file at once (two instances of
+/// one version, a pack install and a launch) would otherwise write the same `.part` file over each other.
+static IN_FLIGHT: std::sync::LazyLock<std::sync::Mutex<HashMap<PathBuf, Arc<tokio::sync::Mutex<()>>>>> =
+    std::sync::LazyLock::new(Default::default);
+
 async fn download_one(job: &Job, progress: &Progress) -> Result<()> {
+    let lock = IN_FLIGHT.lock().unwrap_or_else(|e| e.into_inner()).entry(job.dest.clone()).or_default().clone();
+    let result = match lock.try_lock() {
+        Ok(guard) => {
+            let r = download_one_now(job, progress).await;
+            drop(guard);
+            r
+        }
+        Err(_) => {
+            let guard = lock.lock().await;
+            // the other job has just fetched and checked this very file
+            let r = if is_good(job, false) { Ok(()) } else { download_one_now(job, progress).await };
+            drop(guard);
+            r
+        }
+    };
+    let mut map = IN_FLIGHT.lock().unwrap_or_else(|e| e.into_inner());
+    // the map and this function hold the last two handles: nobody else is waiting for this file
+    if map.get(&job.dest).is_some_and(|l| Arc::strong_count(l) <= 2) {
+        map.remove(&job.dest);
+    }
+    result
+}
+
+/// Why one try at a download failed, and whether trying again could help.
+struct Failed {
+    error: anyhow::Error,
+    /// How many tries in all are worth making for this kind of failure.
+    tries: u32,
+}
+
+impl Failed {
+    fn retry(error: impl Into<anyhow::Error>) -> Failed {
+        Failed { error: error.into(), tries: DOWNLOAD_TRIES }
+    }
+
+    fn fatal(error: impl Into<anyhow::Error>) -> Failed {
+        Failed { error: error.into(), tries: 1 }
+    }
+}
+
+/// Tries for a connection that couldn't be made at all: one more, so a single dropped handshake among thousands of
+/// files doesn't fail an install, while being offline still fails quickly instead of minutes later.
+const CONNECT_TRIES: u32 = 2;
+
+const DOWNLOAD_TRIES: u32 = 4;
+
+async fn download_one_now(job: &Job, progress: &Progress) -> Result<()> {
     if job.url.is_empty() {
         bail!("{} is missing and has no address to download it from", job.dest.display());
     }
@@ -163,12 +215,16 @@ async fn download_one(job: &Job, progress: &Progress) -> Result<()> {
         job.dest.extension().map(|e| format!("{}.", e.to_string_lossy())).unwrap_or_default()
     ));
     let mut last = None;
-    for attempt in 0..4u32 {
+    for attempt in 0..DOWNLOAD_TRIES {
         if attempt > 0 {
-            tokio::time::sleep(Duration::from_millis(400 * 2u64.pow(attempt - 1))).await;
+            let base = if cfg!(test) { 5 } else { 400 };
+            tokio::time::sleep(Duration::from_millis(base * 2u64.pow(attempt - 1))).await;
+        }
+        if progress.cancelled.load(Ordering::Relaxed) {
+            bail!("cancelled");
         }
         let mut counted = 0u64;
-        match fetch_to(&job.url, &part, job.sha1.as_deref(), &mut counted, progress).await {
+        match fetch_to(&job.url, &part, job.sha1.as_deref(), job.size, &mut counted, progress).await {
             Ok(()) => {
                 if job.executable {
                     set_executable(&part);
@@ -180,46 +236,90 @@ async fn download_one(job: &Job, progress: &Progress) -> Result<()> {
                 }
                 return Ok(());
             }
-            Err(e) => {
+            Err(failed) => {
                 progress
                     .bytes_done
                     .fetch_sub(counted.min(progress.bytes_done.load(Ordering::Relaxed)), Ordering::Relaxed);
                 let _ = tokio::fs::remove_file(&part).await;
-                last = Some(e);
+                // a missing file or a full disk won't fix itself in a second, nor will being offline
+                let tries = failed.tries;
+                last = Some(failed.error);
+                if attempt + 1 >= tries {
+                    break;
+                }
             }
         }
     }
-    Err(last.unwrap()).with_context(|| format!("downloading {}", job.url))
+    Err(last.unwrap_or_else(|| anyhow::anyhow!("no attempt was made")))
+        .with_context(|| format!("downloading {}", job.url))
 }
 
-async fn fetch_to(url: &str, part: &Path, sha1: Option<&str>, counted: &mut u64, progress: &Progress) -> Result<()> {
-    let r = client().get(url).send().await?;
+async fn fetch_to(
+    url: &str,
+    part: &Path,
+    sha1: Option<&str>,
+    size: Option<u64>,
+    counted: &mut u64,
+    progress: &Progress,
+) -> std::result::Result<(), Failed> {
+    let r = match client().get(url).send().await {
+        Ok(r) => r,
+        Err(e) => {
+            let tries = if crate::net::is_transient_error(&e) {
+                DOWNLOAD_TRIES
+            } else if e.is_connect() {
+                CONNECT_TRIES
+            } else {
+                1
+            };
+            return Err(Failed { error: e.into(), tries });
+        }
+    };
     if !r.status().is_success() {
-        bail!("HTTP {}", r.status());
+        let tries = if crate::net::is_transient_status(r.status().as_u16()) { DOWNLOAD_TRIES } else { 1 };
+        return Err(Failed { error: anyhow::anyhow!("HTTP {}", r.status()), tries });
     }
-    let mut file = tokio::fs::File::create(part).await?;
+    let mut file = tokio::fs::File::create(part)
+        .await
+        .map_err(|e| Failed::fatal(anyhow::Error::from(e).context(format!("writing {}", part.display()))))?;
     let mut hasher = Sha1::new();
     // pack libraries carry an MD5 in the checksum field (the Java edition tells them apart by length)
     let mut md5 = if sha1.is_some_and(|h| h.len() == 32) { Some(md5::Md5::new()) } else { None };
     let mut stream = r.bytes_stream();
     while let Some(chunk) = stream.next().await {
-        let chunk = chunk?;
+        // a big file (the game, a Java runtime) stops when the player presses Cancel, not when it is done
+        if progress.cancelled.load(Ordering::Relaxed) {
+            return Err(Failed::fatal(anyhow::anyhow!("cancelled")));
+        }
+        let chunk = chunk.map_err(Failed::retry)?;
         hasher.update(&chunk);
         if let Some(m) = md5.as_mut() {
             md5::Digest::update(m, &chunk);
         }
-        file.write_all(&chunk).await?;
+        // writing fails when the disk is full: trying again would only fill it again
+        file.write_all(&chunk)
+            .await
+            .map_err(|e| Failed::fatal(anyhow::Error::from(e).context(format!("writing {}", part.display()))))?;
         *counted += chunk.len() as u64;
         progress.bytes_done.fetch_add(chunk.len() as u64, Ordering::Relaxed);
     }
-    file.flush().await?;
+    file.flush().await.map_err(Failed::fatal)?;
+    // the size decides only for a file without a checksum: a size from a mod site can be off where the hash is right
+    if let Some(expected) = size.filter(|_| sha1.is_none()) {
+        if *counted != expected {
+            return Err(Failed::retry(anyhow::anyhow!(
+                "the file arrived incomplete ({} of {expected} bytes)",
+                *counted
+            )));
+        }
+    }
     if let Some(expected) = sha1 {
         let got = match md5 {
             Some(m) => hex::encode(md5::Digest::finalize(m)),
             None => hex::encode(hasher.finalize()),
         };
         if !got.eq_ignore_ascii_case(expected) {
-            bail!("the file arrived damaged (expected {expected}, got {got})");
+            return Err(Failed::retry(anyhow::anyhow!("the file arrived damaged (expected {expected}, got {got})")));
         }
     }
     Ok(())
@@ -285,16 +385,17 @@ pub async fn vanilla_json(dirs: &Dirs, id: &str) -> Result<VersionJson> {
 // Game files
 
 pub fn client_jar(dirs: &Dirs, game_version: &str) -> PathBuf {
+    let game_version = crate::paths::safe_component(game_version);
     dirs.libraries
         .join("net")
         .join("minecraft")
         .join("client")
-        .join(game_version)
+        .join(&game_version)
         .join(format!("client-{game_version}.jar"))
 }
 
 pub fn asset_index_file(dirs: &Dirs, id: &str) -> PathBuf {
-    dirs.assets.join("indexes").join(format!("{id}.json"))
+    dirs.assets.join("indexes").join(format!("{}.json", crate::paths::safe_component(id)))
 }
 
 #[derive(Deserialize)]
@@ -312,9 +413,25 @@ pub struct AssetObject {
     pub size: u64,
 }
 
+/// An asset index, keeping only objects whose hash is hex digits (a SHA-1): the hash is also the file's path
+/// (`objects/<first two>/<hash>`), and a short or odd one crashed the launcher when it was cut.
 pub fn read_asset_index(dirs: &Dirs, id: &str) -> Result<AssetIndex> {
     let bytes = std::fs::read(asset_index_file(dirs, id)).with_context(|| format!("asset index {id} is missing"))?;
-    Ok(serde_json::from_slice(&bytes)?)
+    let mut index: AssetIndex = serde_json::from_slice(&bytes).with_context(|| format!("reading asset index {id}"))?;
+    let before = index.objects.len();
+    index.objects.retain(|_, o| is_hex_hash(&o.hash));
+    if index.objects.len() != before {
+        crate::logs::warn(format!(
+            "Asset index {id}: left out {} entries with a broken hash",
+            before - index.objects.len()
+        ));
+    }
+    Ok(index)
+}
+
+/// At least two hex digits and nothing else, so it can be cut into `objects/<first two>/<hash>` safely.
+pub fn is_hex_hash(hash: &str) -> bool {
+    hash.len() >= 2 && hash.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
 /// Make sure everything `version` needs to run is in place: libraries, game jar, assets, logging config.
@@ -337,12 +454,15 @@ pub async fn ensure_game_files(
     let mut jobs = Vec::new();
     for lib in version.active_libraries(&features) {
         if let Some(a) = lib.artifact() {
-            let path = a.path.clone().unwrap_or_default();
-            jobs.push(Job::new(&a.url, dirs.libraries.join(&path)).checked(a.sha1.as_deref(), a.size));
+            if let Some(path) = a.path.as_deref() {
+                jobs.push(Job::new(&a.url, dirs.libraries.join(path)).checked(a.sha1.as_deref(), a.size));
+            }
         }
         if let Some(n) = lib.native() {
-            let path = n.path.clone().unwrap_or_default();
-            jobs.push(Job::new(&n.url, dirs.libraries.join(&path)).checked(n.sha1.as_deref(), n.size));
+            match n.path.as_deref() {
+                Some(path) => jobs.push(Job::new(&n.url, dirs.libraries.join(path)).checked(n.sha1.as_deref(), n.size)),
+                None => crate::logs::warn(format!("Skipping the natives of {}: their path is not usable", lib.name)),
+            }
         }
     }
     if let Some(client) = version.downloads.as_ref().and_then(|d| d.client.as_ref()) {
@@ -351,8 +471,11 @@ pub async fn ensure_game_files(
     if let Some(log) = version.logging.as_ref().and_then(|l| l.client.as_ref()) {
         if !log.file.url.is_empty() {
             jobs.push(
-                Job::new(&log.file.url, dirs.assets.join("log_configs").join(&log.file.id))
-                    .checked(Some(&log.file.sha1), Some(log.file.size)),
+                Job::new(
+                    &log.file.url,
+                    dirs.assets.join("log_configs").join(crate::paths::safe_component(&log.file.id)),
+                )
+                .checked(Some(&log.file.sha1), Some(log.file.size)),
             );
         }
     }
@@ -445,16 +568,24 @@ pub fn map_legacy_assets(dirs: &Dirs, version: &VersionJson, game_dir: &Path) ->
         return Ok(None);
     };
     for (name, obj) in &index.objects {
-        let dest = target.join(name);
-        if dest.exists() {
+        // names come from the index file: never outside the folder they are copied into
+        let Some(dest) = crate::paths::join_inside(&target, name) else { continue };
+        // a copy cut short (the launcher closed, a full disk) has the wrong size and is made again
+        if std::fs::metadata(&dest).is_ok_and(|m| m.len() == obj.size) {
             continue;
         }
         let src = dirs.assets.join("objects").join(&obj.hash[..2]).join(&obj.hash);
         if let Some(dir) = dest.parent() {
             std::fs::create_dir_all(dir)?;
         }
+        let _ = std::fs::remove_file(&dest);
         if std::fs::hard_link(&src, &dest).is_err() {
-            std::fs::copy(&src, &dest)?;
+            let part = dest.with_file_name(format!(
+                ".{}.part",
+                dest.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()
+            ));
+            std::fs::copy(&src, &part).with_context(|| format!("copying {}", src.display()))?;
+            std::fs::rename(&part, &dest)?;
         }
     }
     Ok(Some(target))
@@ -508,5 +639,203 @@ mod stamp_tests {
         assert!(!saved.still_good(&AssetStamp { index_size: 1, ..index.clone() }, 10 * day + 1), "other index");
         assert!(!saved.still_good(&AssetStamp { index_modified_ms: 2, ..index.clone() }, 10 * day + 1));
         assert!(!index.still_good(&index, 10 * day), "a stamp that never recorded a pass");
+    }
+}
+
+/// Downloads as they go wrong in real life: servers that answer 404 or 503, connections that drop half way, files
+/// that arrive damaged, a player pressing Cancel, two jobs wanting one file.
+#[cfg(test)]
+mod download_robustness_tests {
+    use super::*;
+    use crate::testutil::{Reply, Server, runtime, scratch, sha1};
+
+    fn job(url: &str, dest: &Path, body: &[u8]) -> Job {
+        let mut j = Job::new(url, dest);
+        j.sha1 = Some(sha1(body));
+        j.size = Some(body.len() as u64);
+        j
+    }
+
+    #[test]
+    fn a_missing_file_fails_at_once_instead_of_being_asked_for_four_times() {
+        runtime().block_on(async {
+            let server = Server::start().await;
+            let dir = scratch("dl-404");
+            let url = format!("{}/gone.jar", server.base);
+            let started = std::time::Instant::now();
+            let err = download_all(vec![Job::new(&url, dir.join("gone.jar"))], &Progress::new(), false).await;
+            assert!(err.is_err());
+            assert_eq!(server.hits("/gone.jar"), 1, "a 404 is final");
+            assert!(started.elapsed() < Duration::from_secs(2));
+            assert!(!dir.join("gone.jar").exists() && !dir.join("gone.jar.part").exists());
+        });
+    }
+
+    #[test]
+    fn a_busy_server_is_asked_again_and_a_damaged_file_is_never_kept() {
+        runtime().block_on(async {
+            let server = Server::start().await;
+            let dir = scratch("dl-busy");
+            let body = b"the real file".to_vec();
+            let url = server.route("/busy.jar", Reply::status(503));
+            assert!(
+                download_all(vec![job(&url, &dir.join("busy.jar"), &body)], &Progress::new(), false).await.is_err()
+            );
+            assert_eq!(server.hits("/busy.jar"), DOWNLOAD_TRIES as usize, "a 503 is tried again");
+
+            // a body that doesn't match its checksum is tried again and then refused, and never saved
+            // (as long as the real one, so it is the checksum that catches it, not the size)
+            let url = server.route("/bad.jar", Reply::ok(b"the fake file".to_vec()));
+            let err = download_all(vec![job(&url, &dir.join("bad.jar"), &body)], &Progress::new(), false).await;
+            assert!(format!("{:#}", err.unwrap_err()).contains("damaged"));
+            assert!(!dir.join("bad.jar").exists());
+
+            // a connection that drops half way leaves nothing behind that a later start would trust
+            let url = server.route("/cut.jar", Reply::cut(body.clone(), 4));
+            assert!(download_all(vec![job(&url, &dir.join("cut.jar"), &body)], &Progress::new(), false).await.is_err());
+            assert!(!dir.join("cut.jar").exists());
+            let leftovers: Vec<_> = std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name()).collect();
+            assert!(leftovers.is_empty(), "{leftovers:?}");
+        });
+    }
+
+    #[test]
+    fn a_short_file_without_a_checksum_is_refused_by_its_size() {
+        runtime().block_on(async {
+            let server = Server::start().await;
+            let dir = scratch("dl-size");
+            let url = server.route("/short.bin", Reply::ok(b"only part".to_vec()));
+            let mut j = Job::new(&url, dir.join("short.bin"));
+            j.size = Some(1000);
+            let err = download_all(vec![j], &Progress::new(), false).await.unwrap_err();
+            assert!(format!("{err:#}").contains("incomplete"), "{err:#}");
+            assert!(!dir.join("short.bin").exists());
+        });
+    }
+
+    #[test]
+    fn a_wrong_size_from_a_mod_site_doesnt_refuse_a_file_whose_checksum_is_right() {
+        runtime().block_on(async {
+            let server = Server::start().await;
+            let dir = scratch("dl-size-off");
+            let body = b"exactly the right bytes".to_vec();
+            let url = server.route("/m.jar", Reply::ok(body.clone()));
+            let mut j = job(&url, &dir.join("m.jar"), &body);
+            j.size = Some(body.len() as u64 + 7);
+            download_all(vec![j], &Progress::new(), false).await.unwrap();
+            assert_eq!(std::fs::read(dir.join("m.jar")).unwrap(), body);
+            assert_eq!(server.hits("/m.jar"), 1);
+        });
+    }
+
+    #[test]
+    fn nothing_is_downloaded_after_cancel() {
+        runtime().block_on(async {
+            let server = Server::start().await;
+            let dir = scratch("dl-cancel");
+            let body = vec![7u8; 1000];
+            let url = server.route("/c.bin", Reply::ok(body.clone()));
+            let progress = Progress::new();
+            progress.cancelled.store(true, Ordering::Relaxed);
+            assert!(download_all(vec![job(&url, &dir.join("c.bin"), &body)], &progress, false).await.is_err());
+            assert_eq!(server.total(), 0);
+            assert!(!dir.join("c.bin").exists());
+        });
+    }
+
+    #[test]
+    fn two_jobs_wanting_the_same_file_at_once_share_one_download() {
+        runtime().block_on(async {
+            let server = Server::start().await;
+            let dir = scratch("dl-shared");
+            let body: Vec<u8> = (0..2_000_000u32).map(|i| (i % 253) as u8).collect();
+            let url = server.route("/big.jar", Reply::ok(body.clone()));
+            let dest = dir.join("big.jar");
+            let (p1, p2) = (Progress::new(), Progress::new());
+            let (a, b) = tokio::join!(
+                download_all(vec![job(&url, &dest, &body)], &p1, false),
+                download_all(vec![job(&url, &dest, &body)], &p2, false),
+            );
+            a.unwrap();
+            b.unwrap();
+            assert_eq!(std::fs::read(&dest).unwrap(), body);
+            assert!(server.hits("/big.jar") <= 2);
+            assert!(!dir.join("big.jar.part").exists());
+            assert!(IN_FLIGHT.lock().unwrap().get(&dest).is_none(), "the lock is let go afterwards");
+        });
+    }
+
+    #[test]
+    fn a_job_without_an_address_names_the_missing_file() {
+        runtime().block_on(async {
+            let dir = scratch("dl-nourl");
+            let err = download_all(vec![Job::new("", dir.join("x.jar"))], &Progress::new(), false).await.unwrap_err();
+            assert!(format!("{err:#}").contains("no address"));
+        });
+    }
+}
+
+#[cfg(test)]
+mod asset_tests {
+    use super::*;
+
+    #[test]
+    fn broken_hashes_in_an_asset_index_are_left_out_instead_of_crashing() {
+        let base = crate::testutil::scratch("asset-index");
+        let dirs = Dirs::at(&base);
+        let good = "a".repeat(40);
+        let json = serde_json::json!({"objects": {
+            "minecraft/ok.ogg": {"hash": good, "size": 3},
+            "short": {"hash": "a", "size": 1},
+            "empty": {"hash": "", "size": 1},
+            "wide": {"hash": "日本語日本語日本語日本語日本", "size": 1},
+            "slash": {"hash": "../../../../../../../../../etc/passwd!!", "size": 1},
+        }});
+        std::fs::create_dir_all(base.join("assets/indexes")).unwrap();
+        std::fs::write(base.join("assets/indexes/17.json"), json.to_string()).unwrap();
+        let index = read_asset_index(&dirs, "17").unwrap();
+        assert_eq!(index.objects.len(), 1);
+        assert!(index.objects.contains_key("minecraft/ok.ogg"));
+        // an index id from a file never leads elsewhere
+        assert_eq!(asset_index_file(&dirs, "../../x").parent().unwrap(), base.join("assets/indexes"));
+        assert!(read_asset_index(&dirs, "missing").is_err());
+        std::fs::write(base.join("assets/indexes/bad.json"), b"{not json").unwrap();
+        assert!(read_asset_index(&dirs, "bad").is_err());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn legacy_assets_are_copied_whole_and_only_inside_their_folder() {
+        let base = crate::testutil::scratch("legacy-assets");
+        let dirs = Dirs::at(base.join("data"));
+        let hash = sha1_of(b"sound");
+        let obj = dirs.assets.join("objects").join(&hash[..2]).join(&hash);
+        std::fs::create_dir_all(obj.parent().unwrap()).unwrap();
+        std::fs::write(&obj, b"sound").unwrap();
+        let json = serde_json::json!({"virtual": true, "objects": {
+            "sound/a.ogg": {"hash": hash, "size": 5},
+            "../../escaped.ogg": {"hash": hash, "size": 5},
+        }});
+        std::fs::create_dir_all(dirs.assets.join("indexes")).unwrap();
+        std::fs::write(dirs.assets.join("indexes/legacy.json"), json.to_string()).unwrap();
+        let mut version = VersionJson::default();
+        version.asset_index = Some(
+            serde_json::from_value(
+                serde_json::json!({"id": "legacy", "url": "", "sha1": "", "size": 0, "totalSize": 0}),
+            )
+            .unwrap(),
+        );
+        let target = map_legacy_assets(&dirs, &version, &base.join("game")).unwrap().unwrap();
+        // a copy cut short by a crash (its own file, not a link to the object) is noticed by its size and made again
+        std::fs::remove_file(target.join("sound/a.ogg")).unwrap();
+        std::fs::write(target.join("sound/a.ogg"), b"so").unwrap();
+        map_legacy_assets(&dirs, &version, &base.join("game")).unwrap();
+        assert_eq!(std::fs::read(target.join("sound/a.ogg")).unwrap(), b"sound");
+        assert!(!dirs.assets.join("escaped.ogg").exists() && !base.join("escaped.ogg").exists());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    fn sha1_of(b: &[u8]) -> String {
+        crate::http::sha1_hex(b)
     }
 }

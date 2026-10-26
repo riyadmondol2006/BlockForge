@@ -11,7 +11,9 @@
 
 use std::collections::BTreeSet;
 use std::fs::File;
-use std::io::{BufWriter, Write};
+use std::io::BufWriter;
+#[cfg(test)]
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -85,6 +87,14 @@ pub fn safe_name(name: &str) -> String {
     name.chars().filter(|c| c.is_ascii_alphanumeric()).collect()
 }
 
+/// The start of the backup file names of the instance called `instance_name`: the Java edition's safe name, so both
+/// editions find each other's backups. A name with no ASCII letters or digits (`Мой мир`, `世界`) keeps its own
+/// letters instead, so its backups are found again and aren't mixed up with those of every other such instance.
+pub fn backup_prefix(instance_name: &str) -> String {
+    let ascii = safe_name(instance_name);
+    if !ascii.is_empty() { ascii } else { crate::paths::folder_name(instance_name) }
+}
+
 /// Where backups are kept: the `backupsPath` setting if it is an existing folder, otherwise `backups/`.
 pub fn backups_dir(dirs: &Dirs, settings: &ServiceSettings) -> PathBuf {
     match settings.backups_path.as_deref().map(Path::new) {
@@ -114,7 +124,13 @@ pub fn parse_name(file_name: &str) -> Option<(String, DateTime<Local>)> {
     if stem.len() < 20 {
         return None;
     }
-    let (prefix, stamp) = stem.split_at(stem.len() - 19);
+    // the stamp is ASCII, so in a backup name the cut is between two characters; in any other name (letters of
+    // several bytes, an emoji) it may not be, and cutting there would crash
+    let cut = stem.len() - 19;
+    if !stem.is_char_boundary(cut) {
+        return None;
+    }
+    let (prefix, stamp) = stem.split_at(cut);
     let name = prefix.strip_suffix('-')?;
     let naive = NaiveDateTime::parse_from_str(stamp, "%Y_%m_%d_%H_%M_%S").ok()?;
     Some((name.to_string(), Local.from_local_datetime(&naive).earliest()?))
@@ -122,7 +138,7 @@ pub fn parse_name(file_name: &str) -> Option<(String, DateTime<Local>)> {
 
 /// The backups made for the instance called `instance_name`, newest first.
 pub fn list(dirs: &Dirs, settings: &ServiceSettings, instance_name: &str) -> Vec<Backup> {
-    list_with_prefix(&backups_dir(dirs, settings), &safe_name(instance_name))
+    list_with_prefix(&backups_dir(dirs, settings), &backup_prefix(instance_name))
 }
 
 /// Backups made of a server (`Server-<name>-<date>.zip`), newest first.
@@ -177,16 +193,51 @@ pub fn create(
     instance_name: &str,
     mode: BackupMode,
 ) -> Result<PathBuf> {
+    // the player chose a folder (an external drive, say): filling the computer's own disk instead without a word
+    // isn't what they asked for
+    if let Some(p) = &settings.unavailable_backups_path {
+        bail!("The backups folder {p} isn't available. Connect its drive, or choose another folder in Settings.");
+    }
     let folder = backups_dir(dirs, settings);
     std::fs::create_dir_all(&folder).with_context(|| format!("creating the backups folder {}", folder.display()))?;
-    let prefix = {
-        let s = safe_name(instance_name);
-        if s.is_empty() { "Instance".to_string() } else { s }
-    };
-    let target = free_path(&folder, &prefix);
+    let target = free_path(&folder, &backup_prefix(instance_name));
     pack(instance_root, &target, |name| mode.includes(name))?;
     crate::logs::info(format!("Backup of {instance_name} ({}) saved to {}", mode.key(), target.display()));
+    for old in prune(dirs, settings, instance_name, &target) {
+        crate::logs::info(format!("Removed the old backup {}", old.display()));
+    }
     Ok(target)
+}
+
+/// Remove the oldest backups of an instance beyond the `backupsToKeep` setting (nothing when it is 0). Only that
+/// instance's own backups (named `<prefix>-<date>.zip` in the backups folder) are ever touched, and never `keep_this`,
+/// the one just made. Returns what was removed.
+pub fn prune(dirs: &Dirs, settings: &ServiceSettings, instance_name: &str, keep_this: &Path) -> Vec<PathBuf> {
+    let keep = settings.backups_to_keep as usize;
+    if keep == 0 {
+        return Vec::new();
+    }
+    // the names of backups only tell instances apart as far as their letters and digits do: when another instance
+    // gives the same start ("My Pack" and "My-Pack"), or it is the catch-all "Instance" of names in other alphabets,
+    // some of these files may be another instance's, and nothing is deleted
+    let prefix = backup_prefix(instance_name);
+    let owners = crate::instances::load_all(dirs).iter().filter(|i| backup_prefix(i.name()) == prefix).count();
+    if prefix == "Instance" || owners > 1 {
+        crate::logs::warn(format!(
+            "Not removing old backups of {instance_name}: their names can't be told apart from another instance's"
+        ));
+        return Vec::new();
+    }
+    let mut removed = Vec::new();
+    for old in
+        list(dirs, settings, instance_name).into_iter().filter(|b| b.path != keep_this).skip(keep.saturating_sub(1))
+    {
+        match std::fs::remove_file(&old.path) {
+            Ok(()) => removed.push(old.path),
+            Err(e) => crate::logs::warn(format!("Couldn't remove the old backup {}: {e}", old.path.display())),
+        }
+    }
+    removed
 }
 
 /// Make a backup of a server folder; everything in it goes in, like the Java edition does.
@@ -216,7 +267,10 @@ pub fn pack(root: &Path, target: &Path, keep: impl Fn(&str) -> bool) -> Result<(
         let mut zip = zip::ZipWriter::new(BufWriter::new(file));
         let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
         add_dir(&mut zip, root, "", &keep, options)?;
-        zip.finish()?.flush()?;
+        // on the disk before it takes the backup's name (and before older backups may be pruned): a power cut must
+        // not leave a broken newest backup in place of good ones
+        let file = zip.finish()?.into_inner().map_err(|e| e.into_error())?;
+        file.sync_all()?;
         Ok(())
     })();
     match result {
@@ -317,17 +371,15 @@ pub fn restore(
         let tops2 = tops.clone();
         let folder = backups_dir(dirs, settings);
         std::fs::create_dir_all(&folder)?;
-        let target = free_path(&folder, &{
-            let s = safe_name(instance_name);
-            if s.is_empty() { "Instance".to_string() } else { s }
-        });
+        let target = free_path(&folder, &backup_prefix(instance_name));
         pack(instance_root, &target, move |n| tops2.contains(n.split('/').next().unwrap_or("")))?;
         crate::logs::info(format!("Saved what is about to be replaced as {}", target.display()));
     }
     // unpack next to the instance first, so a damaged zip never leaves the instance half-restored
-    let staging = instance_root.with_file_name(format!(".restore-{}-{}", safe_name(instance_name), std::process::id()));
-    let _ = std::fs::remove_dir_all(&staging);
-    std::fs::create_dir_all(&staging)?;
+    // a folder of its own, made here: two restores at once (of instances whose names look alike) never share one,
+    // and nothing already there is ever removed
+    let staging = instance_root.with_file_name(format!(".restore-{}", uuid::Uuid::new_v4().simple()));
+    std::fs::create_dir(&staging).with_context(|| format!("creating {}", staging.display()))?;
     let unpacked = (|| -> Result<()> {
         let mut archive = zip::ZipArchive::new(File::open(backup_zip)?)?;
         for i in 0..archive.len() {
@@ -354,7 +406,9 @@ pub fn restore(
     std::fs::create_dir_all(instance_root)?;
     // what is replaced is moved aside first and only deleted once everything new is in place; when a step fails
     // (a file in use, for example) what was moved aside goes back, so the instance is never left with neither
-    let aside = instance_root.with_file_name(format!(".restore-old-{}-{}", safe_name(instance_name), timestamp_now()));
+    // named uniquely: a name built from the instance's name and the second would be the same for two restores of
+    // look-alike instances at once, and the second one would fail
+    let aside = instance_root.with_file_name(format!(".restore-old-{}", uuid::Uuid::new_v4().simple()));
     if let Err(e) = std::fs::create_dir(&aside) {
         let _ = std::fs::remove_dir_all(&staging);
         return Err(anyhow::Error::from(e).context("the instance was not changed"));
@@ -703,6 +757,238 @@ mod tests {
         if let Some(save) = first_save {
             assert!(copy.join("saves").join(save.file_name()).is_dir());
         }
+        let _ = std::fs::remove_dir_all(&base);
+    }
+}
+
+/// What real backups folders hold: files with other people's names, backups of instances named in any language,
+/// two restores at once.
+#[cfg(test)]
+mod robustness_tests {
+    use super::*;
+
+    fn scratch(tag: &str) -> PathBuf {
+        let p = std::env::temp_dir().join(format!("blockforge-backups-rb-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&p);
+        std::fs::create_dir_all(&p).unwrap();
+        p
+    }
+
+    fn instance(root: &Path, world: &str) {
+        std::fs::create_dir_all(root.join("saves/W")).unwrap();
+        std::fs::write(root.join("saves/W/level.dat"), world).unwrap();
+        std::fs::write(root.join("options.txt"), "fov:70").unwrap();
+    }
+
+    #[test]
+    fn odd_file_names_in_the_backups_folder_never_crash_the_list() {
+        let base = scratch("names");
+        let dirs = Dirs::at(base.join("data"));
+        let folder = dirs.base.join("backups");
+        std::fs::create_dir_all(&folder).unwrap();
+        // names whose 19th byte from the end falls inside a letter used to crash the instance page
+        for name in [
+            "Мой мир 2024-10-01.zip",
+            "世界の保存データ.zip",
+            "🎮🎮🎮🎮🎮🎮🎮🎮.zip",
+            "é-2026_10_16_12_34_56.zip",
+            ".zip",
+            "-.zip",
+            "Pack-2026_99_99_99_99_99.zip",
+            "Pack-not_a_date_at_all_.zip",
+        ] {
+            std::fs::write(folder.join(name), b"x").unwrap();
+            let _ = parse_name(name);
+        }
+        assert!(list(&dirs, &ServiceSettings::default(), "Pack").is_empty());
+        assert_eq!(
+            parse_name("Моймир-2026_10_16_12_34_56.zip").map(|(n, _)| n),
+            Some("Моймир".to_string()),
+            "a name outside ASCII before a real stamp still reads"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn backups_of_instances_named_outside_ascii_are_listed_and_kept_apart() {
+        let base = scratch("unicode");
+        let dirs = Dirs::at(base.join("data"));
+        let settings = ServiceSettings::default();
+        let (a, b) = (base.join("a"), base.join("b"));
+        instance(&a, "russian");
+        instance(&b, "japanese");
+        create(&dirs, &settings, &a, "Мой мир", BackupMode::Normal).unwrap();
+        create(&dirs, &settings, &b, "世界", BackupMode::Normal).unwrap();
+        // each sees its own backup, and only its own
+        let la = list(&dirs, &settings, "Мой мир");
+        let lb = list(&dirs, &settings, "世界");
+        assert_eq!(la.len(), 1, "a backup that was made must be listed");
+        assert_eq!(lb.len(), 1);
+        assert_ne!(la[0].path, lb[0].path);
+        // an instance literally called "Instance" doesn't collect every other one's backups
+        assert!(list(&dirs, &settings, "Instance").is_empty());
+        // ASCII names keep the Java edition's names, so both editions share backups
+        assert_eq!(backup_prefix("My Pack!"), "MyPack");
+        assert_eq!(backup_prefix("***"), "Instance");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn two_restores_at_once_never_mix_their_files() {
+        let base = scratch("parallel");
+        let dirs = Dirs::at(base.join("data"));
+        let settings = ServiceSettings::default();
+        let roots: Vec<PathBuf> = (0..6).map(|i| base.join("instances").join(format!("i{i}"))).collect();
+        let zips: Vec<PathBuf> = roots
+            .iter()
+            .enumerate()
+            .map(|(i, r)| {
+                instance(r, &format!("world {i}"));
+                // all of these names have no ASCII letters, which used to give one shared staging folder
+                create(&dirs, &settings, r, &format!("мир{}", "й".repeat(i + 1)), BackupMode::Normal).unwrap()
+            })
+            .collect();
+        for r in &roots {
+            std::fs::write(r.join("saves/W/level.dat"), "ruined").unwrap();
+        }
+        std::thread::scope(|s| {
+            for (i, (r, z)) in roots.iter().zip(&zips).enumerate() {
+                let dirs = &dirs;
+                let settings = &settings;
+                s.spawn(move || restore(dirs, settings, z, r, &format!("мир{}", "й".repeat(i + 1)), false).unwrap());
+            }
+        });
+        for (i, r) in roots.iter().enumerate() {
+            assert_eq!(std::fs::read_to_string(r.join("saves/W/level.dat")).unwrap(), format!("world {i}"));
+        }
+        let left: Vec<_> = std::fs::read_dir(base.join("instances"))
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().starts_with('.'))
+            .map(|e| e.file_name())
+            .collect();
+        assert!(left.is_empty(), "{left:?}");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_zip_with_escaping_entries_restores_only_what_is_inside() {
+        let base = scratch("evil");
+        let dirs = Dirs::at(base.join("data"));
+        let settings = ServiceSettings::default();
+        let root = base.join("inst");
+        instance(&root, "mine");
+        let evil = base.join("evil.zip");
+        {
+            let mut z = zip::ZipWriter::new(File::create(&evil).unwrap());
+            let o = SimpleFileOptions::default();
+            z.start_file("../outside.txt", o).unwrap();
+            z.write_all(b"escaped").unwrap();
+            z.start_file("/abs.txt", o).unwrap();
+            z.write_all(b"escaped").unwrap();
+            z.start_file("saves/W/level.dat", o).unwrap();
+            z.write_all(b"from zip").unwrap();
+            z.finish().unwrap();
+        }
+        let _ = restore(&dirs, &settings, &evil, &root, "Inst", false);
+        assert!(!base.join("outside.txt").exists());
+        assert!(!Path::new("/abs.txt").exists() || std::fs::read(Path::new("/abs.txt")).unwrap() != b"escaped");
+        assert_eq!(std::fs::read_to_string(root.join("saves/W/level.dat")).unwrap(), "from zip");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+}
+
+#[cfg(test)]
+mod retention_tests {
+    use super::*;
+
+    #[test]
+    fn only_the_newest_backups_of_that_instance_are_kept() {
+        let base = crate::testutil::scratch("backup-retention");
+        let dirs = Dirs::at(base.join("data"));
+        let mut settings = ServiceSettings::default();
+        let folder = backups_dir(&dirs, &settings);
+        std::fs::create_dir_all(&folder).unwrap();
+        // older backups of this instance and of another one, and a file that isn't a backup
+        for day in 10..16 {
+            std::fs::write(folder.join(format!("MyPack-2026_01_{day}_12_00_00.zip")), b"old").unwrap();
+            std::fs::write(folder.join(format!("Other-2026_01_{day}_12_00_00.zip")), b"other").unwrap();
+        }
+        std::fs::write(folder.join("notes.zip"), b"mine").unwrap();
+        let root = base.join("inst");
+        std::fs::create_dir_all(root.join("saves/W")).unwrap();
+        std::fs::write(root.join("saves/W/level.dat"), b"w").unwrap();
+
+        // 0 keeps everything, as before
+        create(&dirs, &settings, &root, "My Pack", BackupMode::Normal).unwrap();
+        assert_eq!(list(&dirs, &settings, "My Pack").len(), 7);
+
+        settings.backups_to_keep = 3;
+        let newest = create(&dirs, &settings, &root, "My Pack", BackupMode::Normal).unwrap();
+        let kept = list(&dirs, &settings, "My Pack");
+        assert_eq!(kept.len(), 3, "{:?}", kept.iter().map(|b| &b.file_name).collect::<Vec<_>>());
+        assert!(kept.iter().any(|b| b.path == newest), "the one just made is always kept");
+        assert_eq!(list(&dirs, &settings, "Other").len(), 6, "another instance's backups are never touched");
+        assert!(folder.join("notes.zip").exists());
+        // keeping 1 keeps exactly the new one
+        settings.backups_to_keep = 1;
+        let last = create(&dirs, &settings, &root, "My Pack", BackupMode::Normal).unwrap();
+        let kept = list(&dirs, &settings, "My Pack");
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].path, last);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn the_setting_reads_and_writes_safely() {
+        let mut st: crate::config::Settings = serde_json::from_str(r#"{"backupsToKeep": -4}"#).unwrap();
+        assert_eq!(ServiceSettings::from_settings(&st).backups_to_keep, 0);
+        st = serde_json::from_str(r#"{"backupsToKeep": 99999999}"#).unwrap();
+        assert_eq!(ServiceSettings::from_settings(&st).backups_to_keep, crate::svcsettings::MAX_BACKUPS_TO_KEEP);
+        let mut s = ServiceSettings::default();
+        s.backups_to_keep = 5;
+        s.write_to(&mut st);
+        assert_eq!(serde_json::to_value(&st).unwrap()["backupsToKeep"], 5);
+        s.backups_to_keep = 0;
+        s.write_to(&mut st);
+        assert!(serde_json::to_value(&st).unwrap().get("backupsToKeep").is_none());
+    }
+}
+
+#[cfg(test)]
+mod prune_safety_tests {
+    use super::*;
+
+    fn instance(dirs: &Dirs, folder: &str, name: &str) -> PathBuf {
+        let root = dirs.instances.join(folder);
+        std::fs::create_dir_all(root.join("saves/W")).unwrap();
+        std::fs::write(root.join("saves/W/level.dat"), b"w").unwrap();
+        std::fs::write(root.join("instance.json"), serde_json::json!({"launcher": {"name": name}}).to_string())
+            .unwrap();
+        root
+    }
+
+    #[test]
+    fn pruning_never_touches_backups_that_could_be_another_instances() {
+        let base = crate::testutil::scratch("prune-safety");
+        let dirs = Dirs::at(base.join("data"));
+        let mut settings = ServiceSettings::default();
+        settings.backups_to_keep = 1;
+        let folder = backups_dir(&dirs, &settings);
+        std::fs::create_dir_all(&folder).unwrap();
+        // "My Pack" and "My-Pack" both name their backups MyPack-<date>.zip
+        let a = instance(&dirs, "MyPack", "My Pack");
+        instance(&dirs, "MyPack2", "My-Pack");
+        for day in 10..14 {
+            std::fs::write(folder.join(format!("MyPack-2026_01_{day}_12_00_00.zip")), b"whose?").unwrap();
+        }
+        create(&dirs, &settings, &a, "My Pack", BackupMode::Normal).unwrap();
+        assert_eq!(list(&dirs, &settings, "My Pack").len(), 5, "nothing deleted while the names are shared");
+        // the catch-all name of instances in other alphabets is never pruned either
+        let r = instance(&dirs, "Instance", "Instance");
+        std::fs::write(folder.join("Instance-2026_01_10_12_00_00.zip"), b"someone else's").unwrap();
+        create(&dirs, &settings, &r, "Instance", BackupMode::Normal).unwrap();
+        assert!(folder.join("Instance-2026_01_10_12_00_00.zip").exists());
         let _ = std::fs::remove_dir_all(&base);
     }
 }

@@ -127,7 +127,12 @@ impl Instance {
         self.root.join("disabledmods")
     }
 
+    /// Write `instance.json`. An instance whose folder is gone (deleted while a job for it was still running) is not
+    /// brought back as an empty folder with only this file in it.
     pub fn save(&self) -> Result<()> {
+        if !self.root.is_dir() {
+            anyhow::bail!("{} was deleted, so its settings weren't saved", self.name());
+        }
         write_json_atomic(&self.instance_file(), &self.file)
     }
 
@@ -242,7 +247,12 @@ pub fn set_mod_enabled(instance: &Instance, file: &ModFile, enabled: bool) -> Re
     }
     let to_dir = if enabled { instance.mods_dir() } else { instance.disabled_mods_dir() };
     std::fs::create_dir_all(&to_dir)?;
-    std::fs::rename(&file.path, to_dir.join(&file.name))?;
+    let dest = to_dir.join(&file.name);
+    // on Linux and macOS a rename quietly replaces a file of the same name: never lose the other copy
+    if dest.exists() {
+        anyhow::bail!("{} is already in {}", file.name, to_dir.display());
+    }
+    std::fs::rename(&file.path, dest)?;
     Ok(())
 }
 
@@ -262,7 +272,14 @@ pub fn load_one(root: &Path) -> Option<Instance> {
 /// Every instance, most recently played first. Folders without a readable `instance.json` are skipped.
 pub fn load_all(dirs: &Dirs) -> Vec<Instance> {
     let Ok(rd) = std::fs::read_dir(&dirs.instances) else { return Vec::new() };
-    let roots: Vec<PathBuf> = rd.flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect();
+    // folders starting with a dot are the launcher's own work folders (a restore in progress, a copy being made),
+    // which can hold an instance.json for a moment; instance folders never start with one
+    let roots: Vec<PathBuf> = rd
+        .flatten()
+        .filter(|e| !e.file_name().to_string_lossy().starts_with('.'))
+        .map(|e| e.path())
+        .filter(|p| p.is_dir())
+        .collect();
     // parsing hundreds of KB of JSON per instance adds up for big libraries; spread it over a few threads
     let threads = roots.len().clamp(1, 8);
     let chunk = roots.len().div_ceil(threads).max(1);
@@ -341,12 +358,28 @@ pub async fn create(
     }
     install::ensure_game_files(dirs, &merged, progress, false).await?;
 
-    let folder = paths::unique_folder(&dirs.instances, name);
-    let root = dirs.instance_dir(&folder);
-    std::fs::create_dir_all(&root)?;
-    for sub in ["mods", "saves", "resourcepacks", "shaderpacks", "config"] {
-        std::fs::create_dir_all(root.join(sub))?;
+    let (folder, root) = paths::claim_unique_folder(&dirs.instances, name)?;
+    // a folder left without its instance.json would hold the name and never show up anywhere
+    let made = (|| -> Result<Instance> {
+        for sub in ["mods", "saves", "resourcepacks", "shaderpacks", "config"] {
+            std::fs::create_dir_all(root.join(sub))?;
+        }
+        new_instance_file(name, mc_version, merged, loader_info, folder, root.clone())
+    })();
+    if made.is_err() {
+        let _ = std::fs::remove_dir_all(&root);
     }
+    made
+}
+
+fn new_instance_file(
+    name: &str,
+    mc_version: &str,
+    merged: VersionJson,
+    loader_info: Option<LoaderVersion>,
+    folder: String,
+    root: PathBuf,
+) -> Result<Instance> {
     let mut version = merged;
     version.id = mc_version.to_string();
     let file = InstanceFile {
@@ -373,6 +406,19 @@ pub async fn create(
     Ok(instance)
 }
 
+/// Check every file the instance's game needs (libraries, assets, the game itself, Mojang's Java for it) against its
+/// checksum and download again whatever is damaged or missing: the cure for "it crashes at start since the
+/// computer went off during a download". The instance's own files (worlds, mods, settings) are not touched.
+pub async fn repair(dirs: &Dirs, instance: &Instance, progress: &Arc<Progress>) -> Result<()> {
+    let version = &instance.file.version;
+    if let Some(jv) = version.java_version.as_ref().filter(|j| !j.component.is_empty()) {
+        progress.stage(format!("Checking Java ({})", jv.component));
+        crate::java::repair_runtime(dirs, &jv.component, progress).await.context("checking Java")?;
+    }
+    progress.stage("Checking the game's files");
+    install::ensure_game_files(dirs, version, progress, true).await.context("checking the game's files")
+}
+
 pub fn uuid_v4() -> String {
     uuid::Uuid::new_v4().to_string()
 }
@@ -383,29 +429,36 @@ pub fn delete(instance: &Instance) -> Result<()> {
 
 /// Copy an instance folder under a new name.
 pub fn duplicate(dirs: &Dirs, instance: &Instance, new_name: &str) -> Result<Instance> {
-    let folder = paths::unique_folder(&dirs.instances, new_name);
-    let root = dirs.instance_dir(&folder);
-    copy_dir(&instance.root, &root)?;
-    let mut copy = Instance { folder, mod_count: instance.mod_count, root, file: instance.file.clone() };
-    copy.file.uuid = uuid_v4();
-    copy.file.launcher.name = new_name.to_string();
-    copy.file.launcher.last_played = None;
-    copy.file.launcher.num_plays = None;
-    copy.file.launcher.extras.remove("playDays");
-    copy.save()?;
-    Ok(copy)
+    let (folder, root) = paths::claim_unique_folder(&dirs.instances, new_name)?;
+    let made = (|| -> Result<Instance> {
+        copy_dir(&instance.root, &root)?;
+        let mut copy =
+            Instance { folder, mod_count: instance.mod_count, root: root.clone(), file: instance.file.clone() };
+        copy.file.uuid = uuid_v4();
+        copy.file.launcher.name = new_name.to_string();
+        copy.file.launcher.last_played = None;
+        copy.file.launcher.num_plays = None;
+        copy.file.launcher.extras.remove("playDays");
+        copy.save()?;
+        Ok(copy)
+    })();
+    // a copy that stopped half way (a full disk, a file the game holds open) is removed rather than left half there
+    if made.is_err() {
+        let _ = std::fs::remove_dir_all(&root);
+    }
+    made
 }
 
 fn copy_dir(from: &Path, to: &Path) -> Result<()> {
     std::fs::create_dir_all(to)?;
-    for e in std::fs::read_dir(from)?.flatten() {
+    for e in std::fs::read_dir(from).with_context(|| format!("reading {}", from.display()))?.flatten() {
         let dest = to.join(e.file_name());
         let ty = e.file_type()?;
         if ty.is_dir() {
             copy_dir(&e.path(), &dest)?;
         } else if ty.is_file() {
             // a real copy: the game edits worlds and options in place, which a hard link would share
-            std::fs::copy(e.path(), &dest)?;
+            std::fs::copy(e.path(), &dest).with_context(|| format!("copying {}", e.path().display()))?;
         }
     }
     Ok(())
@@ -464,5 +517,198 @@ mod play_day_tests {
         // oldest first: the 17th, 18th, 19th and today (the 20th)
         assert_eq!(days, vec![2, 0, 1, 0]);
         let _ = std::fs::remove_dir_all(&root);
+    }
+}
+
+#[cfg(test)]
+mod robustness_tests {
+    use super::*;
+
+    fn temp_dirs(tag: &str) -> Dirs {
+        let base = std::env::temp_dir().join(format!("bf-instances-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let dirs = Dirs::at(&base);
+        dirs.ensure().unwrap();
+        dirs
+    }
+
+    fn make(dirs: &Dirs, name: &str) -> Instance {
+        let (folder, root) = paths::claim_unique_folder(&dirs.instances, name).unwrap();
+        let mut file = InstanceFile::default();
+        file.launcher.name = name.to_string();
+        let i = Instance { folder, mod_count: 0, root, file };
+        i.save().unwrap();
+        i
+    }
+
+    #[test]
+    fn switching_a_mod_off_never_overwrites_a_file_of_the_same_name() {
+        let dirs = temp_dirs("toggle");
+        let inst = make(&dirs, "Pack");
+        std::fs::create_dir_all(inst.mods_dir()).unwrap();
+        std::fs::create_dir_all(inst.disabled_mods_dir()).unwrap();
+        std::fs::write(inst.mods_dir().join("sodium.jar"), b"new").unwrap();
+        std::fs::write(inst.disabled_mods_dir().join("sodium.jar"), b"old").unwrap();
+        let file = inst.mod_files().into_iter().find(|m| m.enabled).unwrap();
+        assert!(set_mod_enabled(&inst, &file, false).is_err());
+        assert_eq!(std::fs::read(inst.mods_dir().join("sodium.jar")).unwrap(), b"new");
+        assert_eq!(std::fs::read(inst.disabled_mods_dir().join("sodium.jar")).unwrap(), b"old");
+        // without the clash it moves
+        std::fs::remove_file(inst.disabled_mods_dir().join("sodium.jar")).unwrap();
+        set_mod_enabled(&inst, &file, false).unwrap();
+        assert!(inst.disabled_mods_dir().join("sodium.jar").exists());
+        let _ = std::fs::remove_dir_all(&dirs.base);
+    }
+
+    #[test]
+    fn duplicates_get_their_own_folder_identity_and_history() {
+        let dirs = temp_dirs("dup");
+        let mut inst = make(&dirs, "My Pack");
+        std::fs::create_dir_all(inst.root.join("saves/World")).unwrap();
+        std::fs::write(inst.root.join("saves/World/level.dat"), b"lvl").unwrap();
+        inst.mark_played().unwrap();
+        let copy = duplicate(&dirs, &inst, "My Pack").unwrap();
+        assert_ne!(copy.root, inst.root);
+        assert_ne!(copy.file.uuid, inst.file.uuid);
+        assert_eq!(copy.file.launcher.num_plays, None);
+        assert_eq!(std::fs::read(copy.root.join("saves/World/level.dat")).unwrap(), b"lvl");
+        // the copy is real, not a link: changing it leaves the original alone
+        std::fs::write(copy.root.join("saves/World/level.dat"), b"changed").unwrap();
+        assert_eq!(std::fs::read(inst.root.join("saves/World/level.dat")).unwrap(), b"lvl");
+        assert_eq!(load_all(&dirs).len(), 2);
+        let _ = std::fs::remove_dir_all(&dirs.base);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_duplicate_that_fails_half_way_leaves_nothing_behind() {
+        use std::os::unix::fs::PermissionsExt;
+        if unsafe_is_root() {
+            return; // root can read everything, so the copy can't be made to fail this way
+        }
+        let dirs = temp_dirs("dup-fail");
+        let inst = make(&dirs, "Pack");
+        let locked = inst.root.join("saves");
+        std::fs::create_dir_all(&locked).unwrap();
+        std::fs::write(locked.join("x"), b"x").unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let result = duplicate(&dirs, &inst, "Copy");
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(result.is_err());
+        let folders: Vec<_> = std::fs::read_dir(&dirs.instances).unwrap().flatten().map(|e| e.file_name()).collect();
+        assert_eq!(folders.len(), 1, "the half-made copy was removed: {folders:?}");
+        let _ = std::fs::remove_dir_all(&dirs.base);
+    }
+
+    #[cfg(unix)]
+    fn unsafe_is_root() -> bool {
+        std::process::Command::new("id").arg("-u").output().is_ok_and(|o| o.stdout.starts_with(b"0"))
+    }
+
+    #[test]
+    fn broken_instance_files_are_skipped_and_never_crash_the_list() {
+        let dirs = temp_dirs("broken");
+        make(&dirs, "Good");
+        for (folder, text) in [
+            ("Empty", ""),
+            ("Truncated", r#"{"launcher":{"name":"Half"#),
+            ("Array", "[]"),
+            ("WrongTypes", r#"{"launcher":{"name":5,"lastPlayed":"yesterday"}}"#),
+        ] {
+            let root = dirs.instances.join(folder);
+            std::fs::create_dir_all(&root).unwrap();
+            std::fs::write(root.join("instance.json"), text).unwrap();
+        }
+        // a stray file and a folder without instance.json
+        std::fs::write(dirs.instances.join("notes.txt"), b"hi").unwrap();
+        std::fs::create_dir_all(dirs.instances.join("NoJson")).unwrap();
+        let all = load_all(&dirs);
+        assert!(all.iter().any(|i| i.name() == "Good"));
+        assert!(all.len() <= 2, "{:?}", all.iter().map(|i| i.name().to_string()).collect::<Vec<_>>());
+        let _ = std::fs::remove_dir_all(&dirs.base);
+    }
+
+    #[test]
+    fn play_history_survives_absurd_values() {
+        let dirs = temp_dirs("history");
+        let mut inst = make(&dirs, "H");
+        inst.file.launcher.last_played = Some(i64::MAX);
+        inst.file.launcher.extras.insert("playDays".into(), json!({"not a date": 3, "2026-10-20": u64::MAX}));
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 10, 20).unwrap();
+        let days = inst.play_days(today, 3);
+        assert_eq!(days.len(), 3);
+        assert_eq!(days[2], 255, "a huge count is shown as the most the strip can hold");
+        assert!(inst.play_days(today, 0).is_empty());
+        inst.file.launcher.extras.insert("playDays".into(), json!("garbage"));
+        inst.record_play_day(today);
+        let _ = std::fs::remove_dir_all(&dirs.base);
+    }
+}
+
+#[cfg(test)]
+mod deleted_tests {
+    use super::*;
+
+    #[test]
+    fn a_job_finishing_after_the_instance_was_deleted_doesnt_bring_it_back() {
+        let base = crate::testutil::scratch("deleted-save");
+        let dirs = Dirs::at(&base);
+        let (folder, root) = paths::claim_unique_folder(&dirs.instances, "Gone").unwrap();
+        let mut inst = Instance { folder, mod_count: 0, root: root.clone(), file: InstanceFile::default() };
+        inst.save().unwrap();
+        delete(&inst).unwrap();
+        // a background job (a mod update, a loader change) still holds its copy and saves it at the end
+        inst.file.launcher.name = "changed".into();
+        assert!(inst.save().is_err());
+        assert!(inst.mark_played().is_err());
+        assert!(!root.exists(), "the deleted instance must stay deleted");
+        assert!(load_all(&dirs).is_empty());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+}
+
+#[cfg(test)]
+mod repair_tests {
+    use super::*;
+    use crate::testutil::{Reply, Server, runtime, scratch, sha1};
+
+    #[test]
+    fn repair_replaces_a_damaged_library_that_a_normal_start_would_trust() {
+        runtime().block_on(async {
+            let server = Server::start().await;
+            let base = scratch("repair");
+            let dirs = Dirs::at(&base);
+            dirs.ensure().unwrap();
+            let good = b"the real library bytes".to_vec();
+            let url = server.route("/lib.jar", Reply::ok(good.clone()));
+            let version: crate::model::VersionJson = serde_json::from_value(json!({
+                "id": "1.20.1",
+                "libraries": [{"name": "org.example:lib:1.0", "downloads": {"artifact": {
+                    "path": "org/example/lib/1.0/lib-1.0.jar", "url": url, "sha1": sha1(&good), "size": good.len()
+                }}}]
+            }))
+            .unwrap();
+            let (folder, root) = paths::claim_unique_folder(&dirs.instances, "Pack").unwrap();
+            let inst = Instance { folder, mod_count: 0, root, file: InstanceFile { version, ..Default::default() } };
+            // the same size, other bytes: what a bad sector or a copy cut short leaves
+            let lib = dirs.libraries.join("org/example/lib/1.0/lib-1.0.jar");
+            std::fs::create_dir_all(lib.parent().unwrap()).unwrap();
+            let mut bad = good.clone();
+            bad[0] ^= 0xff;
+            std::fs::write(&lib, &bad).unwrap();
+
+            // a normal start goes by the size and doesn't notice
+            install::ensure_game_files(&dirs, &inst.file.version, &Progress::new(), false).await.unwrap();
+            assert_eq!(std::fs::read(&lib).unwrap(), bad);
+            assert_eq!(server.hits("/lib.jar"), 0);
+            // a repair checks every file's checksum
+            repair(&dirs, &inst, &Progress::new()).await.unwrap();
+            assert_eq!(std::fs::read(&lib).unwrap(), good);
+            assert_eq!(server.hits("/lib.jar"), 1);
+            // nothing to do the second time
+            repair(&dirs, &inst, &Progress::new()).await.unwrap();
+            assert_eq!(server.hits("/lib.jar"), 1);
+            let _ = std::fs::remove_dir_all(&base);
+        });
     }
 }

@@ -126,14 +126,18 @@ impl InstDraft {
         }
     }
 
-    /// The checks Java makes before saving; returns the message to show when something is wrong.
-    fn validate(&self, uses_mc_java: bool) -> Option<String> {
+    /// The checks Java makes before saving; returns the message to show when something is wrong. `global_args` are
+    /// the launcher-wide Java arguments: the draft shows them when the instance has none of its own, and they are
+    /// not this page's to judge (with `-Xmx` there, saving anything at all here used to fail).
+    fn validate(&self, uses_mc_java: bool, global_args: &str) -> Option<String> {
         if !uses_mc_java && !std::path::Path::new(&self.java_path).join("bin").exists() {
             return Some("The Java Path you set is incorrect. Please verify it points to the folder where the bin folder is and try again.".into());
         }
-        if self.java_args.contains("-Xmx")
-            || self.java_args.contains("-XX:PermSize")
-            || self.java_args.contains("-XX:MetaspaceSize")
+        let own_args = self.java_args.trim() != global_args.trim();
+        if own_args
+            && (self.java_args.contains("-Xmx")
+                || self.java_args.contains("-XX:PermSize")
+                || self.java_args.contains("-XX:MetaspaceSize"))
         {
             return Some(
                 "The entered Java Parameters were incorrect. Please remove any references to Xmx or XX:PermSize."
@@ -522,7 +526,7 @@ impl App {
             d = InstDraft::from(inst, &self.settings);
         }
         if save {
-            d.error = d.validate(uses_mc_java);
+            d.error = d.validate(uses_mc_java, &self.settings.java_parameters);
             if d.error.is_none() {
                 if let Some(idx) = self.instances.iter().position(|i| i.folder == inst.folder) {
                     let settings = self.settings.clone();
@@ -620,5 +624,31 @@ mod tests {
         std::fs::remove_dir_all(&saves).unwrap();
         // no saves folder yet: no worlds, and no error
         assert!(world_names(&saves).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod validation_tests {
+    use super::*;
+    use crate::instances::{Instance, InstanceFile};
+
+    fn instance(java_args: Option<&str>) -> Instance {
+        let mut file = InstanceFile::default();
+        file.launcher.java_arguments = java_args.map(str::to_string);
+        Instance { folder: "x".into(), mod_count: 0, root: std::env::temp_dir(), file }
+    }
+
+    #[test]
+    fn launcher_wide_java_arguments_never_block_saving_an_instance() {
+        let mut settings = crate::config::Settings::default();
+        // Aikar's flags, pasted into Settings > Java arguments, include a heap size
+        settings.java_parameters = "-Xms4G -Xmx4G -XX:+UseG1GC".into();
+        let d = InstDraft::from(&instance(None), &settings);
+        assert_eq!(d.validate(true, &settings.java_parameters), None, "changing Play as must still save");
+        // the instance's own arguments are still checked
+        let d = InstDraft::from(&instance(Some("-Xmx2G")), &settings);
+        assert!(d.validate(true, &settings.java_parameters).is_some());
+        let d = InstDraft::from(&instance(Some("-XX:+UseZGC")), &settings);
+        assert_eq!(d.validate(true, &settings.java_parameters), None);
     }
 }

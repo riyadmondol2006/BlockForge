@@ -33,6 +33,15 @@ pub fn safe_name(name: &str) -> String {
     name.chars().filter(|c| c.is_ascii_alphanumeric()).collect()
 }
 
+/// Whether a path below an instance is the player's own data that a pack must never delete or overwrite: worlds
+/// (`saves`, and `world…`/`DIM…` for old versions and servers) and `instance.json`. The first part of the path decides,
+/// ignoring case.
+pub fn is_player_data(rel: &std::path::Path) -> bool {
+    let Some(first) = rel.components().next() else { return true };
+    let first = first.as_os_str().to_string_lossy().to_ascii_lowercase();
+    first == "saves" || first.starts_with("world") || first.starts_with("dim") || first == "instance.json"
+}
+
 /// `<data>/downloads`: every mod file fetched for a pack is kept here, so installing again does not download it
 /// again. Same place as the Java edition.
 pub fn downloads_dir(dirs: &Dirs) -> PathBuf {

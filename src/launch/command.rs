@@ -309,8 +309,12 @@ pub fn assemble(i: &Input) -> Assembled {
         }
     }
     if jvmargs::is_custom(Some(&i.ls.java_arguments)) {
-        // the person's own arguments are used exactly as they are
-        options.extend(jvmargs::split(&i.ls.java_arguments));
+        // the person's own arguments are used as they are, except a starting heap Java would refuse
+        let mut own = jvmargs::split(&i.ls.java_arguments);
+        if let Some(note) = jvmargs::drop_oversized_initial_heap(&mut own, i.heap_mb) {
+            notes.push(note);
+        }
+        options.extend(own);
     } else {
         // nothing set, or BlockForge's defaults: the well known garbage collector settings, sized for the memory
         // this game gets

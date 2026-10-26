@@ -447,3 +447,41 @@ fn json_has_everything() {
     assert!(!to_text(&dataset(), &plan).is_empty());
     assert!(serde_json::from_str::<Value>(&to_json(&dataset(), &plan)).is_ok());
 }
+
+#[test]
+fn a_bad_entry_is_copied_once_not_on_every_start() {
+    let dirs = temp_dirs("copy-once");
+    let dir = craft_dir(&dirs);
+    let mut store = Store::default();
+    store.add(plan("Good"));
+    save(&dirs, &store).unwrap();
+    let mut file: Value = serde_json::from_slice(&std::fs::read(dir.join("plans.json")).unwrap()).unwrap();
+    file["plans"].as_array_mut().unwrap().push(json!("junk"));
+    std::fs::write(dir.join("plans.json"), serde_json::to_vec(&file).unwrap()).unwrap();
+    for _ in 0..4 {
+        let back = load(&dirs);
+        assert_eq!(back.plans.len(), 1);
+    }
+    let copies = names(&dirs).iter().filter(|n| n.starts_with("plans.json.bad-")).count();
+    assert_eq!(copies, 1, "{:?}", names(&dirs));
+}
+
+#[test]
+fn saves_from_two_threads_at_once_never_corrupt_the_store() {
+    let dirs = temp_dirs("two-savers");
+    std::thread::scope(|s| {
+        for t in 0..8 {
+            let dirs = &dirs;
+            s.spawn(move || {
+                for i in 0..10 {
+                    let mut store = Store::default();
+                    store.add(plan(&format!("t{t}-{i}")));
+                    save(dirs, &store).unwrap();
+                }
+            });
+        }
+    });
+    let back = load(&dirs);
+    assert_eq!(back.plans.len(), 1, "one whole save won");
+    assert!(names(&dirs).iter().all(|n| !n.contains(".tmp") && !n.contains(".bad-")), "{:?}", names(&dirs));
+}

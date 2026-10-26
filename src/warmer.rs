@@ -121,7 +121,7 @@ pub fn files_for(dirs: &Dirs, settings: &Settings, instance: &Instance) -> Vec<P
         add(home.join("bin/server/jvm.dll"));
         add(home.join("lib/server/libjvm.dylib"));
         if let Some(major) = crate::java::major_version(home) {
-            add(crate::classcache::archive_for(dirs, &crate::backups::safe_name(instance.name()), major));
+            add(crate::classcache::archive_for(dirs, &crate::launch::warmer::safe_name(instance), major));
         }
     }
 

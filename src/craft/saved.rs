@@ -11,7 +11,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
-use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -369,6 +368,9 @@ fn stock_path(dirs: &Dirs) -> PathBuf {
 /// Read the saved plans and the stock. Never fails: what cannot be read is set aside (see the module docs).
 pub fn load(dirs: &Dirs) -> Store {
     let mut store = Store::default();
+    // entries that couldn't be used: once a copy of the file is kept, the store is written again without them, so
+    // the next start doesn't find them (and copy up to 64 MB) all over again
+    let mut cleaned = false;
     if let Some(file) = read_file::<PlansFile>(&plans_path(dirs)) {
         let mut dropped = false;
         for value in file.value.plans {
@@ -386,6 +388,7 @@ pub fn load(dirs: &Dirs) -> Store {
         }
         if dropped {
             keep_copy(&file.path);
+            cleaned = true;
         }
     }
     if let Some(file) = read_file::<StockFile>(&stock_path(dirs)) {
@@ -401,7 +404,11 @@ pub fn load(dirs: &Dirs) -> Store {
         }
         if dropped {
             keep_copy(&file.path);
+            cleaned = true;
         }
+    }
+    if cleaned {
+        let _ = save(dirs, &store);
     }
     store
 }
@@ -485,18 +492,11 @@ pub fn save(dirs: &Dirs, store: &Store) -> Result<(), String> {
 }
 
 /// Write a file through a temp file next to it, so a crash never leaves half a file behind.
+/// The temporary file is the save's own, so the save made on closing the window and one still running in the
+/// background never write into the same file.
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
-    let tmp = path.with_extension("json.tmp");
-    let result = (|| -> std::io::Result<()> {
-        let mut f = std::fs::File::create(&tmp)?;
-        f.write_all(bytes)?;
-        f.sync_all()?;
-        drop(f);
-        std::fs::rename(&tmp, path)
-    })();
-    if let Err(e) = result {
-        let _ = std::fs::remove_file(&tmp);
-        return Err(format!("Could not write {}: {e}", path.display()));
+    if let Err(e) = crate::config::write_atomic(path, bytes, false) {
+        return Err(format!("Could not write {}: {e:#}", path.display()));
     }
     Ok(())
 }

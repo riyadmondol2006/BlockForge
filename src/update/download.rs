@@ -55,25 +55,29 @@ pub fn find_checksum(sums: &str, name: &str) -> Option<String> {
 }
 
 /// The SHA-256 the release promises for `asset`: its own `digest` when GitHub computed one, otherwise the line in the
-/// release's checksum file. `None` when the release says nothing.
-pub async fn expected_sha256(release: &Release, asset: &Asset) -> Option<String> {
+/// release's checksum file. `Ok(None)` when the release says nothing. When the release has a checksum file that
+/// can't be read (tried twice), that is an error rather than `None`: going on with only the size checked would let a
+/// bad download through just because the list of checksums didn't arrive, and the update may be installed as root.
+pub async fn expected_sha256(release: &Release, asset: &Asset) -> Result<Option<String>> {
     if let Some(hex) = asset.sha256() {
-        return Some(hex);
+        return Ok(Some(hex));
     }
     for wanted in CHECKSUM_FILES {
         let Some(file) = release.assets.iter().find(|a| a.name.eq_ignore_ascii_case(wanted)) else { continue };
         let bytes = match crate::http::get_bytes(&file.browser_download_url).await {
             Ok(b) => b,
-            Err(e) => {
-                crate::logs::warn(format!("Couldn't read {wanted} from the release: {e:#}"));
-                continue;
+            Err(first) => {
+                crate::logs::warn(format!("Couldn't read {wanted} from the release, trying again: {first:#}"));
+                crate::http::get_bytes(&file.browser_download_url).await.with_context(|| {
+                    format!("Couldn't read the release's checksums ({wanted}), so the update can't be checked")
+                })?
             }
         };
         if let Some(hex) = find_checksum(&String::from_utf8_lossy(&bytes), &asset.name) {
-            return Some(hex);
+            return Ok(Some(hex));
         }
     }
-    None
+    Ok(None)
 }
 
 /// The text of the SHA-256 of `data`.
