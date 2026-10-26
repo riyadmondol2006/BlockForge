@@ -444,6 +444,16 @@ impl ConvertState {
                 OutputCheck::IsFile => {
                     wrapped(ui, tr!("A file with that name is already there. Choose another name."), c_danger());
                 }
+                OutputCheck::NotAbsolute => {
+                    wrapped(
+                        ui,
+                        tr!("Write the whole path, starting from a drive or your home folder (~), or use Choose."),
+                        c_warn(),
+                    );
+                }
+                OutputCheck::NotWritable => {
+                    wrapped(ui, tr!("BlockForge isn't allowed to write there. Choose another place."), c_danger());
+                }
                 OutputCheck::NotEmpty => {
                     wrapped(
                         ui,
@@ -649,14 +659,19 @@ impl ConvertState {
         );
         ui.add_space(12.0);
         ui.horizontal(|ui| {
-            if secondary(ui, &tr!("Try again")).clicked() {
-                self.screen = Screen::Setup;
-                self.error = None;
+            if self.error_final {
+                // the world itself is the problem: going back to its settings can't help
+                if secondary(ui, &tr!("Choose another world")).clicked() {
+                    self.start_over();
+                }
+            } else if secondary(ui, &tr!("Back to the settings")).clicked() {
+                // the check of the output folder is made afresh: what made the run fail may have changed
+                self.back_to_setup();
             }
             if ghost(ui, &tr!("Copy details")).clicked() {
                 acts.push(Act::Copy(self.details()));
             }
-            if ghost(ui, &tr!("Choose another world")).clicked() {
+            if !self.error_final && ghost(ui, &tr!("Choose another world")).clicked() {
                 self.start_over();
             }
         });
@@ -670,7 +685,7 @@ fn stop_modal(ctx: &egui::Context) -> Option<bool> {
         ui.set_width(super::services::modal_width(ctx, 420.0));
         ui.label(RichText::new(tr!("Cancel the conversion?")).size(FS_SECTION).semibold());
         ui.add_space(4.0);
-        muted(ui, tr!("The new world is not finished and will not work properly. The original world is not changed."));
+        muted(ui, tr!("What was written of the new world so far is deleted. The original world is not changed."));
         ui.add_space(12.0);
         ui.horizontal(|ui| {
             if danger(ui, &tr!("Cancel conversion")).clicked() {

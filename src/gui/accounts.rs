@@ -19,6 +19,9 @@ pub struct AcctState {
     pub attempt: u64,
     /// The account whose Remove was pressed, waiting for "Remove" to be pressed again.
     pub confirm_remove: Option<String>,
+    /// Why the last sign-in failed. It stays under the Microsoft row until the next try: the player is usually still
+    /// in the browser when it fails, and a toast would be gone by the time they come back.
+    pub last_error: Option<String>,
 }
 
 impl App {
@@ -30,6 +33,7 @@ impl App {
         let mut remove: Option<String> = None;
         let mut change_skin: Option<String> = None;
         let mut copied = false;
+        let mut sign_in = false;
         let current = self.current_account().map(|a| a.uuid.clone());
         ScrollArea::vertical().id_salt("accounts").auto_shrink(false).show(ui, |ui| {
             // at most 720 wide, but never wider than the window
@@ -68,7 +72,12 @@ impl App {
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                 // removing asks once more: a Microsoft account has to be signed in again afterwards
                                 if self.acct.confirm_remove.as_deref() == Some(acc.uuid.as_str()) {
-                                    if danger(ui, "Yes, remove").clicked() {
+                                    let after = if acc.offline {
+                                        "The name can be added again at any time"
+                                    } else {
+                                        "To use this account again, sign in with Microsoft again"
+                                    };
+                                    if danger(ui, "Yes, remove").on_hover_text(after).clicked() {
                                         remove = Some(acc.uuid.clone());
                                     }
                                     if secondary(ui, "Cancel").clicked() {
@@ -78,6 +87,10 @@ impl App {
                                     return;
                                 }
                                 kebab_menu(ui, |ui| {
+                                    if acc.must_login && !acc.offline && ui.button("Sign in again").clicked() {
+                                        sign_in = true;
+                                        ui.close();
+                                    }
                                     if ui.button("Copy UUID").clicked() {
                                         ui.ctx().copy_text(acc.uuid.clone());
                                         copied = true;
@@ -92,7 +105,11 @@ impl App {
                                 if secondary(ui, "Change skin").clicked() {
                                     change_skin = Some(acc.uuid.clone());
                                 }
-                                if current.as_ref() != Some(&acc.uuid) && secondary(ui, "Use").clicked() {
+                                if acc.must_login && !acc.offline {
+                                    if primary(ui, "Sign in again").clicked() {
+                                        sign_in = true;
+                                    }
+                                } else if current.as_ref() != Some(&acc.uuid) && secondary(ui, "Use").clicked() {
                                     select = Some(acc.uuid.clone());
                                 }
                                 used = ui.min_rect().width();
@@ -117,6 +134,12 @@ impl App {
                         }
                     },
                 );
+                if let Some(e) = self.acct.last_error.clone() {
+                    ui.add_space(8.0);
+                    if notice(ui, NoticeKind::Error, &e, Some("Try again")).is_some_and(|r| r.clicked()) {
+                        self.start_sign_in();
+                    }
+                }
                 match self.acct.device.clone() {
                     Some(code) => {
                         ui.add_space(8.0);
@@ -135,9 +158,10 @@ impl App {
                                 ui.horizontal(|ui| {
                                     if secondary(ui, "Copy code").clicked() {
                                         ui.ctx().copy_text(code.user_code.clone());
+                                        self.toast("Copied the code");
                                     }
                                     if secondary(ui, "Open the page again").clicked() {
-                                        let _ = open::that(&code.verification_uri);
+                                        self.open_link(&code.verification_uri);
                                     }
                                     if secondary(ui, "Cancel").clicked() {
                                         self.acct.device = None;
@@ -149,7 +173,13 @@ impl App {
                         ui.add_space(4.0);
                         ui.horizontal(|ui| {
                             ui.spinner();
-                            muted(ui, format!("Waiting for you to finish at {}", code.verification_uri));
+                            muted(
+                                ui,
+                                format!(
+                                    "The code is on your clipboard. Paste it at {} and finish there.",
+                                    code.verification_uri
+                                ),
+                            );
                         });
                     }
                     None if self.acct.signing_in => {
@@ -188,6 +218,9 @@ impl App {
                         }
                         // the same rule as everywhere else a name is typed (Minecraft's own: 3 to 16 characters)
                         let valid = super::whoplays::valid_player_name(name.trim());
+                        if let Some(problem) = super::whoplays::name_problem(name.trim()).filter(|_| !name.trim().is_empty()) {
+                            ui.label(RichText::new(problem).size(FS_META).color(c_danger()));
+                        }
                         let add = add_clicked
                             || (valid && r.is_some_and(|r| r.lost_focus()) && ui.input(|i| i.key_pressed(egui::Key::Enter)));
                         if add && valid {
@@ -216,14 +249,23 @@ impl App {
             self.settings.last_account = Some(id);
             self.save_settings();
         }
+        if sign_in {
+            self.start_sign_in();
+        }
         if let Some(id) = remove {
             self.acct.confirm_remove = None;
+            let name = self.accounts.iter().find(|a| a.uuid == id).map(|a| a.name().to_string()).unwrap_or_default();
             self.accounts.retain(|a| a.uuid != id);
+            let was_playing = current.as_deref() == Some(id.as_str());
             if self.settings.last_account.as_deref() == Some(&id) {
                 self.settings.last_account = None;
             }
             self.save_accounts();
             self.save_settings();
+            match self.current_account().map(|a| a.name().to_string()) {
+                Some(next) if was_playing => self.toast(format!("Removed {name}. Now playing as {next}")),
+                _ => self.toast(format!("Removed {name}")),
+            }
         }
     }
 }

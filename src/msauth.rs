@@ -54,7 +54,7 @@ pub async fn finish_device_login(code: &DeviceCode) -> Result<Account> {
             bail!("The sign-in code ran out. Start again.");
         }
         tokio::time::sleep(std::time::Duration::from_secs(interval)).await;
-        let r = client()
+        let sent = client()
             .post(TOKEN_URL)
             .form(&[
                 ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
@@ -62,7 +62,15 @@ pub async fn finish_device_login(code: &DeviceCode) -> Result<Account> {
                 ("device_code", &code.device_code),
             ])
             .send()
-            .await?;
+            .await;
+        // the player may take minutes at the browser: a dropped connection or a server's error page meanwhile is
+        // asked again on the next turn, until the code runs out
+        let r = match sent {
+            Ok(r) if r.status().is_server_error() => continue,
+            Ok(r) => r,
+            Err(e) if e.is_connect() || e.is_timeout() => continue,
+            Err(e) => return Err(e.into()),
+        };
         let ok = r.status().is_success();
         let body: Value = r.json().await?;
         if ok {

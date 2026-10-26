@@ -3,7 +3,62 @@
 The section for a version is used as the text of its release on GitHub. Older releases (the Java versions, up to
 3.4.42.x) are on the [releases page](https://github.com/riyadmondol2006/BlockForge/releases).
 
-## Unreleased
+## 4.7.0
+
+A friendlier launcher: it asks before what can't be undone, keeps what you typed, says why a button is greyed out and
+what went wrong, and remembers the size you like.
+
+### What is new
+
+- **Stop asks first** when Minecraft is running, since it is closed without saving; a double click on Play no longer
+  cancels the start.
+- **Quit asks first** while a game, a download, an install or a world conversion is running, and says what would stop.
+- **Unsaved instance settings are kept.** Save lights up only when something changed, "Unsaved changes" and a dot on
+  the Settings tab show what is waiting, changes survive going to another page, and Play offers to save them first.
+- **Interface size** in Settings > Appearance (90% to 150%), and the size set with Ctrl and + or - is remembered.
+- **A damaged instance is reported** in the Library instead of vanishing, with a button to open its folder.
+- **Sign-in problems stay on the Accounts page** with Try again, instead of a message that is gone before you are back
+  from the browser; the code is copied for you, a dropped connection no longer ends the sign-in, and an account that
+  must sign in again has a button for it.
+- **Browse for a skin file**, and clear messages when a file isn't a skin (or is the wrong size).
+- **The instance's description** shows on its Overview.
+- **Messages** can be clicked away, stay while pointed at or while you are in the game, and a repeated message counts
+  up instead of piling up.
+- **Every running job** is a click away in the sidebar ("+N more"), each with its Cancel.
+
+### Fixed
+
+- Discover installed mods into instances without a mod loader (where they never load) and said it worked; it now
+  offers to add a loader. The instance lists show each instance's Minecraft version and loader.
+- A search result still on screen from the previous tab installed as the wrong kind (a modpack as a shader).
+- CurseForge "Remove" deleted at once and for good; it now asks, and uses the Recycle Bin (Trash) like the Mods tab.
+- Modpack updates (FTB, ATLauncher, Technic, CurseForge) and changing the mod loader could write over changes made
+  meanwhile in the Mods tab or the settings; they now wait their turn and never save an old copy of the instance. A
+  failed FTB update keeps its update offer.
+- Switching, removing, updating and restoring mods, and restoring a backup, are refused while the game runs (on
+  Windows its files can't be changed), before asking rather than after.
+- Renaming an instance hid its backups; they are renamed with it. Two instances can no longer have the same name (a
+  new one or a copy gets a number).
+- The Mods tab no longer checks every mod for updates after each switch; offline, a failed check is shown next to its
+  button instead of a red message per click. "Remove 12 items?" lists what goes.
+- Typing in a Settings field and going to another page lost what was typed; it is saved now.
+- Instance memory can't be set to all of the computer's memory without a warning, and shows GB like the rest.
+- Tools: busy tools are greyed out with the reason (not refused after confirming), a tool can't run twice at once,
+  Debug mode no longer restarts over running jobs, and clean-ups say how much space they freed.
+- "Update now" waits while a game or a job runs, instead of restarting the launcher over them.
+- Crafting: coming back after a while no longer wipes the plan and its ticks; saved plans can be opened when no plan
+  is shown; a downloaded version no longer replaces the open plan; searching `minecraft:oak_planks` works.
+- World converter: errors say what to do (no permission to write, full disk, a damaged world); "Try again" became
+  "Back to the settings" (and is gone when the world itself is the problem); `~/...` is your home folder; a folder
+  that can't be written to is said before converting; closing the launcher during a conversion cleans up after it.
+- Escape closes the Mods tab's windows; Enter creates the instance and starts an import; the mod loader window's
+  errors wrap and can be retried; Quick play into a world needs a world.
+- Keyboard focus is visible on every control, the outlines of buttons and fields are strong enough to see in both
+  looks, and low-key buttons light up when pointed at.
+- About shows the memory in GB; GNOME (no tray) no longer shows a tray message at every start; the `_JAVA_OPTIONS`
+  warning no longer quits the launcher when you ask how to fix it.
+
+## 4.6.0
 
 A reliability release: what happens when a download breaks off, a file is damaged, a pack is badly made or the
 computer goes off at the wrong moment.

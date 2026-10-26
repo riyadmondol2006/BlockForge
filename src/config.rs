@@ -62,6 +62,8 @@ pub struct Settings {
     pub enable_logs: bool,
     /// `None` follows the computer: on for machines with 4 GB of memory or less.
     pub light_mode: Option<bool>,
+    /// The size of everything in the window (Ctrl and +/-), kept for the next start. `None` is 100%.
+    pub ui_zoom: Option<f32>,
     pub enable_tray_menu: bool,
     pub remember_window_size_position: bool,
     pub launcher_size: Option<Size>,
@@ -129,6 +131,7 @@ impl Default for Settings {
             enable_analytics: false,
             enable_logs: false,
             light_mode: None,
+            ui_zoom: None,
             enable_tray_menu: true,
             remember_window_size_position: false,
             launcher_size: None,

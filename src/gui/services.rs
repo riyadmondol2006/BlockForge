@@ -38,6 +38,8 @@ pub enum SvcMsg {
     ProxyTest(Result<(), String>),
     /// A server was deleted (or deleting it stopped half way): read the servers folder again.
     ServersChanged,
+    /// The file chooser of the skin window closed (`None`: cancelled).
+    SkinPicked(Option<std::path::PathBuf>),
 }
 
 #[derive(Default)]
@@ -89,7 +91,7 @@ pub fn modal_scroll_height(ctx: &Context, wanted: f32, rest: f32) -> f32 {
 /// A yes/no window. `Some(true)` when confirmed, `Some(false)` when cancelled, `None` while it is open.
 pub fn confirm_modal(ctx: &Context, id: &str, title: &str, body: &str, confirm: &str, dangerous: bool) -> Option<bool> {
     let mut answer = None;
-    egui::Modal::new(egui::Id::unique(id)).frame(super::modal_frame(ctx)).show(ctx, |ui| {
+    let modal = egui::Modal::new(egui::Id::unique(id)).frame(super::modal_frame(ctx)).show(ctx, |ui| {
         ui.set_width(modal_width(ctx, 420.0));
         ui.label(RichText::new(title).size(FS_SECTION).semibold());
         ui.add_space(4.0);
@@ -105,7 +107,8 @@ pub fn confirm_modal(ctx: &Context, id: &str, title: &str, body: &str, confirm: 
             }
         });
     });
-    if ctx.input(|i| i.key_pressed(egui::Key::Escape)) && answer.is_none() {
+    // Escape answers the window on top only: one press never closes two stacked windows
+    if modal.should_close() && answer.is_none() {
         answer = Some(false);
     }
     answer
@@ -141,6 +144,11 @@ impl App {
                     _ => self.toast("Network check finished"),
                 }
                 self.svc.net_report = Some(report);
+            }
+            SvcMsg::SkinPicked(path) => {
+                if let Some(d) = self.svc.skin_dialog.as_mut() {
+                    d.picked(path.as_deref());
+                }
             }
             SvcMsg::SkinChanged(result) => match result {
                 Ok(account) => {

@@ -103,7 +103,7 @@ impl App {
                         ui.set_width(380.0);
                         ui.label(RichText::new("Stop Minecraft?").size(FS_SECTION).semibold());
                         ui.add_space(4.0);
-                        muted(ui, "Minecraft is stopped at once. A world that wasn't saved can be damaged.");
+                        muted(ui, super::STOP_WARNING);
                         ui.add_space(12.0);
                         ui.horizontal(|ui| {
                             if danger(ui, "Stop Minecraft").clicked() {

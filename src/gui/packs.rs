@@ -431,8 +431,18 @@ impl App {
         let save_mods = d.save_mods;
         let name = d.name.clone();
         let solder = d.prepared.as_ref().and_then(|p| p.solder.clone());
+        if let Some(inst) = existing.as_ref().filter(|i| self.is_playing(&i.folder)) {
+            self.toast_err(format!("Close Minecraft in {} first, then update it.", inst.name()));
+            return;
+        }
         let label = if reinstall { format!("Updating {title}") } else { format!("Installing {title}") };
+        // an update changes the instance: one change at a time, so a mod switched meanwhile isn't written over
+        let lock = existing.as_ref().map(|i| super::mods::instance_lock(&i.root));
         self.start_task(label, move |progress, _n| async move {
+            let _turn = match &lock {
+                Some(l) => Some(l.lock().await),
+                None => None,
+            };
             let mut req = Request::new(&name, source, row.info, Arc::new(Quiet::new(progress.clone())));
             req.is_reinstall = reinstall;
             req.existing = existing;
@@ -716,7 +726,9 @@ impl App {
         }
         let results = std::mem::take(&mut self.packs.tech);
         let mut open: Option<Slim> = None;
-        ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
+        // a new search starts at the top of its list
+        let list_id = ("tech-list", self.packs.tech_query.trim().to_string());
+        ScrollArea::vertical().id_salt(list_id).auto_shrink(false).show(ui, |ui| {
             for m in &results {
                 let rkey = format!("tech:{}", m.slug);
                 row_frame(ui, |ui| {

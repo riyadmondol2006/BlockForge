@@ -4,7 +4,7 @@
 //! Everything here is `impl App`, like the other pages. It keeps its own small message channel (`CfState`) so the
 //! window's main `Msg` enum does not need new variants; the lead only has to call [`App::cf_windows`] once per frame.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, channel};
@@ -128,6 +128,10 @@ pub struct CfState {
     target_info: Option<TargetInfo>,
     notice_shown: bool,
     updates: Option<UpdateWin>,
+    /// A mod waiting for "Remove" to be confirmed, with the instance folder it is in.
+    confirm_remove: Option<(Project, String)>,
+    /// Counts the result lists that replaced the one before, so a new search starts at the top of the list.
+    list_gen: u64,
     tx: Sender<CfMsg>,
     rx: Receiver<CfMsg>,
 }
@@ -162,6 +166,8 @@ impl Default for CfState {
             target_info: None,
             notice_shown: false,
             updates: None,
+            confirm_remove: None,
+            list_gen: 0,
             tx,
             rx,
         }
@@ -409,13 +415,16 @@ impl App {
         let section = self.cf.section;
         let target = self.discover.target.clone();
         let instance_choices: Vec<(String, String)> =
-            self.instances.iter().map(|i| (i.folder.clone(), i.name().to_string())).collect();
+            self.instances.iter().map(|i| (i.folder.clone(), super::discover::instance_choice(i))).collect();
         let mut act: Option<CardAct> = None;
         let mut more = false;
-        ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
+        let installing: HashSet<String> =
+            self.tasks.iter().filter_map(|t| t.label.strip_prefix("Installing ").map(str::to_string)).collect();
+        ScrollArea::vertical().id_salt(("cf-list", self.cf.list_gen)).auto_shrink(false).show(ui, |ui| {
             for p in &projects {
                 let key = format!("cf:{}", p.id);
                 let is_installed = installed.contains_key(&p.id) && section != Section::Modpacks;
+                let busy = installing.contains(&p.name);
                 row_frame(ui, |ui| {
                     let wide = ui.available_width() >= 560.0;
                     ui.horizontal(|ui| {
@@ -445,7 +454,10 @@ impl App {
                         });
                         row_actions(ui, &key, |ui| {
                             action_cell(ui, &key, |ui| {
-                                if is_installed {
+                                if busy {
+                                    // a second click would open the file chooser again (for a modpack, a second instance)
+                                    ui.spinner().on_hover_text("Installing");
+                                } else if is_installed {
                                     installed_mark(ui);
                                 } else if section == Section::Modpacks {
                                     if secondary(ui, "Install").clicked() {
@@ -542,7 +554,7 @@ impl App {
                 });
                 self.cf_open_dialog(&ctx, p, folder, installed_file, true);
             }
-            Some(CardAct::Remove(p, folder)) => self.cf_remove(&folder, &p),
+            Some(CardAct::Remove(p, folder)) => self.cf.confirm_remove = Some((p, folder)),
             Some(CardAct::View(p)) => {
                 if let Some(url) = p.website_url() {
                     let _ = open::that(url);
@@ -566,7 +578,7 @@ impl App {
             .map(|i| i.name().to_string())
             .unwrap_or_else(|| "Any instance".into());
         let names: Vec<(String, String)> =
-            self.instances.iter().map(|i| (i.folder.clone(), i.name().to_string())).collect();
+            self.instances.iter().map(|i| (i.folder.clone(), super::discover::instance_choice(i))).collect();
         egui::ComboBox::from_id_salt("cf-target").selected_text(format!("For: {current}")).width(220.0).show_ui(
             ui,
             |ui| {
@@ -766,14 +778,49 @@ impl App {
         self.mods_cache = None;
     }
 
-    fn cf_remove(&mut self, folder: &str, project: &Project) {
-        let Some(inst) = self.instance(folder).cloned() else { return };
-        match install::remove_project(&inst, project.id) {
-            Ok(_) => self.toast(format!("Removed {}", project.name)),
-            Err(e) => self.toast_err(format!("{e:#}")),
+    /// When CurseForge is the side Discover shows, open it on `kind` with a fresh search (the Mods tab's "Add").
+    pub(super) fn cf_show_for(&mut self, kind: crate::mods::metadata::ContentKind) {
+        use crate::mods::metadata::ContentKind;
+        if !self.cf.active {
+            return;
         }
+        self.cf.section = match kind {
+            ContentKind::Mods => Section::Mods,
+            ContentKind::ResourcePacks => Section::ResourcePacks,
+            ContentKind::Shaders => Section::ShaderPacks,
+        };
+        self.cf.searched = false;
+    }
+
+    /// Remove every file of a CurseForge project from an instance, the way the Mods tab removes one: in the
+    /// background, one change to the instance at a time, and to the recycle bin when that setting is on.
+    fn cf_remove(&mut self, folder: &str, project: &Project) {
+        if self.is_playing(folder) {
+            self.toast_err(format!("Close Minecraft first, then remove {}.", project.name));
+            return;
+        }
+        let (id, name) = (project.id, project.name.clone());
+        let settings = crate::mods::ModSettings::from_settings(&self.settings);
+        self.mods_job(folder, "Removing", move |mut inst, _| async move {
+            tokio::task::spawn_blocking(move || {
+                let keys: Vec<crate::mods::files::ModKey> = inst
+                    .mod_records()
+                    .iter()
+                    .filter(|m| m.curse_forge_project_id == Some(id))
+                    .map(|m| crate::mods::files::ModKey { file: m.file.clone(), kind: m.kind.clone() })
+                    .collect();
+                if keys.is_empty() {
+                    anyhow::bail!("{name} isn't in this instance any more");
+                }
+                for k in &keys {
+                    crate::mods::files::remove(&mut inst, k, &settings)?;
+                }
+                Ok(format!("Removed {name}"))
+            })
+            .await?
+        });
         self.mods_cache = None;
-        self.reload_instances();
+        self.cf.target_info = None;
     }
 
     /// Install a modpack as a new instance.
@@ -914,8 +961,14 @@ impl App {
 
     fn cf_apply_pack_update(&mut self, folder: &str, update: PackUpdate) {
         let Some(inst) = self.instance(folder).cloned() else { return };
+        if self.is_playing(folder) {
+            self.toast_err(format!("Close Minecraft in {} first, then update it.", inst.name()));
+            return;
+        }
         let (dirs, cfs, hub) = (self.dirs.clone(), self.cf_settings(), self.cf_new_hub());
+        let lock = super::mods::instance_lock(&inst.root);
         self.start_task(format!("Updating {}", inst.name()), move |p, _| async move {
+            let _turn = lock.lock().await;
             let updated = pack::update_pack(&dirs, &cfs, &inst, &update.latest, &p, Some(&hub)).await?;
             Ok(format!("Updated {} to {}", updated.name(), update.latest.display()))
         });
@@ -934,6 +987,29 @@ impl App {
         self.cf_dialog_ui(ctx);
         self.cf_browser_ui(ctx);
         self.cf_updates_ui(ctx);
+        if let Some((project, folder)) = self.cf.confirm_remove.clone() {
+            let use_bin = crate::mods::ModSettings::from_settings(&self.settings).use_recycle_bin;
+            let body = if use_bin {
+                "Its files go to the Recycle Bin (Trash). You can add it again at any time."
+            } else {
+                "Its files are deleted from this instance. You can add it again at any time."
+            };
+            match super::services::confirm_modal(
+                ctx,
+                "cf-confirm-remove",
+                &format!("Remove {}?", project.name),
+                body,
+                "Remove",
+                true,
+            ) {
+                Some(true) => {
+                    self.cf.confirm_remove = None;
+                    self.cf_remove(&folder, &project);
+                }
+                Some(false) => self.cf.confirm_remove = None,
+                None => {}
+            }
+        }
     }
 
     fn cf_handle(&mut self, ctx: &egui::Context, msg: CfMsg) {
@@ -947,6 +1023,7 @@ impl App {
                     Ok(page) => {
                         if reset {
                             self.cf.projects.clear();
+                            self.cf.list_gen += 1;
                         }
                         self.cf.projects.extend(page.projects);
                         self.cf.total = page.total;

@@ -107,14 +107,24 @@ impl Default for ImportState {
     }
 }
 
-/// Ask the system's own file chooser for a file or a folder. Blocks until it closes, so call it from a
+/// Ask the system's own file chooser for a modpack file or a folder. Blocks until it closes, so call it from a
 /// background thread. `None` when cancelled or when the system has no chooser we can start.
 pub fn pick_path_blocking(folder: bool) -> Option<PathBuf> {
+    pick_blocking(folder, "Modpacks", &["mrpack", "zip"])
+}
+
+/// Like [`pick_path_blocking`], for a file of one of the `extensions` (without dots), shown as `kind` in the chooser.
+pub fn pick_file_blocking(kind: &'static str, extensions: &'static [&'static str]) -> Option<PathBuf> {
+    pick_blocking(false, kind, extensions)
+}
+
+fn pick_blocking(folder: bool, kind: &'static str, extensions: &'static [&'static str]) -> Option<PathBuf> {
     use std::process::Command;
+    let patterns: Vec<String> = extensions.iter().map(|e| format!("*.{e}")).collect();
     // the chooser through the desktop portal, for a system where the usual program isn't there
     let portal = || {
         let dialog = rfd::FileDialog::new();
-        if folder { dialog.pick_folder() } else { dialog.add_filter("Modpacks", &["mrpack", "zip"]).pick_file() }
+        if folder { dialog.pick_folder() } else { dialog.add_filter(kind, extensions).pick_file() }
     };
     let run = |mut c: Command| -> Option<PathBuf> {
         let Ok(out) = c.output() else { return portal() };
@@ -128,7 +138,10 @@ pub fn pick_path_blocking(folder: bool) -> Option<PathBuf> {
         let script = if folder {
             "Add-Type -AssemblyName System.Windows.Forms; $f = New-Object System.Windows.Forms.FolderBrowserDialog; if ($f.ShowDialog() -eq 'OK') { $f.SelectedPath }"
         } else {
-            "Add-Type -AssemblyName System.Windows.Forms; $f = New-Object System.Windows.Forms.OpenFileDialog; $f.Filter = 'Modpacks (*.mrpack;*.zip)|*.mrpack;*.zip|All files (*.*)|*.*'; if ($f.ShowDialog() -eq 'OK') { $f.FileName }"
+            let p = patterns.join(";");
+            &format!(
+                "Add-Type -AssemblyName System.Windows.Forms; $f = New-Object System.Windows.Forms.OpenFileDialog; $f.Filter = '{kind} ({p})|{p}|All files (*.*)|*.*'; if ($f.ShowDialog() -eq 'OK') {{ $f.FileName }}"
+            )
         };
         let mut c = crate::platform::command("powershell");
         c.args(["-NoProfile", "-Command", script]);
@@ -145,7 +158,7 @@ pub fn pick_path_blocking(folder: bool) -> Option<PathBuf> {
     if folder {
         zenity.arg("--directory");
     } else {
-        zenity.arg("--file-filter=Modpacks | *.mrpack *.zip");
+        zenity.arg(format!("--file-filter={kind} | {}", patterns.join(" ")));
         zenity.arg("--file-filter=All files | *");
     }
     // zenity answers with a non-zero code when the player cancels; only a missing program moves on to kdialog
@@ -157,7 +170,7 @@ pub fn pick_path_blocking(folder: bool) -> Option<PathBuf> {
     if folder {
         k.args(["--getexistingdirectory", "."]);
     } else {
-        k.args(["--getopenfilename", ".", "*.mrpack *.zip|Modpacks"]);
+        k.args(["--getopenfilename".to_string(), ".".to_string(), format!("{}|{kind}", patterns.join(" "))]);
     }
     run(k)
 }
@@ -314,6 +327,7 @@ impl App {
 
         let mut close = false;
         let mut run: Option<(String, Option<String>)> = None;
+        let mut enter = false;
         let mut pick_file = false;
         let mut pick_folder = false;
         let mut use_found: Option<ImportedInstance> = None;
@@ -334,7 +348,7 @@ impl App {
             let buttons_w = remembered_width(ui, buttons_id, 200.0);
             ui.horizontal(|ui| {
                 let field_w = (ui.available_width() - buttons_w - ui.spacing().item_spacing.x).max(160.0);
-                ui.add_sized(
+                let field = ui.add_sized(
                     [field_w, 32.0],
                     egui::TextEdit::singleline(&mut self.import.input)
                         .hint_text(
@@ -344,6 +358,8 @@ impl App {
                         .margin(egui::Margin::symmetric(10, 7))
                         .background_color(c_field()),
                 );
+                // Enter in the field imports, like the button at the bottom
+                enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                 let used = ui
                     .scope(|ui| {
                         if secondary(ui, "Choose file").clicked() {
@@ -460,7 +476,7 @@ impl App {
                     }
                 },
                 |ui| {
-                    if primary_enabled(ui, "Import", ok).clicked() {
+                    if primary_enabled(ui, "Import", ok).clicked() || (ok && enter) {
                         run = Some((
                             self.import.input.clone(),
                             Some(self.import.name.trim().to_string()).filter(|n| !n.is_empty()),

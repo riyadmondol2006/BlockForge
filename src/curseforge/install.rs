@@ -450,25 +450,6 @@ pub async fn install_latest(
     install_with_dependencies(dirs, cf, instance, project, &file, &include, progress, hub).await
 }
 
-/// Remove a CurseForge mod: its file and its record.
-pub fn remove_project(instance: &Instance, project_id: i64) -> Result<usize> {
-    let current = fresh(instance);
-    let mc = current.mc_version().to_string();
-    let mut count = 0;
-    for rec in current.mod_records().iter().filter(|m| m.curse_forge_project_id == Some(project_id)) {
-        if let Some(p) = record_current_path(&current.root, rec, &mc) {
-            let _ = std::fs::remove_file(p);
-        }
-        count += 1;
-    }
-    update_instance(&current.root, |inst| {
-        let mut mods = inst.mod_records();
-        mods.retain(|m| m.curse_forge_project_id != Some(project_id));
-        inst.set_mod_records(&mods);
-    })?;
-    Ok(count)
-}
-
 // ---------------------------------------------------------------------------------------------------------
 // update checks
 

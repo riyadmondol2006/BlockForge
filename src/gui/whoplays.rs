@@ -27,6 +27,22 @@ pub fn valid_player_name(n: &str) -> bool {
     crate::accounts::valid_offline_name(n)
 }
 
+/// What is wrong with a typed player name, said under the field (the rule itself is in the hint above it). `None`
+/// for a name that can be used.
+pub fn name_problem(n: &str) -> Option<&'static str> {
+    if valid_player_name(n) {
+        None
+    } else if n.is_empty() {
+        Some("Type a name first.")
+    } else if !n.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        Some("Only letters, numbers and underscores (_) can be used.")
+    } else if n.len() < 3 {
+        Some("Too short: a name has at least 3 characters.")
+    } else {
+        Some("Too long: a name has at most 16 characters.")
+    }
+}
+
 /// One of the two ways in. The Microsoft one is the filled, main choice (ink, like every main action: green is for
 /// Play); the offline one is plain.
 fn choice(ui: &mut Ui, width: f32, icon: Icon, title: &str, sub: &str, main: bool) -> bool {
@@ -139,7 +155,7 @@ impl App {
                 }
             } else {
                 ui.label(RichText::new("Play offline").size(FS_SECTION).semibold());
-                muted(ui, "3-16 letters, numbers or underscores. No account needed.");
+                muted(ui, "3\u{2013}16 letters, numbers or underscores. No account needed.");
                 ui.add_space(12.0);
                 let r = ui.add_sized(
                     [ui.available_width(), 32.0],
@@ -152,10 +168,8 @@ impl App {
                 focus_when_shown(ui, &r);
                 // the rule is said as soon as what is typed breaks it, and when Continue is pressed on nothing
                 let typed = st.name.trim();
-                if (typed.is_empty() && st.error) || (!typed.is_empty() && !valid_player_name(typed)) {
-                    ui.label(
-                        RichText::new("Use 3-16 letters, numbers or underscores.").size(FS_META).color(c_danger()),
-                    );
+                if let Some(problem) = name_problem(typed).filter(|_| !typed.is_empty() || st.error) {
+                    ui.label(RichText::new(problem).size(FS_META).color(c_danger()));
                 }
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
@@ -218,11 +232,36 @@ impl App {
         }
         self.acct.signing_in = true;
         self.acct.device = None;
+        self.acct.last_error = None;
         self.acct.attempt += 1;
         let (attempt, n) = (self.acct.attempt, self.notifier());
         self.rt.spawn(async move {
-            n.send(Msg::Device(attempt, crate::msauth::start_device_login().await.map_err(|e| format!("{e:#}"))));
+            n.send(Msg::Device(attempt, crate::msauth::start_device_login().await.map_err(|e| sign_in_error(&e))));
         });
+    }
+}
+
+/// A failed sign-in as the player reads it: a connection problem in plain words, anything else as Microsoft said it.
+pub(super) fn sign_in_error(e: &anyhow::Error) -> String {
+    if crate::msauth::is_offline_error(e) {
+        "Couldn't reach Microsoft. Check your internet connection, then try again.".to_string()
+    } else {
+        format!("{e:#}")
+    }
+}
+
+#[cfg(test)]
+mod name_tests {
+    use super::*;
+
+    #[test]
+    fn a_bad_name_is_told_what_is_wrong_with_it() {
+        assert_eq!(name_problem("Steve"), None);
+        assert_eq!(name_problem(""), Some("Type a name first."));
+        assert!(name_problem("ab").unwrap().starts_with("Too short"));
+        assert!(name_problem("a_name_far_too_long_x").unwrap().starts_with("Too long"));
+        assert!(name_problem("Stéve").unwrap().starts_with("Only letters"));
+        assert!(name_problem("no spaces").unwrap().starts_with("Only letters"));
     }
 }
 

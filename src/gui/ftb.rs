@@ -16,11 +16,32 @@ use crate::cf_seam::MinimalCurseForge;
 use crate::ftb::{self, ManualDownload, PackManifest, PackVersion, Sort, TargetType};
 
 enum Event {
-    Ids { seq: u64, result: Result<Vec<i64>, String> },
-    Page { seq: u64, asked: usize, packs: Vec<PackManifest> },
-    Target { version: i64, text: String, ok: bool },
+    Ids {
+        seq: u64,
+        result: Result<Vec<i64>, String>,
+    },
+    Page {
+        seq: u64,
+        asked: usize,
+        packs: Vec<PackManifest>,
+    },
+    Target {
+        version: i64,
+        text: String,
+        ok: bool,
+    },
     Updates(HashMap<String, PackVersion>),
-    Manual { pack: i64, version: i64, name: Option<String>, files: Vec<ManualDownload> },
+    Manual {
+        pack: i64,
+        version: i64,
+        name: Option<String>,
+        files: Vec<ManualDownload>,
+    },
+    /// An update of an instance ended; `done` is false when it failed (the offer stays).
+    Updated {
+        folder: String,
+        done: bool,
+    },
 }
 
 /// The pack whose details are open.
@@ -51,6 +72,10 @@ pub struct FtbState {
     targets_failed: HashSet<i64>,
     /// instance folder -> the newer version
     pub updates: HashMap<String, PackVersion>,
+    /// The instances being updated right now.
+    updating: HashSet<String>,
+    /// Counts the result lists that replaced the one before, so a new search starts at the top of the list.
+    list_gen: u64,
     updates_checked: bool,
     manual: Option<(i64, i64, Option<String>, Vec<ManualDownload>)>,
     tx: Sender<Event>,
@@ -76,6 +101,8 @@ impl Default for FtbState {
             targets: HashMap::new(),
             targets_failed: HashSet::new(),
             updates: HashMap::new(),
+            updating: HashSet::new(),
+            list_gen: 0,
             updates_checked: false,
             manual: None,
             tx,
@@ -200,13 +227,16 @@ impl App {
                 },
                 Event::Page { seq, asked, packs } if seq == self.ftb.seq => {
                     self.ftb.loading = false;
+                    if self.ftb.page == 1 {
+                        // the first page of a new listing takes the place of the old rows, even when it failed:
+                        // those rows were for another search
+                        self.ftb.packs.clear();
+                        self.ftb.list_gen += 1;
+                    }
                     if packs.is_empty() && asked > 0 {
                         // every pack of the page failed to arrive: the list can't be trusted to be empty
                         self.ftb.page = self.ftb.page.saturating_sub(1);
                         self.ftb.error = Some("None of the packs on this page arrived.".into());
-                    } else if self.ftb.page == 1 {
-                        // the first page of a new listing takes the place of the old rows
-                        self.ftb.packs.clear();
                     }
                     self.ftb.packs.extend(packs);
                 }
@@ -218,6 +248,12 @@ impl App {
                 }
                 Event::Updates(u) => self.ftb.updates = u,
                 Event::Manual { pack, version, name, files } => self.ftb.manual = Some((pack, version, name, files)),
+                Event::Updated { folder, done } => {
+                    self.ftb.updating.remove(&folder);
+                    if done {
+                        self.ftb.updates.remove(&folder);
+                    }
+                }
                 _ => {}
             }
         }
@@ -248,11 +284,24 @@ impl App {
         let Some(latest) = self.ftb.updates.get(folder).cloned() else { return };
         let dirs = self.dirs.clone();
         let opts = ftb::InstallOptions::from_settings(&self.settings, None);
+        if self.is_playing(folder) {
+            self.toast_err(format!("Close Minecraft in {} first, then update it.", inst.name()));
+            return;
+        }
+        if !self.ftb.updating.insert(folder.to_string()) {
+            return;
+        }
         let label = format!("Updating {}", inst.name());
-        let folder_s = folder.to_string();
-        self.ftb.updates.remove(&folder_s);
+        let (folder_s, tx, ctx) = (folder.to_string(), self.ftb.tx.clone(), self.ctx.clone());
+        // one change to the instance at a time: a mod switched in the Mods tab meanwhile would be written over
+        let lock = super::mods::instance_lock(&inst.root);
         self.start_task(label, move |p, _| async move {
-            let updated = ftb::update(&dirs, &inst, latest.id, &opts, &MinimalCurseForge, &p).await?;
+            let _turn = lock.lock().await;
+            // the offer stays until the update worked, so a failed one can be tried again
+            let r = ftb::update(&dirs, &inst, latest.id, &opts, &MinimalCurseForge, &p).await;
+            let _ = tx.send(Event::Updated { folder: folder_s, done: r.is_ok() });
+            ctx.request_repaint();
+            let updated = r?;
             Ok(format!("\"{}\" is now on {}", updated.name(), latest.label()))
         });
     }
@@ -329,6 +378,9 @@ impl App {
         let mut more = false;
         self.ftb_details_dialog(ui.ctx());
 
+        if !self.ftb.packs.is_empty() {
+            context_line(ui, Some(format!("{} packs", thousands(self.ftb.ids.len() as u64))), false, |_| {});
+        }
         if self.ftb.packs.is_empty() && self.ftb.loading {
             skeleton_rows(ui, 6, ROW_H);
         } else if self.ftb.packs.is_empty() && self.ftb.error.is_none() {
@@ -343,9 +395,6 @@ impl App {
                 self.ftb_search();
             }
         }
-        if !self.ftb.ids.is_empty() {
-            context_line(ui, Some(format!("{} packs", thousands(self.ftb.ids.len() as u64))), false, |_| {});
-        }
         // a new search over rows that are already shown: a thin bar says it is on its way
         if self.ftb.loading && self.ftb.page <= 1 && !self.ftb.packs.is_empty() {
             progress_bar(ui, None, 2.0);
@@ -353,7 +402,7 @@ impl App {
             ui.add_space(2.0);
         }
         let packs = std::mem::take(&mut self.ftb.packs);
-        ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
+        ScrollArea::vertical().id_salt(("ftb-list", self.ftb.list_gen)).auto_shrink(false).show(ui, |ui| {
             for pack in &packs {
                 let rkey = format!("ftb:{}", pack.id);
                 row_frame(ui, |ui| {
@@ -408,7 +457,7 @@ impl App {
             } else if total > self.ftb.page * ftb::PAGE_SIZE {
                 ui.vertical_centered(|ui| {
                     small_faint(ui, format!("Showing {} of {}", thousands(shown as u64), thousands(total as u64)));
-                    let next = (total - shown).min(ftb::PAGE_SIZE);
+                    let next = total.saturating_sub(shown).min(ftb::PAGE_SIZE);
                     if ghost(ui, &format!("Load {next} more")).clicked() {
                         more = true;
                     }
@@ -456,6 +505,10 @@ impl App {
                         });
                         let id = ui.scope_id().with(("ftb-update-row", folder));
                         end_aligned(ui, id, |ui| {
+                            if self.ftb.updating.contains(folder) {
+                                ui.spinner().on_hover_text("Updating");
+                                return;
+                            }
                             let clicked = if rows.len() == 1 { primary(ui, "Update") } else { secondary(ui, "Update") };
                             if clicked.clicked() {
                                 update = Some(folder.clone());

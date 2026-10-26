@@ -107,6 +107,10 @@ pub struct ModsState {
     checking: bool,
     checked: bool,
     recheck: bool,
+    /// The last update check was asked for with the button (its failure is said out loud) rather than run on its own.
+    manual_check: bool,
+    /// Why the last update check failed, shown next to its button until one works.
+    update_error: Option<String>,
     synced: bool,
     filter: String,
     show: Show,
@@ -267,14 +271,17 @@ impl App {
     // Background work
 
     /// Runs a change to one instance in the background with a fresh copy of it, then reloads the screen.
-    fn mods_job<F, Fut>(&mut self, folder: &str, label: &str, work: F)
+    pub(super) fn mods_job<F, Fut>(&mut self, folder: &str, label: &str, work: F)
     where
         F: FnOnce(Instance, ModContext) -> Fut + Send + 'static,
         Fut: Future<Output = anyhow::Result<String>> + Send + 'static,
     {
         let Some(root) = self.instance(folder).map(|i| i.root.clone()) else { return };
-        self.mods.busy = Some(label.to_string());
-        self.mods.jobs += 1;
+        // a change made from elsewhere (a CurseForge remove for another instance) isn't this tab's to wait for
+        if folder == self.mods.folder {
+            self.mods.busy = Some(label.to_string());
+            self.mods.jobs += 1;
+        }
         let (dirs, settings, n, folder) =
             (self.dirs.clone(), self.settings.clone(), self.notifier(), folder.to_string());
         let lock = instance_lock(&root);
@@ -460,9 +467,20 @@ impl App {
                     return;
                 }
                 self.mods.checking = false;
+                let manual = std::mem::take(&mut self.mods.manual_check);
                 match result {
-                    Ok(list) => self.mods.updates = list.into_iter().map(|o| (o.key.clone(), o)).collect(),
-                    Err(e) => self.toast_err(format!("Couldn't check for updates: {e}")),
+                    Ok(list) => {
+                        self.mods.updates = list.into_iter().map(|o| (o.key.clone(), o)).collect();
+                        self.mods.update_error = None;
+                    }
+                    Err(e) => {
+                        // a check that ran on its own (after an install, say) fails quietly next to its button;
+                        // one asked for with the button says so
+                        if manual {
+                            self.toast_err(format!("Couldn't check for updates: {e}"));
+                        }
+                        self.mods.update_error = Some(e);
+                    }
                 }
             }
             ModsMsg::Done { folder, result } => {
@@ -478,9 +496,6 @@ impl App {
                     Err(e) => self.toast_err(e),
                 }
                 self.mods.signature = None;
-                if folder == self.mods.folder {
-                    self.mods.recheck = self.mods.checked;
-                }
                 self.reload_instances();
             }
             ModsMsg::Versions { folder, key, result } => {
@@ -527,15 +542,18 @@ impl App {
         let settings = ModSettings::from_settings(&self.settings);
         let name = detected.display_name().to_string();
         self.mods_job(&folder, "Adding", move |mut inst, ctx| async move {
-            if let Some(problem) = detected.problem_for(ctx.target.loader_key, &ctx.target.minecraft_version) {
-                // still added: the player decides, the list shows the warning
-                let _ = problem;
-            }
+            // still added (the player decides), but said: a mod for another loader or version won't load
+            let problem = detected.problem_for(ctx.target.loader_key, &ctx.target.minecraft_version);
             match files::add_file_identified(&mut inst, &source, record_type, &settings).await? {
-                files::AddOutcome::Added(_) => Ok(format!("Added {name}")),
+                files::AddOutcome::Added(_) => match problem {
+                    Some(p) => Err(anyhow::anyhow!("Added {name}, but it may not load: {p}")),
+                    None => Ok(format!("Added {name}")),
+                },
                 files::AddOutcome::AlreadyThere => Ok(format!("{name} is already in this instance")),
             }
         });
+        // a new file may have an update of its own
+        self.mods.recheck = self.mods.checked;
         true
     }
 
@@ -545,6 +563,22 @@ impl App {
     fn mods_apply(&mut self, inst: &Instance, act: Act) {
         let folder = inst.folder.clone();
         let settings = ModSettings::from_settings(&self.settings);
+        // the game holds its files open (on Windows they can't be renamed or deleted at all), and a file switched or
+        // removed under it confuses the list once it closes
+        let changes_files = matches!(
+            act,
+            Act::Toggle(..)
+                | Act::EnableAll(..)
+                | Act::Remove(_)
+                | Act::Update(_)
+                | Act::UpdateAll
+                | Act::Restore(_)
+                | Act::Reinstall(_)
+        );
+        if changes_files && self.is_playing(&folder) {
+            self.toast_err("Close Minecraft first. Its files can't be changed while it runs.");
+            return;
+        }
         match act {
             Act::Kind(k) => {
                 self.mods.kind = Some(k);
@@ -624,6 +658,7 @@ impl App {
                 }
             }
             Act::CheckUpdates => {
+                self.mods.manual_check = true;
                 self.mods_check_updates(inst);
                 self.mods.checked = true;
             }
@@ -699,6 +734,8 @@ impl App {
                 self.discover.target = Some(folder);
                 self.page = Page::Discover;
                 self.discover_search(true);
+                // when CurseForge is the side shown, it opens on the same kind with a search for this instance
+                self.cf_show_for(self.mods.kind());
             }
             Act::OpenFolder => {
                 let dir = inst.root.join(self.mods.kind().folder());
@@ -813,12 +850,23 @@ impl App {
                 if this.mods.checking {
                     muted(ui, "Checking for updates");
                     ui.add(egui::Spinner::new().size(14.0));
-                } else if secondary(ui, "Check for updates").clicked() {
-                    acts.push(Act::CheckUpdates);
+                } else {
+                    if let Some(e) = &this.mods.update_error {
+                        ui.label(RichText::new("Couldn't check").size(FS_META).color(c_warn()))
+                            .on_hover_text(format!("The last update check failed: {e}"));
+                    }
+                    if secondary(ui, "Check for updates").clicked() {
+                        acts.push(Act::CheckUpdates);
+                    }
                 }
                 if offers_n > 0 {
                     let all = format!("Update all ({offers_n})");
-                    if ui.add_enabled_ui(!busy, |ui| secondary(ui, &all)).inner.clicked() {
+                    if ui
+                        .add_enabled_ui(!busy, |ui| secondary(ui, &all))
+                        .inner
+                        .on_disabled_hover_text("Wait for the change that is running to finish")
+                        .clicked()
+                    {
                         acts.push(Act::UpdateAll);
                     }
                 }
@@ -1330,18 +1378,33 @@ impl App {
         if !self.mods.confirm_remove.is_empty() {
             let keys = self.mods.confirm_remove.clone();
             let label = if keys.len() == 1 { format!("\"{}\"", keys[0].file) } else { format!("{} items", keys.len()) };
+            let names =
+                remove_list(&keys, |k| self.mods.entries.values().flatten().find(|e| e.key() == *k).map(|e| e.name()));
+            let where_to = if ModSettings::from_settings(&self.settings).use_recycle_bin {
+                "They go to the Recycle Bin (Trash). You can add them again at any time."
+            } else {
+                "They are deleted from this instance. You can add them again at any time."
+            };
             let (mut yes, mut no) = (false, false);
-            egui::Modal::new(egui::Id::unique("mods-confirm-remove")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
-                ui.set_width(380.0);
-                ui.label(RichText::new(format!("Remove {label}?")).size(FS_SECTION).semibold());
-                ui.add_space(4.0);
-                muted(ui, "The file is deleted from this instance. You can add it again at any time.");
-                ui.add_space(12.0);
-                ui.horizontal(|ui| {
-                    yes = danger(ui, "Remove").clicked();
-                    no = secondary(ui, "Cancel").clicked();
-                });
-            });
+            let r = egui::Modal::new(egui::Id::unique("mods-confirm-remove")).frame(super::modal_frame(ctx)).show(
+                ctx,
+                |ui| {
+                    ui.set_width(380.0);
+                    ui.label(RichText::new(format!("Remove {label}?")).size(FS_SECTION).semibold());
+                    ui.add_space(4.0);
+                    if keys.len() > 1 {
+                        small_muted(ui, &names);
+                        ui.add_space(4.0);
+                    }
+                    muted(ui, where_to);
+                    ui.add_space(12.0);
+                    ui.horizontal(|ui| {
+                        yes = danger(ui, "Remove").clicked();
+                        no = secondary(ui, "Cancel").clicked();
+                    });
+                },
+            );
+            no |= r.should_close() && !yes;
             if yes || no {
                 self.mods.confirm_remove.clear();
             }
@@ -1369,7 +1432,7 @@ impl App {
         // restore a snapshot
         if let Some(file) = self.mods.confirm_restore.clone() {
             let (mut yes, mut no) = (false, false);
-            egui::Modal::new(egui::Id::unique("mods-confirm-restore")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
+            let r = egui::Modal::new(egui::Id::unique("mods-confirm-restore")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
                 ui.set_width(420.0);
                 ui.label(RichText::new("Restore this snapshot?").size(FS_SECTION).semibold());
                 ui.add_space(4.0);
@@ -1380,6 +1443,7 @@ impl App {
                     no = secondary(ui, "Cancel").clicked();
                 });
             });
+            no |= r.should_close() && !yes;
             if yes || no {
                 self.mods.confirm_restore = None;
             }
@@ -1405,7 +1469,7 @@ impl App {
                     crate::mods::InstanceTarget::of(inst, &crate::mods::RemoteConfig::load(&self.dirs))
                 });
             let (mut yes, mut no) = (false, false);
-            egui::Modal::new(egui::Id::unique("mods-confirm-pack")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
+            let r = egui::Modal::new(egui::Id::unique("mods-confirm-pack")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
                 ui.set_width(420.0);
                 ui.label(RichText::new("Make Minecraft run faster").size(FS_SECTION).semibold());
                 ui.add_space(4.0);
@@ -1423,6 +1487,7 @@ impl App {
                     no = secondary(ui, "Cancel").clicked();
                 });
             });
+            no |= r.should_close() && !yes;
             if yes || no {
                 self.mods.confirm_pack = false;
             }
@@ -1452,7 +1517,7 @@ impl App {
         let mut install_version: Option<(ModKey, String)> = None;
         let mut close = false;
         if let Some(d) = &self.mods.versions {
-            egui::Modal::new(egui::Id::unique("mods-versions")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
+            let r = egui::Modal::new(egui::Id::unique("mods-versions")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
                 ui.set_width(560.0);
                 ui.label(RichText::new(format!("Versions of {}", d.name)).size(FS_SECTION).semibold());
                 small_muted(ui, "Pick one to install it in place of the current one. Older versions are fine if a newer one gives you trouble.");
@@ -1498,6 +1563,7 @@ impl App {
                     close = true;
                 }
             });
+            close |= r.should_close() && install_version.is_none();
         }
         if close || install_version.is_some() {
             self.mods.versions = None;
@@ -1515,10 +1581,33 @@ impl App {
     }
 }
 
+/// The names a "Remove N items?" window lists: the first eight, then how many more, so nothing goes unseen (a
+/// selection outlives a filter that hides some of it).
+fn remove_list(keys: &[ModKey], name_of: impl Fn(&ModKey) -> Option<String>) -> String {
+    const SHOWN: usize = 8;
+    let mut names: Vec<String> =
+        keys.iter().take(SHOWN).map(|k| name_of(k).unwrap_or_else(|| k.file.clone())).collect();
+    if keys.len() > SHOWN {
+        names.push(format!("and {} more", keys.len() - SHOWN));
+    }
+    names.join(", ")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn the_remove_window_names_what_goes() {
+        let keys: Vec<ModKey> = (1..=10).map(|i| ModKey { file: format!("mod{i}.jar"), kind: "mods".into() }).collect();
+        let named = |k: &ModKey| (k.file == "mod1.jar").then(|| "Sodium".to_string());
+        assert_eq!(
+            remove_list(&keys, named),
+            "Sodium, mod2.jar, mod3.jar, mod4.jar, mod5.jar, mod6.jar, mod7.jar, mod8.jar, and 2 more"
+        );
+        assert_eq!(remove_list(&keys[..2], |_| None), "mod1.jar, mod2.jar");
+    }
 
     #[test]
     fn details_and_a_small_picture_are_read_from_a_jar() {

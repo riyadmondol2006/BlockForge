@@ -14,7 +14,7 @@ use crate::convert::bedrock::detect::detect_bedrock;
 use crate::convert::bedrock::reader::BedrockWorldReader;
 use crate::convert::java::dirs::detect_java;
 use crate::convert::level::encoding::{EncodingType, TargetVersion, VersionTriple};
-use crate::convert::level::{ConversionSettings, ConvertRequest, ProgressSink};
+use crate::convert::level::{ConversionSettings, ConvertError, ConvertRequest, ProgressSink};
 use crate::convert::pipeline::convert_world;
 
 /// Which game a world belongs to.
@@ -105,6 +105,8 @@ pub enum Event {
     Warning(String),
     Done(Summary),
     Failed(String),
+    /// A failure trying again can't fix: the world's data is damaged, or it is a world that can't be converted.
+    FailedForGood(String),
     Cancelled,
 }
 
@@ -295,9 +297,35 @@ impl Backend for Engine {
                 let _ = events.send(Event::Cancelled);
             }
             Err(e) => {
-                let _ = events.send(Event::Failed(e.to_string()));
+                let message = explain(&e, &job.output);
+                let for_good = matches!(e, ConvertError::Malformed(_) | ConvertError::Unsupported(_));
+                let _ = events.send(if for_good { Event::FailedForGood(message) } else { Event::Failed(message) });
             }
         }
+    }
+}
+
+/// A failed conversion in words a player can act on: what went wrong and, where it helps, which folder.
+fn explain(e: &ConvertError, output: &Path) -> String {
+    use std::io::ErrorKind;
+    match e {
+        ConvertError::Io(io) if io.kind() == ErrorKind::PermissionDenied => format!(
+            "BlockForge isn't allowed to write in {}. Choose another place to save the world.",
+            output.parent().unwrap_or(output).display()
+        ),
+        ConvertError::Io(io) if io.kind() == ErrorKind::StorageFull => {
+            "The disk is full. Free some space, or save the world on another drive.".to_string()
+        }
+        ConvertError::Io(io) if io.kind() == ErrorKind::NotFound => {
+            format!("A file of the world went missing while it was read ({io}). Was the world moved or deleted?")
+        }
+        ConvertError::Io(io) => format!("Reading or writing a file failed: {io}"),
+        ConvertError::Malformed(msg) => format!(
+            "The world's data is damaged or isn't what a Bedrock world holds ({msg}). Trying again won't help: open \
+             the world in Minecraft once, let it save, and convert it again."
+        ),
+        ConvertError::Unsupported(msg) => format!("This world can't be converted: {msg}."),
+        other => other.to_string(),
     }
 }
 
@@ -381,7 +409,10 @@ mod tests {
         let (tx, rx) = channel();
         Engine.run(job(&dir, &dir.join("out"), Edition::Bedrock, "1.21.50"), tx, Arc::new(AtomicBool::new(false)));
         let events: Vec<Event> = rx.iter().collect();
-        assert!(matches!(events.last(), Some(Event::Failed(m)) if m.contains("Bedrock")), "{events:?}");
+        assert!(
+            matches!(events.last(), Some(Event::Failed(m) | Event::FailedForGood(m)) if m.contains("Bedrock")),
+            "{events:?}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -406,7 +437,7 @@ mod tests {
         // the same folder again must be refused (it is not empty), and a cancelled run leaves nothing behind
         let (tx, rx) = channel();
         Engine.run(job(&world, &out, Edition::Java, "1.21.4"), tx, Arc::new(AtomicBool::new(false)));
-        assert!(matches!(rx.iter().last(), Some(Event::Failed(_))));
+        assert!(matches!(rx.iter().last(), Some(Event::Failed(_) | Event::FailedForGood(_))));
         let out2 = std::env::temp_dir().join(format!("bf-engine-cancel-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&out2);
         let (tx, rx) = channel();

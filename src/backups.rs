@@ -240,6 +240,38 @@ pub fn prune(dirs: &Dirs, settings: &ServiceSettings, instance_name: &str, keep_
     removed
 }
 
+/// After an instance was renamed from `old_name` to `new_name`, give its backups the new name, so its page still lists
+/// them (backups are found by name). `others` are the names of the other instances: when one of them shares the old
+/// or the new start of a backup name, the files may be that instance's and are left as they are. Returns how many
+/// were renamed.
+pub fn rename_backups(
+    dirs: &Dirs,
+    settings: &ServiceSettings,
+    old_name: &str,
+    new_name: &str,
+    others: &[String],
+) -> usize {
+    let (old_p, new_p) = (backup_prefix(old_name), backup_prefix(new_name));
+    let shared = |p: &str| p == "Instance" || others.iter().any(|o| backup_prefix(o) == p);
+    if old_p == new_p || shared(&old_p) || shared(&new_p) {
+        return 0;
+    }
+    let folder = backups_dir(dirs, settings);
+    let mut renamed = 0;
+    for b in list_with_prefix(&folder, &old_p) {
+        let Some(rest) = b.file_name.strip_prefix(old_p.as_str()) else { continue };
+        let to = folder.join(format!("{new_p}{rest}"));
+        if to.exists() {
+            continue;
+        }
+        match std::fs::rename(&b.path, &to) {
+            Ok(()) => renamed += 1,
+            Err(e) => crate::logs::warn(format!("Couldn't rename the backup {}: {e}", b.path.display())),
+        }
+    }
+    renamed
+}
+
 /// Make a backup of a server folder; everything in it goes in, like the Java edition does.
 pub fn create_server(
     dirs: &Dirs,
@@ -620,6 +652,26 @@ mod tests {
             .map(|e| e.file_name().to_string_lossy().to_string())
             .filter(|n| n.starts_with(".restore"))
             .collect()
+    }
+
+    #[test]
+    fn renaming_an_instance_takes_its_backups_along_unless_they_could_be_another_instances() {
+        let base = scratch("rename-backups");
+        let dirs = Dirs::at(base.join("data"));
+        let settings = ServiceSettings::default();
+        let root = base.join("inst");
+        sample_instance(&root);
+        let first = create(&dirs, &settings, &root, "Old Pack", BackupMode::Normal).unwrap();
+        assert_eq!(rename_backups(&dirs, &settings, "Old Pack", "New Pack", &["Other".into()]), 1);
+        assert!(!first.exists());
+        assert_eq!(list(&dirs, &settings, "New Pack").len(), 1, "the renamed instance lists its backup");
+        assert!(list(&dirs, &settings, "Old Pack").is_empty());
+        // another instance would be called "NewPack" by its backups too: they stay where they are
+        assert_eq!(rename_backups(&dirs, &settings, "New Pack", "Third", &["NewPack".into()]), 0);
+        assert_eq!(list(&dirs, &settings, "New Pack").len(), 1);
+        // a new name that only differs in what backup names leave out changes nothing
+        assert_eq!(rename_backups(&dirs, &settings, "New Pack", "New-Pack!", &[]), 0);
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]

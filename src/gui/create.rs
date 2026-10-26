@@ -24,6 +24,9 @@ pub struct CreateState {
     pub error: Option<String>,
     /// Add Sodium and the other performance mods once the instance is made.
     pub performance: bool,
+    /// The sidebar label of the instance being made, so Create waits for that job (and not for any other whose
+    /// label happens to start the same way, such as "Creating a support bundle").
+    task_label: Option<String>,
 }
 
 /// The widest the form gets.
@@ -96,6 +99,7 @@ impl Default for CreateState {
             requested: None,
             error: None,
             performance: false,
+            task_label: None,
         }
     }
 }
@@ -148,6 +152,7 @@ impl App {
         ui.add_space(8.0);
         let mut changed_version = false;
         let mut create = false;
+        let mut enter = false;
         // the button stays in view under the form: the form scrolls when the window is short
         let form_h = (ui.available_height() - 64.0).max(160.0);
         ScrollArea::vertical().auto_shrink([false, true]).max_height(form_h).show(ui, |ui| {
@@ -160,13 +165,15 @@ impl App {
             let c = &mut self.create;
             // the hint is the name the instance gets when the field is left empty
             let hint = if c.mc.is_empty() { "My instance".to_string() } else { default_name(&c.mc, c.loader) };
-            ui.add_sized(
+            let name_field = ui.add_sized(
                 [ui.available_width().min(360.0), 32.0],
                 egui::TextEdit::singleline(&mut c.name)
                     .hint_text(RichText::new(hint).color(c_faint()))
                     .margin(egui::Margin::symmetric(10, 7))
                     .background_color(c_field()),
             );
+            // Enter in the name makes the instance, like the button under the form
+            enter = name_field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
 
             // Minecraft version
             ui.add_space(16.0);
@@ -326,11 +333,21 @@ impl App {
 
             ui.add_space(8.0);
         });
-        let creating = self.tasks.iter().any(|t| t.label.starts_with("Creating"));
+        let creating = self.create.task_label.as_ref().is_some_and(|l| self.tasks.iter().any(|t| &t.label == l));
         let ready = !self.create.mc.is_empty()
             && !creating
             && (self.create.loader == Loader::Vanilla || !self.create.loader_versions.is_empty());
         let summary = summary(&self.create);
+        // what a greyed-out Create waits for, said when it is pointed at
+        let why_not = if self.create.mc.is_empty() {
+            "Pick a Minecraft version first".to_string()
+        } else if creating {
+            "The instance is being made. Its progress is in the sidebar".to_string()
+        } else if self.create.loading {
+            format!("Looking up the {} versions", self.create.loader.label())
+        } else {
+            format!("{} isn't available for this Minecraft version", self.create.loader.label())
+        };
         ui.scope(|ui| {
             // the button sits under the form, not at the far edge of a wide window
             ui.set_max_width(ui.available_width().min(FORM_W));
@@ -348,7 +365,7 @@ impl App {
                     }
                 },
                 |ui| {
-                    if primary_enabled(ui, "Create instance", ready).clicked() {
+                    if primary_enabled(ui, "Create instance", ready).on_disabled_hover_text(&why_not).clicked() {
                         create = true;
                     }
                 },
@@ -357,15 +374,21 @@ impl App {
         if changed_version {
             self.request_loader_versions();
         }
+        if enter && ready {
+            create = true;
+        }
         if create {
             let c = &self.create;
             let loader = c.loader;
             let mc = c.mc.clone();
-            let name = if c.name.trim().is_empty() { default_name(&mc, loader) } else { c.name.trim().to_string() };
+            let wanted = if c.name.trim().is_empty() { default_name(&mc, loader) } else { c.name.trim().to_string() };
+            // two instances of one name would share their backups (they are found by name): the second gets a number
+            let name = unique_instance_name(&self.instances, &wanted);
             let version = Some(c.loader_version.clone()).filter(|v| !v.is_empty());
             let performance = c.performance && performance::offered_for(loader.modrinth_name());
             let (dirs, settings) = (self.dirs.clone(), self.settings.clone());
             let label = format!("Creating {name}");
+            self.create.task_label = Some(label.clone());
             self.start_task(label, move |p, _| async move {
                 let mut inst = instances::create(&dirs, &name, &mc, loader, version.as_deref(), &p).await?;
                 let ready = format!("\"{}\" is ready", inst.name());
@@ -382,9 +405,33 @@ impl App {
     }
 }
 
+/// `wanted`, or with " (2)", " (3)" ... after it when an instance of that name (in any case) is there already.
+pub(super) fn unique_instance_name(instances: &[crate::instances::Instance], wanted: &str) -> String {
+    let taken = |n: &str| instances.iter().any(|i| i.name().trim().eq_ignore_ascii_case(n));
+    if !taken(wanted) {
+        return wanted.to_string();
+    }
+    (2..).map(|n| format!("{wanted} ({n})")).find(|n| !taken(n)).unwrap_or_else(|| wanted.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_name_that_is_taken_gets_a_number() {
+        let inst = |name: &str| {
+            let mut file = crate::instances::InstanceFile::default();
+            file.launcher.name = name.into();
+            crate::instances::Instance { folder: name.into(), mod_count: 0, root: std::env::temp_dir(), file }
+        };
+        let all = [inst("Survival"), inst("Survival (2)"), inst("Creative")];
+        assert_eq!(unique_instance_name(&all, "Survival"), "Survival (3)");
+        // case doesn't make a name new: "survival (2)" is taken by "Survival (2)" too
+        assert_eq!(unique_instance_name(&all, "survival"), "survival (3)");
+        assert_eq!(unique_instance_name(&all, "CREATIVE"), "CREATIVE (2)");
+        assert_eq!(unique_instance_name(&all, "Skyblock"), "Skyblock");
+    }
 
     #[test]
     fn the_empty_name_and_the_finished_message_read_well() {

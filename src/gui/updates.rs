@@ -214,6 +214,8 @@ impl App {
             Ok(Installed::Stay { message, .. }) if message.is_empty() => self.upd.stage = Stage::Installing,
             Ok(Installed::Exit) => {
                 self.upd.stage = Stage::Restarting;
+                // the launcher closes itself to finish the update: no "Quit anyway?" for that
+                self.quit_anyway = true;
                 update::apply::exit_soon();
                 self.ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
@@ -243,6 +245,15 @@ impl App {
                 match &self.upd.stage {
                     Stage::Offer => {
                         let can_install = self.can_install_update();
+                        // installing ends with a restart: jobs in progress would stop halfway, and a game that runs
+                        // on would be lost to the launcher (no log, no Stop, no backup after it)
+                        let wait = if self.games.values().any(super::Game::active) {
+                            Some("Close Minecraft first. The launcher restarts to finish the update.")
+                        } else if !self.tasks.is_empty() {
+                            Some("Wait for the jobs in progress to finish. The launcher restarts to finish the update.")
+                        } else {
+                            None
+                        };
                         ui.horizontal_wrapped(|ui| {
                             ui.label(RichText::new(format!("BlockForge {version} is available")).semibold());
                             small_muted(ui, format!("You have {}", crate::VERSION));
@@ -250,7 +261,8 @@ impl App {
                         ui.add_space(6.0);
                         ui.horizontal_wrapped(|ui| {
                             if can_install {
-                                if primary(ui, "Update now").clicked() {
+                                let now = ui.add_enabled_ui(wait.is_none(), |ui| primary(ui, "Update now")).inner;
+                                if now.on_disabled_hover_text(wait.unwrap_or_default()).clicked() {
                                     action = Some(Action::Install);
                                 }
                                 if secondary(ui, "See what's new").clicked() {
@@ -323,8 +335,16 @@ impl App {
                         );
                         ui.add(egui::Label::new(RichText::new(error).color(c_muted()).size(FS_META)).wrap());
                         ui.add_space(6.0);
+                        let wait = if self.games.values().any(super::Game::active) {
+                            Some("Close Minecraft first. The launcher restarts to finish the update.")
+                        } else if !self.tasks.is_empty() {
+                            Some("Wait for the jobs in progress to finish. The launcher restarts to finish the update.")
+                        } else {
+                            None
+                        };
                         ui.horizontal_wrapped(|ui| {
-                            if primary(ui, "Try again").clicked() {
+                            let again = ui.add_enabled_ui(wait.is_none(), |ui| primary(ui, "Try again")).inner;
+                            if again.on_disabled_hover_text(wait.unwrap_or_default()).clicked() {
                                 action = Some(Action::Install);
                             }
                             if secondary(ui, "Download from the website").clicked() {

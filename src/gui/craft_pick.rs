@@ -14,7 +14,9 @@ const ROW_H: f32 = 40.0;
 
 /// The entries matching `query` (and the category), best first; at most `limit`. An empty query matches all.
 pub(super) fn search_entries(book: &Book, query: &str, cat: Option<Category>, limit: usize) -> Vec<u32> {
+    // an id copied from the game or a wiki ("minecraft:oak_planks") finds its item too
     let q = query.trim().to_lowercase();
+    let q = q.strip_prefix("minecraft:").unwrap_or(&q).to_string();
     let q_id = q.replace(' ', "_");
     let mut hits: Vec<(u8, u32)> = Vec::new();
     for (i, e) in book.entries.iter().enumerate() {
@@ -97,7 +99,18 @@ impl CraftState {
             let mut pick: Option<ItemId> = None;
             if n == 0 {
                 ui.add_space(16.0);
-                ui.vertical_centered(|ui| muted(ui, "Nothing matches that. Try fewer letters."));
+                // a category can be what hides the item: say so, and offer to look in all of them
+                let in_all = self.category.is_some() && !search_entries(book, &self.search, None, 1).is_empty();
+                ui.vertical_centered(|ui| {
+                    if in_all {
+                        muted(ui, "Nothing in this category matches that.");
+                        if ghost(ui, "Search all categories").clicked() {
+                            self.category = None;
+                        }
+                    } else {
+                        muted(ui, "Nothing matches that. Try fewer letters.");
+                    }
+                });
                 ui.add_space(16.0);
             } else {
                 ui.spacing_mut().item_spacing.y = 0.0;

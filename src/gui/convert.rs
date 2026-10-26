@@ -102,6 +102,10 @@ pub(super) enum OutputCheck {
     InsideSource,
     IsFile,
     NotEmpty,
+    /// A relative path: it would land wherever the launcher happened to be started from.
+    NotAbsolute,
+    /// The nearest folder that is there can't be written to (a read-only drive, a folder of another user).
+    NotWritable,
 }
 
 /// A conversion in progress.
@@ -148,9 +152,13 @@ pub struct ConvertState {
     pub(super) out_edited: bool,
     out_check: Option<(String, Option<PathBuf>, OutputCheck)>,
     pub(super) run: Option<RunView>,
+    /// The thread the conversion runs on, so closing the launcher can give it a moment to clean up after a stop.
+    worker: Option<std::thread::JoinHandle<()>>,
     run_counter: u64,
     pub(super) summary: Option<Summary>,
     pub(super) error: Option<String>,
+    /// The failure can't be fixed by trying again (the world itself is the problem).
+    pub(super) error_final: bool,
     /// What the failed run was, for the details.
     pub(super) last_job: Option<ConvertJob>,
     pub(super) last_warnings: Vec<String>,
@@ -166,6 +174,7 @@ impl ConvertState {
         ConvertState {
             backend,
             screen: Screen::Setup,
+            error_final: false,
             source: None,
             look: Look::Nothing,
             seq: 0,
@@ -178,6 +187,7 @@ impl ConvertState {
             out_edited: false,
             out_check: None,
             run: None,
+            worker: None,
             run_counter: 0,
             summary: None,
             error: None,
@@ -188,6 +198,14 @@ impl ConvertState {
     }
 
     /// Back to the first screen, forgetting the world (the choices for the target stay as they were).
+    /// From the failed page back to the settings of the same world, with the output folder checked again.
+    pub(super) fn back_to_setup(&mut self) {
+        self.screen = Screen::Setup;
+        self.error = None;
+        self.error_final = false;
+        self.out_check = None;
+    }
+
     pub(super) fn start_over(&mut self) {
         self.screen = Screen::Setup;
         self.source = None;
@@ -198,6 +216,7 @@ impl ConvertState {
         self.out_check = None;
         self.summary = None;
         self.error = None;
+        self.error_final = false;
         self.last_job = None;
         self.last_warnings.clear();
     }
@@ -289,6 +308,7 @@ impl ConvertState {
         match self.output_check() {
             OutputCheck::Ok => None,
             OutputCheck::NotEmpty => Some(tr!("Choose a folder that is empty or does not exist yet.")),
+            OutputCheck::NotWritable => Some(tr!("Choose a place BlockForge is allowed to write in.")),
             _ => Some(tr!("Choose where to save the converted world.")),
         }
     }
@@ -305,7 +325,7 @@ impl ConvertState {
         };
         Some(ConvertJob {
             input: self.source.clone()?,
-            output: PathBuf::from(self.output.trim()),
+            output: expand_output(&self.output),
             target: Target { edition: Edition::Java, version: self.version.clone() },
             dimensions: selection,
             // nothing is copied between different editions, so there is nothing to keep
@@ -353,6 +373,7 @@ impl ConvertState {
     /// Something a run said.
     fn on_event(&mut self, run_id: u64, event: Event) -> Outcome {
         let Some(run) = self.run.as_mut().filter(|r| r.id == run_id) else { return Outcome::Nothing };
+        let for_good = matches!(event, Event::FailedForGood(_));
         match event {
             Event::Stage(s) => run.stage = s,
             Event::Progress(p) => run.progress = if p.is_finite() { p.clamp(0.0, 1.0) } else { 0.0 },
@@ -370,9 +391,10 @@ impl ConvertState {
                 self.screen = Screen::Done;
                 return Outcome::Done;
             }
-            Event::Failed(message) => {
+            Event::Failed(message) | Event::FailedForGood(message) => {
                 self.last_warnings = self.run.take().map(|r| r.warnings).unwrap_or_default();
                 self.error = Some(message);
+                self.error_final = for_good;
                 self.screen = Screen::Failed;
                 return Outcome::Failed;
             }
@@ -458,12 +480,57 @@ fn normalized(path: &Path) -> PathBuf {
 }
 
 /// Whether a converted world can be written to `output` without touching `source` or what is already there.
+/// The typed output folder as a path: a leading `~` is the home folder, as in a terminal (it would otherwise make a
+/// folder called "~").
+pub(super) fn expand_output(text: &str) -> PathBuf {
+    let text = text.trim();
+    let home = || std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from);
+    match text.strip_prefix('~') {
+        Some(rest) if rest.is_empty() || rest.starts_with('/') || rest.starts_with('\\') => match home() {
+            Some(h) => h.join(rest.trim_start_matches(['/', '\\'])),
+            None => PathBuf::from(text),
+        },
+        _ => PathBuf::from(text),
+    }
+}
+
+/// Whether a new folder can be made at `out`: a folder can be made in the nearest folder above it that is there (on
+/// Windows a user may make folders where they may not make files, at the top of a drive). A folder found writable is
+/// remembered, so typing a name doesn't make and remove a test folder on every key; a refusal leaves nothing behind
+/// and is asked again (the permission may have been fixed meanwhile).
+fn writable(out: &Path) -> bool {
+    use std::sync::Mutex;
+    static WRITABLE: Mutex<Option<PathBuf>> = Mutex::new(None);
+    let Some(parent) = out.ancestors().skip(1).find(|p| p.is_dir()) else { return true };
+    let mut known = WRITABLE.lock().unwrap_or_else(|e| e.into_inner());
+    if known.as_deref() == Some(parent) {
+        return true;
+    }
+    let probe = parent.join(format!(".blockforge-write-check-{}", std::process::id()));
+    let ok = match std::fs::create_dir(&probe) {
+        Ok(()) => {
+            let _ = std::fs::remove_dir(&probe);
+            true
+        }
+        // a leftover probe of an earlier run says nothing against the folder
+        Err(e) => e.kind() == std::io::ErrorKind::AlreadyExists,
+    };
+    if ok {
+        *known = Some(parent.to_path_buf());
+    }
+    ok
+}
+
 pub(super) fn check_output(source: Option<&Path>, output: &str) -> OutputCheck {
     let text = output.trim();
     if text.is_empty() {
         return OutputCheck::Empty;
     }
-    let out = Path::new(text);
+    let expanded = expand_output(text);
+    let out = expanded.as_path();
+    if !out.is_absolute() {
+        return OutputCheck::NotAbsolute;
+    }
     if let Some(src) = source {
         let (o, s) = (normalized(out), normalized(src));
         if o == s {
@@ -478,6 +545,7 @@ pub(super) fn check_output(source: Option<&Path>, output: &str) -> OutputCheck {
     }
     match std::fs::read_dir(out).map(|mut rd| rd.next().is_some()) {
         Ok(true) => OutputCheck::NotEmpty,
+        _ if !out.is_dir() && !writable(out) => OutputCheck::NotWritable,
         _ => OutputCheck::Ok,
     }
 }
@@ -554,8 +622,22 @@ impl App {
 
     /// A file or folder was dropped on the window: the page takes it when it is waiting for a world.
     pub(super) fn convert_handle_drop(&mut self, path: &Path) -> bool {
-        if self.page != Page::Convert || self.convert.as_ref().is_none_or(|s| s.screen != Screen::Setup) {
+        if self.page != Page::Convert {
             return false;
+        }
+        match self.convert.as_ref().map(|s| s.screen) {
+            Some(Screen::Setup) => {}
+            // done or failed: the dropped world is the next one
+            Some(Screen::Done | Screen::Failed) => {
+                if let Some(st) = self.convert.as_mut() {
+                    st.start_over();
+                }
+            }
+            Some(Screen::Running) => {
+                self.toast(tr!("A world is being converted. Drop the next one when it is done."));
+                return true;
+            }
+            None => return false,
         }
         self.convert_look(path.to_path_buf());
         true
@@ -585,6 +667,10 @@ impl App {
                 let Some(st) = self.convert.as_mut() else { return };
                 st.picking = false;
                 let Some(path) = path else { return };
+                // the chooser was left open while a conversion started: what it picked would reset the page under it
+                if st.screen != Screen::Setup {
+                    return;
+                }
                 match pick {
                     Pick::SourceFolder | Pick::SourceFile => self.convert_look(path),
                     Pick::OutputParent => {
@@ -612,7 +698,7 @@ impl App {
                     Outcome::Failed if elsewhere => {
                         self.toast_err(tr!("The world could not be converted. Open the Convert page for details."))
                     }
-                    Outcome::Cancelled => self.toast(tr!("Conversion stopped.")),
+                    Outcome::Cancelled => self.toast(tr!("Conversion stopped. What it wrote so far was deleted.")),
                     _ => {}
                 }
             }
@@ -675,18 +761,22 @@ impl App {
         let (tx, rx) = channel::<Event>();
         let spawned = std::thread::Builder::new().name("convert".into()).spawn(move || backend.run(job, tx, cancel));
         let n = self.notifier();
-        if spawned.is_err() {
+        let Ok(handle) = spawned else {
             n.send(Msg::Convert(ConvertMsg::Event {
                 run,
                 event: Event::Failed(tr!("The converter could not start.")),
             }));
             return;
+        };
+        if let Some(st) = self.convert.as_mut() {
+            st.worker = Some(handle);
         }
         let relay = std::thread::Builder::new().name("convert-events".into()).spawn(move || {
             let mut last_progress = Instant::now() - Duration::from_secs(1);
             let mut ended = false;
             for event in rx {
-                let end = matches!(event, Event::Done(_) | Event::Failed(_) | Event::Cancelled);
+                let end =
+                    matches!(event, Event::Done(_) | Event::Failed(_) | Event::FailedForGood(_) | Event::Cancelled);
                 // a flood of progress reports would only make the window redraw for nothing
                 if matches!(event, Event::Progress(_)) {
                     if last_progress.elapsed() < Duration::from_millis(80) {
@@ -714,9 +804,22 @@ impl App {
 
     /// The window is closing: a running conversion is asked to stop.
     pub(super) fn convert_on_exit(&mut self) {
-        if let Some(run) = self.convert.as_ref().and_then(|s| s.run.as_ref()) {
+        let Some(st) = self.convert.as_mut() else { return };
+        if let Some(run) = st.run.as_ref() {
             run.cancel.store(true, Ordering::Relaxed);
         }
+        // a stopped run deletes what it wrote: give it a few seconds, so no half-written world is left behind
+        if let Some(worker) = st.worker.take() {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !worker.is_finished() && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        }
+    }
+
+    /// A world is being converted right now.
+    pub(super) fn convert_running(&self) -> bool {
+        self.convert.as_ref().is_some_and(|s| matches!(s.screen, Screen::Running) && s.run.is_some())
     }
 
     /// The "Add a Bedrock world" button of an instance: opens the converter, set to save into the instance.
@@ -974,6 +1077,34 @@ mod tests {
         std::fs::create_dir_all(dir.join("out 2")).unwrap();
         assert_eq!(free_name(&out), dir.join("out 3"));
         assert_eq!(free_name(&dir.join("nothing")), dir.join("nothing"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_typed_home_folder_is_expanded_and_a_relative_path_is_refused() {
+        let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from).unwrap();
+        assert_eq!(expand_output("~/Desktop/My World"), home.join("Desktop/My World"));
+        assert_eq!(expand_output("  ~  "), home);
+        assert_eq!(expand_output("~someone/x"), PathBuf::from("~someone/x"), "another user's home is left as typed");
+        // it would land wherever the launcher was started from
+        assert_eq!(check_output(None, "My World (converted)"), OutputCheck::NotAbsolute);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_folder_that_cannot_be_written_to_is_said_before_converting() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("bf-convert-readonly-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let out = dir.join("World (converted)");
+        // root may write anywhere: then there is nothing to check
+        let root_user = std::fs::write(dir.join("probe"), b"x").is_ok();
+        if !root_user {
+            assert_eq!(check_output(None, &out.to_string_lossy()), OutputCheck::NotWritable);
+        }
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(check_output(None, &out.to_string_lossy()), OutputCheck::Ok);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -525,14 +525,26 @@ pub fn multipart_body(boundary: &str, slim: bool, png: &[u8]) -> Vec<u8> {
     body
 }
 
-/// Check a skin file the player picked: a PNG of 64x64 (or 64x32) pixels.
+/// Check a skin file the player picked: a PNG of 64x64 (or 64x32) pixels. The error says which of these it isn't.
 pub fn check_skin_file(path: &Path) -> Result<RgbaImage> {
-    let is_png = path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("png"));
-    let img = if is_png { std::fs::read(path).ok().and_then(|b| decode_png(&b).ok()) } else { None };
-    match img {
-        Some(i) if is_valid_skin(i.width(), i.height()) => Ok(i),
-        _ => bail!("That file isn't a skin. Skins are PNG images of 64x64 (or 64x32) pixels."),
+    let bytes = match std::fs::read(path) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            bail!("There is no file at {}. Check the path, or pick the file with Browse.", path.display())
+        }
+        Err(e) => bail!("That file can't be opened: {e}"),
+    };
+    let Ok(img) = decode_png(&bytes) else {
+        bail!("That file isn't a PNG picture. Skins are PNG images of 64x64 (or 64x32) pixels.");
+    };
+    if !is_valid_skin(img.width(), img.height()) {
+        bail!(
+            "That picture is {}x{} pixels. Skins are 64x64 (or 64x32) pixels; HD skins need a mod and can't be uploaded.",
+            img.width(),
+            img.height()
+        );
     }
+    Ok(img)
 }
 
 /// Upload a skin for a signed-in account (`MojangAPIUtils.uploadSkin`). Offline players can't have a skin.
@@ -811,10 +823,15 @@ mod tests {
         assert!(check_skin_file(&ok).is_ok());
         let big = dir.join("big.png");
         solid(128, 128, [1, 2, 3, 255]).save(&big).unwrap();
-        assert!(check_skin_file(&big).is_err());
+        let e = check_skin_file(&big).unwrap_err().to_string();
+        assert!(e.contains("128x128"), "the error says the picture's size: {e}");
         let text = dir.join("skin.txt");
         std::fs::write(&text, "x").unwrap();
-        assert!(check_skin_file(&text).is_err());
+        let e = check_skin_file(&text).unwrap_err().to_string();
+        assert!(e.contains("isn't a PNG"), "{e}");
+        // a mistyped path says so, rather than blaming the file
+        let e = check_skin_file(&dir.join("no-such-skin.png")).unwrap_err().to_string();
+        assert!(e.contains("no file at"), "{e}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -125,7 +125,15 @@ pub(super) fn wide_row(ui: &mut Ui, title: &str, hint: &str, control_width: f32,
     });
 }
 
-fn memory_text(mb: u32) -> String {
+/// The interface sizes the Appearance row offers.
+const ZOOMS: [(f32, &str); 5] = [(0.9, "90%"), (1.0, "100%"), (1.1, "110%"), (1.25, "125%"), (1.5, "150%")];
+
+/// The offered size closest to `zoom` (Ctrl and + can land between two of them).
+fn nearest_zoom(zoom: f32) -> usize {
+    (0..ZOOMS.len()).min_by(|&a, &b| (ZOOMS[a].0 - zoom).abs().total_cmp(&(ZOOMS[b].0 - zoom).abs())).unwrap_or(1)
+}
+
+pub(super) fn memory_text(mb: u32) -> String {
     if mb % 1024 == 0 { format!("{} GB", mb / 1024) } else { format!("{:.1} GB", mb as f32 / 1024.0) }
 }
 
@@ -184,13 +192,14 @@ pub(super) fn draft_text(
     if r.lost_focus() {
         ui.data_mut(|d| d.remove::<String>(id));
         editing.then_some(draft)
-    } else {
-        if r.has_focus() {
-            ui.data_mut(|d| d.insert_temp(id, draft));
-        } else {
-            ui.data_mut(|d| d.remove::<String>(id));
-        }
+    } else if r.has_focus() {
+        ui.data_mut(|d| d.insert_temp(id, draft));
         None
+    } else {
+        ui.data_mut(|d| d.remove::<String>(id));
+        // a draft left over without the field ever saying it was left: the page was switched (the sidebar is drawn
+        // before the page, so the field wasn't drawn again to notice). What was typed is saved now, not dropped.
+        (editing && draft != value).then_some(draft)
     }
 }
 
@@ -284,6 +293,7 @@ impl App {
             });
         });
         let mut dirty = false;
+        let mut dragged = false;
         let mut theme_changed = false;
         let mut open_data = false;
         let (total_mb, free_mb) = memory_now();
@@ -311,6 +321,21 @@ impl App {
                             }
                         });
                 });
+                r.gap(ui);
+                wide_row(
+                    ui,
+                    "Interface size",
+                    "How big text and buttons are. Ctrl + and Ctrl \u{2212} change it too",
+                    330.0,
+                    |ui| {
+                        let zoom = ui.ctx().zoom_factor();
+                        let labels: Vec<&str> = ZOOMS.iter().map(|z| z.1).collect();
+                        if let Some(i) = segmented(ui, &labels, nearest_zoom(zoom)) {
+                            // the window applies it (and keeps it for the next start) on the next frame
+                            ui.ctx().set_zoom_factor(ZOOMS[i].0);
+                        }
+                    },
+                );
                 // no Language row: the window is in English only for now, so a choice there would change nothing.
                 // `language` stays in the settings file for the Java edition.
             });
@@ -332,7 +357,16 @@ impl App {
                     if !auto {
                         // the row lays out from the right: the amount, then the slider to its left
                         ui.add_space(16.0);
-                        ui.label(RichText::new(memory_text(s.maximum_memory)).font(super::fonts::medium(FS_BODY)));
+                        let label = ui.label(
+                            RichText::new(memory_text(s.maximum_memory)).font(super::fonts::medium(FS_BODY)),
+                        );
+                        if s.maximum_memory > max_mb {
+                            // set elsewhere (an imported setting, the file): more than the slider goes to
+                            label.on_hover_text(format!(
+                                "More than the slider goes to ({}, half of this computer's memory). Drag it to pick less.",
+                                memory_text(max_mb)
+                            ));
+                        }
                         ui.scope(|ui| {
                             // a rail that can be seen, filled in ink up to the handle (like a switch that is on)
                             ui.visuals_mut().widgets.inactive.bg_fill = c_active();
@@ -345,7 +379,8 @@ impl App {
                                 .trailing_fill(true);
                             if ui.add(slider).changed() {
                                 s.maximum_memory = mb;
-                                dirty = true;
+                                // written once the drag is over, not on every frame of it
+                                dragged = true;
                             }
                         });
                     }
@@ -516,7 +551,12 @@ impl App {
         }
         if dirty {
             self.save_settings();
+            // the player is looking: a tray that can't start now says why
+            self.tray_quiet = false;
             self.sync_tray();
+            mark_saved(ui.ctx());
+        } else if dragged {
+            self.save_settings_soon();
             mark_saved(ui.ctx());
         }
     }
@@ -583,6 +623,31 @@ mod tests {
     }
 
     #[test]
+    fn typing_is_saved_when_the_page_is_left_with_the_field_still_focused() {
+        let ctx = egui::Context::default();
+        let (_, rect) = frame(&ctx, vec![], "old");
+        let at = rect.center();
+        let press = |pressed| egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        };
+        frame(&ctx, vec![egui::Event::PointerMoved(at), press(true)], "old");
+        frame(&ctx, vec![press(false)], "old");
+        frame(&ctx, vec![key(egui::Key::A, egui::Modifiers::COMMAND)], "old");
+        frame(&ctx, vec![egui::Event::Text("-Xss4M".into())], "old");
+        // the sidebar switches the page: the field isn't drawn for a few frames
+        for _ in 0..3 {
+            let mut out = ctx.run_ui(egui::RawInput::default(), |_| {});
+            out.textures_delta.clear();
+        }
+        // back on the page, what was typed is handed back once, not thrown away
+        assert_eq!(frame(&ctx, vec![], "old").0.as_deref(), Some("-Xss4M"));
+        assert_eq!(frame(&ctx, vec![], "-Xss4M").0, None);
+    }
+
+    #[test]
     fn saved_shows_for_two_seconds_and_fades_out() {
         assert_eq!(saved_alpha(Duration::ZERO), Some(1.0));
         assert_eq!(saved_alpha(Duration::from_millis(1500)), Some(1.0));
@@ -609,6 +674,14 @@ mod tests {
         assert!(!texts(&ctx).iter().any(|t| t == "Saved"), "nothing was saved yet");
         mark_saved(&ctx);
         assert!(texts(&ctx).iter().any(|t| t == "Saved"), "shown right after a save");
+    }
+
+    #[test]
+    fn the_interface_size_row_marks_the_nearest_size() {
+        assert_eq!(ZOOMS[nearest_zoom(1.0)].1, "100%");
+        assert_eq!(ZOOMS[nearest_zoom(1.2)].1, "125%", "Ctrl and + twice");
+        assert_eq!(ZOOMS[nearest_zoom(0.3)].1, "90%");
+        assert_eq!(ZOOMS[nearest_zoom(3.0)].1, "150%");
     }
 
     #[test]

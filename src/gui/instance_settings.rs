@@ -51,11 +51,13 @@ pub struct InstDraft {
     pre: String,
     post: String,
     wrapper: String,
-    error: Option<String>,
+    pub error: Option<String>,
     /// When Save last worked: "Saved" shows for a moment after it (not for ever, while more is changed).
     saved: Option<std::time::Instant>,
     /// The single player worlds of the instance, read once when the settings are opened (not on every frame).
     worlds: Vec<String>,
+    /// The choices as they were saved, to tell whether anything was changed since (see [`InstDraft::dirty`]).
+    base: Option<Box<InstDraft>>,
 }
 
 fn ex_str(l: &LauncherBlock, key: &str) -> Option<String> {
@@ -123,7 +125,82 @@ impl InstDraft {
             error: None,
             saved: None,
             worlds: world_names(&inst.root.join("saves")),
+            base: None,
         }
+        .with_base()
+    }
+
+    /// Remembers the choices as they are now as the saved ones.
+    fn with_base(mut self) -> InstDraft {
+        let mut base = self.clone();
+        base.base = None;
+        self.base = Some(Box::new(base));
+        self
+    }
+
+    /// What the player changed in this draft, carried over to `fresh` (made from the instance file and the launcher
+    /// settings as they are now): everything else is as `fresh` read it. A draft kept a while (or saved after a job
+    /// changed the file) so never writes back old values the player didn't touch, such as yesterday's launcher-wide
+    /// Java arguments.
+    fn rebase(&self, mut fresh: InstDraft) -> InstDraft {
+        let Some(base) = self.base.as_deref() else { return fresh };
+        macro_rules! carry {
+            ($($field:ident),*) => {
+                $( if self.$field != base.$field { fresh.$field = self.$field.clone(); } )*
+            };
+        }
+        carry!(
+            account,
+            quick,
+            server,
+            world,
+            realm,
+            mem,
+            mem_custom,
+            perm_gen,
+            use_mc_java,
+            java_path,
+            java_args,
+            runtime,
+            disable_legacy,
+            system_glfw,
+            system_openal,
+            enable_commands,
+            pre,
+            post,
+            wrapper
+        );
+        fresh.tab = self.tab;
+        fresh.saved = self.saved;
+        fresh
+    }
+
+    /// Something was changed and not saved yet.
+    pub fn dirty(&self) -> bool {
+        self.base.as_deref().is_some_and(|b| !self.same_choices(b))
+    }
+
+    /// The same settings chosen (what Save writes), whatever tab shows or message is up.
+    fn same_choices(&self, o: &InstDraft) -> bool {
+        self.account == o.account
+            && self.quick == o.quick
+            && self.server == o.server
+            && self.world == o.world
+            && self.realm == o.realm
+            && self.mem == o.mem
+            && self.mem_custom == o.mem_custom
+            && self.perm_gen == o.perm_gen
+            && self.use_mc_java == o.use_mc_java
+            && self.java_path == o.java_path
+            && self.java_args == o.java_args
+            && self.runtime == o.runtime
+            && self.disable_legacy == o.disable_legacy
+            && self.system_glfw == o.system_glfw
+            && self.system_openal == o.system_openal
+            && self.enable_commands == o.enable_commands
+            && self.pre == o.pre
+            && self.post == o.post
+            && self.wrapper == o.wrapper
     }
 
     /// The checks Java makes before saving; returns the message to show when something is wrong. `global_args` are
@@ -159,6 +236,10 @@ impl InstDraft {
         }
         if self.quick == QuickKind::Realm && self.realm.trim().is_empty() {
             return Some("The realm id is empty.".into());
+        }
+        if self.quick == QuickKind::Single && self.world.trim().is_empty() {
+            // saved as it is, it would quietly mean the title screen
+            return Some("Pick a world to start in, or play once to make one first.".into());
         }
         None
     }
@@ -268,11 +349,63 @@ fn total_memory_mb() -> u64 {
     *TOTAL.get_or_init(|| crate::platform::memory_mb().0)
 }
 
+/// More than three quarters of the computer's memory for the game: the system and the launcher need the rest.
+fn too_much_memory(mb: u32, total_mb: u64) -> bool {
+    total_mb > 0 && u64::from(mb) * 4 > total_mb * 3
+}
+
 fn gigabytes(mb: u64) -> String {
     format!("{:.1} GB", mb as f64 / 1024.0)
 }
 
 impl App {
+    /// Write a settings draft into its instance. Returns whether it was saved; when not, `d.error` says why.
+    pub(super) fn save_draft(&mut self, d: &mut InstDraft) -> bool {
+        let Some(idx) = self.instances.iter().position(|i| i.folder == d.folder) else {
+            d.error = Some("This instance isn't there any more.".into());
+            return false;
+        };
+        let inst = &self.instances[idx];
+        // the file as it is now, so what a background job wrote meanwhile (a mod it added) is kept, and only what the
+        // player changed is written over it
+        let mut fresh = crate::instances::load_one(&inst.root).unwrap_or_else(|| inst.clone());
+        let settings = self.settings.clone();
+        let mut chosen = d.rebase(InstDraft::from(&fresh, &settings));
+        let has_java = fresh.file.version.java_version.is_some();
+        let uses_mc_java = chosen.use_mc_java.unwrap_or(true) && has_java;
+        if let Some(e) = chosen.validate(uses_mc_java, &settings.java_parameters) {
+            d.error = Some(e);
+            return false;
+        }
+        chosen.write_to(&mut fresh.file.launcher, &settings, uses_mc_java, has_java);
+        match fresh.save() {
+            Ok(()) => {
+                self.instances[idx] = fresh;
+                chosen.saved = Some(std::time::Instant::now());
+                chosen.error = None;
+                *d = chosen.with_base();
+                true
+            }
+            Err(e) => {
+                d.error = Some(format!("Couldn't save: {e:#}"));
+                false
+            }
+        }
+    }
+
+    /// The settings draft that is open, put aside for its instance when it holds changes that weren't saved.
+    pub(super) fn keep_unsaved_draft(&mut self) {
+        if let Some(d) = self.inst_draft.take().filter(InstDraft::dirty) {
+            self.kept_drafts.insert(d.folder.clone(), d);
+        }
+    }
+
+    /// Changes to an instance's settings that weren't saved yet.
+    pub(super) fn unsaved_draft(&self, folder: &str) -> bool {
+        self.inst_draft.as_ref().is_some_and(|d| d.folder == folder && d.dirty())
+            || self.kept_drafts.get(folder).is_some_and(InstDraft::dirty)
+    }
+
     /// Used by the screenshot tour: open the instance settings on a given tab.
     pub(super) fn shot_instance_settings_tab(&mut self, folder: &str, tab: u8) {
         if let Some(inst) = self.instance(folder).cloned() {
@@ -284,7 +417,14 @@ impl App {
 
     pub(super) fn instance_settings_ui(&mut self, ui: &mut Ui, inst: &Instance) {
         if self.inst_draft.as_ref().map(|d| d.folder != inst.folder).unwrap_or(true) {
-            self.inst_draft = Some(InstDraft::from(inst, &self.settings));
+            // changes not saved for another instance wait for it; changes left here earlier come back
+            self.keep_unsaved_draft();
+            let fresh = InstDraft::from(inst, &self.settings);
+            let d = match self.kept_drafts.remove(&inst.folder) {
+                Some(kept) => kept.rebase(fresh),
+                None => fresh,
+            };
+            self.inst_draft = Some(d);
         }
         let mut d = self.inst_draft.take().unwrap();
         let total_mb = total_memory_mb();
@@ -316,14 +456,19 @@ impl App {
             });
             bar.right(ui, |ui| {
                 const SHOWN: std::time::Duration = std::time::Duration::from_secs(3);
-                if let Some(left) = d.saved.and_then(|t| SHOWN.checked_sub(t.elapsed())) {
+                let dirty = d.dirty();
+                if dirty {
+                    ui.label(RichText::new("Unsaved changes").size(FS_META).color(c_warn()));
+                } else if let Some(left) = d.saved.and_then(|t| SHOWN.checked_sub(t.elapsed())) {
                     small_muted(ui, "Saved");
                     ui.ctx().request_repaint_after(left);
                 }
-                if secondary(ui, "Reset").clicked() {
+                // Discard puts back what is saved (the launcher defaults are reset row by row below); it is there only
+                // when there is something to put back
+                if dirty && secondary(ui, "Discard changes").clicked() {
                     reset = true;
                 }
-                if primary(ui, "Save").clicked() {
+                if primary_enabled(ui, "Save", dirty).on_disabled_hover_text("Nothing was changed").clicked() {
                     save = true;
                 }
             });
@@ -428,8 +573,15 @@ impl App {
                             ui.horizontal(|ui| {
                                 ui.spacing_mut().slider_width = 360.0;
                                 let max = if total_mb == 0 { 16384 } else { total_mb as u32 }.max(1024);
-                                ui.add(egui::Slider::new(&mut d.mem_custom, 512..=max).step_by(512.0).suffix(" MB"));
+                                // only moving it changes the value: an amount of another computer (or not on the 256
+                                // steps) shown here isn't rounded into an unsaved change
+                                ui.add(egui::Slider::new(&mut d.mem_custom, 512..=max).step_by(256.0).show_value(false).clamping(egui::SliderClamping::Edits));
+                                // in GB, as the rest of the launcher says it
+                                ui.label(RichText::new(super::settings::memory_text(d.mem_custom)).font(super::fonts::medium(FS_BODY)));
                             });
+                            if too_much_memory(d.mem_custom, total_mb) {
+                                ui.label(RichText::new(format!("That leaves too little for the rest of this computer ({} in all). The game may fail to start, or freeze the computer.", gigabytes(total_mb))).size(FS_META).color(c_warn()));
+                            }
                         }
                         row(ui, r, "PermGen size", "Memory for loaded code, only used by Java 7 and by older modpacks that ask for it", |ui| {
                             ui.add(egui::DragValue::new(&mut d.perm_gen).range(32..=total_mb.max(256) as u32).speed(8.0).suffix(" MB"));
@@ -523,21 +675,12 @@ impl App {
 
         d.worlds = worlds;
         if reset {
+            let tab = d.tab;
             d = InstDraft::from(inst, &self.settings);
+            d.tab = tab;
         }
         if save {
-            d.error = d.validate(uses_mc_java, &self.settings.java_parameters);
-            if d.error.is_none() {
-                if let Some(idx) = self.instances.iter().position(|i| i.folder == inst.folder) {
-                    let settings = self.settings.clone();
-                    let has_java = inst.file.version.java_version.is_some();
-                    d.write_to(&mut self.instances[idx].file.launcher, &settings, uses_mc_java, has_java);
-                    match self.instances[idx].save() {
-                        Ok(()) => d.saved = Some(std::time::Instant::now()),
-                        Err(e) => d.error = Some(format!("Couldn't save: {e:#}")),
-                    }
-                }
-            }
+            self.save_draft(&mut d);
         }
         self.inst_draft = Some(d);
         if let Some(change) = helper_change {
@@ -556,6 +699,8 @@ impl App {
         let Some((folder, mut name)) = self.rename_target.clone() else { return };
         let mut close = false;
         let mut apply = false;
+        let others: Vec<String> =
+            self.instances.iter().filter(|i| i.folder != folder).map(|i| i.name().to_string()).collect();
         let modal = egui::Modal::new(egui::Id::unique("rename")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
             ui.set_width(380.0);
             ui.label(RichText::new("Rename instance").size(FS_SECTION).semibold());
@@ -569,8 +714,18 @@ impl App {
             // typing can start at once
             focus_when_shown(ui, &r);
             ui.add_space(8.0);
+            // two instances of one name would share their backups (they are found by name)
+            let taken = others.iter().any(|o| o.trim().eq_ignore_ascii_case(name.trim()));
+            if taken {
+                ui.label(
+                    RichText::new("Another instance is called that. Pick another name.")
+                        .size(FS_META)
+                        .color(c_danger()),
+                );
+                ui.add_space(4.0);
+            }
             ui.horizontal(|ui| {
-                let ok = !name.trim().is_empty();
+                let ok = !name.trim().is_empty() && !taken;
                 if primary_enabled(ui, "Rename", ok).clicked()
                     || (ok && r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
                 {
@@ -587,9 +742,18 @@ impl App {
         }
         if apply {
             if let Some(idx) = self.instances.iter().position(|i| i.folder == folder) {
+                let old = self.instances[idx].name().to_string();
                 self.instances[idx].file.launcher.name = name.trim().to_string();
-                if let Err(e) = self.instances[idx].save() {
-                    self.toast_err(format!("{e:#}"));
+                match self.instances[idx].save() {
+                    Ok(()) => {
+                        // backups are found by the instance's name: they follow it, so its page still lists them
+                        let svc = crate::svcsettings::ServiceSettings::from_settings(&self.settings);
+                        let moved = crate::backups::rename_backups(&self.dirs, &svc, &old, name.trim(), &others);
+                        if moved > 0 {
+                            self.toast(format!("Renamed, and its {moved} backup(s) with it"));
+                        }
+                    }
+                    Err(e) => self.toast_err(format!("{e:#}")),
                 }
             }
             close = true;
@@ -650,5 +814,60 @@ mod validation_tests {
         assert!(d.validate(true, &settings.java_parameters).is_some());
         let d = InstDraft::from(&instance(Some("-XX:+UseZGC")), &settings);
         assert_eq!(d.validate(true, &settings.java_parameters), None);
+    }
+
+    #[test]
+    fn a_draft_knows_when_it_holds_changes_that_were_not_saved() {
+        let settings = crate::config::Settings::default();
+        let mut d = InstDraft::from(&instance(None), &settings);
+        assert!(!d.dirty(), "just opened");
+        d.tab = 2;
+        d.error = Some("a message".into());
+        assert!(!d.dirty(), "looking at another tab changes nothing");
+        d.wrapper = "prime-run %command%".into();
+        assert!(d.dirty());
+        d.wrapper.clear();
+        assert!(!d.dirty(), "typed and taken back");
+        d.mem = MemChoice::Custom;
+        assert!(d.dirty());
+        let d = d.with_base();
+        assert!(!d.dirty(), "saved");
+    }
+
+    #[test]
+    fn a_kept_draft_carries_only_what_was_changed() {
+        let mut settings = crate::config::Settings::default();
+        settings.java_parameters = "-XX:+UseG1GC".into();
+        let mut kept = InstDraft::from(&instance(None), &settings);
+        kept.wrapper = "prime-run %command%".into();
+        kept.tab = 2;
+        // the launcher-wide arguments change while the draft waits
+        settings.java_parameters = "-XX:+UseZGC".into();
+        let d = kept.rebase(InstDraft::from(&instance(None), &settings));
+        assert_eq!(d.wrapper, "prime-run %command%", "the change is kept");
+        assert_eq!(d.java_args, "-XX:+UseZGC", "an untouched field follows the launcher as it is now");
+        assert_eq!(d.tab, 2);
+        assert!(d.dirty());
+    }
+
+    #[test]
+    fn quick_play_into_a_world_needs_a_world() {
+        let settings = crate::config::Settings::default();
+        let mut d = InstDraft::from(&instance(None), &settings);
+        d.quick = QuickKind::Single;
+        assert!(
+            d.validate(true, &settings.java_parameters).is_some(),
+            "no world picked: it would save as the title screen"
+        );
+        d.world = "New World".into();
+        assert_eq!(d.validate(true, &settings.java_parameters), None);
+    }
+
+    #[test]
+    fn more_than_three_quarters_of_the_memory_is_warned_about() {
+        assert!(!too_much_memory(8192, 16384));
+        assert!(!too_much_memory(12288, 16384), "exactly three quarters");
+        assert!(too_much_memory(12544, 16384));
+        assert!(!too_much_memory(65536, 0), "unknown memory: no warning");
     }
 }

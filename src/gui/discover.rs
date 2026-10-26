@@ -31,6 +31,8 @@ pub struct DiscoverState {
     edited: Option<Instant>,
     /// The Modrinth projects in the target instance, with the instance file's time they were read at.
     installed: Option<(String, Option<SystemTime>, HashSet<String>)>,
+    /// Counts the result lists that replaced the one before, so a new search starts at the top of the list.
+    pub list_gen: u64,
 }
 
 impl Default for DiscoverState {
@@ -50,6 +52,7 @@ impl Default for DiscoverState {
             searched: false,
             edited: None,
             installed: None,
+            list_gen: 0,
         }
     }
 }
@@ -74,6 +77,7 @@ impl DiscoverState {
             Ok((hits, total)) => {
                 if self.offset_pending == 0 {
                     self.hits = hits;
+                    self.list_gen += 1;
                 } else {
                     self.hits.extend(hits);
                 }
@@ -90,6 +94,13 @@ impl DiscoverState {
             }
         }
     }
+}
+
+/// An instance as the "For" list and the Install menu name it: its name, Minecraft version and mod loader, so the one
+/// a mod fits can be told apart from the rest.
+pub(super) fn instance_choice(inst: &crate::instances::Instance) -> String {
+    let loader = inst.loader().map(|(kind, _)| kind.to_string()).unwrap_or_else(|| "no mod loader".into());
+    format!("{} \u{00B7} {} \u{00B7} {loader}", inst.name(), inst.mc_version())
 }
 
 const PAGE: u32 = 20;
@@ -482,7 +493,8 @@ impl App {
     fn install_hit(&mut self, hit: &Hit, folder: Option<String>) {
         let id = hit.project_id.clone();
         let title = hit.title.clone();
-        let kind = self.discover.kind;
+        // the row's own kind: while another tab's search loads, the rows of the last one are still on screen
+        let kind = if hit.project_type.is_empty() { self.discover.kind } else { Kind::from_api(&hit.project_type) };
         let Some(content) = content_kind(kind) else {
             self.discover.installing.insert(id.clone());
             let dirs = self.dirs.clone();
@@ -492,10 +504,17 @@ impl App {
             });
             return;
         };
-        let Some(root) = folder.as_deref().and_then(|f| self.instance(f)).map(|i| i.root.clone()) else {
+        let Some(inst) = folder.as_deref().and_then(|f| self.instance(f)) else {
             self.toast_err("That instance isn't there any more. Choose another one.");
             return;
         };
+        let (root, inst_folder, inst_name) = (inst.root.clone(), inst.folder.clone(), inst.name().to_string());
+        if content == ContentKind::Mods && inst.loader().is_none() {
+            // a mod in an instance without a mod loader is never loaded: offer to add one instead
+            self.toast_err(format!("{inst_name} has no mod loader, so {title} wouldn't load. Pick one first."));
+            self.apply(super::instance_menu::Act::ChangeLoader(inst_folder));
+            return;
+        }
         self.discover.installing.insert(id.clone());
         // the mod manager's install: it records the file in the instance, adds what it needs, and says when what
         // it needs clashes with something already installed
@@ -588,7 +607,7 @@ impl App {
                     .map(|i| i.name().to_string())
                     .unwrap_or_else(|| "Any instance".into());
                 let names: Vec<(String, String)> =
-                    self.instances.iter().map(|i| (i.folder.clone(), i.name().to_string())).collect();
+                    self.instances.iter().map(|i| (i.folder.clone(), instance_choice(i))).collect();
                 egui::ComboBox::from_id_salt("target").selected_text(format!("For: {current}")).width(220.0).show_ui(
                     ui,
                     |ui| {
@@ -692,7 +711,7 @@ impl App {
         let target = self.discover.target.clone();
         let mut install: Option<(Hit, Option<String>)> = None;
         let mut more = false;
-        ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
+        ScrollArea::vertical().id_salt(("discover-list", self.discover.list_gen)).auto_shrink(false).show(ui, |ui| {
             for hit in &hits {
                 let key = format!("mr:{}", hit.project_id);
                 let is_installed = kind != Kind::Modpack
@@ -746,7 +765,7 @@ impl App {
                                             ui.label("Create an instance first");
                                         }
                                         for inst in &self.instances {
-                                            if ui.button(inst.name()).clicked() {
+                                            if ui.button(instance_choice(inst)).clicked() {
                                                 install = Some((hit.clone(), Some(inst.folder.clone())));
                                                 ui.close();
                                             }

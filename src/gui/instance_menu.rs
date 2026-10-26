@@ -9,7 +9,6 @@ use super::theme::*;
 use super::widgets::*;
 use super::{App, InstTab, Msg, Page};
 use crate::instances::{self, Instance};
-use crate::launch::LaunchOptions;
 use crate::loaders::{self, Loader};
 
 /// What the player asked an instance to do.
@@ -266,17 +265,17 @@ impl App {
     pub(super) fn apply(&mut self, act: Act) {
         match act {
             Act::Open(f) => self.open_instance(&f),
-            Act::Play(f) => self.play(&f, LaunchOptions::default()),
+            Act::Play(f) => self.play_checked(&f, super::PendingPlay::Play),
             Act::PlayOffline(f) => self.offline_play = Some((f, String::new(), false)),
             Act::PlayAs(f, id) => {
                 let account = self.accounts.iter().find(|a| a.uuid == id).cloned();
-                self.play_as(&f, LaunchOptions::default(), account);
+                self.play_checked(&f, super::PendingPlay::As(account));
             }
             Act::AddAccount => self.start_sign_in(),
             Act::FastStart(f, on) => self.set_fast_start(&f, on),
             Act::Helper(f, change) => self.apply_helper_change(&f, change),
-            Act::Stop(f) => self.stop(&f),
-            Act::StopSession(key) => self.stop_session(&key),
+            Act::Stop(f) => self.ask_stop(&f, false),
+            Act::StopSession(key) => self.ask_stop(&key, true),
             Act::Folder(f) => {
                 if let Some(root) = self.instance(&f).map(|i| i.root.clone()) {
                     self.open_path(&root);
@@ -321,7 +320,7 @@ impl App {
             }
             Act::Duplicate(f) => {
                 if let Some(inst) = self.instance(&f).cloned() {
-                    let name = format!("{} copy", inst.name());
+                    let name = super::create::unique_instance_name(&self.instances, &format!("{} copy", inst.name()));
                     let dirs = self.dirs.clone();
                     self.start_task(format!("Copying {}", inst.name()), move |_, _| async move {
                         tokio::task::spawn_blocking(move || instances::duplicate(&dirs, &inst, &name)).await??;
@@ -548,12 +547,15 @@ impl App {
                 ui.set_width(440.0);
                 ui.label(RichText::new("Change description").size(FS_SECTION).semibold());
                 ui.add_space(6.0);
-                ui.add_sized(
+                let r = ui.add_sized(
                     [ui.available_width(), 90.0],
                     egui::TextEdit::multiline(&mut text)
                         .margin(egui::Margin::symmetric(12, 10))
                         .background_color(c_field()),
                 );
+                // typing can start at once
+                focus_when_shown(ui, &r);
+                small_muted(ui, "It shows on the instance's Overview.");
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
                     if primary(ui, "Save").clicked() {
@@ -586,7 +588,7 @@ impl App {
             let modal = egui::Modal::new(egui::Id::unique("offline")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
                 ui.set_width(400.0);
                 ui.label(RichText::new("Play offline with another name").size(FS_SECTION).semibold());
-                muted(ui, "3-16 letters, numbers or underscores. No account needed.");
+                muted(ui, "3\u{2013}16 letters, numbers or underscores. No account needed.");
                 ui.add_space(6.0);
                 let r = ui.add_sized(
                     [ui.available_width(), 38.0],
@@ -597,7 +599,9 @@ impl App {
                 );
                 focus_when_shown(ui, &r);
                 if bad {
-                    ui.label(RichText::new("Use 3-16 letters, numbers or underscores.").color(c_danger()));
+                    if let Some(problem) = super::whoplays::name_problem(name.trim()) {
+                        ui.label(RichText::new(problem).color(c_danger()));
+                    }
                 }
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
@@ -620,7 +624,7 @@ impl App {
                         self.accounts.push(acc.clone());
                         self.save_accounts();
                     }
-                    self.play_as(&folder, LaunchOptions::default(), Some(acc));
+                    self.play_checked(&folder, super::PendingPlay::As(Some(acc)));
                     close = true;
                 } else {
                     bad = true;
@@ -637,6 +641,8 @@ impl App {
             let (mut apply, mut close, mut changed) = (false, false, false);
             let mut d = self.loader_dialog.take().unwrap();
             let current = self.instance(&d.folder).and_then(|i| i.loader().map(|(k, v)| format!("{k} {v}")));
+            let mods_in = self.instance(&d.folder).map_or(0, |i| i.mod_count);
+            let playing = self.is_playing(&d.folder);
             let modal = egui::Modal::new(egui::Id::unique("loader")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
                 ui.set_width(440.0);
                 ui.label(RichText::new("Mod loader").size(FS_SECTION).semibold());
@@ -651,13 +657,21 @@ impl App {
                         changed = true;
                     }
                 }
-                if d.loader != Loader::Vanilla {
+                if d.loader != Loader::Vanilla && d.error.is_some() && !d.loading {
+                    // under the choices, where a long message can wrap, and with a way to ask again
+                    let e = d.error.clone().unwrap_or_default();
+                    if notice(ui, NoticeKind::Error, &format!("Couldn't get the {} versions: {e}", d.loader.label()), Some("Try again"))
+                        .is_some_and(|r| r.clicked())
+                    {
+                        d.requested = None;
+                        d.error = None;
+                        changed = true;
+                    }
+                } else if d.loader != Loader::Vanilla {
                     ui.horizontal(|ui| {
                         muted(ui, "Version");
                         if d.loading {
                             ui.add(egui::Spinner::new().size(14.0));
-                        } else if let Some(e) = &d.error {
-                            ui.label(RichText::new(e).color(c_danger()));
                         } else if d.versions.is_empty() {
                             ui.label(
                                 RichText::new(format!(
@@ -687,9 +701,27 @@ impl App {
                         }
                     });
                 }
+                // mods made for one loader don't load in another
+                let loader_now = current.as_deref().map(|c| c.split(' ').next().unwrap_or(c).to_lowercase());
+                let switching = loader_now.as_deref() != Some(d.loader.label().to_lowercase().as_str())
+                    && !(loader_now.is_none() && d.loader == Loader::Vanilla);
+                if switching && mods_in > 0 {
+                    ui.add_space(6.0);
+                    ui.label(
+                        RichText::new(format!(
+                            "The {mods_in} mod(s) in this instance stay. Mods made for another loader won't load: switch them off or replace them in the Mods tab."
+                        ))
+                        .size(FS_META)
+                        .color(c_warn()),
+                    );
+                }
+                if playing {
+                    ui.add_space(6.0);
+                    ui.label(RichText::new("Close Minecraft first, then change the mod loader.").size(FS_META).color(c_warn()));
+                }
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    let ready = d.loader == Loader::Vanilla || (!d.loading && !d.versions.is_empty());
+                    let ready = !playing && (d.loader == Loader::Vanilla || (!d.loading && !d.versions.is_empty()));
                     if primary_enabled(ui, "Apply", ready).clicked() {
                         apply = true;
                     }
@@ -703,7 +735,10 @@ impl App {
                 if let Some(inst) = self.instance(&d.folder).cloned() {
                     let (dirs, loader) = (self.dirs.clone(), d.loader);
                     let version = Some(d.version.clone()).filter(|v| !v.is_empty());
+                    // one change to the instance at a time: a mod installed meanwhile waits, and isn't written over
+                    let lock = super::mods::instance_lock(&inst.root);
                     self.start_task(format!("Changing the mod loader of {}", inst.name()), move |p, _| async move {
+                        let _turn = lock.lock().await;
                         let mut inst = inst;
                         instances::set_loader(&dirs, &mut inst, loader, version.as_deref(), &p).await?;
                         Ok(format!("{} now uses {}", inst.name(), loader.label()))

@@ -8,7 +8,7 @@ use super::theme::*;
 use super::widgets::*;
 use super::{App, InstTab, Page, Phase};
 use crate::instances::Instance;
-use crate::launch::{LaunchOptions, Level};
+use crate::launch::Level;
 
 /// "12 min" or "1 h 05 min": how long a game has been running.
 fn elapsed_text(t: std::time::Duration) -> String {
@@ -248,11 +248,31 @@ impl App {
                                 self.discover.kind = crate::modrinth::Kind::Modpack;
                                 self.discover_search(true);
                             }
+                            // instances from another launcher (MultiMC, Prism, CurseForge, a .mrpack) come in here
+                            if secondary(ui, "Import")
+                                .on_hover_text("From another launcher, or a modpack file")
+                                .clicked()
+                            {
+                                self.open_import(None);
+                            }
                         });
+                        small_muted(ui, "You can also drop a modpack file (.mrpack or .zip) on this window.");
                     });
                 }
             }
 
+            if self.instances.len() == 1 {
+                // the one instance is the card above; the ways to more stay in reach
+                ui.add_space(12.0);
+                ui.horizontal(|ui| {
+                    if secondary_icon(ui, Icon::Plus, "New instance").clicked() {
+                        self.page = Page::Create;
+                    }
+                    if secondary(ui, "Find mods").clicked() {
+                        self.page = Page::Discover;
+                    }
+                });
+            }
             if self.instances.len() > 1 {
                 ui.add_space(18.0);
                 let (cols, width) = grid_columns(ui.available_width(), 248.0, 16.0);
@@ -313,6 +333,31 @@ impl App {
             ui.horizontal(|ui| self.library_filters(ui, false));
         }
         ui.add_space(8.0);
+        // a folder whose instance.json is damaged isn't in the list: said here, so its worlds aren't taken for lost
+        if let Some(first) = self.unreadable.first().cloned() {
+            let names: Vec<String> =
+                self.unreadable.iter().filter_map(|p| p.file_name().map(|n| n.to_string_lossy().to_string())).collect();
+            let text = if names.len() == 1 {
+                format!(
+                    "The instance in the folder \"{}\" can't be read: its settings file (instance.json) is damaged. Its worlds and mods are still in the folder.",
+                    names[0]
+                )
+            } else {
+                let mut shown: Vec<String> = names.iter().take(3).cloned().collect();
+                if names.len() > 3 {
+                    shown.push(format!("and {} more", names.len() - 3));
+                }
+                format!(
+                    "{} instance folders can't be read ({}): their settings files (instance.json) are damaged. Their worlds and mods are still in the folders.",
+                    names.len(),
+                    shown.join(", ")
+                )
+            };
+            if notice(ui, NoticeKind::Warn, &text, Some("Open folder")).is_some_and(|r| r.clicked()) {
+                self.open_folder(&first);
+            }
+            ui.add_space(8.0);
+        }
         if let Some(a) = self.library_list(ui) {
             self.apply(a);
         }
@@ -487,6 +532,8 @@ impl App {
         }
         header.finish(ui);
         ui.add_space(12.0);
+        // a dot on Settings while changes there weren't saved
+        let unsaved = self.unsaved_draft(&folder);
         tab_bar(ui, |ui| {
             for (t, label) in [
                 (InstTab::Overview, "Overview"),
@@ -494,7 +541,10 @@ impl App {
                 (InstTab::Logs, "Logs"),
                 (InstTab::Settings, "Settings"),
             ] {
-                if tab(ui, label, self.tab == t).clicked() {
+                let mark = (t == InstTab::Settings).then_some(unsaved);
+                let r = tab_marked(ui, label, self.tab == t, mark);
+                let r = if mark == Some(true) { r.on_hover_text("Changes here aren't saved yet") } else { r };
+                if r.clicked() {
                     self.tab = t;
                     if t == InstTab::Mods {
                         self.mods_cache = None;
@@ -520,6 +570,25 @@ impl App {
                     self.ftb_update_instance(&inst.folder);
                 }
                 ui.add_space(12.0);
+            }
+            // the description, when it says more than the version and loader under the name already do (a pack's own
+            // words, or what the player wrote with "Change description")
+            let desc = inst.file.launcher.description.trim();
+            if !desc.is_empty() && !is_automatic_description(desc, inst) {
+                let format = egui::TextFormat {
+                    font_id: egui::FontId::proportional(FS_BODY),
+                    color: c_muted(),
+                    ..Default::default()
+                };
+                let mut job = egui::text::LayoutJob::single_section(desc.to_string(), format);
+                job.wrap = egui::text::TextWrapping {
+                    max_width: ui.available_width(),
+                    max_rows: 3,
+                    break_anywhere: false,
+                    overflow_character: Some('\u{2026}'),
+                };
+                ui.add(egui::Label::new(job)).on_hover_text(desc);
+                ui.add_space(10.0);
             }
             // what this instance is, in one strip (the version and the loader are under its name)
             let java = inst
@@ -568,7 +637,7 @@ impl App {
                 // neutral: the one green button of the page is Play
                 if ui.add_enabled_ui(ready, |ui| secondary_icon(ui, Icon::Play, "Play and join")).inner.clicked() {
                     let server = self.quick_server.trim().to_string();
-                    self.play(&inst.folder, LaunchOptions { server: Some(server), world: None });
+                    self.play_checked(&inst.folder, super::PendingPlay::Join(server));
                 }
             });
             section_break(ui);
@@ -784,6 +853,14 @@ pub(super) fn contains_ignoring_case(text: &str, lower: &str) -> bool {
         return t.len() >= l.len() && t.windows(l.len()).any(|w| w.eq_ignore_ascii_case(l));
     }
     text.to_lowercase().contains(lower)
+}
+
+/// The description an instance gets when it is made ("Minecraft 1.21.1 with Fabric"): it repeats what the line under
+/// the name says, so the Overview leaves it out.
+fn is_automatic_description(desc: &str, inst: &Instance) -> bool {
+    let mc = inst.mc_version();
+    desc == format!("Minecraft {mc}")
+        || inst.loader().is_some_and(|(kind, _)| desc == format!("Minecraft {mc} with {kind}"))
 }
 
 #[cfg(test)]

@@ -58,6 +58,25 @@ fn busy_reason(games_running: bool, jobs_running: bool) -> Option<&'static str> 
     }
 }
 
+/// The sidebar label of the job a tool starts, so its button can wait while that job runs.
+fn task_label(id: &str) -> Option<&'static str> {
+    Some(match id {
+        "network_checker" => "Network checker",
+        "support_bundle" => "Creating a support bundle",
+        "log_clearer" => "Clearing old logs",
+        "download_clearer" => "Clearing downloads",
+        "class_cache_clearer" => "Clearing the game start cache",
+        "libraries_deleter" => "Deleting libraries",
+        "skin_updater" => "Updating skins",
+        _ => return None,
+    })
+}
+
+/// The space a clean-up gave back, as the message after it says it.
+fn freed(before: u64, after: u64) -> String {
+    format!("{} freed", human_size(before.saturating_sub(after)))
+}
+
 impl App {
     pub(super) fn tools_ui(&mut self, ui: &mut Ui) {
         heading(ui, "Tools");
@@ -66,6 +85,11 @@ impl App {
         let logs_on = self.settings.enable_logs;
         let flatpak = *FLATPAK.get_or_init(tools::is_flatpak);
         let no_accounts = self.accounts.is_empty();
+        // what is running decides which tools can start: they are greyed out with the reason, not refused after the
+        // player has confirmed
+        let games_running = self.games.values().any(super::Game::active);
+        let busy = busy_reason(games_running, !self.tasks.is_empty());
+        let running: Vec<String> = self.tasks.iter().map(|t| t.label.clone()).collect();
         let mut clicked: Option<&'static str> = None;
         let mut go: Option<Fix> = None;
         #[cfg(feature = "converter")]
@@ -92,6 +116,26 @@ impl App {
                             }
                             "skin_updater" if no_accounts => {
                                 (false, Some(("Add an account first.", Some(Fix::Accounts))))
+                            }
+                            id if task_label(id).is_some_and(|l| running.iter().any(|r| r == l)) => {
+                                (false, Some(("Running now. Its progress is in the sidebar.", None)))
+                            }
+                            "debug_mode" if games_running => (
+                                false,
+                                Some((
+                                    "Close Minecraft first. The restarted launcher can't follow a game that runs.",
+                                    None,
+                                )),
+                            ),
+                            "debug_mode" if !running.is_empty() => (
+                                false,
+                                Some(("Wait for the jobs in progress to finish first. A restart stops them.", None)),
+                            ),
+                            "download_clearer" | "libraries_deleter" if busy.is_some() => {
+                                (false, busy.map(|why| (why, None)))
+                            }
+                            "class_cache_clearer" if games_running => {
+                                (false, Some(("Close Minecraft first, it is using the cache.", None)))
                             }
                             _ => (true, None),
                         };
@@ -192,7 +236,10 @@ impl App {
                 });
             }
             "debug_mode" => match tools::relaunch_in_debug() {
-                Ok(()) => self.ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+                Ok(()) => {
+                    self.quit_anyway = true;
+                    self.ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
                 Err(e) => self.toast_err(format!("{e:#}")),
             },
             "download_clearer" => {
@@ -201,8 +248,17 @@ impl App {
                     return;
                 }
                 self.start_task("Clearing downloads", move |_p, _n| async move {
-                    let n = tokio::task::spawn_blocking(move || tools::clear_downloads(&dirs)).await?;
-                    Ok(format!("Downloads cleared ({n} removed)"))
+                    let freed = tokio::task::spawn_blocking(move || {
+                        let size = |d: &crate::paths::Dirs| {
+                            crate::packutil::dir_size(&tools::downloads_dir(d))
+                                + crate::packutil::dir_size(&tools::failed_downloads_dir(d))
+                        };
+                        let before = size(&dirs);
+                        tools::clear_downloads(&dirs);
+                        freed(before, size(&dirs))
+                    })
+                    .await?;
+                    Ok(format!("Downloads cleared ({freed})"))
                 });
             }
             "skin_updater" => {
@@ -228,8 +284,8 @@ impl App {
                     self.toast_err("Close Minecraft first, it is using the cache");
                 } else {
                     self.start_task("Clearing the game start cache", move |_p, _n| async move {
-                        let freed = tokio::task::spawn_blocking(move || crate::classcache::clear(&dirs)).await?;
-                        Ok(format!("Game start cache cleared ({} MB freed)", freed / (1024 * 1024)))
+                        let bytes = tokio::task::spawn_blocking(move || crate::classcache::clear(&dirs)).await?;
+                        Ok(format!("Game start cache cleared ({})", freed(bytes, 0)))
                     });
                 }
             }
@@ -239,8 +295,13 @@ impl App {
                     return;
                 }
                 self.start_task("Deleting libraries", move |_p, _n| async move {
-                    let n = tokio::task::spawn_blocking(move || tools::delete_libraries(&dirs)).await?;
-                    Ok(format!("Libraries deleted ({n} removed). They download again when a game starts"))
+                    let freed = tokio::task::spawn_blocking(move || {
+                        let before = crate::packutil::dir_size(&dirs.libraries);
+                        tools::delete_libraries(&dirs);
+                        freed(before, crate::packutil::dir_size(&dirs.libraries))
+                    })
+                    .await?;
+                    Ok(format!("Libraries deleted ({freed}). They download again when a game starts"))
                 });
             }
             _ => {}

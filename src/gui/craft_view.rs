@@ -95,10 +95,21 @@ impl CraftState {
                 });
             }
             Some(Err(e)) => {
+                let mut reset = false;
                 note_box(ui, NoticeKind::Error, |ui| {
                     ui.label(RichText::new("This can't be worked out").semibold().color(c_danger()));
                     ui.label(e);
+                    // a recipe picked earlier can be what stands in the way: the way back is here too
+                    if !self.recipe_choices.is_empty() || !self.ingredient_choices.is_empty() {
+                        ui.add_space(4.0);
+                        reset = secondary(ui, "Reset my recipe choices").clicked();
+                    }
                 });
+                if reset {
+                    self.recipe_choices.clear();
+                    self.ingredient_choices.clear();
+                    self.touch_plan();
+                }
             }
             Some(Ok(view)) => self.result(ui, book, &view, acts),
         }
@@ -192,7 +203,13 @@ impl CraftState {
                     });
                     ui.close();
                 }
-                if ui.button("JSON file (.json)").clicked() {
+                if ui
+                    .button("JSON data (.json)")
+                    .on_hover_text(
+                        "For spreadsheets and scripts. To open this plan again later, save it, then use Saved plans > Export.",
+                    )
+                    .clicked()
+                {
                     acts.push(Act::Export {
                         name: format!("{slug}.json"),
                         content: saved::to_json(&book.ds, plan),

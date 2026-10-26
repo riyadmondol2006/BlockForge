@@ -189,7 +189,8 @@ impl App {
                 for (k, v) in [
                     ("Installed as", install_label(kind).to_string()),
                     ("System", format!("{} ({})", os_text_cached(), std::env::consts::ARCH)),
-                    ("Memory", format!("{total_mb} MB")),
+                    // in GB, as Settings and the instance pages say it
+                    ("Memory", super::settings::memory_text(total_mb.min(u64::from(u32::MAX)) as u32)),
                 ] {
                     rows.gap(ui);
                     key_value(ui, k, |ui| {

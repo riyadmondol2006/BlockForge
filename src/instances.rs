@@ -271,7 +271,13 @@ pub fn load_one(root: &Path) -> Option<Instance> {
 
 /// Every instance, most recently played first. Folders without a readable `instance.json` are skipped.
 pub fn load_all(dirs: &Dirs) -> Vec<Instance> {
-    let Ok(rd) = std::fs::read_dir(&dirs.instances) else { return Vec::new() };
+    load_all_and_unreadable(dirs).0
+}
+
+/// [`load_all`], and the folders whose `instance.json` is there but can't be read (see [`unreadable`]), found in the
+/// same pass.
+pub fn load_all_and_unreadable(dirs: &Dirs) -> (Vec<Instance>, Vec<PathBuf>) {
+    let Ok(rd) = std::fs::read_dir(&dirs.instances) else { return (Vec::new(), Vec::new()) };
     // folders starting with a dot are the launcher's own work folders (a restore in progress, a copy being made),
     // which can hold an instance.json for a moment; instance folders never start with one
     let roots: Vec<PathBuf> = rd
@@ -283,17 +289,42 @@ pub fn load_all(dirs: &Dirs) -> Vec<Instance> {
     // parsing hundreds of KB of JSON per instance adds up for big libraries; spread it over a few threads
     let threads = roots.len().clamp(1, 8);
     let chunk = roots.len().div_ceil(threads).max(1);
-    let mut all: Vec<Instance> = std::thread::scope(|s| {
+    let read: Vec<Result<Instance, PathBuf>> = std::thread::scope(|s| {
         let handles: Vec<_> = roots
             .chunks(chunk)
-            .map(|c| s.spawn(move || c.iter().filter_map(|r| load_one(r)).collect::<Vec<_>>()))
+            .map(|c| {
+                s.spawn(move || {
+                    c.iter()
+                        .filter_map(|r| match load_one(r) {
+                            Some(i) => Some(Ok(i)),
+                            // a folder without an instance.json isn't counted: it may be one being made
+                            None => r.join("instance.json").is_file().then(|| Err(r.clone())),
+                        })
+                        .collect::<Vec<_>>()
+                })
+            })
             .collect();
         handles.into_iter().flat_map(|h| h.join().unwrap_or_default()).collect()
     });
+    let (mut all, mut broken) = (Vec::new(), Vec::new());
+    for r in read {
+        match r {
+            Ok(i) => all.push(i),
+            Err(p) => broken.push(p),
+        }
+    }
     all.sort_by(|a, b| {
         b.last_played().cmp(&a.last_played()).then_with(|| a.name().to_lowercase().cmp(&b.name().to_lowercase()))
     });
-    all
+    broken.sort();
+    (all, broken)
+}
+
+/// Instance folders whose `instance.json` is there but can't be read (damaged, cut short, edited by hand): they are
+/// left out of [`load_all`], and the player is told rather than left to think the instance and its worlds are gone.
+/// A folder without an `instance.json` at all isn't counted (it may be one being made, or not an instance).
+pub fn unreadable(dirs: &Dirs) -> Vec<PathBuf> {
+    load_all_and_unreadable(dirs).1
 }
 
 /// The `launcher` fields the Java edition expects on every instance; without `isPlayable` it calls an instance corrupt.
@@ -333,9 +364,14 @@ pub async fn set_loader(
     install::ensure_game_files(dirs, &merged, progress, false).await?;
     let mut version = merged;
     version.id = mc;
-    instance.file.version = version;
-    instance.file.launcher.loader_version = info;
-    instance.save()
+    // the file as it is now, not as it was when this began minutes ago: a rename, a setting or a mod changed
+    // meanwhile is kept
+    let mut fresh = load_one(&instance.root).unwrap_or_else(|| instance.clone());
+    fresh.file.version = version;
+    fresh.file.launcher.loader_version = info;
+    fresh.save()?;
+    *instance = fresh;
+    Ok(())
 }
 
 /// Create an instance: fetch the version (and loader), download everything it needs, then write `instance.json`.
@@ -462,6 +498,28 @@ fn copy_dir(from: &Path, to: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod unreadable_tests {
+    use super::*;
+
+    #[test]
+    fn a_damaged_instance_file_is_reported_not_hidden() {
+        let base = crate::testutil::scratch("unreadable");
+        let dirs = Dirs::at(&base);
+        std::fs::create_dir_all(dirs.instances.join("Good")).unwrap();
+        std::fs::write(dirs.instances.join("Good/instance.json"), "{}").unwrap();
+        std::fs::create_dir_all(dirs.instances.join("Broken")).unwrap();
+        std::fs::write(dirs.instances.join("Broken/instance.json"), "{\"launcher\": {\"name\": \"Bro").unwrap();
+        // no instance.json yet (one being made) and the launcher's own work folders don't count
+        std::fs::create_dir_all(dirs.instances.join("Empty")).unwrap();
+        std::fs::create_dir_all(dirs.instances.join(".restore-1")).unwrap();
+        std::fs::write(dirs.instances.join(".restore-1/instance.json"), "x").unwrap();
+        assert_eq!(unreadable(&dirs), vec![dirs.instances.join("Broken")]);
+        assert_eq!(load_all(&dirs).len(), 1);
+        let _ = std::fs::remove_dir_all(&base);
+    }
 }
 
 #[cfg(test)]

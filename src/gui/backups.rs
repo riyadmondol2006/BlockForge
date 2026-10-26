@@ -73,6 +73,7 @@ impl App {
         let list: Vec<Backup> = std::mem::take(&mut st.list);
         let svc = st.svc.clone().unwrap_or_default();
         let show_all = st.show_all;
+        let playing = self.is_playing(&inst.folder);
         let working = {
             let (restoring, backing_up) = (restore_label(inst.name()), backup_label(inst.name()));
             self.tasks.iter().any(|t| t.label == restoring || t.label == backing_up)
@@ -148,8 +149,10 @@ impl App {
                 });
             });
             line.right(ui, |ui| {
-                ui.add_enabled_ui(!working, |ui| {
-                    if ghost(ui, "Restore").clicked() {
+                // said before the question, not refused after it
+                let why = if playing { "Close Minecraft first" } else { "Wait for the backup that is being made" };
+                ui.add_enabled_ui(!working && !playing, |ui| {
+                    if ghost(ui, "Restore").on_disabled_hover_text(why).clicked() {
                         restore = Some(b.path.clone());
                     }
                 });

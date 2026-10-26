@@ -67,9 +67,11 @@ pub fn c_border() -> Color32 {
 pub fn c_rule() -> Color32 {
     pick(0x202422, 0xEDEFEE)
 }
-/// The line around things you can press: one step stronger than a card's.
+/// The line around things you can press: one step stronger than a card's, and at least 3:1 against the card, the
+/// field and the page behind it (WCAG 1.4.11), since in the light look a field is white on a white card and the line
+/// is all that shows where it is.
 pub fn c_control() -> Color32 {
-    pick(0x3C413E, 0xC9CECB)
+    pick(0x666C68, 0x8A908C)
 }
 pub fn c_text() -> Color32 {
     pick(0xECEEED, 0x121413)
@@ -208,10 +210,13 @@ pub fn apply(ctx: &egui::Context, reduced_motion: bool) {
     v.widgets.hovered.corner_radius = r;
     v.widgets.active.bg_fill = c_active();
     v.widgets.active.weak_bg_fill = c_active();
-    v.widgets.active.bg_stroke = Stroke::new(1.0, c_control());
     v.widgets.active.fg_stroke = Stroke::new(1.5, c_text());
     v.widgets.active.corner_radius = r;
     v.widgets.open = v.widgets.active;
+    v.widgets.open.bg_stroke = Stroke::new(1.0, c_control());
+    // egui draws a widget with keyboard focus in the "active" style: the same ring as the launcher's own widgets
+    // (see `focus_ring`), so the focus can be seen when moving with Tab
+    v.widgets.active.bg_stroke = Stroke::new(2.0, c_accent());
     ctx.set_visuals(v);
 
     ctx.global_style_mut(|s| {
@@ -231,4 +236,47 @@ pub fn apply(ctx: &egui::Context, reduced_motion: bool) {
         ]
         .into();
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A button reached with Tab is drawn with the 2px accent ring, so a keyboard user can see where they are; the
+    /// same button without the focus has the thin control outline.
+    #[test]
+    fn a_button_reached_with_tab_shows_the_focus_ring() {
+        let ctx = egui::Context::default();
+        apply(&ctx, true);
+        let frame = |events: Vec<egui::Event>| {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 300.0))),
+                events,
+                ..Default::default()
+            };
+            let mut out = ctx.run_ui(input, |ui| {
+                let _ = ui.button("Play as");
+            });
+            out.textures_delta.clear();
+            out.shapes
+                .into_iter()
+                .filter_map(|c| match c.shape {
+                    egui::Shape::Rect(r) => Some(r.stroke),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        let ring = |strokes: &[Stroke]| strokes.iter().any(|s| s.width >= 2.0 && s.color == c_accent());
+        assert!(!ring(&frame(vec![])), "no focus yet: no ring");
+        let tab = egui::Event::Key {
+            key: egui::Key::Tab,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame(vec![tab]);
+        assert!(ctx.memory(|m| m.focused()).is_some(), "Tab gave the button the focus");
+        assert!(ring(&frame(vec![])), "the focused button is drawn with the accent ring");
+    }
 }

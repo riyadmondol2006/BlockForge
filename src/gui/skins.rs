@@ -9,7 +9,7 @@ use image::RgbaImage;
 use super::services::{SvcMsg, modal_scroll_height, modal_width};
 use super::theme::*;
 use super::widgets::*;
-use super::{App, Msg, Page};
+use super::{App, Msg};
 use crate::skins;
 
 /// A face drawn from a saved skin, remembered until the skin file changes.
@@ -35,6 +35,8 @@ pub struct SkinDialog {
     slim: bool,
     message: Option<(String, bool)>,
     uploading: bool,
+    /// The system's file chooser is open.
+    picking: bool,
     /// Skin-sized pictures found in the downloads folder, newest first, to pick from.
     downloads: Vec<PathBuf>,
     preview: Option<((Option<PathBuf>, bool), TextureHandle)>,
@@ -48,6 +50,14 @@ impl SkinDialog {
     pub fn failed(&mut self, message: String) {
         self.uploading = false;
         self.message = Some((message, true));
+    }
+
+    /// The file chooser closed, with a file or cancelled.
+    pub fn picked(&mut self, file: Option<&Path>) {
+        self.picking = false;
+        if let Some(file) = file {
+            self.use_file(file);
+        }
     }
 
     fn use_file(&mut self, file: &Path) {
@@ -189,6 +199,7 @@ impl App {
             slim: false,
             message: None,
             uploading: false,
+            picking: false,
             downloads,
             preview: None,
         });
@@ -214,6 +225,7 @@ impl App {
         let mut open_site = false;
         let mut pick: Option<PathBuf> = None;
         let mut typed = false;
+        let mut browse = false;
 
         // the picture: the chosen skin if there is one, otherwise the current skin
         let key = (d.chosen.clone(), d.slim);
@@ -273,6 +285,10 @@ impl App {
                                 typed = true;
                             }
                         });
+                        // the system's chooser: dropping a file doesn't work everywhere (Wayland), typing a path is a chore
+                        if ui.add_enabled_ui(!d.picking, |ui| secondary(ui, "Browse\u{2026}")).inner.clicked() {
+                            browse = true;
+                        }
                         if !d.downloads.is_empty() {
                             small_muted(ui, "In your downloads");
                             ui.spacing_mut().item_spacing.y = 2.0;
@@ -342,9 +358,18 @@ impl App {
                 d.use_file(&PathBuf::from(text));
             }
         }
+        if browse {
+            d.picking = true;
+            let n = self.notifier();
+            std::thread::spawn(move || {
+                let path = super::import::pick_file_blocking("Skins", &["png"]);
+                n.send(Msg::Svc(SvcMsg::SkinPicked(path)));
+            });
+        }
         if sign_in {
-            self.page = Page::Accounts;
+            // straight to the Microsoft sign-in, not just the page it is on
             close = true;
+            self.start_sign_in();
         }
         if upload {
             if let (Some(file), Some(account)) =

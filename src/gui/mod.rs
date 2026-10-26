@@ -74,6 +74,14 @@ const MAX_LOG_LINES: usize = 6000;
 /// The smallest window, in points: every page is laid out to work at this size.
 const MIN_WINDOW: egui::Vec2 = egui::vec2(860.0, 560.0);
 
+/// What "Stop Minecraft?" says, wherever it is asked (the instance page, the sidebar, the log window).
+pub(super) const STOP_WARNING: &str = "Minecraft is stopped at once. A world that wasn't saved can be damaged. To close \
+                                        it safely, use Save and Quit in the game.";
+
+/// The smallest and largest interface size kept in the settings (a value outside, typed into the file, is ignored).
+const MIN_ZOOM: f32 = 0.5;
+const MAX_ZOOM: f32 = 3.0;
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Page {
     Home,
@@ -148,6 +156,8 @@ pub enum Msg {
     Tray(tray::TrayCmd),
     AccountRefreshed(Result<Account, String>),
     Toast(String, bool),
+    /// The desktop has no tray (GNOME without an extension): why, for the log.
+    NoTray(String),
     Svc(services::SvcMsg),
     Mods(mods::ModsMsg),
     Packs(packs::PacksMsg),
@@ -207,10 +217,22 @@ impl Game {
     }
 }
 
+/// How the game was asked to start, kept while "Save the settings first?" is up.
+#[derive(Clone)]
+pub enum PendingPlay {
+    Play,
+    As(Option<Account>),
+    Join(String),
+}
+
 struct Toast {
     text: String,
     error: bool,
     until: Instant,
+    /// An error that came while the player was away from the window: it waits for them, however long.
+    held: bool,
+    /// How many times this same message came in a row ("×3" after it).
+    count: u32,
 }
 
 pub struct App {
@@ -240,11 +262,23 @@ pub struct App {
     gpus: Option<Vec<crate::gpu::Gpu>>,
     logo: egui::TextureHandle,
     confirm_delete: Option<String>,
+    /// A Stop waiting to be confirmed: an instance folder, or a session key when `.1` is true.
+    confirm_stop: Option<(String, bool)>,
+    /// The window was asked to close while games or jobs were running: "Quit anyway?" is showing.
+    confirm_quit: bool,
+    /// The player said to quit anyway (or the launcher closes itself to finish an update): close without asking.
+    quit_anyway: bool,
     /// Instances whose folders are being deleted in the background; they are left out of the lists meanwhile.
     deleting: Vec<String>,
     quick_server: String,
     rename_target: Option<(String, String)>,
     inst_draft: Option<instance_settings::InstDraft>,
+    /// Instance folders whose instance.json can't be read; the Library says so.
+    unreadable: Vec<std::path::PathBuf>,
+    /// Settings drafts with changes that weren't saved, kept for their instance while another one is open.
+    kept_drafts: HashMap<String, instance_settings::InstDraft>,
+    /// Play was pressed for an instance whose settings were changed and not saved: "Save first?" is showing.
+    confirm_play_unsaved: Option<(String, PendingPlay)>,
     runtimes: Vec<(String, String)>,
     console_lines: Vec<LogLine>,
     console_uploading: bool,
@@ -262,6 +296,9 @@ pub struct App {
     loader_dialog: Option<instance_menu::LoaderDialog>,
     tray: Option<tray::Tray>,
     window_visible: bool,
+    /// A tray that can't start says so in the log only: at every start on a desktop without one, a message would
+    /// only be noise. Turned off once the player switches the tray on in Settings, where an answer is expected.
+    tray_quiet: bool,
     upd: updates::UpdateUi,
     last_window: Option<(crate::config::Size, crate::config::Pos)>,
     last_window_save: Instant,
@@ -345,8 +382,12 @@ impl App {
         fonts::install(&cc.egui_ctx);
         theme::set_dark(theme::theme_is_dark(&settings.theme));
         theme::apply(&cc.egui_ctx, settings.light_mode.unwrap_or_else(low_end_pc));
+        // the size the window had last time (checked against the screen once the window is up, see `follow_zoom`)
+        if let Some(z) = settings.ui_zoom.filter(|z| (MIN_ZOOM..=MAX_ZOOM).contains(z)) {
+            cc.egui_ctx.set_zoom_factor(z);
+        }
         let accounts = crate::accounts::load(&dirs);
-        let instances = instances::load_all(&dirs);
+        let (instances, unreadable) = instances::load_all_and_unreadable(&dirs);
         launch::clean_stale_temp(&dirs);
         {
             let dirs = dirs.clone();
@@ -385,10 +426,16 @@ impl App {
             gpus: None,
             logo,
             confirm_delete: None,
+            confirm_stop: None,
+            confirm_quit: false,
+            quit_anyway: false,
             deleting: Vec::new(),
             quick_server: String::new(),
             rename_target: None,
             inst_draft: None,
+            kept_drafts: HashMap::new(),
+            unreadable,
+            confirm_play_unsaved: None,
             runtimes: Vec::new(),
             console_lines: Vec::new(),
             console_uploading: false,
@@ -403,6 +450,7 @@ impl App {
             loader_dialog: None,
             tray: None,
             window_visible: true,
+            tray_quiet: true,
             upd: updates::UpdateUi::default(),
             last_window: None,
             last_window_save: Instant::now(),
@@ -470,17 +518,30 @@ impl App {
     pub fn toast(&mut self, text: impl Into<String>) {
         let text: String = text.into();
         self.console_push(Level::Info, &format!("[BlockForge] {text}"));
-        self.toasts.push(Toast { text, error: false, until: Instant::now() + Duration::from_secs(4) });
+        self.push_toast(text, false, Duration::from_secs(4));
     }
 
     pub fn toast_err(&mut self, text: impl Into<String>) {
         let text: String = text.into();
         self.console_push(Level::Error, &format!("[BlockForge] {text}"));
-        self.toasts.push(Toast { text, error: true, until: Instant::now() + Duration::from_secs(8) });
+        self.push_toast(text, true, Duration::from_secs(8));
+    }
+
+    /// The same message again (a failing check, a button pressed twice) counts up on the toast that shows it
+    /// instead of pushing the others away.
+    fn push_toast(&mut self, text: String, error: bool, show: Duration) {
+        let until = Instant::now() + show;
+        match self.toasts.last_mut() {
+            Some(t) if t.text == text && t.error == error => {
+                t.count += 1;
+                t.until = t.until.max(until);
+            }
+            _ => self.toasts.push(Toast { text, error, until, count: 1, held: false }),
+        }
     }
 
     pub fn reload_instances(&mut self) {
-        self.instances = instances::load_all(&self.dirs);
+        (self.instances, self.unreadable) = instances::load_all_and_unreadable(&self.dirs);
         if !self.deleting.is_empty() {
             self.instances.retain(|i| !self.deleting.contains(&i.folder));
         }
@@ -563,6 +624,14 @@ impl App {
             return; // looked at again with the new zoom on the next frame
         }
         self.zoom_seen = zoom;
+        // kept for the next start (not the size a screenshot run asked for)
+        if self.shot.is_none() {
+            let keep = ((zoom - 1.0).abs() > 0.005).then_some(zoom);
+            if self.settings.ui_zoom != keep {
+                self.settings.ui_zoom = keep;
+                self.save_settings_soon();
+            }
+        }
         ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(MIN_WINDOW));
         if let Some(r) = inner.filter(|r| r.width() < MIN_WINDOW.x || r.height() < MIN_WINDOW.y) {
             ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(r.size().max(MIN_WINDOW)));
@@ -593,7 +662,8 @@ impl App {
         self.selected = Some(folder.to_string());
         self.page = Page::Instance;
         self.tab = InstTab::Overview;
-        self.inst_draft = None;
+        // changes that weren't saved are kept for their instance (and come back with its Settings tab)
+        self.keep_unsaved_draft();
     }
 
     /// Run `work` in the background with a progress bar in the sidebar. A `Some` message is shown when it ends.
@@ -795,6 +865,22 @@ impl App {
     }
 
     /// Stop every session of this instance.
+    /// Stop pressed for an instance (or one session of it, when `session` is true). A game that is running is killed,
+    /// which loses what wasn't saved, so that asks first; a start that is still being prepared is cancelled at once,
+    /// unless the Play button turned into Stop a moment ago (a double click on Play).
+    pub fn ask_stop(&mut self, key: &str, session: bool) {
+        let games: Vec<&Game> = if session {
+            self.games.get(key).into_iter().collect()
+        } else {
+            self.games.values().filter(|g| g.folder == key).collect()
+        };
+        if games.iter().any(|g| matches!(g.phase, Phase::Running)) {
+            self.confirm_stop = Some((key.to_string(), session));
+        } else if games.iter().any(|g| g.active() && g.started.elapsed() > Duration::from_millis(600)) {
+            if session { self.stop_session(key) } else { self.stop(key) }
+        }
+    }
+
     pub fn stop(&mut self, folder: &str) {
         for g in self.games.values_mut().filter(|g| g.folder == folder) {
             if let Some(k) = g.kill.take() {
@@ -963,22 +1049,28 @@ impl App {
                 Ok(code) => {
                     let (c2, n) = (code.clone(), self.notifier());
                     self.rt.spawn(async move {
-                        let r = crate::msauth::finish_device_login(&c2).await.map_err(|e| format!("{e:#}"));
+                        let r = crate::msauth::finish_device_login(&c2).await.map_err(|e| whoplays::sign_in_error(&e));
                         n.send(Msg::SignedIn(attempt, r));
                     });
-                    let _ = open::that(&code.verification_uri);
+                    // the code is waiting on the clipboard when the browser page asks for it
+                    self.ctx.copy_text(code.user_code.clone());
+                    self.open_link(&code.verification_uri);
                     self.acct.device = Some(code);
                 }
                 Err(e) => {
                     self.acct.signing_in = false;
+                    self.acct.last_error = Some(e.clone());
                     self.toast_err(e);
                 }
             },
             Msg::SignedIn(_, r) => {
                 self.acct.signing_in = false;
                 self.acct.device = None;
+                // the player finished in the browser: the launcher comes back to the front
+                self.ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
                 match r {
                     Ok(acc) => {
+                        self.acct.last_error = None;
                         self.accounts.retain(|a| a.uuid != acc.uuid);
                         self.toast(format!("Signed in as {}", acc.name()));
                         self.settings.last_account = Some(acc.uuid.clone());
@@ -986,7 +1078,10 @@ impl App {
                         self.save_accounts();
                         self.save_settings();
                     }
-                    Err(e) => self.toast_err(e),
+                    Err(e) => {
+                        self.acct.last_error = Some(e.clone());
+                        self.toast_err(e);
+                    }
                 }
             }
             Msg::Java(list) => self.java_list = list,
@@ -1045,6 +1140,12 @@ impl App {
                 }
             }
             Msg::Update(m) => self.handle_update(m),
+            Msg::NoTray(e) => {
+                crate::logs::warn(format!("No tray available on this desktop: {e}"));
+                if !self.tray_quiet {
+                    self.toast(format!("No tray available on this desktop ({e})"));
+                }
+            }
             Msg::Toast(t, err) => {
                 if err {
                     self.toast_err(t)
@@ -1184,38 +1285,21 @@ impl App {
             ui.add_space(8.0);
             // downloads in progress, as bare rows
             for t in self.tasks.iter().take(2) {
-                ui.add(egui::Label::new(RichText::new(&t.label).size(FS_META).medium_weight()).truncate());
-                let (d, total) =
-                    (t.progress.files_done.load(Ordering::Relaxed), t.progress.files_total.load(Ordering::Relaxed));
-                if total > 0 {
-                    progress_bar(ui, Some(t.progress.fraction()), 4.0);
-                    let note = format!(
-                        "{d} / {total} files  \u{00B7}  {}",
-                        human_size(t.progress.bytes_done.load(Ordering::Relaxed))
-                    );
-                    ui.label(RichText::new(note).size(FS_META).color(c_faint()));
-                } else {
-                    progress_bar(ui, None, 4.0);
-                    let stage = t.progress.stage_text();
-                    if !stage.is_empty() {
-                        ui.add(egui::Label::new(RichText::new(stage).size(FS_META).color(c_faint())).truncate());
-                    }
-                }
-                // a long download or install can be stopped; the job stops at its next step and says it was cancelled
-                let cancelling = t.progress.cancelled.load(Ordering::Relaxed);
-                let text = if cancelling { "Cancelling\u{2026}" } else { "Cancel" };
-                let button = egui::Button::new(RichText::new(text).size(FS_META).color(c_faint())).frame(false);
-                let resp = ui.add_enabled(!cancelling, button);
-                resp.widget_info(|| {
-                    egui::WidgetInfo::labeled(egui::Role::Button, !cancelling, format!("Cancel {}", t.label))
-                });
-                if resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
-                    t.progress.cancelled.store(true, Ordering::Relaxed);
-                }
-                ui.add_space(8.0);
+                task_row(ui, t);
             }
             if self.tasks.len() > 2 {
-                ui.label(RichText::new(format!("+{} more", self.tasks.len() - 2)).size(FS_META).color(c_faint()));
+                // the others are a click away, each with its progress and its Cancel
+                let more = egui::Button::new(
+                    RichText::new(format!("+{} more", self.tasks.len() - 2)).size(FS_META).color(c_muted()),
+                )
+                .frame(false);
+                let r = ui.add(more).on_hover_cursor(egui::CursorIcon::PointingHand);
+                egui::Popup::menu(&r).show(|ui| {
+                    ui.set_width(260.0);
+                    for t in self.tasks.iter().skip(2) {
+                        task_row(ui, t);
+                    }
+                });
             }
             // games that are running: one row each, a click opens the instance
             for (folder, name, t) in playing.iter().take(2) {
@@ -1227,7 +1311,9 @@ impl App {
                 let when = elapsed_short(*t);
                 let when_galley = ui.painter().layout_no_wrap(when, egui::FontId::proportional(FS_META), c_faint());
                 let name_w = rect.width() - 28.0 - when_galley.size().x - 18.0;
-                let name_galley = ui.painter().layout(name.clone(), fonts::medium(FS_META), c_text(), name_w.max(20.0));
+                let mut job = egui::text::LayoutJob::simple_singleline(name.clone(), fonts::medium(FS_META), c_text());
+                job.wrap = egui::text::TextWrapping::truncate_at_width(name_w.max(20.0));
+                let name_galley = ui.fonts_mut(|f| f.layout_job(job));
                 ui.painter().with_clip_rect(rect).galley(
                     egui::pos2(rect.left() + 28.0, rect.center().y - name_galley.size().y / 2.0),
                     name_galley,
@@ -1243,7 +1329,7 @@ impl App {
                 );
                 focus_ring(ui, &resp, rect, R_CONTROL);
                 resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, format!("Playing {name}")));
-                if resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                if resp.on_hover_text(name.as_str()).on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
                     let f = folder.clone();
                     self.open_instance(&f);
                 }
@@ -1281,18 +1367,33 @@ impl App {
 
     fn toasts_ui(&mut self, ctx: &egui::Context) {
         let now = Instant::now();
-        self.toasts.retain(|t| t.until > now);
+        // an error that comes while the player is in the game waits for them to come back to the window, and then
+        // shows for a few seconds more
+        let away = !ctx.input(|i| i.viewport().focused.unwrap_or(true));
+        for t in self.toasts.iter_mut().filter(|t| t.error) {
+            if away {
+                t.held = true;
+            } else if std::mem::take(&mut t.held) {
+                t.until = t.until.max(now + Duration::from_secs(5));
+            }
+        }
+        self.toasts.retain(|t| t.until > now || t.held);
         if self.toasts.is_empty() {
             return;
         }
-        ctx.request_repaint_after(Duration::from_millis(500));
+        // nothing to count down while away (coming back wakes the window): a long game costs no CPU
+        if !away {
+            ctx.request_repaint_after(Duration::from_millis(500));
+        }
+        let mut dismiss: Option<usize> = None;
         egui::Area::new(egui::Id::unique("toasts"))
             .anchor(egui::Align2::CENTER_BOTTOM, vec2(0.0, -24.0))
             .order(egui::Order::Tooltip)
             .show(ctx, |ui| {
-                for t in self.toasts.iter().rev().take(3) {
+                let shown = self.toasts.len().saturating_sub(3);
+                for (i, t) in self.toasts.iter_mut().enumerate().skip(shown).rev() {
                     let (bg, fg) = if t.error { (c_danger_bg(), c_danger()) } else { (c_raised(), c_text()) };
-                    egui::Frame::new()
+                    let r = egui::Frame::new()
                         .fill(bg)
                         .stroke(Stroke::new(1.0, if t.error { c_danger_line() } else { c_control() }))
                         .corner_radius(CornerRadius::same(R_CONTROL + 2))
@@ -1305,11 +1406,218 @@ impl App {
                         })
                         .show(ui, |ui| {
                             ui.set_max_width(560.0);
-                            ui.label(RichText::new(&t.text).color(fg));
-                        });
+                            let text =
+                                if t.count > 1 { format!("{}  \u{00D7}{}", t.text, t.count) } else { t.text.clone() };
+                            ui.label(RichText::new(text).color(fg));
+                        })
+                        .response
+                        .interact(egui::Sense::click())
+                        .on_hover_text("Click to close");
+                    // one being read stays a little longer
+                    if r.hovered() {
+                        t.until = t.until.max(now + Duration::from_secs(3));
+                    }
+                    if r.clicked() {
+                        dismiss = Some(i);
+                    }
                     ui.add_space(6.0);
                 }
             });
+        if let Some(i) = dismiss {
+            self.toasts.remove(i);
+        }
+    }
+
+    /// "Stop Minecraft?" for a game that is running (see [`App::ask_stop`]).
+    fn stop_confirm_ui(&mut self, ctx: &egui::Context) {
+        let Some((key, session)) = self.confirm_stop.clone() else { return };
+        let still_running =
+            if session { self.games.get(&key).is_some_and(Game::active) } else { self.is_playing(&key) };
+        if !still_running {
+            // the game closed by itself meanwhile
+            self.confirm_stop = None;
+            return;
+        }
+        match services::confirm_modal(ctx, "confirm-stop", "Stop Minecraft?", STOP_WARNING, "Stop Minecraft", true) {
+            Some(true) => {
+                self.confirm_stop = None;
+                if session { self.stop_session(&key) } else { self.stop(&key) }
+            }
+            Some(false) => self.confirm_stop = None,
+            None => {}
+        }
+    }
+
+    /// Start the game the way `how` says, after asking about settings that were changed and not saved. Every Play
+    /// (the button, Play as, an offline name, Play and join) comes through here.
+    pub fn play_checked(&mut self, folder: &str, how: PendingPlay) {
+        if self.unsaved_draft(folder) && !self.is_playing(folder) {
+            self.confirm_play_unsaved = Some((folder.to_string(), how));
+        } else {
+            self.start_pending(folder, how);
+        }
+    }
+
+    fn start_pending(&mut self, folder: &str, how: PendingPlay) {
+        match how {
+            PendingPlay::Play => self.play(folder, launch::LaunchOptions::default()),
+            PendingPlay::As(account) => self.play_as(folder, launch::LaunchOptions::default(), account),
+            PendingPlay::Join(server) => self.play(folder, launch::LaunchOptions { server: Some(server), world: None }),
+        }
+    }
+
+    /// "Save first?" when Play is pressed with changed settings that weren't saved.
+    fn play_unsaved_ui(&mut self, ctx: &egui::Context) {
+        let Some((folder, how)) = self.confirm_play_unsaved.clone() else { return };
+        let name = self.instance(&folder).map(|i| i.name().to_string()).unwrap_or_default();
+        let mut answer = None;
+        let modal = egui::Modal::new(egui::Id::unique("confirm-play-unsaved")).frame(modal_frame(ctx)).show(ctx, |ui| {
+            ui.set_width(services::modal_width(ctx, 420.0));
+            ui.label(RichText::new("Save the settings first?").size(FS_SECTION).semibold());
+            ui.add_space(4.0);
+            muted(ui, format!("You changed settings of {name} and didn't save them. The game starts with the saved ones unless you save first."));
+            ui.add_space(12.0);
+            ui.horizontal(|ui| {
+                if primary(ui, "Save and play").clicked() {
+                    answer = Some(Some(true));
+                }
+                if secondary(ui, "Play without saving").clicked() {
+                    answer = Some(Some(false));
+                }
+                if secondary(ui, "Cancel").clicked() {
+                    answer = Some(None);
+                }
+            });
+        });
+        if modal.should_close() && answer.is_none() {
+            answer = Some(None);
+        }
+        let Some(choice) = answer else { return };
+        self.confirm_play_unsaved = None;
+        match choice {
+            Some(true) => {
+                let mut d = match self.inst_draft.take() {
+                    Some(d) if d.folder == folder => d,
+                    other => {
+                        self.inst_draft = other;
+                        match self.kept_drafts.remove(&folder) {
+                            Some(d) => d,
+                            None => return self.start_pending(&folder, how),
+                        }
+                    }
+                };
+                let saved = self.save_draft(&mut d);
+                let error = d.error.clone();
+                if self.inst_draft.as_ref().is_none_or(|o| o.folder == folder) {
+                    self.inst_draft = Some(d);
+                } else {
+                    self.kept_drafts.insert(folder.clone(), d);
+                }
+                if saved {
+                    self.start_pending(&folder, how);
+                } else {
+                    // the check that failed is shown where it can be fixed
+                    self.open_instance(&folder);
+                    self.tab = InstTab::Settings;
+                    self.toast_err(error.unwrap_or_else(|| "The settings couldn't be saved.".into()));
+                }
+            }
+            Some(false) => self.start_pending(&folder, how),
+            None => {}
+        }
+    }
+
+    /// What closing the launcher now would cut short: running games and jobs, one line each. Empty when nothing is.
+    fn quit_blockers(&self) -> Vec<String> {
+        let mut lines = Vec::new();
+        let mut playing: Vec<&str> = self
+            .games
+            .values()
+            .filter(|g| g.active())
+            .filter_map(|g| self.instance(&g.folder).map(|i| i.name()))
+            .collect();
+        playing.sort_unstable();
+        playing.dedup();
+        if !playing.is_empty() {
+            lines.push(format!(
+                "Minecraft is running ({}). It keeps running, but BlockForge won't see it finish: no log, no Stop button, no backup afterwards.",
+                playing.join(", ")
+            ));
+        }
+        for t in self.tasks.iter().take(3) {
+            lines.push(format!("{} stops halfway.", t.label));
+        }
+        if self.tasks.len() > 3 {
+            lines.push(format!("{} more jobs stop halfway.", self.tasks.len() - 3));
+        }
+        #[cfg(feature = "converter")]
+        if self.convert_running() {
+            lines.push("The world conversion stops, and what it wrote so far is deleted.".to_string());
+        }
+        lines
+    }
+
+    /// "Quit anyway?" when the window is closed while something is running.
+    /// A close asked for while something is running is held back, and the window comes forward to ask. Called from
+    /// `logic`, which runs also while the window is minimized or covered by the game (`ui` doesn't then).
+    fn hold_close(&mut self, ctx: &egui::Context) {
+        if ctx.input(|i| i.viewport().close_requested())
+            && !self.quit_anyway
+            && self.shot.is_none()
+            && self.autoplay.is_none()
+            && !self.quit_blockers().is_empty()
+        {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.confirm_quit = true;
+            // a minimized window, or one hidden in the tray, comes back to ask
+            self.window_visible = true;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+        }
+    }
+
+    /// "Quit anyway?", while a close is held back (see [`App::hold_close`]).
+    fn quit_confirm_ui(&mut self, ctx: &egui::Context) {
+        if !self.confirm_quit {
+            return;
+        }
+        let lines = self.quit_blockers();
+        if lines.is_empty() {
+            // everything finished while the question was up
+            self.confirm_quit = false;
+            return;
+        }
+        let mut answer = None;
+        let modal = egui::Modal::new(egui::Id::unique("confirm-quit")).frame(modal_frame(ctx)).show(ctx, |ui| {
+            ui.set_width(services::modal_width(ctx, 440.0));
+            ui.label(RichText::new("Quit BlockForge?").size(FS_SECTION).semibold());
+            ui.add_space(4.0);
+            for line in &lines {
+                muted(ui, line);
+            }
+            ui.add_space(12.0);
+            ui.horizontal(|ui| {
+                if danger(ui, "Quit anyway").clicked() {
+                    answer = Some(true);
+                }
+                if secondary(ui, "Keep it open").clicked() {
+                    answer = Some(false);
+                }
+            });
+        });
+        if modal.should_close() && answer.is_none() {
+            answer = Some(false);
+        }
+        match answer {
+            Some(true) => {
+                self.confirm_quit = false;
+                self.quit_anyway = true;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            Some(false) => self.confirm_quit = false,
+            None => {}
+        }
     }
 
     fn confirm_ui(&mut self, ctx: &egui::Context) {
@@ -1356,6 +1664,11 @@ impl App {
                 // the background (a failure brings it back with the next reload and says why)
                 self.deleting.push(folder.clone());
                 self.instances.retain(|i| i.folder != folder);
+                // its unsaved settings go too: a new instance can get the same folder name
+                self.kept_drafts.remove(&folder);
+                if self.inst_draft.as_ref().is_some_and(|d| d.folder == folder) {
+                    self.inst_draft = None;
+                }
                 self.start_task(format!("Deleting {name}"), move |_, n| async move {
                     let result = tokio::task::spawn_blocking(move || instances::delete(&inst)).await;
                     n.send(Msg::Deleted(folder));
@@ -1385,6 +1698,34 @@ fn zoom_that_fits(zoom: f32, monitor: egui::Vec2) -> Option<f32> {
 }
 
 /// The first sentence of a longer explanation, for a toast; the whole of it goes to the log.
+/// One job in the sidebar (or in its "+N more" list): what it is, how far it got, and its Cancel.
+fn task_row(ui: &mut egui::Ui, t: &Task) {
+    ui.add(egui::Label::new(RichText::new(&t.label).size(FS_META).medium_weight()).truncate());
+    let (d, total) = (t.progress.files_done.load(Ordering::Relaxed), t.progress.files_total.load(Ordering::Relaxed));
+    if total > 0 {
+        progress_bar(ui, Some(t.progress.fraction()), 4.0);
+        let note =
+            format!("{d} / {total} files  \u{00B7}  {}", human_size(t.progress.bytes_done.load(Ordering::Relaxed)));
+        ui.label(RichText::new(note).size(FS_META).color(c_faint()));
+    } else {
+        progress_bar(ui, None, 4.0);
+        let stage = t.progress.stage_text();
+        if !stage.is_empty() {
+            ui.add(egui::Label::new(RichText::new(stage).size(FS_META).color(c_faint())).truncate());
+        }
+    }
+    // a long download or install can be stopped; the job stops at its next step and says it was cancelled
+    let cancelling = t.progress.cancelled.load(Ordering::Relaxed);
+    let text = if cancelling { "Cancelling\u{2026}" } else { "Cancel" };
+    let button = egui::Button::new(RichText::new(text).size(FS_META).color(c_faint())).frame(false);
+    let resp = ui.add_enabled(!cancelling, button);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, !cancelling, format!("Cancel {}", t.label)));
+    if resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+        t.progress.cancelled.store(true, Ordering::Relaxed);
+    }
+    ui.add_space(8.0);
+}
+
 fn first_sentence(text: &str) -> String {
     let line = text.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("");
     match line.find(". ") {
@@ -1447,6 +1788,7 @@ impl eframe::App for App {
         while let Ok(m) = self.rx.try_recv() {
             self.handle(m);
         }
+        self.hold_close(ctx);
         // modpacks and instance folders dropped on the window open the import window
         let dropped: Vec<std::path::PathBuf> =
             ctx.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).collect());
@@ -1557,6 +1899,9 @@ impl eframe::App for App {
         self.export_modal(&ctx);
         self.toasts_ui(&ctx);
         self.confirm_ui(&ctx);
+        self.stop_confirm_ui(&ctx);
+        self.play_unsaved_ui(&ctx);
+        self.quit_confirm_ui(&ctx);
         self.svc_overlays(&ctx);
         self.cf_windows(&ctx);
         self.poll_ftb();

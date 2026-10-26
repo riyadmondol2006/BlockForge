@@ -223,11 +223,22 @@ pub fn tab_bar<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
 
 /// One tab of a [`tab_bar`].
 pub fn tab(ui: &mut Ui, text: &str, selected: bool) -> Response {
-    let color = if selected { c_text() } else { c_muted() };
-    let galley = ui.painter().layout_no_wrap(text.to_string(), super::fonts::medium(14.0), color);
-    let (rect, resp) = ui.allocate_exact_size(vec2(galley.size().x, 34.0), Sense::click());
+    tab_marked(ui, text, selected, None)
+}
+
+/// A [`tab`] with room for a small dot after its name, shown when `mark` is `Some(true)` (something waits there,
+/// such as changes not saved yet). The room is kept when there is no dot, so the tabs don't move when it comes.
+pub fn tab_marked(ui: &mut Ui, text: &str, selected: bool, mark: Option<bool>) -> Response {
+    const DOT_ROOM: f32 = 10.0;
+    let galley = ui.painter().layout_no_wrap(text.to_string(), super::fonts::medium(14.0), egui::Color32::PLACEHOLDER);
+    let extra = if mark.is_some() { DOT_ROOM } else { 0.0 };
+    let (rect, resp) = ui.allocate_exact_size(vec2(galley.size().x + extra, 34.0), Sense::click());
     let color = if selected || resp.hovered() { c_text() } else { c_muted() };
+    let text_right = rect.left() + galley.size().x;
     ui.painter().galley(egui::pos2(rect.left(), rect.center().y - galley.size().y / 2.0 - 1.0), galley, color);
+    if mark == Some(true) {
+        ui.painter().circle_filled(egui::pos2(text_right + DOT_ROOM / 2.0 + 1.0, rect.center().y - 5.0), 3.0, c_warn());
+    }
     if selected {
         ui.painter().rect_filled(
             egui::Rect::from_min_max(egui::pos2(rect.left(), rect.bottom() - 2.0), rect.right_bottom()),
@@ -510,7 +521,9 @@ pub fn secondary_enabled(ui: &mut Ui, text: &str, enabled: bool) -> Response {
 
 /// A low-weight action: text with a fill only under the pointer.
 pub fn ghost(ui: &mut Ui, text: &str) -> Response {
-    let galley = ui.painter().layout_no_wrap(text.to_string(), super::fonts::medium(14.0), c_text());
+    // laid out without a colour of its own, so the one given when it is painted (muted, or full under the pointer)
+    // is the one it gets
+    let galley = ui.painter().layout_no_wrap(text.to_string(), super::fonts::medium(14.0), egui::Color32::PLACEHOLDER);
     let (rect, resp) = ui.allocate_exact_size(vec2(galley.size().x + 24.0, 32.0), Sense::click());
     if resp.hovered() || resp.is_pointer_button_down_on() {
         ui.painter().rect_filled(

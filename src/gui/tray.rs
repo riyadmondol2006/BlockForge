@@ -95,7 +95,7 @@ impl Tray {
                 Ok(h) => {
                     let _ = tx.send(h);
                 }
-                Err(e) => n.send(Msg::Toast(format!("No tray available on this desktop ({e})"), false)),
+                Err(e) => n.send(Msg::NoTray(e.to_string())),
             }
         });
         // the window doesn't wait for the desktop: `stop` takes the handle whenever it arrives

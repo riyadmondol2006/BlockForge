@@ -298,8 +298,15 @@ impl CraftState {
             return;
         };
         self.rev += 1;
+        // the same version read again (the page gave back its memory while it wasn't looked at, or Try again):
+        // the plan, its ticks and the recipe choices stay; another version starts afresh
+        let same = self.version.as_deref() == Some(version);
         self.version = Some(version.to_string());
         self.load = Load::Loading;
+        // a saved plan waiting for its version only opens with that version
+        if self.pending_open.as_ref().is_some_and(|p| p.version != version) {
+            self.pending_open = None;
+        }
         self.book = None;
         self.icons = IconCache::default();
         self.plan = None;
@@ -309,13 +316,15 @@ impl CraftState {
         self.stock_hits_for.clear();
         self.stock_pick = None;
         self.stock_bufs.clear();
-        self.active = None;
-        self.active_sig = None;
-        self.unsaved = false;
-        self.done.clear();
-        self.done_sig = None;
-        self.recipe_choices.clear();
-        self.ingredient_choices.clear();
+        if !same {
+            self.active = None;
+            self.active_sig = None;
+            self.unsaved = false;
+            self.done.clear();
+            self.done_sig = None;
+            self.recipe_choices.clear();
+            self.ingredient_choices.clear();
+        }
         acts.push(Act::Load { rev: self.rev, version: version.to_string(), jar });
     }
 
@@ -391,7 +400,14 @@ impl CraftState {
                 if self.has_version(&v) {
                     return acts;
                 }
-                self.want = Some(v);
+                // the page switches to it when nothing is being planned, or when it was just asked for; a plan that
+                // is open stays, and the new version waits in the list
+                let asked = matches!(self.dialog, Some(Dialog::GetVersion));
+                if self.book.is_none() || self.target.is_none() || asked {
+                    self.want = Some(v);
+                } else {
+                    acts.push(Act::Toast(format!("Minecraft {v} is ready. Pick it in the Version list."), false));
+                }
                 acts.push(Act::Relist);
             }
             CraftMsg::Saved(r) => {
@@ -598,10 +614,11 @@ impl CraftState {
     }
 
     pub(super) fn set_target(&mut self, id: &str) {
+        // picking the same item again folds the list (in a narrow window) and keeps the plan as it is
+        self.picking = false;
         if self.target.as_deref() == Some(id) {
             return;
         }
-        self.picking = false;
         self.target = Some(id.to_string());
         self.recipe_choices.clear();
         self.ingredient_choices.clear();
@@ -791,6 +808,8 @@ impl CraftState {
                 at.map(|p| i.events.remove(p)).is_some()
             });
             if slash && self.load == Load::Ready {
+                // in a narrow window the search is folded away once an item is picked: "/" opens it again
+                self.picking = true;
                 ctx.memory_mut(|m| m.request_focus(search_id));
             }
         }
@@ -816,6 +835,11 @@ impl CraftState {
             heading(ui, "Crafting calculator");
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 self.version_combo(ui, acts);
+                // the plans saved earlier, also when no plan is open (after a restart, or a version that failed)
+                let n = self.store.plans.len();
+                if n > 0 && self.target.is_none() && ghost(ui, &format!("Saved plans ({n})")).clicked() {
+                    self.dialog = Some(Dialog::Saved);
+                }
                 if let (false, Some(s)) = (narrow, &status) {
                     small_muted(ui, s.clone());
                 }
@@ -865,7 +889,10 @@ impl CraftState {
                  the sounds or the libraries.",
             );
             ui.add_space(8.0);
-            self.get_versions(ui, env, acts, 300.0);
+            // as tall as the window allows, not a fixed height that leaves a gap on a tall window and is cut short on
+            // a small one
+            let height = (ui.available_height() - 28.0).max(160.0);
+            self.get_versions(ui, env, acts, height);
         });
     }
 
@@ -1210,13 +1237,13 @@ fn pick_open_path() -> Option<PathBuf> {
     #[cfg(target_os = "linux")]
     {
         let mut zenity = crate::platform::command("zenity");
-        zenity.args(["--file-selection", "--file-filter=Crafting plans | *.json *.txt", "--file-filter=All files | *"]);
+        zenity.args(["--file-selection", "--file-filter=Crafting plans | *.json", "--file-filter=All files | *"]);
         if let Ok(out) = zenity.output() {
             let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
             return if out.status.success() && !text.is_empty() { Some(PathBuf::from(text)) } else { None };
         }
     }
-    rfd::FileDialog::new().add_filter("Crafting plans", &["json", "txt"]).pick_file()
+    rfd::FileDialog::new().add_filter("Crafting plans", &["json"]).pick_file()
 }
 
 #[cfg(test)]

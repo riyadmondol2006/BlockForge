@@ -26,7 +26,7 @@ impl Warning {
 
     fn text(self, folder: &str) -> String {
         match self {
-            Warning::JavaOptions => "We've detected that you have a _JAVA_OPTIONS environment variable which may cause issues installing and playing Minecraft.\n\nDo you want to fix this now so you don't have any issues in the future?".into(),
+            Warning::JavaOptions => "We've detected that you have a _JAVA_OPTIONS environment variable which may cause issues installing and playing Minecraft. BlockForge leaves it out when it starts the game, but other Java programs still see it.\n\nDo you want to see how to remove it?".into(),
             Warning::OneDrive => "We have detected that you're running BlockForge from within OneDrive.\n\nThis can cause serious issues and you should move the folder outside of OneDrive.\n\nDo you want to close the launcher and do this now?".into(),
             Warning::ProgramFiles => "We have detected that you're running BlockForge from within Program Files.\n\nThis can cause serious issues and you should move the folder outside of Program Files.\n\nDo you want to close the launcher and do this now?".into(),
             Warning::NotWritable => format!("We have detected that BlockForge cannot write files in its current location ({folder}).\n\nWe cannot continue to run, you must move this folder somewhere else with write access.\n\nTry moving to a folder in your Desktop or another drive.\n\nYou can also try running BlockForge as administrator, but this is not recommended."),
@@ -91,11 +91,15 @@ impl App {
                 }
             });
         });
+        if yes && w == Warning::JavaOptions {
+            // only a page to read: the launcher stays open (it leaves the variable out of the games it starts)
+            self.open_link("https://atl.pw/javaoptionsfromlauncher");
+            self.startup_warnings.remove(0);
+            return;
+        }
         if yes {
             match w {
-                Warning::JavaOptions => {
-                    let _ = open::that("https://atl.pw/javaoptionsfromlauncher");
-                }
+                Warning::JavaOptions => {}
                 Warning::OneDrive | Warning::ProgramFiles => {
                     let _ = open::that(&self.dirs.base);
                 }
