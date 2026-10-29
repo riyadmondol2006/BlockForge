@@ -154,7 +154,7 @@ impl App {
                                     }
                                 } else if busy {
                                     ui.horizontal(|ui| {
-                                        ui.spinner();
+                                        spinner(ui);
                                         muted(ui, "Backing up or deleting\u{2026}");
                                     });
                                 } else {

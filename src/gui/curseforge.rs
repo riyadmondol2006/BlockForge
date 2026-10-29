@@ -456,7 +456,7 @@ impl App {
                             action_cell(ui, &key, |ui| {
                                 if busy {
                                     // a second click would open the file chooser again (for a modpack, a second instance)
-                                    ui.spinner().on_hover_text("Installing");
+                                    spinner(ui).on_hover_text("Installing");
                                 } else if is_installed {
                                     installed_mark(ui);
                                 } else if section == Section::Modpacks {
@@ -523,7 +523,7 @@ impl App {
                         small_faint(ui, format!("Showing {} of {}", thousands(shown), thousands(self.cf.total)));
                     }
                     if self.cf.loading {
-                        ui.spinner();
+                        spinner(ui);
                     } else {
                         let next = if self.cf.total > shown {
                             (self.cf.total - shown).min(u64::from(curseforge::PAGE_SIZE)).to_string()
@@ -537,7 +537,7 @@ impl App {
                 });
             } else if self.cf.loading {
                 ui.vertical_centered(|ui| {
-                    ui.spinner();
+                    spinner(ui);
                 });
             }
             ui.add_space(8.0);
@@ -1201,7 +1201,7 @@ impl App {
             body.show(ui, |ui| {
                 if d.loading {
                     ui.horizontal(|ui| {
-                        ui.spinner();
+                        spinner(ui);
                         muted(ui, "Getting the files");
                     });
                 }
@@ -1271,7 +1271,7 @@ impl App {
                     if target.is_some() {
                         if d.deps_loading {
                             ui.horizontal(|ui| {
-                                ui.spinner();
+                                spinner(ui);
                                 muted(ui, "Checking what this file needs");
                             });
                         } else if let Some(e) = &d.deps_error {
@@ -1322,7 +1322,7 @@ impl App {
                             }
                             _ => {
                                 if d.changelog_loading {
-                                    ui.spinner();
+                                    spinner(ui);
                                 } else if super::discover::text_link(ui, "Show what changed in this version", FS_BODY).clicked() {
                                     want_changelog = true;
                                 }
@@ -1567,7 +1567,7 @@ impl App {
             ui.add_space(6.0);
             if w.loading {
                 ui.horizontal(|ui| {
-                    ui.spinner();
+                    spinner(ui);
                     muted(ui, "Checking CurseForge");
                 });
             }

@@ -265,7 +265,7 @@ impl App {
                 ui.horizontal(|ui| {
                     filter_label(ui, &format!("{} version", self.create.loader.label()));
                     if self.create.loading {
-                        ui.spinner();
+                        spinner(ui);
                     } else if !self.create.loader_versions.is_empty() {
                         let newest = self.create.loader_versions[0].clone();
                         let shown = if self.create.loader_version.is_empty() {
@@ -358,7 +358,7 @@ impl App {
                 "create",
                 |ui| {
                     if creating {
-                        ui.spinner();
+                        spinner(ui);
                         muted(ui, "Working on it, you can follow along in the sidebar");
                     } else {
                         small_muted(ui, summary);

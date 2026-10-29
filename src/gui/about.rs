@@ -159,7 +159,7 @@ impl App {
             ui.add_space(4.0);
             ui.horizontal_wrapped(|ui| {
                 if busy {
-                    ui.spinner();
+                    spinner(ui);
                 }
                 let (color, size) = match (is_error, available.is_some()) {
                     (true, _) => (c_danger(), FS_META),

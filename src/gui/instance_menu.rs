@@ -692,7 +692,7 @@ impl App {
                     ui.horizontal(|ui| {
                         muted(ui, "Version");
                         if d.loading {
-                            ui.add(egui::Spinner::new().size(14.0));
+                            spinner_sized(ui, 14.0);
                         } else if d.versions.is_empty() {
                             ui.label(
                                 RichText::new(format!(

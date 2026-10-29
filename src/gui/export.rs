@@ -343,7 +343,7 @@ impl App {
                 "export",
                 |ui| {
                     if running {
-                        ui.spinner();
+                        spinner(ui);
                         muted(ui, "Working on it, you can follow along in the sidebar");
                     } else if !reason.is_empty() {
                         small_muted(ui, reason);

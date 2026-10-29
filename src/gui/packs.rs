@@ -759,7 +759,7 @@ impl App {
             }
             if self.packs.tech_loading {
                 ui.add_space(8.0);
-                ui.spinner();
+                spinner(ui);
             }
             ui.add_space(8.0);
         });
@@ -888,7 +888,7 @@ impl App {
             if d.loading {
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    ui.spinner();
+                    spinner(ui);
                     muted(ui, "Reading this version");
                 });
             }

@@ -506,7 +506,7 @@ impl App {
             ui.spacing_mut().item_spacing.x = 8.0;
             match self.games.get(&folder).map(|g| g.phase) {
                 Some(Phase::Preparing) => {
-                    ui.add(egui::Spinner::new().size(14.0));
+                    spinner_sized(ui, 14.0);
                     ui.label(RichText::new("Getting ready").color(c_muted()));
                 }
                 Some(Phase::Running) => {

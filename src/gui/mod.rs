@@ -172,10 +172,21 @@ pub struct Notifier {
     ctx: egui::Context,
 }
 
+/// How soon the window shows what came in by [`Notifier::send_soon`].
+const SOON: Duration = Duration::from_millis(100);
+
 impl Notifier {
     pub fn send(&self, m: Msg) {
         let _ = self.tx.send(m);
         self.ctx.request_repaint();
+    }
+
+    /// Like [`Notifier::send`], for what comes in streams (a game's log lines): the window shows it within [`SOON`]
+    /// instead of at once. A modpack that logs thousands of lines while it loads kept the launcher drawing at the
+    /// screen's full rate, taking processor time from the game exactly when it needed it most.
+    pub fn send_soon(&self, m: Msg) {
+        let _ = self.tx.send(m);
+        self.ctx.request_repaint_after(SOON);
     }
 }
 
@@ -838,7 +849,7 @@ impl App {
                             Some(l) => {
                                 watch.line(&l);
                                 if let Some(entry) = assembler.push(&l) {
-                                    n.send(Msg::GameLog(folder_s.clone(), entry));
+                                    n.send_soon(Msg::GameLog(folder_s.clone(), entry));
                                 }
                             }
                             None => break,

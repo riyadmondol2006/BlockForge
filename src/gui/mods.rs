@@ -845,11 +845,11 @@ impl App {
             |ui, (this, acts)| {
                 if let Some(b) = &this.mods.busy {
                     muted(ui, format!("{b}\u{2026}"));
-                    ui.add(egui::Spinner::new().size(14.0));
+                    spinner_sized(ui, 14.0);
                 }
                 if this.mods.checking {
                     muted(ui, "Checking for updates");
-                    ui.add(egui::Spinner::new().size(14.0));
+                    spinner_sized(ui, 14.0);
                 } else {
                     if let Some(e) = &this.mods.update_error {
                         ui.label(RichText::new("Couldn't check").size(FS_META).color(c_warn()))
@@ -1040,7 +1040,7 @@ impl App {
             ui.add_space(6.0);
         } else if self.mods.scanning {
             ui.horizontal(|ui| {
-                ui.add(egui::Spinner::new().size(14.0));
+                spinner_sized(ui, 14.0);
                 muted(ui, "Scanning for malware");
             });
         }
@@ -1525,7 +1525,7 @@ impl App {
                 match &d.list {
                     None => {
                         ui.horizontal(|ui| {
-                            ui.add(egui::Spinner::new().size(14.0));
+                            spinner_sized(ui, 14.0);
                             muted(ui, "Asking Modrinth");
                         });
                     }

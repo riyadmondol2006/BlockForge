@@ -592,8 +592,42 @@ pub fn progress_bar(ui: &mut Ui, fraction: Option<f32>, height: f32) -> Response
             if bar.width() > 0.0 {
                 ui.painter().rect_filled(bar, r, c_accent());
             }
-            ui.ctx().request_repaint();
+            ui.ctx().request_repaint_after(ANIMATION_FRAME);
         }
+    }
+    resp
+}
+
+/// How often something that moves by itself (a spinner, a bar with no number yet) is drawn again: smooth to the eye,
+/// but not every frame the screen can show. A long install or a search shows one for a while, and drawing the whole
+/// window 60 to 144 times a second for it kept a processor core busy (or several, without a screen to wait for).
+pub const ANIMATION_FRAME: std::time::Duration = std::time::Duration::from_millis(33);
+
+/// The "working" spinner, as egui draws it, but drawn again only every [`ANIMATION_FRAME`].
+pub fn spinner(ui: &mut Ui) -> Response {
+    let size = ui.style().spacing.interact_size.y;
+    spinner_sized(ui, size)
+}
+
+/// [`spinner`] at `size` points.
+pub fn spinner_sized(ui: &mut Ui, size: f32) -> Response {
+    let (rect, resp) = ui.allocate_exact_size(vec2(size, size), Sense::hover());
+    resp.widget_info(|| egui::WidgetInfo::new(egui::Role::ProgressIndicator));
+    if ui.is_rect_visible(rect) {
+        ui.ctx().request_repaint_after(ANIMATION_FRAME);
+        let radius = (rect.height().min(rect.width()) * 0.5) - 2.0;
+        let n_points = (radius.round() as u32).clamp(8, 128);
+        let time = ui.input(|i| i.time);
+        let start = time * std::f64::consts::TAU;
+        let end = start + 240f64.to_radians() * time.sin();
+        let points: Vec<egui::Pos2> = (0..n_points)
+            .map(|i| {
+                let angle = egui::emath::lerp(start..=end, i as f64 / n_points as f64);
+                let (sin, cos) = angle.sin_cos();
+                rect.center() + radius * vec2(cos as f32, sin as f32)
+            })
+            .collect();
+        ui.painter().add(egui::Shape::line(points, Stroke::new(3.0, ui.visuals().strong_text_color())));
     }
     resp
 }

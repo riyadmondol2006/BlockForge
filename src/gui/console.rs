@@ -77,7 +77,7 @@ impl App {
                             action = ConsoleAction::Copy;
                         }
                         if uploading {
-                            ui.add(egui::Spinner::new().size(14.0));
+                            spinner_sized(ui, 14.0);
                             muted(ui, "Uploading the log");
                         } else if secondary(ui, "Upload log")
                             .on_hover_text(

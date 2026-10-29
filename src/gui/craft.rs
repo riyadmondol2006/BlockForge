@@ -776,7 +776,7 @@ impl CraftState {
         match (&self.versions, &self.load) {
             (None, _) => {
                 ui.horizontal(|ui| {
-                    ui.spinner();
+                    spinner(ui);
                     muted(ui, "Looking for the games on this computer");
                 });
             }
@@ -788,7 +788,7 @@ impl CraftState {
             (_, Load::Ready) => self.body(ui, &mut acts),
             _ => {
                 ui.horizontal(|ui| {
-                    ui.spinner();
+                    spinner(ui);
                     muted(ui, "Reading the recipes of this version");
                 });
             }
@@ -930,7 +930,7 @@ impl CraftState {
                 }
                 None => {
                     ui.horizontal(|ui| {
-                        ui.spinner();
+                        spinner(ui);
                         muted(ui, "Loading the version list");
                     });
                 }
@@ -962,7 +962,7 @@ impl CraftState {
                                 small_muted(ui, "On this computer");
                             } else if busy {
                                 small_muted(ui, "Downloading\u{2026}");
-                                ui.spinner();
+                                spinner(ui);
                             } else if secondary(ui, "Download").clicked() {
                                 self.downloading.insert(v.id.clone());
                                 acts.push(Act::Download(v.id.clone()));

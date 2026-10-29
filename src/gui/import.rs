@@ -376,7 +376,7 @@ impl App {
             });
             if self.import.picking {
                 ui.horizontal(|ui| {
-                    ui.spinner();
+                    spinner(ui);
                     small_muted(ui, "Waiting for the file chooser");
                 });
             }
@@ -408,7 +408,7 @@ impl App {
             match &self.import.scan {
                 None => {
                     ui.horizontal(|ui| {
-                        ui.spinner();
+                        spinner(ui);
                         muted(ui, "Looking for other launchers");
                     });
                 }

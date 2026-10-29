@@ -216,7 +216,7 @@ impl ConvertState {
             Look::Busy => {
                 card(ui, |ui| {
                     ui.horizontal(|ui| {
-                        ui.spinner();
+                        spinner(ui);
                         ui.label(ellipsis(tr!("Looking at the world...")));
                     });
                     self.source_path(ui);

@@ -451,7 +451,7 @@ impl App {
             if self.ftb.loading {
                 if !packs.is_empty() {
                     ui.vertical_centered(|ui| {
-                        ui.spinner();
+                        spinner(ui);
                     });
                 }
             } else if total > self.ftb.page * ftb::PAGE_SIZE {
@@ -506,7 +506,7 @@ impl App {
                         let id = ui.scope_id().with(("ftb-update-row", folder));
                         end_aligned(ui, id, |ui| {
                             if self.ftb.updating.contains(folder) {
-                                ui.spinner().on_hover_text("Updating");
+                                spinner(ui).on_hover_text("Updating");
                                 return;
                             }
                             let clicked = if rows.len() == 1 { primary(ui, "Update") } else { secondary(ui, "Update") };
@@ -633,7 +633,7 @@ impl App {
                 },
                 |ui| {
                     if installing {
-                        ui.spinner();
+                        spinner(ui);
                         muted(ui, "Installing");
                     }
                     if secondary(ui, "Close").clicked() {

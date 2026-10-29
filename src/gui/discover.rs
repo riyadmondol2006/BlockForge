@@ -744,7 +744,7 @@ impl App {
                         row_actions(ui, &key, |ui| {
                             action_cell(ui, &key, |ui| {
                                 if busy {
-                                    ui.spinner();
+                                    spinner(ui);
                                     return;
                                 }
                                 if is_installed {
@@ -807,7 +807,7 @@ impl App {
                 ui.vertical_centered(|ui| {
                     small_faint(ui, format!("Showing {} of {}", thousands(shown), thousands(self.discover.total)));
                     if self.discover.loading {
-                        ui.spinner();
+                        spinner(ui);
                     } else {
                         let next = (self.discover.total - shown).min(u64::from(PAGE));
                         if ghost(ui, &format!("Load {next} more")).clicked() {
@@ -817,7 +817,7 @@ impl App {
                 });
             } else if self.discover.loading {
                 ui.vertical_centered(|ui| {
-                    ui.spinner();
+                    spinner(ui);
                 });
             }
             ui.add_space(8.0);

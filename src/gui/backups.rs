@@ -99,7 +99,7 @@ impl App {
             }
             if working {
                 // a backup or a restore of this instance is running: another one now would read half-written files
-                ui.add(egui::Spinner::new().size(14.0));
+                spinner_sized(ui, 14.0);
                 muted(ui, "A backup or restore of this instance is running\u{2026}");
             } else {
                 let (_, picked) = secondary_menu(ui, "Back up now", |ui| {

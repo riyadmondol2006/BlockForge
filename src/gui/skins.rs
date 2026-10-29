@@ -316,7 +316,7 @@ impl App {
                         }
                         if d.uploading {
                             ui.horizontal(|ui| {
-                                ui.spinner();
+                                spinner(ui);
                                 muted(ui, "Uploading your skin\u{2026}");
                             });
                         } else if let Some((text, error)) = &d.message {

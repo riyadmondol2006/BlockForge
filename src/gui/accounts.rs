@@ -172,7 +172,7 @@ impl App {
                         });
                         ui.add_space(4.0);
                         ui.horizontal(|ui| {
-                            ui.spinner();
+                            spinner(ui);
                             muted(
                                 ui,
                                 format!(
@@ -185,7 +185,7 @@ impl App {
                     None if self.acct.signing_in => {
                         ui.add_space(4.0);
                         ui.horizontal(|ui| {
-                            ui.spinner();
+                            spinner(ui);
                             muted(ui, "Asking Microsoft for a code");
                             if secondary(ui, "Cancel").clicked() {
                                 self.acct.signing_in = false;

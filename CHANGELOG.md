@@ -3,6 +3,18 @@
 The section for a version is used as the text of its release on GitHub. Older releases (the Java versions, up to
 3.4.42.x) are on the [releases page](https://github.com/riyadmondol2006/BlockForge/releases).
 
+## 4.8.3
+
+A lighter launcher while something is going on: far less processor time while a game loads or a job runs.
+
+### Fixed
+
+- While a game runs, its log lines are shown a few times a second instead of each at once. A modpack that logs
+  thousands of lines while it loads kept the launcher drawing its window at the screen's full rate, taking processor
+  time from the game when it needed it most. No line is left out.
+- Spinners and progress bars that move by themselves (while a pack is unpacked, a search runs or a list loads) draw
+  the window 30 times a second instead of at every frame the screen can show.
+
 ## 4.8.2
 
 Faster downloads that use more of your connection, and a window that tells you when a new BlockForge is out.
