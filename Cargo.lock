@@ -328,7 +328,7 @@ dependencies = [
 
 [[package]]
 name = "blockforge"
-version = "4.8.4"
+version = "4.9.0"
 dependencies = [
  "anyhow",
  "base64",
