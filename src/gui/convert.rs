@@ -54,6 +54,8 @@ pub(super) enum Act {
     Copy(String),
     Link(&'static str),
     BackToInstance(String),
+    /// Put the converted world in this instance (its folder name), or with `None` in a folder of the player's choice.
+    Into(Option<String>),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -142,8 +144,12 @@ pub struct ConvertState {
     /// Numbers the looks at a world, so the answer to an old one is ignored.
     seq: u64,
     pub(super) picking: bool,
-    /// The instance the world is added to; `None` for the standalone flow of the Tools page.
+    /// The instance the world is added to; `None` when it goes to a folder of the player's choice.
     pub(super) dest: Option<Dest>,
+    /// The page was opened from an instance ("Add a Bedrock world"), so it is titled for it and leads back to it.
+    pub(super) via_instance: bool,
+    /// The instances a world can be put in, for the "Put it in" choice (filled in by the window every frame).
+    pub(super) choices: Vec<Dest>,
     pub(super) versions: Vec<String>,
     pub(super) version: String,
     pub(super) dims: Vec<(String, bool)>,
@@ -180,6 +186,8 @@ impl ConvertState {
             seq: 0,
             picking: false,
             dest: None,
+            via_instance: false,
+            choices: Vec::new(),
             versions,
             version,
             dims: Vec::new(),
@@ -227,6 +235,18 @@ impl ConvertState {
         self.start_over();
         self.version = pick_version(&self.versions, dest.as_ref().map(|d| d.mc_version.as_str()));
         self.dest = dest;
+    }
+
+    /// Puts the world in another instance (or, with `None`, in a folder of the player's choice) without forgetting
+    /// the world that was chosen: the version follows the instance and the output moves to its saves folder.
+    pub(super) fn choose_dest(&mut self, dest: Option<Dest>) {
+        self.version = pick_version(&self.versions, dest.as_ref().map(|d| d.mc_version.as_str()));
+        self.dest = dest;
+        self.out_edited = false;
+        self.out_check = None;
+        let name = self.found().map(|d| d.name.clone());
+        self.output =
+            name.and_then(|n| self.suggested_output(&n)).map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
     }
 
     /// Where the converted world goes by default.
@@ -584,6 +604,9 @@ pub(super) fn number(n: u64) -> String {
     crate::i18n::format_number(n.min(i64::MAX as u64) as i64, crate::i18n::selected_locale().language)
 }
 
+/// Where the settings keep the instance converted worlds go to (its folder name), among the launcher's extras.
+const CONVERT_INTO_KEY: &str = "convertInto";
+
 // ---------------------------------------------------------------------------------------------------------
 // The window's side
 
@@ -593,15 +616,25 @@ impl App {
     pub(super) fn open_convert(&mut self, into: Option<&Instance>) {
         self.page = Page::Convert;
         self.convert_open();
+        // from the sidebar, the world goes to the instance the last one went to, when that instance is still there
+        let remembered = self.convert_remembered().map(Dest::of);
+        let via = into.is_some();
+        let dest = into.map(Dest::of).or(remembered);
         let Some(st) = self.convert.as_mut() else { return };
-        let dest = into.map(Dest::of);
         if st.screen == Screen::Running {
-            if dest != st.dest {
+            if via && dest != st.dest {
                 self.toast(tr!("A conversion is already running. It has to finish first."));
             }
-        } else if dest.is_some() || st.dest.is_some() {
+        } else if dest != st.dest || via != st.via_instance {
             st.set_dest(dest);
+            st.via_instance = via;
         }
+    }
+
+    /// The instance converted worlds were last put in from the converter's own page, when it is still there.
+    fn convert_remembered(&self) -> Option<&Instance> {
+        let folder = self.settings.extras.get(CONVERT_INTO_KEY).and_then(|v| v.as_str())?;
+        self.instance(folder)
     }
 
     fn convert_open(&mut self) {
@@ -613,6 +646,16 @@ impl App {
     pub(super) fn convert_ui(&mut self, ui: &mut Ui) {
         self.convert_open();
         let Some(mut st) = self.convert.take() else { return };
+        st.choices = self.instances.iter().map(Dest::of).collect();
+        // an instance that was deleted or renamed can't take the world any more (the screenshot tour's made-up
+        // instance is left alone)
+        if self.shot.is_none()
+            && st.screen == Screen::Setup
+            && st.dest.as_ref().is_some_and(|d| !st.choices.iter().any(|c| c.folder == d.folder))
+        {
+            st.choose_dest(None);
+            st.via_instance = false;
+        }
         let acts = st.show(ui);
         self.convert = Some(st);
         for a in acts {
@@ -717,6 +760,22 @@ impl App {
             Act::Copy(text) => {
                 self.ctx.copy_text(text);
                 self.toast(tr!("Copied"));
+            }
+            Act::Into(folder) => {
+                let dest = folder.as_deref().and_then(|f| self.instance(f)).map(Dest::of);
+                // remembered for the next time the converter is opened from the sidebar
+                match &dest {
+                    Some(d) => {
+                        self.settings.extras.insert(CONVERT_INTO_KEY.into(), serde_json::json!(d.folder));
+                    }
+                    None => {
+                        self.settings.extras.remove(CONVERT_INTO_KEY);
+                    }
+                }
+                self.save_settings();
+                if let Some(st) = self.convert.as_mut() {
+                    st.choose_dest(dest);
+                }
             }
             Act::Link(url) => self.open_link(url),
             Act::BackToInstance(folder) => self.open_instance(&folder),
@@ -873,6 +932,7 @@ impl ConvertState {
         self.versions = vec!["1.21.4".into(), "1.21.1".into(), "1.20.6".into(), "1.20.4".into()];
         self.version = "1.21.4".into();
         self.dest = None;
+        self.via_instance = false;
         self.dims = detected.dimensions.iter().map(|n| (n.clone(), n != "end")).collect();
         self.output = default_output(&source, &detected.name).to_string_lossy().to_string();
         self.out_edited = true;
@@ -884,6 +944,7 @@ impl ConvertState {
             self.output = saves.join(safe_name(&name)).to_string_lossy().to_string();
             self.dest =
                 Some(Dest { folder: "Survival".into(), name: "Survival".into(), saves, mc_version: "1.21.4".into() });
+            self.via_instance = true;
         }
         let job = ConvertJob {
             input: source,
@@ -1205,6 +1266,30 @@ mod tests {
         st.set_dest(None);
         let seq = st.begin_look(dir.join("dl").join("Home.mcworld"));
         st.apply_detected(seq, Ok(Fake.detect(Path::new("/")).unwrap()));
+        assert_eq!(Path::new(&st.output), dir.join("dl").join("Home (converted)"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn choosing_an_instance_keeps_the_world_and_moves_it_into_the_saves() {
+        let dir = tmp("into");
+        let saves = dir.join("saves");
+        let dest = Dest { folder: "Old".into(), name: "Old".into(), saves: saves.clone(), mc_version: "1.20.6".into() };
+        let mut st = ConvertState::new(Arc::new(Fake));
+        let seq = st.begin_look(dir.join("dl").join("Home.mcworld"));
+        st.apply_detected(seq, Ok(Fake.detect(Path::new("/")).unwrap()));
+        assert_eq!(Path::new(&st.output), dir.join("dl").join("Home (converted)"));
+        // a typed folder is replaced too: an instance means its saves folder
+        st.output = dir.join("elsewhere").to_string_lossy().to_string();
+        st.output_edited();
+        st.choose_dest(Some(dest));
+        assert!(st.found().is_some(), "the world chosen is kept");
+        assert_eq!(Path::new(&st.output), saves.join("Home"));
+        assert_eq!(st.version, "1.20.6", "converted for the instance's Minecraft");
+        assert_eq!(st.job().expect("ready to convert").output, saves.join("Home"));
+        // and back to a folder of one's own: next to the world again
+        st.choose_dest(None);
+        assert!(st.found().is_some());
         assert_eq!(Path::new(&st.output), dir.join("dl").join("Home (converted)"));
         let _ = std::fs::remove_dir_all(&dir);
     }

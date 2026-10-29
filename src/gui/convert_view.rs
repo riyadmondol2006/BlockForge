@@ -3,8 +3,8 @@
 use egui::{Align, Color32, CornerRadius, Layout, RichText, ScrollArea, Sense, Stroke, Ui, vec2};
 
 use super::convert::{
-    Act, CHUNKER_URL, ConvertState, Look, MAX_UNMAPPED, OutputCheck, Pick, Screen, dimension_label, format_elapsed,
-    free_name, number,
+    Act, CHUNKER_URL, ConvertState, Dest, Look, MAX_UNMAPPED, OutputCheck, Pick, Screen, dimension_label,
+    format_elapsed, free_name, number,
 };
 use super::craft_fmt::{check_labeled, small_faint};
 use super::icons::Icon;
@@ -180,11 +180,11 @@ impl ConvertState {
         ui.scope(|ui| {
             ui.set_max_width((ui.available_width() - 12.0).min(PAGE_WIDTH));
             ui.horizontal(|ui| {
-                heading(ui, &if self.dest.is_some() { tr!("Add a Bedrock world") } else { tr!("World converter") });
+                heading(ui, &if self.via_instance { tr!("Add a Bedrock world") } else { tr!("World converter") });
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if self.screen != Screen::Running {
                         // the standalone converter is a page of its own in the sidebar: nowhere to go back to
-                        if let Some(d) = &self.dest {
+                        if let Some(d) = self.dest.as_ref().filter(|_| self.via_instance) {
                             if back_link(ui, &tr!("Back to {0}", &d.name)).clicked() {
                                 acts.push(Act::BackToInstance(d.folder.clone()));
                             }
@@ -506,9 +506,43 @@ impl ConvertState {
         });
     }
 
+    /// "Put it in": an installed instance, where the world is added to the saves at once (converted for the
+    /// instance's Minecraft version), or a folder of the player's choice. The choice made here is remembered.
+    fn put_in_choice(&self, ui: &mut Ui, acts: &mut Vec<Act>) {
+        let label = |d: &Dest| tr!("{0} \u{00B7} Minecraft {1}", &d.name, &d.mc_version);
+        let folder_text = tr!("A folder you choose");
+        let current = self.dest.as_ref().map(label).unwrap_or_else(|| folder_text.clone());
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(tr!("Put it in")).color(c_muted()));
+            egui::ComboBox::from_id_salt("convert-into")
+                .selected_text(current)
+                .width((ui.available_width() - 4.0).clamp(160.0, 360.0))
+                .show_ui(ui, |ui| {
+                    if ui.selectable_label(self.dest.is_none(), &folder_text).clicked() && self.dest.is_some() {
+                        acts.push(Act::Into(None));
+                    }
+                    if !self.choices.is_empty() {
+                        ui.separator();
+                    }
+                    for c in &self.choices {
+                        let on = self.dest.as_ref().is_some_and(|d| d.folder == c.folder);
+                        if ui.selectable_label(on, label(c)).clicked() && !on {
+                            acts.push(Act::Into(Some(c.folder.clone())));
+                        }
+                    }
+                })
+                .response
+                .on_hover_text(tr!(
+                    "Choose an instance to add the converted world to its worlds straight away, ready to play"
+                ));
+        });
+    }
+
     fn output_block(&mut self, ui: &mut Ui, acts: &mut Vec<Act>) {
         let check = self.output_check();
         card(ui, |ui| {
+            self.put_in_choice(ui, acts);
+            ui.add_space(6.0);
             ui.horizontal(|ui| {
                 let button_w = 130.0;
                 let field = ui.add_sized(
@@ -738,6 +772,12 @@ impl ConvertState {
                         if primary_icon(ui, Icon::Folder, &tr!("Open folder")).clicked() {
                             acts.push(Act::Open(s.output.clone()));
                         }
+                    }
+                }
+                // put in an instance from the converter's own page: one click to it
+                if let Some(d) = dest.as_ref().filter(|_| !self.via_instance) {
+                    if secondary(ui, &tr!("Go to {0}", &d.name)).clicked() {
+                        acts.push(Act::BackToInstance(d.folder.clone()));
                     }
                 }
                 let another = if dest.is_some() { tr!("Add another") } else { tr!("Convert another") };
