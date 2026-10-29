@@ -10,7 +10,8 @@ use super::craft_fmt::{check_labeled, small_faint};
 use super::icons::Icon;
 use super::theme::*;
 use super::widgets::*;
-use crate::convert::backend::Edition;
+use crate::convert::backend::{Edition, WorldPlayer};
+use crate::convert::level::{Difficulty, EntityFilter, GameType, InventorySource};
 use crate::tr;
 
 /// How wide the page's content gets on a wide window.
@@ -156,6 +157,13 @@ fn option_row(ui: &mut Ui, title: &str, control: impl FnOnce(&mut Ui)) {
     });
 }
 
+/// A row with a title, a line that says what it does, and a switch at the right.
+fn switch_row(ui: &mut Ui, title: &str, hint: &str, on: &mut bool) {
+    setting_row(ui, title, hint, |ui| {
+        toggle(ui, on);
+    });
+}
+
 /// The tick boxes of the dimensions in a row, first to last, so Tab visits them in the order they are read. The group
 /// is measured first, as it sits at the right of its row.
 fn dimension_checks(ui: &mut Ui, dims: &mut [(String, bool)]) {
@@ -279,8 +287,10 @@ impl ConvertState {
             ui.add_space(STEP_GAP);
             badges.push(step(ui, 2, &tr!("CONVERT TO"), target_ready, |ui| self.target_block(ui)));
             ui.add_space(STEP_GAP);
+            badges.push(step(ui, 3, &tr!("WHAT COMES ALONG"), true, |ui| self.keep_block(ui)));
+            ui.add_space(STEP_GAP);
             let title = if self.dest.is_some() { tr!("ADD TO THE INSTANCE AS") } else { tr!("SAVE AS") };
-            badges.push(step(ui, 3, &title, output_ready, |ui| self.output_block(ui, acts)));
+            badges.push(step(ui, 4, &title, output_ready, |ui| self.output_block(ui, acts)));
         }
         // the line between two badges: in the brand colour once the step above it is ready
         for pair in badges.windows(2) {
@@ -504,6 +514,211 @@ impl ConvertState {
                 }
             }
         });
+    }
+
+    /// What comes along besides the blocks: the world's mobs and item frames, the players' things and who owns them,
+    /// and the world's settings. Everything is kept by default.
+    fn keep_block(&mut self, ui: &mut Ui) {
+        card(ui, |ui| {
+            switch_row(
+                ui,
+                &tr!("Mobs, pets and villagers"),
+                &tr!(
+                    "Animals and monsters, tamed pets, villagers with their trades, armor stands, minecarts, boats and paintings"
+                ),
+                &mut self.entities.convert,
+            );
+            if self.entities.convert {
+                option_row(ui, &tr!("Which mobs"), |ui| {
+                    let label = |f: EntityFilter| match f {
+                        EntityFilter::All => tr!("All of them"),
+                        EntityFilter::NoHostile => tr!("No hostile mobs"),
+                        EntityFilter::PetsAndNamedOnly => tr!("Only pets, named mobs and villagers"),
+                        EntityFilter::None => tr!("None"),
+                    };
+                    egui::ComboBox::from_id_salt("convert-mobs")
+                        .selected_text(label(self.entities.filter))
+                        .width(250.0)
+                        .show_ui(ui, |ui| {
+                            for f in [EntityFilter::All, EntityFilter::NoHostile, EntityFilter::PetsAndNamedOnly] {
+                                ui.selectable_value(&mut self.entities.filter, f, label(f));
+                            }
+                        });
+                });
+                switch_row(
+                    ui,
+                    &tr!("Item frames"),
+                    &tr!("Item frames and glow item frames, with the item in them"),
+                    &mut self.entities.item_frames,
+                );
+                switch_row(
+                    ui,
+                    &tr!("Leave out what lies around"),
+                    &tr!("Dropped items, experience orbs, falling sand and arrows are not brought over"),
+                    &mut self.entities.drop_transient,
+                );
+            }
+            rule(ui);
+            match self.owner.clone() {
+                Some((name, _)) => switch_row(
+                    ui,
+                    &tr!("Make {0} the owner", &name),
+                    &tr!("The host's character and pets become this account's, so you play on as them"),
+                    &mut self.make_owner,
+                ),
+                None => {
+                    option_row(ui, &tr!("Owner"), |ui| small_muted(ui, tr!("Add an account to become the owner")));
+                }
+            }
+            switch_row(
+                ui,
+                &tr!("Ender chest"),
+                &tr!("What the host kept in the ender chest"),
+                &mut self.player_opts.include_ender_chest,
+            );
+            switch_row(
+                ui,
+                &tr!("Experience, health and food"),
+                &tr!("Also effects and the bed or respawn anchor to wake up at"),
+                &mut self.player_opts.include_stats,
+            );
+            let players = self.world_players().to_vec();
+            if !players.is_empty() {
+                switch_row(
+                    ui,
+                    &tr!("The other players"),
+                    &tr!("Each player who joined the world gets their own player file with their things"),
+                    &mut self.player_opts.export_guest_profiles,
+                );
+                self.inventory_choice(ui, &players);
+            }
+            rule(ui);
+            egui::CollapsingHeader::new(RichText::new(tr!("World settings")).semibold())
+                .id_salt("convert-world-settings")
+                .default_open(!self.overrides.is_empty())
+                .show(ui, |ui| self.overrides_rows(ui));
+        });
+    }
+
+    /// Whose inventory the owner starts with: the host's, another player's, or the host's with the other's items in
+    /// the free slots.
+    fn inventory_choice(&mut self, ui: &mut Ui, players: &[WorldPlayer]) {
+        let describe = |p: &WorldPlayer| {
+            let who = if p.signed_in { tr!("Signed-in player") } else { tr!("Player") };
+            tr!(
+                "{0} \u{00B7} level {1} \u{00B7} {2} items \u{00B7} at {3}, {4}, {5}",
+                &who,
+                p.level,
+                p.items,
+                p.position[0],
+                p.position[1],
+                p.position[2]
+            )
+        };
+        let chosen = self.player_opts.inventory_source.profile_id().map(str::to_string);
+        let current = chosen
+            .as_deref()
+            .and_then(|id| players.iter().find(|p| p.id.eq_ignore_ascii_case(id)))
+            .map(describe)
+            .unwrap_or_else(|| tr!("The host's"));
+        let merge = matches!(self.player_opts.inventory_source, InventorySource::MergeHostAnd(_));
+        option_row(ui, &tr!("Your inventory"), |ui| {
+            egui::ComboBox::from_id_salt("convert-inventory").selected_text(current).width(320.0).show_ui(ui, |ui| {
+                if ui.selectable_label(chosen.is_none(), tr!("The host's")).clicked() {
+                    self.player_opts.inventory_source = InventorySource::Host;
+                }
+                for p in players {
+                    let on = chosen.as_deref().is_some_and(|id| id.eq_ignore_ascii_case(&p.id));
+                    if ui.selectable_label(on, describe(p)).clicked() {
+                        self.player_opts.inventory_source = if merge {
+                            InventorySource::MergeHostAnd(p.id.clone())
+                        } else {
+                            InventorySource::Profile(p.id.clone())
+                        };
+                    }
+                }
+            });
+        });
+        if let Some(id) = chosen {
+            let mut keep_host = merge;
+            if check_labeled(
+                ui,
+                &mut keep_host,
+                &tr!("Keep the host's items too, with that player's in the free slots"),
+            )
+            .changed()
+            {
+                self.player_opts.inventory_source =
+                    if keep_host { InventorySource::MergeHostAnd(id) } else { InventorySource::Profile(id) };
+            }
+        }
+    }
+
+    /// Difficulty, game mode, cheats and hardcore: kept as the world had them unless one is chosen.
+    fn overrides_rows(&mut self, ui: &mut Ui) {
+        let keep = tr!("As the world had it");
+        option_row(ui, &tr!("Difficulty"), |ui| {
+            let label = |d: Option<Difficulty>| match d {
+                None => keep.clone(),
+                Some(Difficulty::Peaceful) => tr!("Peaceful"),
+                Some(Difficulty::Easy) => tr!("Easy"),
+                Some(Difficulty::Normal) => tr!("Normal"),
+                Some(Difficulty::Hard) => tr!("Hard"),
+            };
+            egui::ComboBox::from_id_salt("convert-difficulty")
+                .selected_text(label(self.overrides.difficulty))
+                .width(200.0)
+                .show_ui(ui, |ui| {
+                    for d in [
+                        None,
+                        Some(Difficulty::Peaceful),
+                        Some(Difficulty::Easy),
+                        Some(Difficulty::Normal),
+                        Some(Difficulty::Hard),
+                    ] {
+                        ui.selectable_value(&mut self.overrides.difficulty, d, label(d));
+                    }
+                });
+        });
+        option_row(ui, &tr!("Game mode"), |ui| {
+            let label = |g: Option<GameType>| match g {
+                None => keep.clone(),
+                Some(GameType::Survival) => tr!("Survival"),
+                Some(GameType::Creative) => tr!("Creative"),
+                Some(GameType::Adventure) => tr!("Adventure"),
+                Some(GameType::Spectator) => tr!("Spectator"),
+            };
+            egui::ComboBox::from_id_salt("convert-gamemode")
+                .selected_text(label(self.overrides.game_type))
+                .width(200.0)
+                .show_ui(ui, |ui| {
+                    for g in [
+                        None,
+                        Some(GameType::Survival),
+                        Some(GameType::Creative),
+                        Some(GameType::Adventure),
+                        Some(GameType::Spectator),
+                    ] {
+                        ui.selectable_value(&mut self.overrides.game_type, g, label(g));
+                    }
+                });
+        });
+        let on_off = |id: &str, title: String, value: &mut Option<bool>, ui: &mut Ui| {
+            option_row(ui, &title, |ui| {
+                let label = |v: Option<bool>| match v {
+                    None => keep.clone(),
+                    Some(true) => tr!("On"),
+                    Some(false) => tr!("Off"),
+                };
+                egui::ComboBox::from_id_salt(id).selected_text(label(*value)).width(200.0).show_ui(ui, |ui| {
+                    for v in [None, Some(true), Some(false)] {
+                        ui.selectable_value(value, v, label(v));
+                    }
+                });
+            });
+        };
+        on_off("convert-cheats", tr!("Cheats"), &mut self.overrides.allow_commands, ui);
+        on_off("convert-hardcore", tr!("Hardcore"), &mut self.overrides.hardcore, ui);
     }
 
     /// "Put it in": an installed instance, where the world is added to the saves at once (converted for the

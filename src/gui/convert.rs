@@ -14,10 +14,13 @@ use egui::Ui;
 
 use super::{App, Msg, Page};
 use crate::convert::backend::{
-    self, Backend, ConvertJob, Detected, DimensionSelection, Edition, Event, Summary, Target,
+    self, Backend, ConvertJob, Detected, DimensionSelection, Edition, EntityOptions, Event, Summary, Target,
+    WorldPlayer,
 };
+use crate::convert::level::{InventorySource, LevelOverrides, PlayerOptions};
 use crate::instances::Instance;
 use crate::tr;
+use uuid::Uuid;
 
 /// How long a run can go on before stopping it asks "are you sure".
 pub(super) const CONFIRM_STOP_AFTER: Duration = Duration::from_secs(5);
@@ -150,6 +153,17 @@ pub struct ConvertState {
     pub(super) via_instance: bool,
     /// The instances a world can be put in, for the "Put it in" choice (filled in by the window every frame).
     pub(super) choices: Vec<Dest>,
+    /// What comes along besides the blocks: mobs, pets, item frames (all on by default).
+    pub(super) entities: EntityOptions,
+    /// The players' things: ender chest, stats, the other players, whose inventory (all kept by default). The owner
+    /// is not kept here: it is the launcher's account when [`Self::make_owner`] is on.
+    pub(super) player_opts: PlayerOptions,
+    /// The account the launcher plays with becomes the owner of the world (its player file, its pets).
+    pub(super) make_owner: bool,
+    /// The launcher's account, name and uuid (filled in by the window every frame).
+    pub(super) owner: Option<(String, Uuid)>,
+    /// Difficulty, game mode, cheats and hardcore to give the world; all kept as they were by default.
+    pub(super) overrides: LevelOverrides,
     pub(super) versions: Vec<String>,
     pub(super) version: String,
     pub(super) dims: Vec<(String, bool)>,
@@ -188,6 +202,11 @@ impl ConvertState {
             dest: None,
             via_instance: false,
             choices: Vec::new(),
+            entities: EntityOptions::default(),
+            player_opts: PlayerOptions::default(),
+            make_owner: true,
+            owner: None,
+            overrides: LevelOverrides::default(),
             versions,
             version,
             dims: Vec::new(),
@@ -276,6 +295,11 @@ impl ConvertState {
             Ok(d) if d.edition != Edition::Bedrock => self.look = Look::Unknown(backend::JAVA_WORLD.to_string()),
             Ok(d) => {
                 self.dims = d.dimensions.iter().map(|n| (n.clone(), true)).collect();
+                // the inventory of a player of another world can't be taken: back to the host's
+                let known = |id: &str| d.players.iter().any(|p| p.id.eq_ignore_ascii_case(id));
+                if self.player_opts.inventory_source.profile_id().is_some_and(|id| !known(id)) {
+                    self.player_opts.inventory_source = InventorySource::Host;
+                }
                 if !self.out_edited {
                     if let Some(out) = self.suggested_output(&d.name) {
                         self.output = out.to_string_lossy().to_string();
@@ -350,10 +374,22 @@ impl ConvertState {
             dimensions: selection,
             // nothing is copied between different editions, so there is nothing to keep
             keep_unknown_nbt: false,
-            player: Default::default(),
-            level_overrides: Default::default(),
-            entities: Default::default(),
+            player: self.player_options(),
+            level_overrides: self.overrides,
+            entities: self.entities,
         })
+    }
+
+    /// The player options of the job: the ones chosen, with the launcher's account as the owner when that is on.
+    pub(super) fn player_options(&self) -> PlayerOptions {
+        let mut p = self.player_opts.clone();
+        p.owner_uuid = self.owner.as_ref().filter(|_| self.make_owner).map(|(_, uuid)| *uuid);
+        p
+    }
+
+    /// The other players of the chosen world, whose inventory the owner can be given.
+    pub(super) fn world_players(&self) -> &[WorldPlayer] {
+        self.found().map(|d| d.players.as_slice()).unwrap_or(&[])
     }
 
     /// The world is being converted.
@@ -650,6 +686,7 @@ impl App {
         self.convert_open();
         let Some(mut st) = self.convert.take() else { return };
         st.choices = self.instances.iter().map(Dest::of).collect();
+        st.owner = self.current_account().and_then(|a| Some((a.name().to_string(), Uuid::parse_str(&a.uuid).ok()?)));
         // an instance that was deleted or renamed can't take the world any more (the screenshot tour's made-up
         // instance is left alone)
         if self.shot.is_none()
@@ -927,6 +964,7 @@ impl ConvertState {
             name: "Mace, Spear, Sword PvP Map! V4".into(),
             dimensions: vec!["overworld".into(), "nether".into(), "end".into()],
             size_bytes: 48_300_000,
+            players: Vec::new(),
         };
         self.screen = Screen::Setup;
         self.run = None;
@@ -1065,6 +1103,7 @@ mod tests {
                 name: "Home".into(),
                 dimensions: vec!["overworld".into(), "nether".into()],
                 size_bytes: 10,
+                players: Vec::new(),
             })
         }
         fn target_versions(&self, e: Edition) -> Vec<String> {
@@ -1086,6 +1125,7 @@ mod tests {
                 name: "Home".into(),
                 dimensions: vec!["overworld".into()],
                 size_bytes: 10,
+                players: Vec::new(),
             })
         }
         fn target_versions(&self, e: Edition) -> Vec<String> {
@@ -1274,6 +1314,25 @@ mod tests {
         st.apply_detected(seq, Ok(Fake.detect(Path::new("/")).unwrap()));
         assert_eq!(Path::new(&st.output), dir.join("dl").join("Home (converted)"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn everything_comes_along_and_the_launchers_account_owns_the_world() {
+        let mut st = ConvertState::new(Arc::new(Fake));
+        // all on by default; the world's own settings kept
+        assert_eq!(st.entities, EntityOptions::default());
+        assert!(st.entities.convert && st.entities.item_frames && st.entities.drop_transient);
+        let p = st.player_options();
+        assert!(p.include_ender_chest && p.include_stats && p.export_guest_profiles);
+        assert_eq!(p.inventory_source, InventorySource::Host);
+        assert!(st.overrides.is_empty());
+        // no account: nobody in particular owns it
+        assert_eq!(p.owner_uuid, None);
+        let uuid = Uuid::from_u128(0x1234);
+        st.owner = Some(("Alex".into(), uuid));
+        assert_eq!(st.player_options().owner_uuid, Some(uuid));
+        st.make_owner = false;
+        assert_eq!(st.player_options().owner_uuid, None);
     }
 
     #[test]

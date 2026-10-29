@@ -3,53 +3,10 @@
 The section for a version is used as the text of its release on GitHub. Older releases (the Java versions, up to
 3.4.42.x) are on the [releases page](https://github.com/riyadmondol2006/BlockForge/releases).
 
-## Unreleased
-
-The world converter keeps much more of a Bedrock world: its mobs and pets, item frames, the players, their maps and
-the world's settings.
-
-### World converter
-
-- **Mobs, pets and the rest come along.** A converted Bedrock world now has its entities: animals and monsters,
-  villagers with their job, level and trades, wandering traders, armor stands with what they wear, paintings on their
-  wall, minecarts with their loot or contents, boats, end crystals and the rest. Before, a converted world had none.
-- **Pets stay yours.** Tamed wolves, cats, parrots, horses, donkeys and llamas keep being tamed, sitting where they
-  sat, with their names, collars, coats, saddles, armor and chests. When the owner's Java account is known, the
-  host's pets belong to it; otherwise they stay tamed under an owner made from the Bedrock host.
-- **Item frames.** Item frames and glow item frames become Java item frames again, with the item in them turned the
-  same way.
-- **What mobs carry.** Weapons, armor and held items are kept, with what a mob picked up still sure to drop. Shulker
-  boxes keep their contents, and enchanted items their enchantments, wherever they are: held by a mob, in a frame, on
-  a villager's trade or in a minecart. This also fixes shulker boxes in chests and other containers, which lost their
-  contents.
-- **Mobs stay where they were.** Each entity goes to the chunk it stands in, leashed mobs stay tied to their fence,
-  bees and turtles remember their home, and a mob that appears twice in the world's data comes over once.
-- **For every Java version.** Entities are written the way each target version keeps them, from 1.13 to 26.3
-  (separate entity files from 1.17).
-- **Options, all on by default.** Convert entities at all; which mobs (all, no hostile ones, only pets and named
-  mobs, or none); leave out what lies around only for a moment (dropped items, experience orbs, falling sand and
-  projectiles); convert item frames. The converter page will show them in a later step.
-- **Not yet.** Riders are written next to their mount instead of on it, and armor stands in a pose other than the
-  default stand straight.
-- **Your character comes along whole.** A converted Bedrock world keeps the host's inventory and armor (they were
-  dropped before), the ender chest, the experience level, health, food, active effects and the bed or respawn anchor
-  you respawn at. Each Java version gets the player in its own format.
-- **Shulker boxes keep what is inside them.** A shulker box (or a banner, a head ...) inside a chest, in the
-  inventory or in the ender chest is no longer emptied.
-- **Maps still show their picture.** Every map in a chest, a shulker box, the inventory or the ender chest points at
-  its converted map again, in every Java version.
-- **The other players are kept too.** Each player who joined the Bedrock world gets their own player file in the
-  Java world with their inventory, ender chest and level, instead of being lost.
-- **New options, all on by default** (the converter page shows them in a later version): which Java account owns
-  the world, whether to keep the ender chest and the stats, whose inventory the owner gets (the host's, another
-  player's, or the host's with the other player's items filling the free slots), whether to write the other players,
-  and the difficulty, game mode, cheats and hardcore to give the converted world. Java has no lock on advancements
-  for a world that was in Creative or had cheats on, so nothing else needs changing for those.
-
 ## 4.9.0
 
-A new look for the whole launcher, with smooth motion, a layout that fits every window, and more options where they
-help.
+A new look for the whole launcher, with smooth motion, a layout that fits every window and more options, and a world
+converter that brings a Bedrock world over whole: its mobs and pets, item frames, the players and their maps.
 
 ### What is new
 
@@ -100,6 +57,49 @@ help.
   under a name that is free, for the instance's own Minecraft version, and shows up in Singleplayer ready to play.
   The choice is remembered, so the next worlds go to the same instance by themselves; "A folder you choose" turns
   that off. When it is done, "Go to" opens the instance.
+
+### World converter: the whole world comes along
+
+- **Mobs, pets and the rest come along.** A converted Bedrock world now has its entities: animals and monsters,
+  villagers with their job, level and trades, wandering traders, armor stands with what they wear, paintings on their
+  wall, minecarts with their loot or contents, boats, end crystals and the rest. Before, a converted world had none.
+- **Pets stay yours.** Tamed wolves, cats, parrots, horses, donkeys and llamas keep being tamed, sitting where they
+  sat, with their names, collars, coats, saddles, armor and chests. When the owner's Java account is known, the
+  host's pets belong to it; otherwise they stay tamed under an owner made from the Bedrock host.
+- **Item frames.** Item frames and glow item frames become Java item frames again, with the item in them turned the
+  same way.
+- **What mobs carry.** Weapons, armor and held items are kept, with what a mob picked up still sure to drop. Shulker
+  boxes keep their contents, and enchanted items their enchantments, wherever they are: held by a mob, in a frame, on
+  a villager's trade or in a minecart. This also fixes shulker boxes in chests and other containers, which lost their
+  contents.
+- **Mobs stay where they were.** Each entity goes to the chunk it stands in, leashed mobs stay tied to their fence,
+  bees and turtles remember their home, and a mob that appears twice in the world's data comes over once.
+- **For every Java version.** Entities are written the way each target version keeps them, from 1.13 to 26.3
+  (separate entity files from 1.17).
+- **Options, all on by default.** Convert entities at all; which mobs (all, no hostile ones, only pets and named
+  mobs, or none); leave out what lies around only for a moment (dropped items, experience orbs, falling sand and
+  projectiles); convert item frames.
+- **Your character comes along whole.** A converted Bedrock world keeps the host's inventory and armor (they were
+  dropped before), the ender chest, the experience level, health, food, active effects and the bed or respawn anchor
+  you respawn at. Each Java version gets the player in its own format.
+- **Shulker boxes keep what is inside them.** A shulker box (or a banner, a head ...) inside a chest, in the
+  inventory or in the ender chest is no longer emptied.
+- **Maps still show their picture.** Every map in a chest, a shulker box, the inventory or the ender chest points at
+  its converted map again, in every Java version.
+- **The other players are kept too.** Each player who joined the Bedrock world gets their own player file in the
+  Java world with their inventory, ender chest and level, instead of being lost.
+- **New options, all on by default:** which Java account owns the world (the account you play with, so the host's
+  character and pets become yours), whether to keep the ender chest and the stats, whose inventory the owner gets
+  (the host's, another player's, or the host's with the other player's items filling the free slots), whether to
+  write the other players, and the difficulty, game mode, cheats and hardcore to give the converted world (kept as
+  the world had them unless you pick one). Java has no lock on advancements for a world that was in Creative or had
+  cheats on, so nothing else needs changing for those.
+- **On the converter page.** A new "What comes along" step shows all of this: switches for mobs, item frames,
+  what lies around, the owner, the ender chest, experience and the other players, a choice of whose inventory you
+  get (the other players are told apart by their level, items and place, as Bedrock keeps no names), and "World
+  settings" for the difficulty, game mode, cheats and hardcore. The command-line converter has the same options.
+- **Not yet.** Riders are written next to their mount instead of on it, and armor stands in a pose other than the
+  default stand straight.
 
 ### Fixed
 

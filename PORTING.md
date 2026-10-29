@@ -133,5 +133,6 @@ surveys: core, model, java, bedrock).
 - Wave 2 (in progress): Bedrock pre-transforms, Bedrock items + block entities (read), Java items (write), Java block
   entities (write), Bedrock world/level reader, Java world/level writer. Contracts: `docs/porting/CONTRACTS.md`.
 - Next: pipeline (`convert_world`), wire the GUI backend, test world end to end, then the remaining Bedrock -> Java gaps (entities are done). Java -> Bedrock is not planned.
-- Players, map links and level overrides done (Phase 5): see the Phase 5 list. The GUI does not show the new options
-  yet (`ConvertJob::player`, `ConvertJob::level_overrides` carry them, default = everything kept).
+- Players, map links and level overrides done (Phase 5): see the Phase 5 list. The converter page shows every option
+  in its "What comes along" step (`ConvertJob::entities`, `ConvertJob::player`, `ConvertJob::level_overrides`;
+  default = everything kept, the launcher's account as the owner), and so does `examples/convert_world.rs`.

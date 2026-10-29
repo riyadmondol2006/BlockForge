@@ -132,6 +132,24 @@ pub struct Detected {
     /// The dimensions found: `"overworld"`, `"nether"`, `"end"`.
     pub dimensions: Vec<String>,
     pub size_bytes: u64,
+    /// The other players of a Bedrock world (besides the host), whose inventory the owner can be given.
+    pub players: Vec<WorldPlayer>,
+}
+
+/// One of the other players of a Bedrock world (`player_server_<uuid>`). Bedrock keeps no gamertag, so a player is
+/// told apart by what they have: their level, how many items they carry and where they are.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WorldPlayer {
+    /// The profile's uuid (the key without `player_server_`), the way
+    /// [`InventorySource`](crate::convert::level::InventorySource) names it.
+    pub id: String,
+    /// A player signed in to an account owned it.
+    pub signed_in: bool,
+    pub level: i32,
+    /// Stacks in the inventory and armor.
+    pub items: usize,
+    /// The block the player stands on.
+    pub position: [i32; 3],
 }
 
 /// What a conversion reports while it runs. A run ends with exactly one of `Done`, `Failed` or `Cancelled`.
@@ -259,15 +277,33 @@ impl Backend for Engine {
                 .game_version
                 .map(|v| format!("{}.{}.{}", v[0], v[1], v[2]))
                 .unwrap_or_else(|| info.version.name().to_string());
-            let dimensions = BedrockWorldReader::open(&info, &ConversionSettings::default())
+            let reader = BedrockWorldReader::open(&info, &ConversionSettings::default());
+            let dimensions = reader
+                .as_ref()
                 .map(|r| r.dimensions().iter().map(|d| dimension_name(d.identifier())).collect())
                 .unwrap_or_else(|_| vec!["overworld".to_string()]);
+            // the other players, to choose whose inventory the owner gets; a world that can't list them has none
+            let players = reader
+                .as_ref()
+                .ok()
+                .and_then(|r| r.player_profiles().ok())
+                .unwrap_or_default()
+                .into_iter()
+                .map(|p| WorldPlayer {
+                    signed_in: p.signed_in(),
+                    level: p.player.stats.xp_level,
+                    items: p.player.inventory.len(),
+                    position: p.player.position.map(|v| v.floor() as i32),
+                    id: p.id,
+                })
+                .collect();
             return Ok(Detected {
                 edition: Edition::Bedrock,
                 version,
                 name: info.name.clone(),
                 dimensions,
                 size_bytes: Engine::size_of(path),
+                players,
             });
         }
         if detect_java(path).is_some() {
