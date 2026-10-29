@@ -200,6 +200,37 @@ jobs:
           name: BlockForge-macos
           path: dist/BlockForge-${{ env.VERSION }}-macos-arm64.dmg
           if-no-files-found: error
+      # the game helpers' checks on macOS (the other systems check them in "Game helpers"), every Java one after
+      # another on this machine: GitHub is often short of macOS machines, and jobs of their own waiting for one
+      # failed to get them and held the release back
+      - uses: actions/setup-java@v6
+        with:
+          distribution: zulu
+          java-version: 8
+      - name: Game helpers with Java 8
+        shell: bash
+        run: .github/scripts/agents-check.sh 8
+      - uses: actions/setup-java@v6
+        with:
+          distribution: zulu
+          java-version: 17
+      - name: Game helpers with Java 17
+        shell: bash
+        run: .github/scripts/agents-check.sh 17
+      - uses: actions/setup-java@v6
+        with:
+          distribution: zulu
+          java-version: 21
+      - name: Game helpers with Java 21
+        shell: bash
+        run: .github/scripts/agents-check.sh 21
+      - uses: actions/setup-java@v6
+        with:
+          distribution: zulu
+          java-version: 25
+      - name: Game helpers with Java 25
+        shell: bash
+        run: .github/scripts/agents-check.sh 25
 
   agents:
     # the two helpers the launcher starts the game with (packaging/boost and packaging/lite) run inside the game's
@@ -224,45 +255,9 @@ jobs:
       - name: Self-tests, both agents in one Java, and the jars built from their sources
         run: .github/scripts/agents-check.sh ${{ matrix.java }}
 
-  agents-macos:
-    # the same checks on macOS, every Java one after another on one machine: GitHub is often short of macOS
-    # machines, and four jobs waiting for one each failed to get them and held the release back
-    name: Game helpers (macos-15, Java 8, 17, 21 and 25)
-    runs-on: macos-15
-    timeout-minutes: 30
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-java@v6
-        with:
-          distribution: zulu
-          java-version: 8
-      - name: Java 8
-        run: .github/scripts/agents-check.sh 8
-      - uses: actions/setup-java@v6
-        with:
-          distribution: zulu
-          java-version: 17
-      - name: Java 17
-        run: .github/scripts/agents-check.sh 17
-      - uses: actions/setup-java@v6
-        with:
-          distribution: zulu
-          java-version: 21
-      - name: Java 21
-        run: .github/scripts/agents-check.sh 21
-      - uses: actions/setup-java@v6
-        with:
-          distribution: zulu
-          java-version: 25
-      - name: Java 25
-        run: .github/scripts/agents-check.sh 25
-
   release:
     name: Publish
-    needs: [checks, linux, windows, macos, agents, agents-macos]
+    needs: [checks, linux, windows, macos, agents]
     runs-on: ubuntu-22.04
     timeout-minutes: 15
     if: >-
