@@ -8,6 +8,7 @@ mod console;
 mod convert;
 #[cfg(feature = "converter")]
 mod convert_view;
+mod covers;
 mod craft;
 mod craft_fmt;
 mod craft_pick;
