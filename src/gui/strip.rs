@@ -72,13 +72,34 @@ pub fn play_strip(ui: &mut Ui, days: &[u8], hue: Color32, cell: f32, gap: f32) -
     let size = vec2(n * cell + (n - 1.0) * gap, cell);
     let (rect, resp) = ui.allocate_exact_size(size, Sense::hover());
     if ui.is_rect_visible(rect) {
-        let radius = CornerRadius::same(if cell >= 8.0 { 2 } else { 1 });
+        let radius = CornerRadius::same(if cell >= 10.0 {
+            3
+        } else if cell >= 8.0 {
+            2
+        } else {
+            1
+        });
+        // the cell under the pointer is lifted out with a ring, so it is clear which day the tip is about
+        let pointed = resp.hover_pos().map(|pos| ((pos.x - rect.left()) / (cell + gap)).floor() as i64);
         for (i, d) in days.iter().enumerate() {
             let x = rect.left() + i as f32 * (cell + gap);
             let r = egui::Rect::from_min_size(egui::pos2(x, rect.top()), vec2(cell, cell));
-            ui.painter().rect_filled(r, radius, if *d > 0 { hue } else { c_active() });
+            if *d > 0 {
+                // a played day is a little brighter at the top, like the face of a block catching the light
+                ui.painter().rect_filled(r, radius, hue);
+                let top = egui::Rect::from_min_size(r.min, vec2(cell, (cell * 0.4).round()));
+                ui.painter().rect_filled(
+                    top,
+                    CornerRadius { nw: radius.nw, ne: radius.ne, sw: 0, se: 0 },
+                    Color32::from_white_alpha(if is_dark() { 34 } else { 46 }),
+                );
+            } else {
+                ui.painter().rect_filled(r, radius, c_active());
+            }
             if i + 1 == days.len() {
                 ui.painter().rect_stroke(r.expand(1.0), radius, Stroke::new(1.0, c_text()), egui::StrokeKind::Outside);
+            } else if pointed == Some(i as i64) {
+                ui.painter().rect_stroke(r.expand(1.0), radius, Stroke::new(1.0, c_muted()), egui::StrokeKind::Outside);
             }
         }
     }

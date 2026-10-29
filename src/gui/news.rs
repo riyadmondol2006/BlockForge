@@ -1,6 +1,6 @@
 //! The launcher news on the home page, and the window that shows one article in full.
 
-use egui::{Align, Context, CornerRadius, Layout, RichText, ScrollArea, Sense, Stroke, Ui};
+use egui::{Align, Context, CornerRadius, Layout, RichText, ScrollArea, Sense, Ui};
 
 use super::services::{SvcMsg, modal_scroll_height, modal_width};
 use super::theme::*;
@@ -137,8 +137,9 @@ impl App {
                 n.send(Msg::Svc(SvcMsg::News(crate::news::load(&dirs).await.map_err(|e| format!("{e:#}")))));
             });
         }
-        ui.add_space(12.0);
+        ui.add_space(24.0);
         section(ui, "News");
+        ui.add_space(2.0);
         match &self.svc.news.status {
             Status::Idle | Status::Loading => skeleton_rows(ui, 3, 52.0),
             Status::Failed(e) => {
@@ -150,60 +151,73 @@ impl App {
             Status::Loaded if self.svc.news.items.is_empty() => muted(ui, "No news right now."),
             Status::Loaded => {
                 let mut open = None;
-                // one panel, a rule between the articles; the one under the pointer gets a tone step
-                egui::Frame::new()
-                    .fill(c_card())
-                    .stroke(Stroke::new(1.0, c_border()))
-                    .corner_radius(CornerRadius::same(R_CARD))
-                    .inner_margin(egui::Margin::same(4))
-                    .show(ui, |ui| {
-                        ui.spacing_mut().item_spacing.y = 0.0;
-                        for (i, item) in self.svc.news.items.iter().enumerate() {
-                            if i > 0 {
-                                rule(ui);
-                            }
-                            // the fill is put in behind the contents once it is known whether the row is pointed at
-                            let fill = ui.painter().add(egui::Shape::Noop);
-                            let resp = egui::Frame::new()
-                                .inner_margin(egui::Margin::symmetric(12, 10))
-                                .show(ui, |ui| {
-                                    ui.set_width(ui.available_width());
-                                    ui.spacing_mut().item_spacing.y = 2.0;
-                                    ui.spacing_mut().interact_size.y = 20.0;
-                                    ui.horizontal(|ui| {
-                                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                            if !item.date.is_empty() {
-                                                ui.label(RichText::new(&item.date).size(FS_META).color(c_faint()));
-                                            }
-                                            ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                                                ui.add(
-                                                    egui::Label::new(
-                                                        RichText::new(&item.title).font(super::fonts::medium(FS_BODY)),
-                                                    )
-                                                    .truncate(),
-                                                );
-                                            });
+                // one panel of glass, a rule between the articles; the one under the pointer fades to a tone step
+                // and gets a short brand mark at its start
+                let panel = card_frame().inner_margin(egui::Margin::same(6)).show(ui, |ui| {
+                    ui.spacing_mut().item_spacing.y = 0.0;
+                    for (i, item) in self.svc.news.items.iter().enumerate() {
+                        if i > 0 {
+                            ui.add_space(2.0);
+                            rule(ui);
+                            ui.add_space(2.0);
+                        }
+                        // the fill is put in behind the contents once it is known whether the row is pointed at
+                        let fill = ui.painter().add(egui::Shape::Noop);
+                        let resp = egui::Frame::new()
+                            .inner_margin(egui::Margin { left: 16, right: 14, top: 12, bottom: 12 })
+                            .show(ui, |ui| {
+                                ui.set_width(ui.available_width());
+                                ui.spacing_mut().item_spacing.y = 4.0;
+                                ui.spacing_mut().interact_size.y = 20.0;
+                                ui.horizontal(|ui| {
+                                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                        if !item.date.is_empty() {
+                                            ui.label(RichText::new(&item.date).size(FS_META).color(c_faint()));
+                                        }
+                                        ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                                            ui.add(
+                                                egui::Label::new(
+                                                    RichText::new(&item.title).font(super::fonts::semibold(FS_BODY)),
+                                                )
+                                                .truncate(),
+                                            );
                                         });
                                     });
-                                    let galley = two_lines(ui, &item.preview, ui.available_width());
-                                    let (rect, _) = ui.allocate_exact_size(galley.size(), Sense::hover());
-                                    ui.painter().galley(rect.min, galley, c_muted());
-                                })
-                                .response
-                                .interact(Sense::click())
-                                .on_hover_cursor(egui::CursorIcon::PointingHand);
-                            if resp.hovered() {
-                                ui.painter().set(
-                                    fill,
-                                    egui::Shape::rect_filled(resp.rect, CornerRadius::same(R_CONTROL), c_hover()),
-                                );
-                            }
-                            resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &item.title));
-                            if resp.clicked() {
-                                open = Some(i);
-                            }
+                                });
+                                let galley = two_lines(ui, &item.preview, ui.available_width());
+                                let (rect, _) = ui.allocate_exact_size(galley.size(), Sense::hover());
+                                ui.painter().galley(rect.min, galley, c_muted());
+                            })
+                            .response
+                            .interact(Sense::click())
+                            .on_hover_cursor(egui::CursorIcon::PointingHand);
+                        let t = super::motion::hover(ui, resp.id, resp.hovered());
+                        if t > 0.0 {
+                            let r = resp.rect;
+                            let mark = egui::Rect::from_min_size(
+                                egui::pos2(r.left() + 5.0, r.center().y - 9.0 * t),
+                                egui::vec2(3.0, 18.0 * t),
+                            );
+                            ui.painter().set(
+                                fill,
+                                egui::Shape::Vec(vec![
+                                    egui::Shape::rect_filled(
+                                        r,
+                                        CornerRadius::same(R_CONTROL),
+                                        c_hover().gamma_multiply(t),
+                                    ),
+                                    egui::Shape::rect_filled(mark, CornerRadius::same(2), c_accent().gamma_multiply(t)),
+                                ]),
+                            );
                         }
-                    });
+                        focus_ring(ui, &resp, resp.rect, R_CONTROL);
+                        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &item.title));
+                        if resp.clicked() {
+                            open = Some(i);
+                        }
+                    }
+                });
+                glass_edge(ui.painter(), panel.response.rect, R_CARD);
                 if open.is_some() {
                     self.svc.news.open = open;
                 }

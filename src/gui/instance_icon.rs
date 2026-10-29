@@ -79,18 +79,28 @@ impl App {
 
     /// The instance's picture: its own `instance.png` if it has one that can be read, otherwise the cube.
     pub(super) fn instance_icon(&self, ui: &mut Ui, inst: &Instance, size: f32) {
+        let (rect, _) = ui.allocate_exact_size(vec2(size, size), egui::Sense::hover());
+        if !ui.is_rect_visible(rect) {
+            return;
+        }
+        let corner = CornerRadius::same((size * 0.22).round() as u8);
+        // a large picture sits on the panel with a soft shadow of its own, like a tile laid on glass
+        if size >= 56.0 {
+            let shadow = egui::Shadow {
+                offset: [0, (size / 12.0) as i8],
+                blur: (size / 3.0) as u8,
+                spread: 0,
+                color: Color32::from_black_alpha(if is_dark() { 120 } else { 34 }),
+            };
+            ui.painter().add(shadow.as_shape(rect, corner));
+        }
         match self.local_picture(inst.root.join("instance.png")) {
             Some(tex) => {
-                ui.add(
-                    egui::Image::from_texture(&tex)
-                        .fit_to_exact_size(vec2(size, size))
-                        .corner_radius(CornerRadius::same((size * 0.22) as u8)),
-                );
+                egui::Image::from_texture(&tex).corner_radius(corner).paint_at(ui, rect);
+                // a hairline keeps a pale logo from melting into a pale card
+                ui.painter().rect_stroke(rect, corner, Stroke::new(1.0, c_border()), egui::StrokeKind::Inside);
             }
-            None => {
-                let (rect, _) = ui.allocate_exact_size(vec2(size, size), egui::Sense::hover());
-                paint_default_icon(ui, rect, inst.loader().map(|(kind, _)| kind));
-            }
+            None => paint_default_icon(ui, rect, inst.loader().map(|(kind, _)| kind)),
         }
     }
 }

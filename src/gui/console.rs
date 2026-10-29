@@ -67,11 +67,14 @@ impl App {
             egui::Panel::bottom("console-bar")
                 .frame(
                     egui::Frame::new()
-                        .fill(c_bg())
+                        .fill(c_surface())
                         .stroke(egui::Stroke::new(1.0, c_border()))
-                        .inner_margin(egui::Margin::same(12)),
+                        .inner_margin(egui::Margin::symmetric(16, 12)),
                 )
                 .show(ui, |ui| {
+                    // the faint light along the top of the bar, as on the other panes of glass
+                    let top = ui.max_rect().expand2(egui::vec2(16.0, 12.0));
+                    ui.painter().hline(top.x_range(), top.top() + 1.5, egui::Stroke::new(1.0, c_glass_edge()));
                     ui.horizontal(|ui| {
                         if secondary(ui, "Copy log").clicked() {
                             action = ConsoleAction::Copy;
@@ -120,7 +123,7 @@ impl App {
                 }
             }
             egui::CentralPanel::default()
-                .frame(egui::Frame::new().fill(c_field()).inner_margin(egui::Margin::same(12)))
+                .frame(egui::Frame::new().fill(c_field()).inner_margin(egui::Margin::symmetric(16, 12)))
                 .show(ui, |ui| {
                     ui.spacing_mut().item_spacing.y = 2.0;
                     let row_h = ui.text_style_height(&egui::TextStyle::Monospace);

@@ -131,13 +131,27 @@ impl App {
             if i > 0 {
                 rule(ui);
             }
-            let mut line = SplitRow::fixed(ui, 52.0, TRAIL_W);
+            // the fill is put in behind the row once it is known whether the row is pointed at
+            let fill = ui.painter().add(egui::Shape::Noop);
+            let mut line = SplitRow::fixed(ui, 56.0, TRAIL_W);
+            let row = line.rect();
+            let t = super::motion::hover(ui, egui::Id::unique(("backup-row", &b.path)), ui.rect_contains_pointer(row));
+            if t > 0.0 {
+                let r = row.expand2(egui::vec2(8.0, 0.0));
+                ui.painter().set(fill, egui::Shape::rect_filled(r, R_CONTROL, c_hover().gamma_multiply(t)));
+            }
             line.left(ui, |ui| {
+                // a small tile for the archive, then the date and the file
+                let (tile, _) = ui.allocate_exact_size(egui::vec2(36.0, 36.0), egui::Sense::hover());
+                ui.painter().rect_filled(tile, R_CONTROL, c_field());
+                ui.painter().rect_stroke(tile, R_CONTROL, egui::Stroke::new(1.0, c_border()), egui::StrokeKind::Inside);
+                super::icons::paint(ui.painter(), super::icons::Icon::Package, tile.center(), 16.0, c_muted());
+                ui.add_space(4.0);
                 // a long file name is cut short next to the buttons instead of running under them
                 ui.vertical(|ui| {
                     ui.spacing_mut().item_spacing.y = 2.0;
-                    ui.add_space(6.0);
-                    ui.add(egui::Label::new(when(b)).truncate());
+                    ui.add_space(8.0);
+                    ui.add(egui::Label::new(RichText::new(when(b)).font(super::fonts::medium(FS_BODY))).truncate());
                     ui.add(
                         egui::Label::new(
                             RichText::new(format!("{}  \u{00B7}  {}", human_size(b.size), b.file_name))

@@ -155,7 +155,8 @@ fn secondary_menu_closing<R>(
     let (rect, resp) = ui.allocate_exact_size(vec2(w + 28.0 + 18.0, 32.0), Sense::click());
     let open = egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&resp));
     if ui.is_rect_visible(rect) {
-        let bg = if resp.hovered() || open { c_hover() } else { c_field() };
+        let t = super::motion::hover(ui, resp.id, resp.hovered() || open);
+        let bg = super::motion::mix(c_field(), c_field_hover(), t);
         ui.painter().rect(
             rect,
             CornerRadius::same(R_CONTROL),
@@ -209,6 +210,11 @@ impl SplitRow {
     /// How wide the right part turned out this frame.
     pub(super) fn used(&self) -> f32 {
         self.used
+    }
+
+    /// The whole row.
+    pub(super) fn rect(&self) -> egui::Rect {
+        self.row
     }
 
     /// How wide the left part is.
