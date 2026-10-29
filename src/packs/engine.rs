@@ -399,7 +399,7 @@ async fn definition(ctx: &Ctx, req: &Request, progress: &Arc<Progress>) -> Resul
             dl::download_all(vec![Dl::new(&url, &zip)], progress).await.context("downloading the modpack")?;
             progress.stage("Unpacking modpack.zip");
             let (zip2, out2) = (zip.clone(), out.clone());
-            tokio::task::spawn_blocking(move || fsx::unzip(&zip2, &out2)).await??;
+            tokio::task::spawn_blocking(move || fsx::unzip(&zip2, &out2)).await?.context("unpacking modpack.zip")?;
             let _ = std::fs::remove_file(&zip);
             let loader = technic_loader(ctx, &out, &json.minecraft).await?;
             json.loader = loader.clone();

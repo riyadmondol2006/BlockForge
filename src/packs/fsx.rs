@@ -130,7 +130,8 @@ pub fn unzip(zip_path: &Path, out: &Path) -> Result<()> {
             std::fs::create_dir_all(dir)?;
         }
         let mut f = File::create(&dest).with_context(|| format!("writing {}", dest.display()))?;
-        io::copy(&mut entry, &mut f)?;
+        crate::packutil::copy_zip_entry(&mut entry, &mut f)
+            .with_context(|| format!("unpacking {raw} from {}", zip_path.display()))?;
     }
     Ok(())
 }
@@ -147,9 +148,7 @@ pub fn read_zip_entry(zip_path: &Path, name: &str) -> Option<Vec<u8>> {
     let file = File::open(zip_path).ok()?;
     let mut archive = zip::ZipArchive::new(file).ok()?;
     let mut entry = archive.by_name(name).ok()?;
-    let mut out = Vec::new();
-    entry.read_to_end(&mut out).ok()?;
-    Some(out)
+    crate::packutil::zip_entry_bytes(&mut entry).ok()
 }
 
 pub fn zip_contains(zip_path: &Path, name: &str) -> bool {
@@ -210,7 +209,7 @@ pub fn combine_jars(main: &Path, add: &Path, out: &Path) -> Result<()> {
                 writer.add_directory(&name, opts)?;
             } else {
                 writer.start_file(&name, opts)?;
-                io::copy(&mut entry, &mut writer)?;
+                crate::packutil::copy_zip_entry(&mut entry, &mut writer)?;
             }
             added.insert(name);
         }

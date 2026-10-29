@@ -178,7 +178,7 @@ pub fn extract_world(zip_path: &Path, saves: &Path) -> Result<()> {
             std::fs::create_dir_all(dir)?;
         }
         let mut f = std::fs::File::create(&out)?;
-        std::io::copy(&mut entry, &mut f)?;
+        crate::packutil::copy_zip_entry(&mut entry, &mut f)?;
     }
     Ok(())
 }

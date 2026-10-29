@@ -3,7 +3,7 @@
 //! the same code as for a client.
 
 use std::collections::HashSet;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -133,9 +133,7 @@ pub fn make_fabric_launch_jar(
                     continue;
                 }
                 w.start_file(&name, opts)?;
-                let mut buf = Vec::new();
-                e.read_to_end(&mut buf)?;
-                w.write_all(&buf)?;
+                w.write_all(&crate::packutil::zip_entry_bytes(&mut e)?)?;
                 added.insert(name);
             }
         }

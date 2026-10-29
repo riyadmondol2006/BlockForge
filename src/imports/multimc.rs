@@ -3,7 +3,6 @@
 //! `minecraft/`). The same format is written by the exporter, so an export can be imported back.
 
 use std::collections::BTreeMap;
-use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -389,7 +388,7 @@ pub fn extract_export(archive: &Path, dest: &Path) -> Result<PathBuf> {
             std::fs::create_dir_all(dir)?;
         }
         let mut f = std::fs::File::create(&out)?;
-        std::io::copy(&mut entry, &mut f)?;
+        crate::packutil::copy_zip_entry(&mut entry, &mut f)?;
     }
     if dest.join("mmc-pack.json").is_file() {
         return Ok(dest.to_path_buf());
@@ -570,9 +569,7 @@ pub fn read_archive_entry(archive: &Path, name: &str) -> Result<String> {
     let file = std::fs::File::open(archive)?;
     let mut zip = zip::ZipArchive::new(file)?;
     let mut e = zip.by_name(name)?;
-    let mut s = String::new();
-    e.read_to_string(&mut s)?;
-    Ok(s)
+    Ok(crate::packutil::zip_entry_text(&mut e)?)
 }
 
 /// The settings of a MultiMC/Prism `instance.cfg` written into an instance's `launcher` block.

@@ -1,6 +1,7 @@
 //! Small helpers shared by the FTB installer, the importers and the exporters: making a ready-to-run
 //! Minecraft + loader, safe paths from files other people wrote, and folder copying.
 
+use std::io::{self, Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
@@ -152,6 +153,84 @@ pub fn dir_size(dir: &Path) -> u64 {
             _ => 0,
         })
         .sum()
+}
+
+/// Copy a file out of a zip someone else made (a modpack, an export) without holding its CRC-32 against it: some
+/// packs (RLCraft's Technic zip) list out-of-date checksums for jars that are whole, and the Java launchers never
+/// check them. A file that comes out shorter or longer than the zip says is still an error.
+pub fn copy_zip_entry<R: Read + ?Sized, W: Write + ?Sized>(
+    entry: &mut zip::read::ZipFile<'_, R>,
+    out: &mut W,
+) -> io::Result<u64> {
+    let size = entry.size();
+    let mut counting = Counting { inner: out, written: 0 };
+    match io::copy(entry, &mut counting) {
+        // the zip crate says so only after the last byte, so everything has been written by then
+        Err(e) if counting.written == size && is_bad_checksum(&e) => Ok(size),
+        r => r,
+    }
+}
+
+/// A file out of a zip someone else made, as bytes, its CRC-32 not checked (see [`copy_zip_entry`]).
+pub fn zip_entry_bytes<R: Read + ?Sized>(entry: &mut zip::read::ZipFile<'_, R>) -> io::Result<Vec<u8>> {
+    let mut out = Vec::with_capacity(entry.size().min(64 << 20) as usize);
+    copy_zip_entry(entry, &mut out)?;
+    Ok(out)
+}
+
+/// A text file out of a zip someone else made, its CRC-32 not checked (see [`copy_zip_entry`]).
+pub fn zip_entry_text<R: Read + ?Sized>(entry: &mut zip::read::ZipFile<'_, R>) -> io::Result<String> {
+    String::from_utf8(zip_entry_bytes(entry)?).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+}
+
+fn is_bad_checksum(e: &io::Error) -> bool {
+    e.kind() == io::ErrorKind::InvalidData && e.to_string() == "Invalid checksum"
+}
+
+struct Counting<'a, W: Write + ?Sized> {
+    inner: &'a mut W,
+    written: u64,
+}
+
+impl<W: Write + ?Sized> Write for Counting<'_, W> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let n = self.inner.write(buf)?;
+        self.written += n as u64;
+        Ok(n)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+#[cfg(test)]
+mod zip_entry_tests {
+    use std::io::{Cursor, Read, Write};
+
+    use super::*;
+
+    #[test]
+    fn a_file_with_an_out_of_date_checksum_is_still_read() {
+        let mut w = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        w.start_file("mods/a.jar", zip::write::SimpleFileOptions::default()).unwrap();
+        w.write_all(&b"the whole jar, every byte of it ".repeat(64)).unwrap();
+        let mut bytes = w.finish().unwrap().into_inner();
+        let crc = zip::ZipArchive::new(Cursor::new(&bytes)).unwrap().by_index(0).unwrap().crc32().to_le_bytes();
+        // every copy of the checksum (the file's own header and the zip's index) now says something else
+        let mut from = 0;
+        while let Some(at) = bytes[from..].windows(4).position(|w| w == crc) {
+            bytes[from + at] ^= 0xff;
+            from += at + 4;
+        }
+        let mut z = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
+        let err = z.by_index(0).unwrap().read_to_end(&mut Vec::new()).unwrap_err();
+        assert!(is_bad_checksum(&err), "{err}");
+        assert_eq!(
+            zip_entry_bytes(&mut z.by_index(0).unwrap()).unwrap(),
+            b"the whole jar, every byte of it ".repeat(64)
+        );
+    }
 }
 
 #[cfg(test)]

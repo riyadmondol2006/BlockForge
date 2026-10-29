@@ -565,9 +565,7 @@ pub fn require_entry(archive_path: &Path, name: &str) -> Result<String> {
     let mut archive =
         zip::ZipArchive::new(file).with_context(|| format!("{} isn't a zip file", archive_path.display()))?;
     let mut entry = archive.by_name(name).with_context(|| format!("{} isn't in {}", name, archive_path.display()))?;
-    let mut text = String::new();
-    entry.read_to_string(&mut text)?;
-    Ok(text)
+    Ok(crate::packutil::zip_entry_text(&mut entry)?)
 }
 
 #[cfg(test)]

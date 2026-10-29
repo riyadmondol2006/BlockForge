@@ -440,7 +440,7 @@ pub fn extract_overrides(zip_path: &Path, overrides: &str, root: &Path) -> Resul
             std::fs::create_dir_all(dir)?;
         }
         let mut f = std::fs::File::create(&out).with_context(|| format!("writing {}", out.display()))?;
-        std::io::copy(&mut entry, &mut f)?;
+        crate::packutil::copy_zip_entry(&mut entry, &mut f).with_context(|| format!("unpacking {name}"))?;
         if !player_data {
             written.push(rel.to_string());
         }
@@ -455,8 +455,7 @@ pub fn mod_info_from_jar(path: &Path) -> Option<(String, String, String)> {
     let mut archive = zip::ZipArchive::new(file).ok()?;
     let mut read = |name: &str| -> Option<Value> {
         let mut e = archive.by_name(name).ok()?;
-        let mut s = String::new();
-        e.read_to_string(&mut s).ok()?;
+        let s = crate::packutil::zip_entry_text(&mut e).ok()?;
         serde_json::from_str(s.trim_start_matches('\u{feff}')).ok()
     };
     let text = |v: &Value, k: &str| v.get(k).and_then(Value::as_str).map(str::to_string);

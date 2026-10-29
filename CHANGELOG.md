@@ -3,6 +3,17 @@
 The section for a version is used as the text of its release on GitHub. Older releases (the Java versions, up to
 3.4.42.x) are on the [releases page](https://github.com/riyadmondol2006/BlockForge/releases).
 
+## 4.8.1
+
+### Fixed
+
+- A modpack zip that lists an out-of-date checksum for a file inside it no longer stops the install with nothing but
+  "Invalid checksum" (RLCraft from Technic did this for 11 of its mods, which are whole). Files are unpacked as the
+  Java launchers do, without that check, in Technic and ATLauncher packs, Modrinth and CurseForge packs and imported
+  instances; a file that comes out shorter or longer than the zip says is still refused. BlockForge's own updates,
+  backups and the game's files are checked as before.
+- An error while unpacking a modpack now names the pack and the file it was on.
+
 ## 4.8.0
 
 Quicker downloads you can follow, modpacks that don't fail over a stale checksum, and the speed switches next to Play.

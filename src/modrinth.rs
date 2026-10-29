@@ -1,7 +1,6 @@
 //! Modrinth: searching, installing mods (with the mods they need) and importing `.mrpack` modpacks.
 
 use std::collections::{BTreeMap, HashSet};
-use std::io::Read;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -350,8 +349,7 @@ pub async fn import_mrpack(dirs: &Dirs, pack: &Path, progress: &Arc<Progress>) -
     let index: PackIndex = {
         let mut entry =
             archive.by_name("modrinth.index.json").context("not a Modrinth modpack (no modrinth.index.json)")?;
-        let mut text = String::new();
-        entry.read_to_string(&mut text)?;
+        let text = crate::packutil::zip_entry_text(&mut entry)?;
         serde_json::from_str(&text).context("reading modrinth.index.json")?
     };
     let mc = index.dependencies.get("minecraft").context("the modpack doesn't say which Minecraft it needs")?.clone();
@@ -438,7 +436,7 @@ async fn fill_mrpack(
             std::fs::create_dir_all(dir)?;
         }
         let mut f = std::fs::File::create(&out)?;
-        std::io::copy(&mut entry, &mut f)?;
+        crate::packutil::copy_zip_entry(&mut entry, &mut f).with_context(|| format!("unpacking {name}"))?;
     }
     instance.save()?;
     Ok(())
