@@ -3,18 +3,6 @@
 The section for a version is used as the text of its release on GitHub. Older releases (the Java versions, up to
 3.4.42.x) are on the [releases page](https://github.com/riyadmondol2006/BlockForge/releases).
 
-## 4.9.1
-
-Bedrock worlds go straight into the instance you play.
-
-### What is new
-
-- **Put a converted world in an instance.** The World converter's last step has a "Put it in" choice: a folder you
-  choose, or any of your instances. With an instance picked, the converted world is added to its worlds under a
-  name that is free, for the instance's own Minecraft version, and shows up in Singleplayer ready to play. The
-  choice is remembered, so the next worlds go to the same instance by themselves; "A folder you choose" turns that
-  off. When it is done, "Go to" opens the instance.
-
 ## 4.9.0
 
 A new look for the whole launcher, with smooth motion, a layout that fits every window, and more options where they
@@ -64,6 +52,11 @@ help.
   the memory and a description. The Create button stays in view.
 - **Accounts, Export and Who's playing** are laid out more clearly; Export's formats are cards and its folder list
   has "Select all" and "Select none".
+- **Put a converted world in an instance.** The World converter's last step has a "Put it in" choice: a folder you
+  choose, or any of your instances. With an instance picked, the converted Bedrock world is added to its worlds
+  under a name that is free, for the instance's own Minecraft version, and shows up in Singleplayer ready to play.
+  The choice is remembered, so the next worlds go to the same instance by themselves; "A folder you choose" turns
+  that off. When it is done, "Go to" opens the instance.
 
 ### Fixed
 

@@ -211,7 +211,9 @@ jobs:
         os: [ubuntu-22.04, windows-latest, macos-15]
         java: [8, 17, 21, 25]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    # the checks take a few minutes, but the wait for a free macOS machine counts too, and when GitHub is short of
+    # them that wait alone outran a 15 minute limit and held the release back
+    timeout-minutes: 45
     defaults:
       run:
         shell: bash
