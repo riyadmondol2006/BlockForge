@@ -1,8 +1,10 @@
 //! Accounts: Microsoft sign-in and offline players.
 
-use egui::{Align, Layout, RichText, ScrollArea, Ui};
+use egui::{Align, Color32, CornerRadius, Layout, RichText, ScrollArea, Stroke, Ui};
 
 use super::App;
+use super::icons::Icon;
+use super::motion;
 use super::theme::*;
 use super::widgets::*;
 use crate::msauth::DeviceCode;
@@ -28,7 +30,7 @@ impl App {
     pub(super) fn accounts_ui(&mut self, ui: &mut Ui) {
         heading(ui, "Accounts");
         muted(ui, "Choose who plays. Microsoft accounts can join online servers; offline players can't.");
-        ui.add_space(8.0);
+        ui.add_space(14.0);
         let mut select: Option<String> = None;
         let mut remove: Option<String> = None;
         let mut change_skin: Option<String> = None;
@@ -41,89 +43,113 @@ impl App {
             let accounts = self.accounts.clone();
             if accounts.is_empty() {
                 card(ui, |ui| {
-                    ui.label(RichText::new("No accounts yet").semibold());
-                    small_muted(ui, "Add one below.");
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 14.0;
+                        super::settings::icon_tile(ui, Icon::User, 40.0);
+                        ui.vertical(|ui| {
+                            ui.spacing_mut().item_spacing.y = 2.0;
+                            ui.label(RichText::new("No accounts yet").semibold());
+                            small_muted(ui, "Add one below.");
+                        });
+                    });
                 });
             } else {
-                card(ui, |ui| {
-                    let mut rows = super::settings::Rows::new();
-                    for acc in &accounts {
-                        rows.gap(ui);
-                        // the buttons keep their room on the right (as wide as on the last frame)
-                        let buttons_id = ui.scope_id().with(("account-buttons", &acc.uuid));
-                        let buttons_w = remembered_width(ui, buttons_id, 260.0);
-                        let mut used = buttons_w;
-                        ui.horizontal(|ui| {
-                            self.account_avatar(ui, &acc.uuid, acc.name(), acc.offline, 40.0);
-                            ui.vertical(|ui| {
-                                ui.set_max_width((ui.available_width() - buttons_w - 12.0).max(120.0));
-                                ui.spacing_mut().item_spacing.y = 2.0;
-                                ui.horizontal_wrapped(|ui| {
-                                    ui.label(RichText::new(acc.name()).semibold());
-                                    if current.as_ref() == Some(&acc.uuid) {
-                                        ink_tag(ui, "Playing as");
-                                    }
-                                    if acc.must_login {
-                                        tag(ui, "Sign in again", c_danger());
-                                    }
+                ui.spacing_mut().item_spacing.y = 10.0;
+                for acc in &accounts {
+                    let playing = current.as_ref() == Some(&acc.uuid);
+                    account_card(ui, egui::Id::unique(("account-card", &acc.uuid)), playing, |ui| {
+                            // the buttons keep their room on the right (as wide as on the last frame)
+                            let buttons_id = ui.scope_id().with(("account-buttons", &acc.uuid));
+                            let buttons_w = remembered_width(ui, buttons_id, 260.0);
+                            let mut used = buttons_w;
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing.x = 14.0;
+                                let face = self.account_avatar(ui, &acc.uuid, acc.name(), acc.offline, 44.0);
+                                // the one playing has a ring in the brand colour around the face
+                                let on = motion::toward(ui.ctx(), egui::Id::unique(("account-ring", &acc.uuid)), playing, motion::MEDIUM);
+                                if on > 0.0 && face.is_positive() {
+                                    ui.painter().rect_stroke(
+                                        face.expand(3.0),
+                                        CornerRadius::same(((face.width() * 0.24).round() as u8).saturating_add(3)),
+                                        Stroke::new(2.0, c_accent().gamma_multiply(on)),
+                                        egui::StrokeKind::Outside,
+                                    );
+                                }
+                                ui.vertical(|ui| {
+                                    ui.set_max_width((ui.available_width() - buttons_w - 12.0).max(120.0));
+                                    ui.spacing_mut().item_spacing.y = 2.0;
+                                    ui.horizontal_wrapped(|ui| {
+                                        ui.label(RichText::new(acc.name()).size(FS_SECTION - 1.0).semibold());
+                                        if playing {
+                                            brand_tag(ui, "Playing as");
+                                        }
+                                        if acc.must_login {
+                                            tag(ui, "Sign in again", c_danger());
+                                        }
+                                    });
+                                    account_meta(ui, acc.offline, &acc.uuid);
                                 });
-                                account_meta(ui, acc.offline, &acc.uuid);
-                            });
-                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                // removing asks once more: a Microsoft account has to be signed in again afterwards
-                                if self.acct.confirm_remove.as_deref() == Some(acc.uuid.as_str()) {
-                                    let after = if acc.offline {
-                                        "The name can be added again at any time"
-                                    } else {
-                                        "To use this account again, sign in with Microsoft again"
-                                    };
-                                    if danger(ui, "Yes, remove").on_hover_text(after).clicked() {
-                                        remove = Some(acc.uuid.clone());
+                                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                    // removing asks once more: a Microsoft account has to be signed in again afterwards
+                                    if self.acct.confirm_remove.as_deref() == Some(acc.uuid.as_str()) {
+                                        let after = if acc.offline {
+                                            "The name can be added again at any time"
+                                        } else {
+                                            "To use this account again, sign in with Microsoft again"
+                                        };
+                                        if danger(ui, "Yes, remove").on_hover_text(after).clicked() {
+                                            remove = Some(acc.uuid.clone());
+                                        }
+                                        if secondary(ui, "Cancel").clicked() {
+                                            self.acct.confirm_remove = None;
+                                        }
+                                        used = ui.min_rect().width();
+                                        return;
                                     }
-                                    if secondary(ui, "Cancel").clicked() {
-                                        self.acct.confirm_remove = None;
+                                    kebab_menu(ui, |ui| {
+                                        if acc.must_login && !acc.offline && ui.button("Sign in again").clicked() {
+                                            sign_in = true;
+                                            ui.close();
+                                        }
+                                        if ui.button("Copy UUID").clicked() {
+                                            ui.ctx().copy_text(acc.uuid.clone());
+                                            copied = true;
+                                            ui.close();
+                                        }
+                                        ui.separator();
+                                        if ui.button("Remove").clicked() {
+                                            self.acct.confirm_remove = Some(acc.uuid.clone());
+                                            ui.close();
+                                        }
+                                    });
+                                    if secondary(ui, "Change skin").clicked() {
+                                        change_skin = Some(acc.uuid.clone());
+                                    }
+                                    if acc.must_login && !acc.offline {
+                                        if primary(ui, "Sign in again").clicked() {
+                                            sign_in = true;
+                                        }
+                                    } else if current.as_ref() != Some(&acc.uuid) && secondary(ui, "Use").clicked() {
+                                        select = Some(acc.uuid.clone());
                                     }
                                     used = ui.min_rect().width();
-                                    return;
-                                }
-                                kebab_menu(ui, |ui| {
-                                    if acc.must_login && !acc.offline && ui.button("Sign in again").clicked() {
-                                        sign_in = true;
-                                        ui.close();
-                                    }
-                                    if ui.button("Copy UUID").clicked() {
-                                        ui.ctx().copy_text(acc.uuid.clone());
-                                        copied = true;
-                                        ui.close();
-                                    }
-                                    ui.separator();
-                                    if ui.button("Remove").clicked() {
-                                        self.acct.confirm_remove = Some(acc.uuid.clone());
-                                        ui.close();
-                                    }
                                 });
-                                if secondary(ui, "Change skin").clicked() {
-                                    change_skin = Some(acc.uuid.clone());
-                                }
-                                if acc.must_login && !acc.offline {
-                                    if primary(ui, "Sign in again").clicked() {
-                                        sign_in = true;
-                                    }
-                                } else if current.as_ref() != Some(&acc.uuid) && secondary(ui, "Use").clicked() {
-                                    select = Some(acc.uuid.clone());
-                                }
-                                used = ui.min_rect().width();
                             });
-                        });
-                        remember_width(ui, buttons_id, used);
-                    }
-                });
+                            remember_width(ui, buttons_id, used);
+                    });
+                }
             }
 
-            super::settings::section_head(ui, "Add an account", "");
+            super::settings::group_head(
+                ui,
+                Icon::Plus,
+                "Add an account",
+                "Sign in with Microsoft, or add a player for offline games",
+            );
             card(ui, |ui| {
-                super::settings::wide_row(
+                method_row(
                     ui,
+                    Icon::User,
                     "Microsoft",
                     "Your browser opens a Microsoft page; enter the code shown here to sign in.",
                     220.0,
@@ -134,6 +160,11 @@ impl App {
                         }
                     },
                 );
+                // what follows the sign-in lines up with the text of its row, not with the icon (and leaves no room
+                // when there is nothing to show)
+                let more = self.acct.last_error.is_some() || self.acct.device.is_some() || self.acct.signing_in;
+                if more {
+                    under_head(ui, |ui| {
                 if let Some(e) = self.acct.last_error.clone() {
                     ui.add_space(8.0);
                     if notice(ui, NoticeKind::Error, &e, Some("Try again")).is_some_and(|r| r.clicked()) {
@@ -142,19 +173,22 @@ impl App {
                 }
                 match self.acct.device.clone() {
                     Some(code) => {
-                        ui.add_space(8.0);
-                        ui.horizontal(|ui| {
+                        ui.add_space(10.0);
+                        ui.horizontal_wrapped(|ui| {
+                            ui.spacing_mut().item_spacing.x = 12.0;
                             // the code, large and in figures of equal width, so it can be read out and typed
+                            // on the brand tint with a brand outline: the one thing on the page to look at now
                             egui::Frame::new()
-                                .fill(c_field())
-                                .stroke(egui::Stroke::new(1.0, c_control()))
-                                .corner_radius(egui::CornerRadius::same(R_CONTROL))
-                                .inner_margin(egui::Margin::symmetric(16, 8))
+                                .fill(c_accent_soft())
+                                .stroke(Stroke::new(1.0, c_accent().gamma_multiply(0.6)))
+                                .corner_radius(CornerRadius::same(R_CONTROL))
+                                .inner_margin(egui::Margin::symmetric(18, 8))
                                 .show(ui, |ui| {
                                     ui.label(RichText::new(&code.user_code).size(FS_TITLE).semibold().monospace());
                                 });
                             ui.vertical(|ui| {
                                 ui.spacing_mut().item_spacing.y = 6.0;
+                                ui.add_space(6.0);
                                 ui.horizontal(|ui| {
                                     if secondary(ui, "Copy code").clicked() {
                                         ui.ctx().copy_text(code.user_code.clone());
@@ -170,16 +204,14 @@ impl App {
                                 });
                             });
                         });
-                        ui.add_space(4.0);
+                        ui.add_space(6.0);
                         ui.horizontal(|ui| {
-                            spinner(ui);
-                            muted(
-                                ui,
-                                format!(
-                                    "The code is on your clipboard. Paste it at {} and finish there.",
-                                    code.verification_uri
-                                ),
+                            spinner_sized(ui, 18.0);
+                            let text = format!(
+                                "The code is on your clipboard. Paste it at {} and finish there.",
+                                code.verification_uri
                             );
+                            ui.add(egui::Label::new(RichText::new(text).color(c_muted())).wrap());
                         });
                     }
                     None if self.acct.signing_in => {
@@ -194,11 +226,14 @@ impl App {
                     }
                     None => {}
                 }
-                ui.add_space(8.0);
-                rule(ui);
-                ui.add_space(8.0);
-                super::settings::wide_row(
+                });
+                }
+            });
+            ui.add_space(10.0);
+            card(ui, |ui| {
+                method_row(
                     ui,
+                    Icon::Play,
                     "Offline player",
                     "Just a name. Works for single player and offline-mode servers. 3\u{2013}16 letters, numbers or underscores.",
                     330.0,
@@ -237,7 +272,7 @@ impl App {
                     },
                 );
             });
-            ui.add_space(16.0);
+            ui.add_space(24.0);
         });
         if copied {
             self.toast("Copied the UUID");
@@ -286,10 +321,70 @@ fn account_meta(ui: &mut Ui, offline: bool, uuid: &str) {
     ui.add(egui::Label::new(job).truncate()).on_hover_text(uuid);
 }
 
-/// A small filled label in the ink colour: what is true of this one row (the account that is playing).
-fn ink_tag(ui: &mut Ui, text: &str) {
-    let galley = ui.painter().layout_no_wrap(text.to_string(), super::fonts::medium(FS_META), c_on_ink());
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(galley.size().x + 12.0, 20.0), egui::Sense::hover());
-    ui.painter().rect_filled(rect, egui::CornerRadius::same(R_TAG), c_ink());
-    ui.painter().galley(rect.center() - galley.size() / 2.0, galley, c_on_ink());
+/// A small label in the brand gradient: what is true of this one row (the account that is playing).
+fn brand_tag(ui: &mut Ui, text: &str) {
+    let galley = ui.painter().layout_no_wrap(text.to_string(), super::fonts::semibold(FS_META), c_on_accent());
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(galley.size().x + 16.0, 22.0), egui::Sense::hover());
+    motion::brand_rect(ui.painter(), rect, 11);
+    ui.painter().galley(rect.center() - galley.size() / 2.0, galley, c_on_accent());
+}
+
+/// The card of one account. It rises a little under the pointer, and the account that is playing is outlined in the
+/// brand colour with a faint glow of it, so which one is in use is seen at a glance.
+fn account_card(ui: &mut Ui, id: egui::Id, playing: bool, add: impl FnOnce(&mut Ui)) {
+    let was_hot = ui.data(|d| d.get_temp::<bool>(id.with("hot"))).unwrap_or(false);
+    let t = motion::hover(ui, id, was_hot);
+    let on = motion::toward(ui.ctx(), id.with("playing"), playing, motion::MEDIUM);
+    let (a, b) = (card_shadow(), card_shadow_raised());
+    let lerp = |x: f32, y: f32| x + (y - x) * t;
+    let mut shadow = egui::Shadow {
+        offset: [0, lerp(a.offset[1] as f32, b.offset[1] as f32).round() as i8],
+        blur: lerp(a.blur as f32, b.blur as f32).round() as u8,
+        spread: 0,
+        color: motion::mix(a.color, b.color, t),
+    };
+    if on > 0.0 {
+        // the glow of the one that plays: the shadow takes on the brand colour
+        let g = c_accent();
+        let alpha = (if is_dark() { 46.0 } else { 34.0 }) * on;
+        shadow.color = motion::mix(shadow.color, Color32::from_rgba_unmultiplied(g.r(), g.g(), g.b(), alpha as u8), on);
+    }
+    let line =
+        motion::mix(motion::mix(c_border(), c_control().gamma_multiply(0.7), t), c_accent().gamma_multiply(0.7), on);
+    let out = egui::Frame::new()
+        .fill(motion::mix(c_card(), c_raised(), t))
+        .stroke(Stroke::new(1.0, line))
+        .corner_radius(CornerRadius::same(R_CARD))
+        .inner_margin(egui::Margin::symmetric(18, 14))
+        .shadow(shadow)
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            add(ui);
+        });
+    let rect = out.response.rect;
+    glass_edge(ui.painter(), rect, R_CARD);
+    let hot = ui.rect_contains_pointer(rect);
+    ui.data_mut(|d| d.insert_temp(id.with("hot"), hot));
+}
+
+/// The part of a card under a [`method_row`], lined up with the row's text rather than its icon.
+fn under_head<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
+    ui.scope(|ui| {
+        ui.visuals_mut().indent_has_left_vline = false;
+        ui.spacing_mut().indent = 54.0;
+        ui.indent("under-head", add).inner
+    })
+    .inner
+}
+
+/// The head of one way of adding an account: its icon in a tile beside a setting row.
+fn method_row(ui: &mut Ui, icon: Icon, title: &str, hint: &str, control_width: f32, control: impl FnOnce(&mut Ui)) {
+    ui.horizontal_top(|ui| {
+        ui.spacing_mut().item_spacing.x = 14.0;
+        super::settings::icon_tile(ui, icon, 40.0);
+        ui.vertical(|ui| {
+            ui.spacing_mut().item_spacing.y = 2.0;
+            super::settings::wide_row(ui, title, hint, control_width, control);
+        });
+    });
 }

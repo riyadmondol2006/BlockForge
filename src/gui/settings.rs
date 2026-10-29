@@ -6,6 +6,8 @@ use std::time::{Duration, Instant};
 use egui::{Align, Layout, RichText, ScrollArea, Ui};
 
 use super::App;
+use super::icons::{self, Icon};
+use super::motion;
 use super::theme::{self, *};
 use super::widgets::*;
 
@@ -16,7 +18,7 @@ const PAGE_WIDTH: f32 = 720.0;
 const SAVED_FOR: Duration = Duration::from_millis(2000);
 const SAVED_FADE: Duration = Duration::from_millis(400);
 /// The room "Saved" always takes, shown or not, so nothing on the title row moves.
-const SAVED_WIDTH: f32 = 56.0;
+const SAVED_WIDTH: f32 = 76.0;
 
 fn saved_at_id() -> egui::Id {
     egui::Id::unique("settings-saved-at")
@@ -38,17 +40,22 @@ fn saved_alpha(since: Duration) -> Option<f32> {
     Some((left.as_secs_f32() / SAVED_FADE.as_secs_f32()).min(1.0))
 }
 
-/// "Saved" in a fixed slot at the right of the title row, there for two seconds after a save and then gone.
+/// "Saved" in a fixed slot at the right of the title row, there for two seconds after a save and then gone: a small
+/// pill in the brand tint with a check mark.
 fn saved_stamp(ui: &mut Ui) {
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(SAVED_WIDTH, 20.0), egui::Sense::hover());
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(SAVED_WIDTH, 24.0), egui::Sense::hover());
     let Some(at) = ui.data(|d| d.get_temp::<Instant>(saved_at_id())) else { return };
     let Some(alpha) = saved_alpha(at.elapsed()) else { return };
-    ui.painter().text(
-        rect.right_center(),
-        egui::Align2::RIGHT_CENTER,
+    let ink = if is_dark() { c_accent() } else { c_accent_hover() };
+    let p = ui.painter();
+    p.rect_filled(rect, egui::CornerRadius::same(12), c_accent_soft().gamma_multiply(alpha));
+    super::discover::paint_check(p, egui::pos2(rect.left() + 17.0, rect.center().y), 11.0, ink.gamma_multiply(alpha));
+    p.text(
+        egui::pos2(rect.left() + 28.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
         "Saved",
-        egui::FontId::proportional(FS_META),
-        c_faint().gamma_multiply(alpha),
+        super::fonts::medium(FS_META),
+        ink.gamma_multiply(alpha),
     );
     ui.ctx().request_repaint_after(Duration::from_millis(50));
 }
@@ -64,6 +71,102 @@ pub(super) fn section_head(ui: &mut Ui, title: &str, hint: &str) {
         }
     });
     ui.add_space(8.0);
+}
+
+/// The small rounded tile of a group's icon: the icon in the brand colour on the brand tint.
+pub(super) fn icon_tile(ui: &mut Ui, icon: Icon, size: f32) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
+    paint_icon_tile(ui.painter(), rect, icon);
+}
+
+/// [`icon_tile`] painted at `rect`.
+pub(super) fn paint_icon_tile(p: &egui::Painter, rect: egui::Rect, icon: Icon) {
+    let ink = if is_dark() { c_accent() } else { c_accent_hover() };
+    p.rect(
+        rect,
+        egui::CornerRadius::same(R_CONTROL),
+        c_accent_soft(),
+        egui::Stroke::new(1.0, c_accent().gamma_multiply(0.22)),
+        egui::StrokeKind::Inside,
+    );
+    icons::paint(p, icon, rect.center(), (rect.width() * 0.46).round(), ink);
+}
+
+/// The head of a group of settings: its icon in a tile, the title, and one muted line about it.
+pub(super) fn group_head(ui: &mut Ui, icon: Icon, title: &str, hint: &str) {
+    ui.add_space(26.0);
+    group_title(ui, icon, title, hint);
+    ui.add_space(10.0);
+}
+
+/// The icon tile and the two lines of a group's head, without the room around it.
+fn group_title(ui: &mut Ui, icon: Icon, title: &str, hint: &str) {
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 12.0;
+        icon_tile(ui, icon, 34.0);
+        ui.vertical(|ui| {
+            ui.spacing_mut().item_spacing.y = 1.0;
+            ui.label(RichText::new(title).size(FS_SECTION).semibold());
+            if !hint.is_empty() {
+                ui.add(egui::Label::new(RichText::new(hint).size(FS_META).color(c_muted())).truncate());
+            }
+        });
+    });
+}
+
+/// A group of settings that starts folded, in its own card: the whole head (icon, title, hint and a chevron that
+/// turns) opens and closes it, by pointer or by keyboard. The rows slide open under the head.
+pub(super) fn folding_group(
+    ui: &mut Ui,
+    id_salt: &str,
+    icon: Icon,
+    title: &str,
+    hint: &str,
+    rows: impl FnOnce(&mut Ui, &mut Rows),
+) {
+    let id = egui::Id::unique(("settings-fold", id_salt));
+    let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, false);
+    ui.add_space(26.0);
+    card(ui, |ui| {
+        let head = ui.scope(|ui| group_title(ui, icon, title, hint)).response.rect;
+        // the head reaches across the card so the chevron sits at its right edge
+        let head = egui::Rect::from_min_max(head.min, egui::pos2(ui.max_rect().right(), head.max.y)).expand(6.0);
+        let resp = ui.interact(head, id.with("head"), egui::Sense::click());
+        if resp.clicked() {
+            state.toggle(ui);
+        }
+        let open = state.openness(ui.ctx());
+        let t = motion::hover(ui, resp.id, resp.hovered());
+        if t > 0.0 {
+            // under the tile and the text, which were drawn first
+            ui.painter().rect_stroke(
+                head,
+                egui::CornerRadius::same(R_CONTROL),
+                egui::Stroke::new(1.0, c_border().gamma_multiply(t)),
+                egui::StrokeKind::Inside,
+            );
+        }
+        // the chevron points right when folded and down when open
+        let c = egui::pos2(head.right() - 18.0, head.center().y);
+        let a = open * std::f32::consts::FRAC_PI_2;
+        let rot = |x: f32, y: f32| c + egui::vec2(x * a.cos() - y * a.sin(), x * a.sin() + y * a.cos());
+        ui.painter().add(egui::Shape::line(
+            vec![rot(-2.5, -5.0), rot(2.5, 0.0), rot(-2.5, 5.0)],
+            egui::Stroke::new(1.6, motion::mix(c_muted(), c_text(), t)),
+        ));
+        focus_ring(ui, &resp, head, R_CONTROL);
+        let is_open = state.is_open();
+        resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::DisclosureTriangle, true, is_open, title));
+        resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+        state.show_body_unindented(ui, |ui| {
+            ui.add_space(14.0);
+            rule(ui);
+            ui.add_space(12.0);
+            // the title of a row sits close to its explanation
+            ui.spacing_mut().item_spacing.y = 2.0;
+            rows(ui, &mut Rows::new());
+        });
+    });
 }
 
 /// The rules between the rows of one card: call [`Rows::gap`] before each row.
@@ -89,9 +192,9 @@ impl Rows {
     }
 }
 
-/// A titled block: the heading with its hint, then one card holding the rows, divided by rules.
-fn section(ui: &mut Ui, title: &str, hint: &str, rows: impl FnOnce(&mut Ui, &mut Rows)) {
-    section_head(ui, title, hint);
+/// A titled block: the head with its icon and hint, then one card of glass holding the rows, divided by rules.
+fn section(ui: &mut Ui, icon: Icon, title: &str, hint: &str, rows: impl FnOnce(&mut Ui, &mut Rows)) {
+    group_head(ui, icon, title, hint);
     card(ui, |ui| {
         // the title of a row sits close to its explanation
         ui.spacing_mut().item_spacing.y = 2.0;
@@ -292,6 +395,7 @@ impl App {
                 ui.with_layout(Layout::right_to_left(Align::Center), saved_stamp);
             });
         });
+        muted(ui, "Every change is saved as soon as it is made.");
         let mut dirty = false;
         let mut dragged = false;
         let mut theme_changed = false;
@@ -305,7 +409,7 @@ impl App {
             // at most 760 wide, but never wider than the window (set_max_width alone would widen a narrow page)
             ui.set_max_width((ui.available_width() - 14.0).min(PAGE_WIDTH));
             let s = &mut self.settings;
-            section(ui, "Appearance", "How the launcher looks", |ui, r| {
+            section(ui, Icon::Layers, "Appearance", "How the launcher looks", |ui, r| {
                 r.gap(ui);
                 wide_row(ui, "Theme", "Light and dark looks for the whole launcher", 310.0, |ui| {
                     egui::ComboBox::from_id_salt("theme")
@@ -339,7 +443,7 @@ impl App {
                 // no Language row: the window is in English only for now, so a choice there would change nothing.
                 // `language` stays in the settings file for the Java edition.
             });
-            section(ui, "Game", "Memory, Java and how games start", |ui, r| {
+            section(ui, Icon::Play, "Game", "Memory, Java and how games start", |ui, r| {
                 // memory
                 let mut auto = s.automatic_memory != Some(false);
                 let hint = if auto {
@@ -368,9 +472,10 @@ impl App {
                             ));
                         }
                         ui.scope(|ui| {
-                            // a rail that can be seen, filled in ink up to the handle (like a switch that is on)
+                            // a rail that can be seen, filled in the brand colour up to the handle (like a switch
+                            // that is on)
                             ui.visuals_mut().widgets.inactive.bg_fill = c_active();
-                            ui.visuals_mut().selection.bg_fill = c_ink();
+                            ui.visuals_mut().selection.bg_fill = c_accent();
                             ui.spacing_mut().slider_width = 200.0;
                             let mut mb = s.maximum_memory.clamp(1024, max_mb);
                             let slider = egui::Slider::new(&mut mb, 1024..=max_mb)
@@ -492,7 +597,7 @@ impl App {
                     dirty |= perf.rows(ui, s);
                 });
             });
-            section(ui, "Privacy", "Off unless you turn it on", |ui, r| {
+            section(ui, Icon::Info, "Privacy", "Off unless you turn it on", |ui, r| {
                 r.gap(ui);
                 setting_row(
                     ui,
@@ -512,7 +617,7 @@ impl App {
                     },
                 );
             });
-            section(ui, "Launcher", "The window, the tray and where files are kept", |ui, r| {
+            section(ui, Icon::Sliders, "Launcher", "The window, the tray and where files are kept", |ui, r| {
                 let low_end = super::low_end_pc();
                 let hint = if low_end {
                     "Fewer animations and a smaller picture cache. On by default for this computer"
@@ -540,7 +645,7 @@ impl App {
                 });
             });
             self.services_settings_ui(ui);
-            ui.add_space(16.0);
+            ui.add_space(24.0);
         });
         if open_data {
             self.open_folder(&self.dirs.base.clone());

@@ -68,28 +68,43 @@ impl App {
         let folder = self.dirs.base.to_string_lossy().to_string();
         let (mut yes, mut no, mut never) = (false, false, false);
         egui::Modal::new(egui::Id::unique("startup")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
-            ui.set_width(super::services::modal_width(ctx, 460.0));
-            ui.label(RichText::new(w.title()).size(FS_SECTION).semibold());
-            ui.add_space(6.0);
-            ui.label(w.text(&folder));
-            ui.add_space(10.0);
+            ui.set_width(super::services::modal_width(ctx, 480.0));
+            // the warning's sign beside its title: amber for a risk, red when the launcher can't go on
+            let stop = w == Warning::NotWritable;
             ui.horizontal(|ui| {
-                if w == Warning::NotWritable {
-                    if primary(ui, "Close BlockForge").clicked() {
-                        yes = true;
-                    }
-                } else {
-                    if primary(ui, "Yes").clicked() {
-                        yes = true;
-                    }
-                    if secondary(ui, "No").clicked() {
-                        no = true;
-                    }
-                    if secondary(ui, "Don't remind me again").clicked() {
+                ui.spacing_mut().item_spacing.x = 12.0;
+                let (disc, _) = ui.allocate_exact_size(egui::vec2(34.0, 34.0), egui::Sense::hover());
+                let (bg, fg) = if stop { (c_danger_bg(), c_danger()) } else { (c_warn_bg(), c_warn()) };
+                ui.painter().circle_filled(disc.center(), 17.0, bg);
+                super::icons::paint(ui.painter(), super::icons::Icon::Info, disc.center(), 18.0, fg);
+                ui.add(egui::Label::new(RichText::new(w.title()).size(FS_SECTION).semibold()).wrap());
+            });
+            ui.add_space(12.0);
+            ui.add(egui::Label::new(RichText::new(w.text(&folder)).color(c_muted())).wrap());
+            ui.add_space(20.0);
+            super::discover::dialog_footer(
+                ui,
+                "startup",
+                |ui| {
+                    if !stop && ghost(ui, "Don't remind me again").clicked() {
                         never = true;
                     }
-                }
-            });
+                },
+                |ui| {
+                    if stop {
+                        if primary(ui, "Close BlockForge").clicked() {
+                            yes = true;
+                        }
+                    } else {
+                        if secondary(ui, "No").clicked() {
+                            no = true;
+                        }
+                        if primary(ui, "Yes").clicked() {
+                            yes = true;
+                        }
+                    }
+                },
+            );
         });
         if yes && w == Warning::JavaOptions {
             // only a page to read: the launcher stays open (it leaves the variable out of the games it starts)

@@ -97,15 +97,16 @@ fn skin_candidates(dir: &Path, limit: usize) -> Vec<PathBuf> {
         .collect()
 }
 
-/// A file of the downloads folder as a row of the list: the chosen one has the selection fill.
+/// A file of the downloads folder as a row of the list: the fill fades in under the pointer, and the chosen one is in
+/// the brand tint.
 fn file_row(ui: &mut Ui, name: &str, selected: bool) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 28.0), Sense::click());
-    if selected {
-        ui.painter().rect_filled(rect, CornerRadius::same(R_CONTROL), c_selection());
-    } else if resp.hovered() {
-        ui.painter().rect_filled(rect, CornerRadius::same(R_CONTROL), c_hover());
-    }
-    let fg = if selected || resp.hovered() { c_text() } else { c_muted() };
+    let t = super::motion::hover(ui, resp.id, resp.hovered());
+    let s = super::motion::toward(ui.ctx(), resp.id.with("on"), selected, super::motion::FAST);
+    let bg = super::motion::mix(c_hover().gamma_multiply(t), c_accent_soft(), s);
+    ui.painter().rect_filled(rect, CornerRadius::same(R_CONTROL), bg);
+    let ink = if is_dark() { c_accent() } else { c_accent_hover() };
+    let fg = super::motion::mix(super::motion::mix(c_muted(), c_text(), t), ink, s);
     let mut job = egui::text::LayoutJob::single_section(
         name.to_string(),
         egui::TextFormat::simple(egui::FontId::proportional(FS_BODY), fg),
@@ -129,8 +130,15 @@ fn color_image(img: &RgbaImage) -> ColorImage {
 
 impl App {
     /// A player's face as a rounded square, in place of `avatar()`'s coloured letter. `uuid` is the account's id;
-    /// the skin is read from the saved copy, and fetched once if there is none yet.
-    pub(super) fn account_avatar(&mut self, ui: &mut Ui, uuid: &str, name: &str, offline: bool, size: f32) {
+    /// the skin is read from the saved copy, and fetched once if there is none yet. Returns where the face is.
+    pub(super) fn account_avatar(
+        &mut self,
+        ui: &mut Ui,
+        uuid: &str,
+        name: &str,
+        offline: bool,
+        size: f32,
+    ) -> egui::Rect {
         let path = skins::skin_path(&self.dirs, uuid);
         let up_to_date = match self.svc.heads.get_mut(uuid) {
             Some(h) if h.checked.elapsed() < HEAD_RECHECK => true,
@@ -152,10 +160,7 @@ impl App {
                         self.ctx.load_texture(format!("head-{uuid}"), color_image(&head), TextureOptions::NEAREST);
                     self.svc.heads.insert(uuid.to_string(), HeadTexture { stamp, checked: Instant::now(), tex });
                 }
-                None => {
-                    avatar(ui, name, size);
-                    return;
-                }
+                None => return avatar(ui, name, size).rect,
             }
             // no saved skin yet: fetch it once, then the face is drawn again
             if stamp.is_none() && !offline && self.svc.skin_requested.insert(uuid.to_string()) {
@@ -168,7 +173,7 @@ impl App {
                 }
             }
         }
-        let Some(head) = self.svc.heads.get(uuid) else { return };
+        let Some(head) = self.svc.heads.get(uuid) else { return egui::Rect::NOTHING };
         let (rect, resp) = ui.allocate_exact_size(vec2(size, size), Sense::hover());
         let radius = CornerRadius::same((size * 0.24).round() as u8);
         ui.painter().rect_filled(rect, radius, c_field());
@@ -178,6 +183,7 @@ impl App {
         if resp.hovered() {
             resp.on_hover_text(name);
         }
+        rect
     }
 
     /// Open the "Change skin" window for an account.
@@ -238,26 +244,26 @@ impl App {
 
         egui::Modal::new(egui::Id::unique("skin-dialog")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
             ui.set_width(modal_width(ctx, if d.offline { 460.0 } else { 600.0 }));
-            ui.label(RichText::new("Change skin").size(FS_SECTION).semibold());
+            ui.label(RichText::new("Change skin").size(FS_FIGURE).semibold());
             if d.offline {
                 muted(ui, format!("{} is an offline player", d.name));
                 ui.add_space(8.0);
                 ui.label("Minecraft keeps skins on Microsoft's servers, so offline players always look like one of the default characters in game.");
                 ui.add_space(4.0);
                 ui.label("To use your own skin, sign in with the Microsoft account that owns Minecraft, then choose Change skin again.");
-                ui.add_space(12.0);
-                ui.horizontal(|ui| {
-                    if primary(ui, "Sign in with Microsoft").clicked() {
-                        sign_in = true;
-                    }
+                ui.add_space(20.0);
+                super::discover::dialog_footer(ui, "skin-offline", |_| {}, |ui| {
                     if secondary(ui, "Close").clicked() {
                         close = true;
+                    }
+                    if primary(ui, "Sign in with Microsoft").clicked() {
+                        sign_in = true;
                     }
                 });
                 return;
             }
             muted(ui, format!("For {}. Your skin shows in every game and on every server.", d.name));
-            ui.add_space(10.0);
+            ui.add_space(14.0);
             // a short window (or a big zoom) scrolls the middle part instead of pushing the buttons off the screen
             egui::ScrollArea::vertical().max_height(modal_scroll_height(ctx, 560.0, 170.0)).auto_shrink([false, true]).show(ui, |ui| {
                 ui.horizontal_top(|ui| {
@@ -267,7 +273,13 @@ impl App {
                     let size = vec2(16.0 * scale, 32.0 * scale);
                     let panel = vec2(if wide { 200.0 } else { size.x + 24.0 }, size.y + 24.0);
                     let (rect, _) = ui.allocate_exact_size(panel, Sense::hover());
-                    ui.painter().rect_filled(rect, CornerRadius::same(R_CARD), c_field());
+                    // a small stage: a well of glass, lit softly in the brand colours, with a shadow under the feet
+                    ui.painter().rect(rect, CornerRadius::same(R_CARD), c_card(), egui::Stroke::new(1.0, c_border()), egui::StrokeKind::Inside);
+                    let p = ui.painter().with_clip_rect(rect.shrink(1.0).intersect(ui.clip_rect()));
+                    let r = rect.width().min(rect.height()) * 0.55;
+                    super::about::brand_glow(&p, rect.center() - vec2(0.0, size.y * 0.04), r, 0.4);
+                    let feet = egui::pos2(rect.center().x, rect.center().y + size.y / 2.0 - 2.0);
+                    p.add(egui::Shape::ellipse_filled(feet, vec2(size.x * 0.42, 5.0), egui::Color32::from_black_alpha(if is_dark() { 90 } else { 28 })));
                     if let Some((_, tex)) = &d.preview {
                         egui::Image::from_texture(egui::load::SizedTexture::new(tex.id(), size)).paint_at(ui, egui::Rect::from_center_size(rect.center(), size));
                     }
@@ -325,20 +337,27 @@ impl App {
                     });
                 });
             });
-            ui.add_space(12.0);
-            ui.horizontal(|ui| {
-                let ready = d.chosen.is_some() && !d.uploading;
-                if primary_enabled(ui, "Use this skin", ready).clicked() {
-                    upload = true;
-                }
-                if secondary(ui, "Cancel").clicked() {
-                    close = true;
-                }
-                // why the main button is greyed out
-                if d.chosen.is_none() {
-                    ui.label(RichText::new("Choose a skin file first").size(FS_META).color(c_faint()));
-                }
-            });
+            ui.add_space(16.0);
+            // why the main button is greyed out at the left, the buttons that finish the window at the right
+            let ready = d.chosen.is_some() && !d.uploading;
+            let waiting = d.chosen.is_none();
+            super::discover::dialog_footer(
+                ui,
+                "skin-dialog",
+                |ui| {
+                    if waiting {
+                        ui.label(RichText::new("Choose a skin file first").size(FS_META).color(c_faint()));
+                    }
+                },
+                |ui| {
+                    if secondary(ui, "Cancel").clicked() {
+                        close = true;
+                    }
+                    if primary_enabled(ui, "Use this skin", ready).clicked() {
+                        upload = true;
+                    }
+                },
+            );
         });
         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) && !d.uploading {
             close = true;

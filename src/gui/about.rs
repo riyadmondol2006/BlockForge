@@ -4,10 +4,11 @@
 use egui::{Align, Layout, RichText, ScrollArea, Ui, vec2};
 
 use super::icons::Icon;
+use super::motion;
 use super::theme::*;
 use super::widgets::*;
 use super::{App, Page};
-use crate::update::{self, Kind};
+use crate::update::{self, Kind, UpdateStatus};
 
 const REPO: &str = "https://github.com/riyadmondol2006/BlockForge";
 
@@ -129,51 +130,72 @@ impl App {
         ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
             // at most 720 wide, but never wider than the window (set_max_width alone would widen a narrow page)
             ui.set_max_width((ui.available_width() - 14.0).min(COLUMN));
-            // the name and version; the update button is at the right, and its answer is the line under it
-            let button_id = ui.scope_id().with("about-update-button");
-            let button_w = remembered_width(ui, button_id, 150.0);
-            ui.horizontal(|ui| {
-                ui.add(egui::Image::from_texture(&self.logo).fit_to_exact_size(vec2(48.0, 48.0)));
-                ui.vertical(|ui| {
-                    // the version wraps rather than run under the button in a narrow window
-                    ui.set_max_width((ui.available_width() - button_w - 16.0).max(140.0));
-                    ui.spacing_mut().item_spacing.y = 2.0;
-                    ui.label(RichText::new(crate::NAME).size(FS_TITLE).semibold());
-                    muted(ui, format!("Version {} \u{00B7} {}", version_text(), install_label(kind)));
-                });
-                let used = ui
-                    .with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if available.is_some() {
-                            // the banner's words: a copy that can't update itself gets the download page
-                            if primary(ui, if can_install { "Update now" } else { "Get the update" }).clicked() {
-                                show_offer = true;
+            // the hero: the logo glowing on a panel of glass, the name and version, the update button at the right
+            // and its answer on the line under the version
+            let up_to_date = matches!(self.update_status(), UpdateStatus::UpToDate);
+            hero(ui, |ui| {
+                let button_id = ui.scope_id().with("about-update-button");
+                let button_w = remembered_width(ui, button_id, 150.0);
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 18.0;
+                    let (logo, _) = ui.allocate_exact_size(vec2(64.0, 64.0), egui::Sense::hover());
+                    brand_glow(ui.painter(), logo.center(), 96.0, 1.0);
+                    egui::Image::from_texture(&self.logo).paint_at(ui, logo);
+                    ui.vertical(|ui| {
+                        // the version wraps rather than run under the button in a narrow window
+                        ui.set_max_width((ui.available_width() - button_w - 16.0).max(140.0));
+                        ui.spacing_mut().item_spacing.y = 3.0;
+                        ui.add_space(2.0);
+                        ui.label(RichText::new(crate::NAME).size(FS_TITLE).semibold());
+                        muted(ui, format!("Version {} \u{00B7} {}", version_text(), install_label(kind)));
+                        ui.add_space(2.0);
+                        ui.horizontal_wrapped(|ui| {
+                            ui.spacing_mut().item_spacing.x = 6.0;
+                            if busy {
+                                spinner_sized(ui, 14.0);
+                            } else {
+                                // a dot that says how it stands: the brand colour when all is well or a new version
+                                // waits, red when the check failed
+                                let color = if is_error {
+                                    c_danger()
+                                } else if available.is_some() || up_to_date {
+                                    c_accent()
+                                } else {
+                                    c_faint()
+                                };
+                                let (dot, _) = ui.allocate_exact_size(vec2(8.0, 16.0), egui::Sense::hover());
+                                ui.painter().circle_filled(dot.center(), 4.0, color);
                             }
-                        } else if secondary_enabled(ui, "Check for updates", !busy).clicked() {
-                            check = true;
-                        }
-                        ui.min_rect().width()
-                    })
-                    .inner;
-                remember_width(ui, button_id, used);
-            });
-            ui.add_space(4.0);
-            ui.horizontal_wrapped(|ui| {
-                if busy {
-                    spinner(ui);
-                }
-                let (color, size) = match (is_error, available.is_some()) {
-                    (true, _) => (c_danger(), FS_META),
-                    (false, true) => (c_text(), FS_BODY),
-                    (false, false) => (c_faint(), FS_META),
-                };
-                let mut line = status_text.clone();
-                if !is_error && !self.settings.check_for_launcher_updates {
-                    line.push_str(" \u{00B7} Automatic update checks are off in Settings.");
-                }
-                ui.add(egui::Label::new(RichText::new(line).color(color).size(size)).wrap());
+                            let (color, size) = match (is_error, available.is_some()) {
+                                (true, _) => (c_danger(), FS_META),
+                                (false, true) => (c_text(), FS_BODY),
+                                (false, false) => (c_muted(), FS_META),
+                            };
+                            let mut line = status_text.clone();
+                            if !is_error && !self.settings.check_for_launcher_updates {
+                                line.push_str(" \u{00B7} Automatic update checks are off in Settings.");
+                            }
+                            ui.add(egui::Label::new(RichText::new(line).color(color).size(size)).wrap());
+                        });
+                    });
+                    let used = ui
+                        .with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            if available.is_some() {
+                                // the banner's words: a copy that can't update itself gets the download page
+                                if primary(ui, if can_install { "Update now" } else { "Get the update" }).clicked() {
+                                    show_offer = true;
+                                }
+                            } else if secondary_enabled(ui, "Check for updates", !busy).clicked() {
+                                check = true;
+                            }
+                            ui.min_rect().width()
+                        })
+                        .inner;
+                    remember_width(ui, button_id, used);
+                });
             });
 
-            ui.add_space(16.0);
+            ui.add_space(26.0);
             ui.horizontal(|ui| {
                 ui.label(RichText::new("This copy").size(FS_SECTION).semibold());
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -182,6 +204,7 @@ impl App {
                     }
                 });
             });
+            ui.add_space(2.0);
             card(ui, |ui| {
                 // the name of a row sits close to its value
                 ui.spacing_mut().item_spacing.y = 2.0;
@@ -211,6 +234,7 @@ impl App {
             });
 
             about_title(ui, "Help");
+            card(ui, |ui| {
             if let Some(url) = links(
                 ui,
                 &[
@@ -229,8 +253,10 @@ impl App {
                     self.page = Page::Tools;
                 }
             });
+            });
 
             about_title(ui, "Built on ATLauncher");
+            card(ui, |ui| {
             prose(ui, |ui| {
                 ui.add(egui::Label::new(
                     "BlockForge is a fork of ATLauncher, rewritten in Rust. The way instances, accounts and modpacks \
@@ -242,10 +268,12 @@ impl App {
             if let Some(url) = links(ui, &[("ATLauncher on GitHub", "https://github.com/ATLauncher/ATLauncher".to_string())]) {
                 link = Some(url);
             }
+            });
 
             // the translation key is upper case; without a translation it is shown in sentence case
             let credits = crate::tr!("CREDITS");
             about_title(ui, if credits == "CREDITS" { "Credits" } else { &credits });
+            card(ui, |ui| {
             prose(ui, |ui| {
                 bullet(
                     ui,
@@ -279,8 +307,10 @@ impl App {
             ) {
                 link = Some(url);
             }
+            });
 
             about_title(ui, "License");
+            card(ui, |ui| {
             muted(ui, "BlockForge is free software under the GNU General Public License v3.");
             if let Some(url) = links(
                 ui,
@@ -288,6 +318,7 @@ impl App {
             ) {
                 link = Some(url);
             }
+            });
 
             ui.add_space(24.0);
             ui.add(
@@ -325,8 +356,49 @@ impl App {
 
 /// The title of a block of the page, with room above it.
 fn about_title(ui: &mut Ui, text: &str) {
-    ui.add_space(16.0);
+    ui.add_space(26.0);
     ui.label(RichText::new(text).size(FS_SECTION).semibold());
+    ui.add_space(2.0);
+}
+
+/// A soft light in the two brand colours around `center`, reaching out to `radius`; `strength` from 0 to 1. On the
+/// dark look the bright colours are laid on thinly. On the light look the glow is an opaque pale tint of them instead:
+/// a thin layer of a colour over white turns grey at its edge.
+pub(super) fn brand_glow(painter: &egui::Painter, center: egui::Pos2, radius: f32, strength: f32) {
+    let bright = |c: u32| egui::Color32::from_rgb((c >> 16) as u8, (c >> 8) as u8, c as u8);
+    let (green, cyan) = (bright(0x34D399), bright(0x22D3EE));
+    let tint = |c: egui::Color32| {
+        if is_dark() {
+            let a = (150.0 * strength) as u8;
+            egui::Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), a)
+        } else {
+            motion::mix(c_card(), c, 0.28 * strength)
+        }
+    };
+    motion::glow(painter, center + vec2(-radius * 0.08, radius * 0.02), radius, tint(green));
+    motion::glow(painter, center + vec2(radius * 0.15, radius * 0.06), radius * 0.83, tint(cyan));
+}
+
+/// The top of the page: a card of glass that holds the logo's glow inside its edges.
+fn hero(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
+    const MARGIN: f32 = 24.0;
+    let id = ui.scope_id().with("about-hero-size");
+    // the glow is cut at the card's edge; how big the card is comes from the last frame
+    let last = ui.data(|d| d.get_temp::<egui::Vec2>(id));
+    let out = card_frame().inner_margin(egui::Margin::same(MARGIN as i8)).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        if let Some(size) = last {
+            let edge = egui::Rect::from_min_size(ui.max_rect().min - vec2(MARGIN, MARGIN), size).shrink(1.0);
+            ui.set_clip_rect(ui.clip_rect().intersect(edge));
+        }
+        add(ui);
+    });
+    let rect = out.response.rect;
+    glass_edge(ui.painter(), rect, R_CARD);
+    if last.is_none_or(|l| (l - rect.size()).length() > 0.5) {
+        ui.data_mut(|d| d.insert_temp(id, rect.size()));
+        ui.ctx().request_discard("the size of the About card changed");
+    }
 }
 
 /// Text that reads at a comfortable line length, not the whole width of the page.
@@ -352,18 +424,49 @@ fn key_value(ui: &mut Ui, key: &str, value: impl FnOnce(&mut Ui)) {
     });
 }
 
-/// A row of text links, underlined in the text colour. Returns the address of the one that was clicked.
+/// A row of links, each a small pill with an arrow that says it opens in the browser. Returns the address of the one
+/// that was clicked.
 fn links(ui: &mut Ui, items: &[(&str, String)]) -> Option<String> {
     let mut clicked = None;
+    ui.add_space(6.0);
     ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing.x = 16.0;
+        ui.spacing_mut().item_spacing = vec2(8.0, 8.0);
         for (label, url) in items {
-            if ui.link(RichText::new(*label).underline()).clicked() {
+            if link_pill(ui, label).on_hover_text(url).clicked() {
                 clicked = Some(url.clone());
             }
         }
     });
     clicked
+}
+
+/// One link of [`links`]: a quiet pill that brightens under the pointer, the arrow in the brand colour.
+fn link_pill(ui: &mut Ui, label: &str) -> egui::Response {
+    let font = super::fonts::medium(13.0);
+    let galley = ui.painter().layout_no_wrap(label.to_string(), font, egui::Color32::PLACEHOLDER);
+    let (rect, resp) = ui.allocate_exact_size(vec2(galley.size().x + 40.0, 30.0), egui::Sense::click());
+    if ui.is_rect_visible(rect) {
+        let t = motion::hover(ui, resp.id, resp.hovered());
+        let p = ui.painter();
+        p.rect(
+            rect,
+            egui::CornerRadius::same(15),
+            motion::mix(c_field(), c_field_hover(), t),
+            egui::Stroke::new(1.0, motion::mix(c_border(), c_control(), t)),
+            egui::StrokeKind::Inside,
+        );
+        let fg = motion::mix(c_muted(), c_text(), t);
+        p.galley(egui::pos2(rect.left() + 14.0, rect.center().y - galley.size().y / 2.0), galley, fg);
+        // a small arrow up and to the right, a little further out under the pointer
+        let c = egui::pos2(rect.right() - 16.0 + t * 1.5, rect.center().y - t * 1.5);
+        let ink = if is_dark() { c_accent() } else { c_accent_hover() };
+        let stroke = egui::Stroke::new(1.5, ink);
+        p.line_segment([c + vec2(-3.5, 3.5), c + vec2(3.5, -3.5)], stroke);
+        p.add(egui::Shape::line(vec![c + vec2(-2.0, -3.5), c + vec2(3.5, -3.5), c + vec2(3.5, 2.0)], stroke));
+    }
+    focus_ring(ui, &resp, rect, 15);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Link, true, label));
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
 /// One line of a quiet list: a small dash and the text, wrapped.

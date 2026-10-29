@@ -306,14 +306,30 @@ impl App {
                 .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
                 .order(egui::Order::Foreground)
                 .show(ctx, |ui| {
-                    egui::Frame::new()
+                    // a panel of glass in the brand tint, lit from inside, with the package it will become
+                    let out = egui::Frame::new()
                         .fill(c_accent_soft())
                         .stroke(Stroke::new(2.0, c_accent()))
                         .corner_radius(CornerRadius::same(R_DIALOG))
-                        .inner_margin(egui::Margin::symmetric(40, 28))
+                        .inner_margin(egui::Margin::symmetric(48, 30))
+                        .shadow(ui.visuals().window_shadow)
                         .show(ui, |ui| {
-                            ui.label(RichText::new("Drop to import").size(FS_TITLE).semibold());
+                            ui.vertical_centered(|ui| {
+                                let (rect, _) = ui.allocate_exact_size(egui::vec2(44.0, 44.0), egui::Sense::hover());
+                                super::about::brand_glow(ui.painter(), rect.center(), 44.0, 0.5);
+                                let ink = if is_dark() { c_accent() } else { c_accent_hover() };
+                                super::icons::paint(
+                                    ui.painter(),
+                                    super::icons::Icon::Package,
+                                    rect.center(),
+                                    34.0,
+                                    ink,
+                                );
+                                ui.add_space(8.0);
+                                ui.label(RichText::new("Drop to import").size(FS_TITLE).semibold());
+                            });
                         });
+                    glass_edge(ui.painter(), out.response.rect, R_DIALOG);
                 });
         }
         if !self.import.open {
@@ -339,9 +355,9 @@ impl App {
                 close = true;
             }
             muted(ui, "Your files are copied. Nothing is changed or removed in the other launcher.");
-            ui.add_space(16.0);
+            ui.add_space(14.0);
 
-            section(ui, "File, folder or link");
+            ui.label(RichText::new("File, folder or link").semibold());
             ui.add_space(2.0);
             // the field takes what is left of the row after the buttons, measured on the last frame
             let buttons_id = ui.scope_id().with("import-buttons");
@@ -400,11 +416,9 @@ impl App {
                 });
             }
 
-            ui.add_space(16.0);
-            rule(ui);
-            ui.add_space(12.0);
-            section(ui, "Found on this computer");
-            ui.add_space(4.0);
+            ui.add_space(20.0);
+            ui.label(RichText::new("Found on this computer").semibold());
+            ui.add_space(2.0);
             match &self.import.scan {
                 None => {
                     ui.horizontal(|ui| {
@@ -416,57 +430,70 @@ impl App {
                     muted(ui, "No other launchers were found. Choose an instance folder yourself.");
                 }
                 Some(found) => {
-                    ScrollArea::vertical()
-                        .id_salt("found-instances")
-                        .max_height(room.min(260.0))
-                        .auto_shrink([false, true])
+                    // the instances on a well of their own, divided by hairlines
+                    egui::Frame::new()
+                        .fill(c_card())
+                        .stroke(Stroke::new(1.0, c_border()))
+                        .corner_radius(CornerRadius::same(R_CARD))
+                        .inner_margin(egui::Margin::symmetric(14, 6))
                         .show(ui, |ui| {
-                            for (n, i) in found.iter().enumerate() {
-                                if n > 0 {
-                                    rule(ui);
-                                }
-                                ui.add_space(6.0);
-                                ui.horizontal(|ui| {
-                                    ui.vertical(|ui| {
-                                        ui.set_max_width((ui.available_width() - 110.0).max(240.0));
-                                        ui.spacing_mut().item_spacing.y = 0.0;
-                                        ui.add(egui::Label::new(RichText::new(&i.name).semibold()).truncate());
-                                        small_muted(
-                                            ui,
-                                            format!(
-                                                "{}  \u{00B7}  Minecraft {}  \u{00B7}  {}",
-                                                i.source,
-                                                i.minecraft_version,
-                                                i.loader_label()
-                                            ),
-                                        );
-                                        match self.import.previews.get(&i.root) {
-                                            Some(Some(p)) => small_muted(
-                                                ui,
-                                                format!(
-                                                    "{} mods  \u{00B7}  {} worlds  \u{00B7}  {}",
-                                                    p.mods,
-                                                    p.worlds,
-                                                    human_size(p.bytes)
-                                                ),
-                                            ),
-                                            Some(None) => small_muted(ui, "Couldn't read this instance's files"),
-                                            None => small_muted(ui, " "),
+                            ui.set_width(ui.available_width());
+                            ScrollArea::vertical()
+                                .id_salt("found-instances")
+                                .max_height(room.min(260.0))
+                                .auto_shrink([false, true])
+                                .show(ui, |ui| {
+                                    for (n, i) in found.iter().enumerate() {
+                                        if n > 0 {
+                                            rule(ui);
                                         }
-                                    });
-                                    let id = ui.scope_id().with(("found-row", &i.root));
-                                    end_aligned(ui, id, |ui| {
-                                        if secondary(ui, "Import").clicked() {
-                                            use_found = Some(i.clone());
-                                        }
-                                    });
+                                        ui.add_space(6.0);
+                                        ui.horizontal(|ui| {
+                                            ui.spacing_mut().item_spacing.x = 12.0;
+                                            avatar(ui, &i.name, 36.0);
+                                            ui.vertical(|ui| {
+                                                ui.set_max_width((ui.available_width() - 110.0).max(200.0));
+                                                ui.spacing_mut().item_spacing.y = 0.0;
+                                                ui.add(egui::Label::new(RichText::new(&i.name).semibold()).truncate());
+                                                small_muted(
+                                                    ui,
+                                                    format!(
+                                                        "{}  \u{00B7}  Minecraft {}  \u{00B7}  {}",
+                                                        i.source,
+                                                        i.minecraft_version,
+                                                        i.loader_label()
+                                                    ),
+                                                );
+                                                match self.import.previews.get(&i.root) {
+                                                    Some(Some(p)) => small_muted(
+                                                        ui,
+                                                        format!(
+                                                            "{} mods  \u{00B7}  {} worlds  \u{00B7}  {}",
+                                                            p.mods,
+                                                            p.worlds,
+                                                            human_size(p.bytes)
+                                                        ),
+                                                    ),
+                                                    Some(None) => {
+                                                        small_muted(ui, "Couldn't read this instance's files")
+                                                    }
+                                                    None => small_muted(ui, " "),
+                                                }
+                                            });
+                                            let id = ui.scope_id().with(("found-row", &i.root));
+                                            end_aligned(ui, id, |ui| {
+                                                if secondary(ui, "Import").clicked() {
+                                                    use_found = Some(i.clone());
+                                                }
+                                            });
+                                        });
+                                        ui.add_space(6.0);
+                                    }
                                 });
-                                ui.add_space(6.0);
-                            }
                         });
                 }
             }
-            ui.add_space(16.0);
+            ui.add_space(20.0);
             dialog_footer(
                 ui,
                 "import",

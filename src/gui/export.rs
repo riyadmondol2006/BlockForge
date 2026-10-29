@@ -62,13 +62,17 @@ const CHEVRON: f32 = 22.0;
 fn chevron(ui: &mut Ui, open: bool) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(CHEVRON, CHEVRON), egui::Sense::click());
     let c = rect.center();
-    let color = if resp.hovered() { c_text() } else { c_muted() };
-    let pts: [egui::Pos2; 3] = if open {
-        [c + egui::vec2(-4.0, -2.0), c + egui::vec2(0.0, 2.5), c + egui::vec2(4.0, -2.0)]
-    } else {
-        [c + egui::vec2(-2.0, -4.0), c + egui::vec2(2.5, 0.0), c + egui::vec2(-2.0, 4.0)]
-    };
-    ui.painter().add(egui::Shape::line(pts.to_vec(), Stroke::new(1.6, color)));
+    let t = super::motion::hover(ui, resp.id, resp.hovered());
+    if t > 0.0 {
+        ui.painter().rect_filled(rect, CornerRadius::same(R_TAG), c_hover().gamma_multiply(t));
+    }
+    let color = super::motion::mix(c_muted(), c_text(), t);
+    // the chevron turns from pointing right (folded) to pointing down (open)
+    let a =
+        super::motion::toward(ui.ctx(), resp.id.with("open"), open, super::motion::FAST) * std::f32::consts::FRAC_PI_2;
+    let rot = |x: f32, y: f32| c + egui::vec2(x * a.cos() - y * a.sin(), x * a.sin() + y * a.cos());
+    let pts = vec![rot(-2.0, -4.0), rot(2.5, 0.0), rot(-2.0, 4.0)];
+    ui.painter().add(egui::Shape::line(pts, Stroke::new(1.6, color)));
     focus_ring(ui, &resp, rect, R_TAG);
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, if open { "Collapse" } else { "Expand" }));
     resp.on_hover_cursor(egui::CursorIcon::PointingHand)
@@ -250,7 +254,7 @@ impl App {
                 close = true;
             }
             muted(ui, "Make a modpack file other people can import.");
-            ui.add_space(12.0);
+            ui.add_space(16.0);
 
             // one scrolling part, so the buttons below it never leave the window
             ScrollArea::vertical().id_salt("export-body").max_height(room).auto_shrink([false, true]).show(ui, |ui| {
@@ -309,10 +313,12 @@ impl App {
                     small_muted(ui, "Waiting for the folder chooser");
                 }
 
-                ui.add_space(12.0);
-                section(ui, "Folders and files to include");
+                ui.add_space(20.0);
+                ui.label(RichText::new("Folders and files to include").semibold());
                 small_muted(ui, "Mods that Modrinth or CurseForge know are listed by id, so they don't make the file bigger.");
-                egui::Frame::new().fill(c_field()).stroke(Stroke::new(1.0, c_border())).corner_radius(CornerRadius::same(R_CONTROL)).inner_margin(egui::Margin::same(8)).show(ui, |ui| {
+                ui.add_space(4.0);
+                // the tree on a well of its own
+                egui::Frame::new().fill(c_card()).stroke(Stroke::new(1.0, c_border())).corner_radius(CornerRadius::same(R_CARD)).inner_margin(egui::Margin::symmetric(12, 10)).show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     self.tree_rows(ui, &root, "", 0);
                     if self.export.dialog.as_ref().is_some_and(|d| d.children.get("").is_some_and(Vec::is_empty)) {
@@ -326,7 +332,7 @@ impl App {
             });
 
             let Some(d) = self.export.dialog.as_mut() else { return };
-            ui.add_space(12.0);
+            ui.add_space(16.0);
             let ready = !d.running && !d.name.trim().is_empty() && !d.save_to.trim().is_empty();
             let reason = if d.running {
                 ""

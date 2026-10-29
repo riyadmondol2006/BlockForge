@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use egui::{CornerRadius, RichText, Stroke, Ui};
 
-use super::discover::{dialog_footer, dialog_title};
+use super::discover::{close_button, dialog_footer};
 use super::theme::*;
 use super::widgets::*;
 use super::{App, Msg};
@@ -251,22 +251,23 @@ impl App {
         let busy = matches!(self.upd.stage, Stage::Downloading { .. } | Stage::Installing | Stage::Restarting);
         let action: Cell<Option<Action>> = Cell::new(None);
         let (width, notes_height) = super::curseforge::modal_size(ctx, 560.0, 300.0);
+        let logo = self.logo.clone();
         let modal =
             egui::Modal::new(egui::Id::unique("update-dialog")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
                 ui.set_width(width);
                 match &self.upd.stage {
                     Stage::Offer => {
-                        if dialog_title(ui, &format!("BlockForge {version} is available")) {
+                        let title = format!("BlockForge {version} is available");
+                        if update_head(ui, &logo, &title, Some(&format!("You have {}", crate::VERSION)), true) {
                             action.set(Some(Action::Later));
                         }
-                        small_muted(ui, format!("You have {}", crate::VERSION));
-                        ui.add_space(10.0);
+                        ui.add_space(14.0);
                         if !release.body.trim().is_empty() {
                             egui::Frame::new()
                                 .fill(c_card())
                                 .stroke(Stroke::new(1.0, c_border()))
-                                .corner_radius(CornerRadius::same(R_CONTROL))
-                                .inner_margin(egui::Margin::same(12))
+                                .corner_radius(CornerRadius::same(R_CARD))
+                                .inner_margin(egui::Margin::symmetric(16, 14))
                                 .show(ui, |ui| {
                                     ui.set_width(ui.available_width());
                                     egui::ScrollArea::vertical()
@@ -274,11 +275,11 @@ impl App {
                                         .max_height(notes_height.min(320.0))
                                         .show(ui, |ui| release_notes(ui, &release.body));
                                 });
-                            ui.add_space(10.0);
+                            ui.add_space(14.0);
                         }
                         if let Some(wait) = wait.filter(|_| can_install) {
-                            small_muted(ui, wait);
-                            ui.add_space(6.0);
+                            notice(ui, NoticeKind::Warn, wait, None);
+                            ui.add_space(12.0);
                         }
                         dialog_footer(
                             ui,
@@ -309,19 +310,25 @@ impl App {
                     Stage::Downloading { progress, .. } => {
                         let (done, total) =
                             (progress.done.load(Ordering::Relaxed), progress.total.load(Ordering::Relaxed));
-                        ui.label(
-                            RichText::new(format!("Downloading BlockForge {version}")).size(FS_SECTION).semibold(),
-                        );
-                        ui.add_space(10.0);
-                        progress_bar(ui, (total > 0).then(|| progress.fraction()), 6.0);
-                        ui.add_space(4.0);
+                        update_head(ui, &logo, &format!("Downloading BlockForge {version}"), None, false);
+                        ui.add_space(16.0);
+                        progress_bar(ui, (total > 0).then(|| progress.fraction()), 8.0);
+                        ui.add_space(6.0);
                         let text = if total > 0 {
                             format!("{} of {}", human_size(done), human_size(total))
                         } else {
                             human_size(done)
                         };
-                        small_muted(ui, text);
-                        ui.add_space(10.0);
+                        ui.horizontal(|ui| {
+                            small_muted(ui, text);
+                            if total > 0 {
+                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                    let percent = format!("{:.0}%", progress.fraction() * 100.0);
+                                    ui.label(RichText::new(percent).size(FS_META).font(super::fonts::medium(FS_META)));
+                                });
+                            }
+                        });
+                        ui.add_space(14.0);
                         dialog_footer(
                             ui,
                             "update-downloading",
@@ -335,25 +342,34 @@ impl App {
                         ui.ctx().request_repaint_after(Duration::from_millis(100));
                     }
                     Stage::Installing => {
-                        ui.label(RichText::new(installing_text(self.upd.kind, &version)).size(FS_SECTION).semibold());
-                        ui.add_space(10.0);
-                        progress_bar(ui, None, 6.0);
+                        update_head(ui, &logo, &installing_text(self.upd.kind, &version), None, false);
+                        ui.add_space(16.0);
+                        progress_bar(ui, None, 8.0);
                         ui.ctx().request_repaint_after(Duration::from_millis(100));
                     }
                     Stage::Restarting => {
-                        ui.label(RichText::new(closing_text(self.upd.kind, &version)).size(FS_SECTION).semibold());
+                        update_head(ui, &logo, &closing_text(self.upd.kind, &version), None, false);
                     }
                     Stage::Note { message, command } => {
-                        if dialog_title(ui, &format!("BlockForge {version}")) {
+                        if update_head(ui, &logo, &format!("BlockForge {version}"), None, true) {
                             action.set(Some(Action::Later));
                         }
-                        ui.add_space(6.0);
+                        ui.add_space(12.0);
                         ui.add(egui::Label::new(RichText::new(message)).wrap());
                         if let Some(command) = command {
-                            ui.add_space(6.0);
-                            ui.add(egui::Label::new(RichText::new(command).monospace().color(c_text())).wrap());
+                            ui.add_space(10.0);
+                            // the command on a well of its own, so it reads as something to copy
+                            egui::Frame::new()
+                                .fill(c_card())
+                                .stroke(Stroke::new(1.0, c_border()))
+                                .corner_radius(CornerRadius::same(R_CONTROL))
+                                .inner_margin(egui::Margin::symmetric(12, 10))
+                                .show(ui, |ui| {
+                                    ui.set_width(ui.available_width());
+                                    ui.add(egui::Label::new(RichText::new(command).monospace().color(c_text())).wrap());
+                                });
                         }
-                        ui.add_space(10.0);
+                        ui.add_space(16.0);
                         dialog_footer(
                             ui,
                             "update-note",
@@ -371,16 +387,16 @@ impl App {
                         );
                     }
                     Stage::Failed(error) => {
-                        if dialog_title(ui, &format!("Couldn't update to BlockForge {version}")) {
+                        if update_head(ui, &logo, &format!("Couldn't update to BlockForge {version}"), None, true) {
                             action.set(Some(Action::Later));
                         }
-                        ui.add_space(6.0);
-                        ui.add(egui::Label::new(RichText::new(error).color(c_muted())).wrap());
+                        ui.add_space(12.0);
+                        notice(ui, NoticeKind::Error, error, None);
                         if let Some(wait) = wait {
-                            ui.add_space(6.0);
+                            ui.add_space(8.0);
                             small_muted(ui, wait);
                         }
-                        ui.add_space(10.0);
+                        ui.add_space(16.0);
                         dialog_footer(
                             ui,
                             "update-failed",
@@ -519,6 +535,35 @@ fn release_notes(ui: &mut Ui, body: &str) {
             }
         }
     }
+}
+
+/// The head of the update window: the logo glowing softly, the title (wrapped when long) and an optional line under
+/// it, and at the right the close button when the window can be closed. Returns whether that was pressed.
+fn update_head(ui: &mut Ui, logo: &egui::TextureHandle, title: &str, sub: Option<&str>, closable: bool) -> bool {
+    let mut closed = false;
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 14.0;
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(40.0, 40.0), egui::Sense::hover());
+        super::about::brand_glow(ui.painter(), rect.center(), 32.0, 0.6);
+        egui::Image::from_texture(logo).paint_at(ui, rect);
+        let close_w = if closable { 28.0 + ui.spacing().item_spacing.x } else { 0.0 };
+        ui.vertical(|ui| {
+            ui.set_max_width((ui.available_width() - close_w).max(120.0));
+            ui.spacing_mut().item_spacing.y = 2.0;
+            if sub.is_none() {
+                ui.add_space(9.0);
+            }
+            ui.add(egui::Label::new(RichText::new(title).size(FS_SECTION).semibold()).wrap());
+            if let Some(sub) = sub {
+                small_muted(ui, sub);
+            }
+        });
+        if closable {
+            closed =
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| close_button(ui).clicked()).inner;
+        }
+    });
+    closed
 }
 
 /// The window's line while the downloaded update is being put in place.

@@ -1,8 +1,9 @@
 //! Create: pick a Minecraft version and a loader, then download it all.
 
-use egui::{CornerRadius, RichText, ScrollArea, Stroke, Ui};
+use egui::{Color32, CornerRadius, RichText, ScrollArea, Stroke, Ui, vec2};
 
 use super::discover::filter_label;
+use super::motion;
 use super::theme::*;
 use super::widgets::*;
 use super::{App, Msg, Page};
@@ -32,21 +33,123 @@ pub struct CreateState {
 /// The widest the form gets.
 const FORM_W: f32 = 720.0;
 
-/// One version in the grid of versions: plain until pointed at, a tone step up when it is the chosen one.
+/// One version in the grid of versions: plain until pointed at (the fill fades in), the chosen one in the brand tint
+/// with a brand outline.
 fn version_cell(ui: &mut Ui, text: &str, selected: bool, width: f32) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, 28.0), egui::Sense::click());
-    let bg = if selected {
-        c_selection()
-    } else if resp.hovered() {
-        c_hover()
-    } else {
-        egui::Color32::TRANSPARENT
-    };
-    ui.painter().rect_filled(rect, CornerRadius::same(R_CONTROL), bg);
-    let font = if selected { super::fonts::medium(FS_BODY) } else { egui::FontId::proportional(FS_BODY) };
-    ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, text, font, c_text());
-    focus_ring(ui, &resp, rect, R_CONTROL);
+    let t = motion::hover(ui, resp.id, resp.hovered());
+    let s = motion::toward(ui.ctx(), resp.id.with("on"), selected, motion::FAST);
+    let bg = motion::mix(c_hover().gamma_multiply(t), c_accent_soft(), s);
+    let line = c_accent().gamma_multiply(0.7 * s);
+    ui.painter().rect(rect, CornerRadius::same(R_TAG + 2), bg, Stroke::new(1.0, line), egui::StrokeKind::Inside);
+    let font = if selected { super::fonts::semibold(FS_BODY) } else { egui::FontId::proportional(FS_BODY) };
+    let fg = motion::mix(c_text(), accent_ink(), s);
+    ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, text, font, fg);
+    focus_ring(ui, &resp, rect, R_TAG + 2);
     resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, text));
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+/// The brand colour as text: the bright one on the dark look, the deep one on the light look (4.5:1 on white).
+fn accent_ink() -> Color32 {
+    if is_dark() { c_accent() } else { c_accent_hover() }
+}
+
+/// The head of a step of the form: its number in a small badge of the brand gradient, the title, and what was picked
+/// so far after it.
+fn step_head(ui: &mut Ui, n: usize, title: &str, picked: Option<&str>) {
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 10.0;
+        step_title(ui, n, title);
+        if let Some(p) = picked.filter(|p| !p.is_empty()) {
+            ui.label(RichText::new(p).color(c_muted()));
+        }
+    });
+    ui.add_space(4.0);
+}
+
+/// The badge and the title of a step, in a row that is already there.
+fn step_title(ui: &mut Ui, n: usize, title: &str) {
+    let (badge, _) = ui.allocate_exact_size(vec2(24.0, 24.0), egui::Sense::hover());
+    motion::brand_rect(ui.painter(), badge, 12);
+    ui.painter().text(
+        badge.center(),
+        egui::Align2::CENTER_CENTER,
+        n.to_string(),
+        super::fonts::semibold(FS_META),
+        c_on_accent(),
+    );
+    ui.label(RichText::new(title).size(FS_SECTION).semibold());
+}
+
+/// A few words under a loader's name on its card.
+fn loader_blurb(l: Loader) -> &'static str {
+    match l {
+        Loader::Vanilla => "No mods",
+        Loader::Fabric => "Light, fast",
+        Loader::Quilt => "Fabric-like",
+        Loader::Forge => "The classic",
+        Loader::NeoForge => "Newer Forge",
+    }
+}
+
+/// The narrowest a loader card gets before the row wraps.
+const LOADER_CARD_W: f32 = 118.0;
+
+/// One mod loader to choose, as a card: its letter in a tile of its colour, the name and a few words. It lifts a
+/// little under the pointer; the chosen one takes the brand tint and outline and a check in the corner.
+fn loader_card(ui: &mut Ui, l: Loader, selected: bool, width: f32) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(vec2(width, 60.0), egui::Sense::click());
+    if ui.is_rect_visible(rect) {
+        let t = motion::hover(ui, resp.id, resp.hovered());
+        let s = motion::toward(ui.ctx(), resp.id.with("on"), selected, motion::MEDIUM);
+        let card = rect.translate(vec2(0.0, -1.5 * t));
+        let p = ui.painter();
+        if t > 0.0 {
+            let shadow = egui::Shadow {
+                offset: [0, 6],
+                blur: 18,
+                spread: 0,
+                color: Color32::from_black_alpha(((if is_dark() { 110.0 } else { 26.0 }) * t) as u8),
+            };
+            p.add(shadow.as_shape(card, CornerRadius::same(R_CARD)));
+        }
+        let fill = motion::mix(motion::mix(c_field(), c_field_hover(), t), c_accent_soft(), s);
+        let line = motion::mix(motion::mix(c_border(), c_control().gamma_multiply(0.8), t), c_accent(), s);
+        p.rect(card, CornerRadius::same(R_CARD), fill, Stroke::new(1.0 + 0.5 * s, line), egui::StrokeKind::Inside);
+        glass_edge(p, card, R_CARD);
+        // the loader's letter on a pale tint of its colour, like the loader tags elsewhere; on the chosen one the tile
+        // turns into a check in the brand gradient
+        let hue = loader_color(l.label());
+        let tile = egui::Rect::from_min_size(egui::pos2(card.left() + 12.0, card.center().y - 12.0), vec2(24.0, 24.0));
+        let r = CornerRadius::same(R_TAG + 1);
+        p.rect_filled(tile, r, hue.gamma_multiply(0.18 * (1.0 - s)));
+        let letter = l.label().chars().next().unwrap_or('?').to_string();
+        p.text(
+            tile.center(),
+            egui::Align2::CENTER_CENTER,
+            letter,
+            super::fonts::semibold(FS_BODY),
+            hue.gamma_multiply(1.0 - s),
+        );
+        if s > 0.0 {
+            motion::gradient_rect(p, tile, R_TAG + 1, c_accent().gamma_multiply(s), c_accent2().gamma_multiply(s));
+            super::discover::paint_check(p, tile.center(), 12.0, c_on_accent().gamma_multiply(s));
+        }
+        // the name and the few words beside the tile
+        let left = tile.right() + 8.0;
+        let room = card.right() - left - 8.0;
+        let name = p.layout(l.label().to_string(), super::fonts::semibold(FS_BODY), c_text(), room);
+        p.galley(egui::pos2(left, card.center().y - 17.0), name, c_text());
+        let mut job = egui::text::LayoutJob::single_section(
+            loader_blurb(l).to_string(),
+            egui::TextFormat::simple(egui::FontId::proportional(FS_META), c_muted()),
+        );
+        job.wrap = egui::text::TextWrapping::truncate_at_width(room);
+        p.galley(egui::pos2(left, card.center().y + 2.0), p.layout_job(job), c_muted());
+    }
+    focus_ring(ui, &resp, rect, R_CARD);
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::RadioButton, true, selected, l.label()));
     resp.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
@@ -149,24 +252,30 @@ impl App {
 
     pub(super) fn create_ui(&mut self, ui: &mut Ui) {
         heading(ui, "New instance");
-        ui.add_space(8.0);
+        muted(ui, "Pick a Minecraft version and a mod loader, then BlockForge downloads it all.");
+        ui.add_space(14.0);
         let mut changed_version = false;
         let mut create = false;
         let mut enter = false;
         // the button stays in view under the form: the form scrolls when the window is short
-        let form_h = (ui.available_height() - 64.0).max(160.0);
+        let form_h = (ui.available_height() - 84.0).max(160.0);
         ScrollArea::vertical().auto_shrink([false, true]).max_height(form_h).show(ui, |ui| {
             // a form reads best in a column of its own, not stretched across a wide window
             ui.set_max_width((ui.available_width() - 14.0).min(FORM_W));
             ui.spacing_mut().item_spacing.y = 8.0;
 
             // name
-            section(ui, "Name");
+            card(ui, |ui| {
+            // the name is one line: its field sits beside the step's title
+            ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 10.0;
+            step_title(ui, 1, "Name");
+            ui.add_space(14.0);
             let c = &mut self.create;
             // the hint is the name the instance gets when the field is left empty
             let hint = if c.mc.is_empty() { "My instance".to_string() } else { default_name(&c.mc, c.loader) };
             let name_field = ui.add_sized(
-                [ui.available_width().min(360.0), 32.0],
+                [ui.available_width().min(420.0), 32.0],
                 egui::TextEdit::singleline(&mut c.name)
                     .hint_text(RichText::new(hint).color(c_faint()))
                     .margin(egui::Margin::symmetric(10, 7))
@@ -174,15 +283,14 @@ impl App {
             );
             // Enter in the name makes the instance, like the button under the form
             enter = name_field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            });
+            });
 
             // Minecraft version
-            ui.add_space(16.0);
-            ui.horizontal(|ui| {
-                ui.label(RichText::new("Minecraft version").size(FS_SECTION).semibold());
-                if !self.create.mc.is_empty() {
-                    ui.label(RichText::new(&self.create.mc).color(c_muted()));
-                }
-            });
+            ui.add_space(6.0);
+            card(ui, |ui| {
+            let picked = self.create.mc.clone();
+            step_head(ui, 2, "Minecraft version", Some(&picked));
             match (&self.manifest, &self.manifest_error) {
                 (Some(m), _) => {
                     ui.horizontal(|ui| {
@@ -202,8 +310,10 @@ impl App {
                         .filter(|v| filter.is_empty() || v.id.to_lowercase().contains(&filter))
                         .map(|v| v.id.as_str())
                         .collect();
+                    // the grid sits a step into the card: a darker well on the dark look, a tinted one on the light
+                    ui.add_space(2.0);
                     egui::Frame::new()
-                        .fill(c_field())
+                        .fill(if is_dark() { c_bg() } else { c_surface() })
                         .stroke(Stroke::new(1.0, c_border()))
                         .corner_radius(CornerRadius::same(R_CONTROL))
                         .inner_margin(egui::Margin::same(6))
@@ -220,7 +330,7 @@ impl App {
                             let (cols, cell) = grid_columns(ui.available_width() - 12.0, 84.0, 4.0);
                             ScrollArea::vertical()
                                 .id_salt("versions")
-                                .max_height(176.0)
+                                .max_height(144.0)
                                 .auto_shrink([false, true])
                                 .show_rows(ui, 28.0, versions.len().div_ceil(cols), |ui, range| {
                                     for r in range {
@@ -248,20 +358,29 @@ impl App {
                     skeleton_rows(ui, 4, 36.0);
                 }
             }
+            });
 
             // loader
-            ui.add_space(16.0);
-            section(ui, "Mod loader");
-            let labels: Vec<&str> = Loader::ALL.iter().map(|l| l.label()).collect();
-            let current = Loader::ALL.iter().position(|l| *l == self.create.loader).unwrap_or(0);
-            if let Some(i) = segmented(ui, &labels, current) {
-                if Loader::ALL[i] != self.create.loader {
-                    self.create.loader = Loader::ALL[i];
-                    changed_version = true;
-                }
+            ui.add_space(6.0);
+            card(ui, |ui| {
+            step_head(ui, 3, "Mod loader", None);
+            // the loaders as cards in a row that ends flush with the card's edge, wrapping in a narrow window
+            let gap = 10.0;
+            let (cols, w) = grid_columns(ui.available_width(), LOADER_CARD_W, gap);
+            for row in Loader::ALL.chunks(cols) {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = gap;
+                    for l in row {
+                        let on = *l == self.create.loader;
+                        if loader_card(ui, *l, on, w).clicked() && !on {
+                            self.create.loader = *l;
+                            changed_version = true;
+                        }
+                    }
+                });
             }
             if self.create.loader != Loader::Vanilla {
-                ui.add_space(4.0);
+                ui.add_space(8.0);
                 ui.horizontal(|ui| {
                     filter_label(ui, &format!("{} version", self.create.loader.label()));
                     if self.create.loading {
@@ -330,6 +449,7 @@ impl App {
                     });
                 }
             }
+            });
 
             ui.add_space(8.0);
         });
@@ -350,26 +470,29 @@ impl App {
         };
         ui.scope(|ui| {
             // the button sits under the form, not at the far edge of a wide window
-            ui.set_max_width(ui.available_width().min(FORM_W));
-            rule(ui);
-            ui.add_space(8.0);
-            super::discover::dialog_footer(
-                ui,
-                "create",
-                |ui| {
-                    if creating {
-                        spinner(ui);
-                        muted(ui, "Working on it, you can follow along in the sidebar");
-                    } else {
-                        small_muted(ui, summary);
-                    }
-                },
-                |ui| {
-                    if primary_enabled(ui, "Create instance", ready).on_disabled_hover_text(&why_not).clicked() {
-                        create = true;
-                    }
-                },
-            );
+            ui.set_max_width((ui.available_width() - 14.0).min(FORM_W));
+            ui.add_space(4.0);
+            // a bar of glass under the form: what is about to be made, and the button that makes it
+            card_frame().inner_margin(egui::Margin::symmetric(18, 12)).show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                super::discover::dialog_footer(
+                    ui,
+                    "create",
+                    |ui| {
+                        if creating {
+                            spinner(ui);
+                            muted(ui, "Working on it, you can follow along in the sidebar");
+                        } else {
+                            small_muted(ui, summary);
+                        }
+                    },
+                    |ui| {
+                        if primary_enabled(ui, "Create instance", ready).on_disabled_hover_text(&why_not).clicked() {
+                            create = true;
+                        }
+                    },
+                );
+            });
         });
         if changed_version {
             self.request_loader_versions();
