@@ -1,4 +1,5 @@
-//! Discover: search Modrinth and install into an instance.
+//! Discover: search Modrinth (or, with "All", Modrinth and CurseForge together, and Smithed for data packs) and
+//! install into an instance.
 
 use std::collections::HashSet;
 use std::time::{Duration, Instant, SystemTime};
@@ -26,13 +27,21 @@ pub struct DiscoverState {
     pub installing: HashSet<String>,
     offset_pending: u32,
     /// A search has been started since the page first opened.
-    searched: bool,
+    pub(super) searched: bool,
     /// When the search field was last typed in and the search it wants has not started yet (see [`live_search`]).
     edited: Option<Instant>,
     /// The Modrinth projects in the target instance, with the instance file's time they were read at.
     installed: Option<(String, Option<SystemTime>, HashSet<String>)>,
     /// Counts the result lists that replaced the one before, so a new search starts at the top of the list.
     pub list_gen: u64,
+    /// "Both": CurseForge is searched too, and the two sites' results are shown as one list.
+    pub both: bool,
+    /// CurseForge's part of a search on every site.
+    pub cf: super::discover_both::CfSide,
+    /// Smithed's part of a search for data packs on every site.
+    pub sm: super::discover_both::SmSide,
+    /// Every site's results as one list (see [`super::discover_both::merge`]).
+    pub merged: Vec<super::discover_both::Entry>,
 }
 
 impl Default for DiscoverState {
@@ -53,6 +62,10 @@ impl Default for DiscoverState {
             edited: None,
             installed: None,
             list_gen: 0,
+            both: false,
+            cf: Default::default(),
+            sm: Default::default(),
+            merged: Vec::new(),
         }
     }
 }
@@ -63,11 +76,105 @@ fn content_kind(kind: Kind) -> Option<ContentKind> {
         Kind::Mod => Some(ContentKind::Mods),
         Kind::ResourcePack => Some(ContentKind::ResourcePacks),
         Kind::Shader => Some(ContentKind::Shaders),
-        Kind::Modpack => None,
+        Kind::Modpack | Kind::DataPack => None,
+    }
+}
+
+/// The worlds of an instance that already have a data pack, known by its Modrinth project or its file name.
+pub(super) fn worlds_with(
+    inst: &crate::instances::Instance,
+    modrinth_id: Option<&str>,
+    file: Option<&str>,
+) -> HashSet<String> {
+    inst.mod_records()
+        .iter()
+        .filter(|r| r.kind == "datapack")
+        .filter(|r| {
+            modrinth_id.is_some_and(|id| r.modrinth_project_id().is_some_and(|p| p.eq_ignore_ascii_case(id)))
+                || file.is_some_and(|f| r.file == f)
+        })
+        .filter_map(|r| r.path.as_deref()?.strip_prefix("saves/")?.strip_suffix("/datapacks").map(str::to_string))
+        .collect()
+}
+
+/// The worlds of an instance as menu entries, every world at once first. A world that has the pack already is
+/// ticked. Gives the worlds chosen.
+fn world_entries(ui: &mut Ui, inst: &crate::instances::Instance, have: &HashSet<String>) -> Option<Vec<String>> {
+    let worlds = crate::content::service::worlds(&inst.root);
+    if worlds.is_empty() {
+        ui.label(RichText::new("No worlds yet. Play once to make one.").color(c_muted()));
+        return None;
+    }
+    let mut chosen = None;
+    if worlds.len() > 1 && ui.button(format!("All {} worlds", worlds.len())).clicked() {
+        chosen = Some(worlds.clone());
+        ui.close();
+    }
+    for w in &worlds {
+        let r = if have.contains(w) {
+            ui.button(format!("{w}  \u{2713}"))
+                .on_hover_text("Has it already. Adding it again puts in the newest version.")
+        } else {
+            ui.button(w)
+        };
+        if r.clicked() {
+            chosen = Some(vec![w.clone()]);
+            ui.close();
+        }
+    }
+    chosen
+}
+
+/// The Install button of a data pack, which goes into worlds: a menu of the chosen instance's worlds, or of the
+/// instances and then their worlds. `have` says which worlds of an instance have it already. Gives the instance
+/// folder and the worlds.
+pub(super) fn data_pack_button(
+    ui: &mut Ui,
+    instances: &[crate::instances::Instance],
+    target: Option<&str>,
+    have: &dyn Fn(&crate::instances::Instance) -> HashSet<String>,
+) -> Option<(String, Vec<String>)> {
+    let r = secondary(ui, "Install");
+    let mut chosen = None;
+    egui::Popup::menu(&r).show(|ui| {
+        ui.set_min_width(180.0);
+        match target.and_then(|t| instances.iter().find(|i| i.folder == t)) {
+            Some(inst) => {
+                small_muted(ui, "Add to world");
+                chosen = world_entries(ui, inst, &have(inst)).map(|w| (inst.folder.clone(), w));
+            }
+            None => {
+                if instances.is_empty() {
+                    ui.label("Create an instance first");
+                }
+                for inst in instances {
+                    ui.menu_button(instance_choice(inst), |ui| {
+                        if let Some(w) = world_entries(ui, inst, &have(inst)) {
+                            chosen = Some((inst.folder.clone(), w));
+                        }
+                    });
+                }
+            }
+        }
+    });
+    chosen
+}
+
+/// "New World", "New World and Survival", "3 worlds".
+pub(super) fn worlds_text(worlds: &[String]) -> String {
+    match worlds {
+        [one] => one.clone(),
+        [a, b] => format!("{a} and {b}"),
+        _ => format!("{} worlds", worlds.len()),
     }
 }
 
 impl DiscoverState {
+    /// The Modrinth projects in the target instance, once read.
+    pub(super) fn installed_ids(&self) -> Option<&HashSet<String>> {
+        self.installed.as_ref().map(|(_, _, ids)| ids)
+    }
+
     pub fn arrived(&mut self, seq: u64, result: Result<(Vec<Hit>, u64), String>) {
         if seq != self.seq {
             return;
@@ -93,6 +200,7 @@ impl DiscoverState {
                 }
             }
         }
+        self.remerge();
     }
 }
 
@@ -238,6 +346,12 @@ pub(super) fn tag_parts<'a>(names: impl Iterator<Item = &'a str>, max: usize) ->
     let loaders = v.iter().filter(|n| is_loader(n)).count();
     v.truncate(loaders + max);
     v.into_iter().map(|n| (loader_display(n), tag_color(n))).collect()
+}
+
+/// The tags of a data pack: no loaders (a project that is a mod as well lists them, but the data pack needs none),
+/// and not "datapack" itself.
+pub(super) fn data_pack_tags<'a>(names: impl Iterator<Item = &'a str>, max: usize) -> Vec<(String, Color32)> {
+    tag_parts(names.filter(|n| !is_loader(n) && !n.eq_ignore_ascii_case("datapack")), max)
 }
 
 /// A loader's name as it is written everywhere else ("neoforge" is "NeoForge"); other words stay as they are.
@@ -463,7 +577,7 @@ impl App {
         // what the target instance runs: its Minecraft version, and every loader whose mods it can use
         let kind = self.discover.kind;
         let (mc, loaders) = match (self.discover.target.as_ref().and_then(|f| self.instance(f)), kind) {
-            (Some(inst), Kind::Mod | Kind::ResourcePack | Kind::Shader) => {
+            (Some(inst), Kind::Mod | Kind::ResourcePack | Kind::Shader | Kind::DataPack) => {
                 let loaders = if kind == Kind::Mod {
                     crate::mods::InstanceTarget::of(inst, &crate::mods::RemoteConfig::load(&self.dirs))
                         .accepted_loaders()
@@ -476,6 +590,16 @@ impl App {
         };
         let d = &mut self.discover;
         d.searched = true;
+        if d.both {
+            // with every site, "more" asks each only for what it still has
+            let mr_more = reset || (d.hits.len() as u64) < d.total;
+            self.both_search_cf(reset);
+            self.both_search_sm(reset);
+            if !mr_more {
+                return;
+            }
+        }
+        let d = &mut self.discover;
         // a new search leaves the old rows in place until the new ones arrive; more results go after the ones shown
         d.offset_pending = if reset { 0 } else { d.hits.len() as u32 };
         d.seq += 1;
@@ -490,11 +614,15 @@ impl App {
         });
     }
 
-    fn install_hit(&mut self, hit: &Hit, folder: Option<String>) {
+    pub(super) fn install_hit(&mut self, hit: &Hit, folder: Option<String>) {
         let id = hit.project_id.clone();
         let title = hit.title.clone();
         // the row's own kind: while another tab's search loads, the rows of the last one are still on screen
         let kind = if hit.project_type.is_empty() { self.discover.kind } else { Kind::from_api(&hit.project_type) };
+        if kind == Kind::DataPack {
+            // data packs go into worlds, which the Install menu asks for (see install_data_pack_hit)
+            return;
+        }
         let Some(content) = content_kind(kind) else {
             self.discover.installing.insert(id.clone());
             let dirs = self.dirs.clone();
@@ -533,6 +661,27 @@ impl App {
         self.mods_cache = None;
     }
 
+    /// Adds a Modrinth data pack to worlds of an instance.
+    pub(super) fn install_data_pack_hit(&mut self, hit: &Hit, folder: &str, worlds: Vec<String>) {
+        let Some(inst) = self.instance(folder) else {
+            self.toast_err("That instance isn't there any more. Choose another one.");
+            return;
+        };
+        let (id, title, root) = (hit.project_id.clone(), hit.title.clone(), inst.root.clone());
+        self.discover.installing.insert(id.clone());
+        let (dirs, settings, lock) = (self.dirs.clone(), self.settings.clone(), super::mods::instance_lock(&root));
+        self.start_task(format!("Installing {title}"), move |p, _| async move {
+            let _turn = lock.lock().await;
+            let inst = crate::instances::load_one(&root)
+                .ok_or_else(|| anyhow::anyhow!("that instance can't be read any more"))?;
+            let options = crate::content::ServiceOptions::from_settings(&settings);
+            let mut service = crate::content::ContentService::new(&dirs, inst, options);
+            service.install_data_pack(&id, &worlds, &p).await?;
+            Ok(format!("Added {title} to {}", worlds_text(&worlds)))
+        });
+        self.mods_cache = None;
+    }
+
     /// Discover lists Modrinth's and CurseForge's modpacks; the other sources have pages of their own.
     pub(super) fn other_modpack_sources(&mut self, ui: &mut Ui) {
         ui.horizontal_wrapped(|ui| {
@@ -549,7 +698,7 @@ impl App {
 
     /// Keeps the list of Modrinth projects in the target instance current, reading it again only when the
     /// instance's file changes.
-    fn discover_refresh_installed(&mut self) {
+    pub(super) fn discover_refresh_installed(&mut self) {
         let Some(inst) = self.discover.target.as_ref().and_then(|f| self.instance(f)) else {
             self.discover.installed = None;
             return;
@@ -646,13 +795,17 @@ impl App {
         // under the filters: what the list is limited to, and how many results there are
         let kind = self.discover.kind;
         let limited_to = self.discover.target.as_ref().and_then(|f| self.instance(f)).map(|inst| {
+            // a data pack runs without a mod loader
+            let loader = inst.loader().filter(|_| kind != Kind::DataPack);
             format!(
                 "Showing what works with Minecraft {}{}",
                 inst.mc_version(),
-                inst.loader().map(|(k, _)| format!(" and {k}")).unwrap_or_default()
+                loader.map(|(k, _)| format!(" and {k}")).unwrap_or_default()
             )
         });
-        let count = (self.discover.total > 0).then(|| format!("{} results", thousands(self.discover.total)));
+        let d = &self.discover;
+        let total = d.total + if d.both { d.cf.total } else { 0 } + if d.with_smithed() { d.sm.total } else { 0 };
+        let count = (total > 0).then(|| format!("{} results", thousands(total)));
         let mut show_everything = false;
         if kind == Kind::Modpack || limited_to.is_some() || count.is_some() {
             context_line(ui, count, limited_to.is_some() && kind != Kind::Modpack, |ui| {
@@ -672,6 +825,10 @@ impl App {
         }
         if search {
             self.discover_search(true);
+        }
+        if self.discover.both {
+            self.discover_both_list(ui);
+            return;
         }
         // a new search over rows that are already shown: a thin bar says it is on its way
         if self.discover.loading && self.discover.offset_pending == 0 && !self.discover.hits.is_empty() {
@@ -710,11 +867,13 @@ impl App {
         let hits = std::mem::take(&mut self.discover.hits);
         let target = self.discover.target.clone();
         let mut install: Option<(Hit, Option<String>)> = None;
+        let mut install_data: Option<(Hit, String, Vec<String>)> = None;
         let mut more = false;
         ScrollArea::vertical().id_salt(("discover-list", self.discover.list_gen)).auto_shrink(false).show(ui, |ui| {
             for hit in &hits {
                 let key = format!("mr:{}", hit.project_id);
                 let is_installed = kind != Kind::Modpack
+                    && kind != Kind::DataPack
                     && installed.as_ref().is_some_and(|(_, _, ids)| ids.contains(&hit.project_id));
                 let busy = self.discover.installing.contains(&hit.project_id)
                     && self.tasks.iter().any(|t| t.label == format!("Installing {}", hit.title));
@@ -738,7 +897,12 @@ impl App {
                             if !wide {
                                 parts.push((format!("{} downloads", human_count(hit.downloads)), c_faint()));
                             }
-                            parts.extend(tag_parts(hit.categories.iter().map(String::as_str), 3));
+                            let tags = hit.categories.iter().map(String::as_str);
+                            parts.extend(if kind == Kind::DataPack {
+                                data_pack_tags(tags, 3)
+                            } else {
+                                tag_parts(tags, 3)
+                            });
                             meta_line(ui, &parts);
                         });
                         row_actions(ui, &key, |ui| {
@@ -747,7 +911,16 @@ impl App {
                                     spinner(ui);
                                     return;
                                 }
-                                if is_installed {
+                                if kind == Kind::DataPack {
+                                    let have = |inst: &crate::instances::Instance| {
+                                        worlds_with(inst, Some(&hit.project_id), None)
+                                    };
+                                    if let Some((folder, worlds)) =
+                                        data_pack_button(ui, &self.instances, target.as_deref(), &have)
+                                    {
+                                        install_data = Some((hit.clone(), folder, worlds));
+                                    }
+                                } else if is_installed {
                                     installed_mark(ui);
                                 } else if kind == Kind::Modpack {
                                     if secondary(ui, "Install").clicked() {
@@ -828,6 +1001,9 @@ impl App {
         }
         if let Some((hit, folder)) = install {
             self.install_hit(&hit, folder);
+        }
+        if let Some((hit, folder, worlds)) = install_data {
+            self.install_data_pack_hit(&hit, &folder, worlds);
         }
         if more {
             self.discover_search(false);

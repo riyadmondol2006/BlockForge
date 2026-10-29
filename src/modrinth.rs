@@ -21,10 +21,11 @@ pub enum Kind {
     Modpack,
     ResourcePack,
     Shader,
+    DataPack,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 4] = [Kind::Mod, Kind::Modpack, Kind::ResourcePack, Kind::Shader];
+    pub const ALL: [Kind; 5] = [Kind::Mod, Kind::Modpack, Kind::ResourcePack, Kind::Shader, Kind::DataPack];
 
     pub fn api_name(self) -> &'static str {
         match self {
@@ -32,6 +33,7 @@ impl Kind {
             Kind::Modpack => "modpack",
             Kind::ResourcePack => "resourcepack",
             Kind::Shader => "shader",
+            Kind::DataPack => "datapack",
         }
     }
 
@@ -41,6 +43,7 @@ impl Kind {
             Kind::Modpack => "Modpacks",
             Kind::ResourcePack => "Resource packs",
             Kind::Shader => "Shaders",
+            Kind::DataPack => "Data packs",
         }
     }
 
@@ -51,6 +54,7 @@ impl Kind {
             Kind::Modpack => "mods",
             Kind::ResourcePack => "resourcepacks",
             Kind::Shader => "shaderpacks",
+            Kind::DataPack => "datapacks",
         }
     }
 
@@ -59,6 +63,7 @@ impl Kind {
             "modpack" => Kind::Modpack,
             "resourcepack" => Kind::ResourcePack,
             "shader" => Kind::Shader,
+            "datapack" => Kind::DataPack,
             _ => Kind::Mod,
         }
     }
@@ -159,7 +164,13 @@ pub async fn search_for_loaders(
     if !r.status().is_success() {
         bail!("Modrinth search failed: HTTP {}", r.status());
     }
-    let answer: SearchAnswer = r.json().await?;
+    let mut answer: SearchAnswer = r.json().await?;
+    if kind == Kind::DataPack {
+        // Modrinth files a project that is both a mod and a data pack as a mod; here it was asked for as a data pack
+        for hit in &mut answer.hits {
+            hit.project_type = "datapack".into();
+        }
+    }
     Ok((answer.hits, answer.total_hits))
 }
 
@@ -221,6 +232,9 @@ pub async fn versions(project: &str, mc: Option<&str>, loader: Loader, kind: Kin
         if let Some(l) = loader.modrinth_name() {
             req = req.query(&[("loaders", serde_json::to_string(&[l])?)]);
         }
+    } else if kind == Kind::DataPack {
+        // a project that is also a mod has jars too; only its data pack zips are wanted
+        req = req.query(&[("loaders", serde_json::to_string(&["datapack"])?)]);
     }
     let r = req.send().await?;
     if !r.status().is_success() {

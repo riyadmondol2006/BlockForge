@@ -15,9 +15,11 @@ mod craft_view;
 mod create;
 mod curseforge;
 mod discover;
+mod discover_both;
 mod export;
 mod fonts;
 mod ftb;
+mod github_add;
 mod icons;
 mod import;
 mod instance_icon;
@@ -127,6 +129,23 @@ pub enum Msg {
     Search {
         seq: u64,
         result: Result<(Vec<Hit>, u64), String>,
+    },
+    /// CurseForge's half of a search on both sites.
+    SearchCf {
+        seq: u64,
+        reset: bool,
+        result: Result<crate::curseforge::api::SearchPage, String>,
+    },
+    /// Smithed's part of a search for data packs on every site.
+    SearchSmithed {
+        seq: u64,
+        reset: bool,
+        result: Result<(Vec<crate::smithed::Pack>, u64), String>,
+    },
+    /// A GitHub repository's releases, for "Add from GitHub".
+    GithubReleases {
+        seq: u64,
+        result: Result<Vec<crate::github::Release>, String>,
     },
     Icon {
         url: String,
@@ -314,6 +333,7 @@ pub struct App {
     /// only be noise. Turned off once the player switches the tray on in Settings, where an answer is expected.
     tray_quiet: bool,
     upd: updates::UpdateUi,
+    gh: github_add::GhState,
     last_window: Option<(crate::config::Size, crate::config::Pos)>,
     last_window_save: Instant,
     /// When settings changed by [`App::save_settings_soon`] are to be written.
@@ -467,6 +487,7 @@ impl App {
             window_visible: true,
             tray_quiet: true,
             upd: updates::UpdateUi::default(),
+            gh: Default::default(),
             last_window: None,
             last_window_save: Instant::now(),
             settings_save_due: None,
@@ -978,6 +999,9 @@ impl App {
             },
             Msg::LoaderVersions { loader, mc, result } => self.create.loader_versions_arrived(loader, &mc, result),
             Msg::Search { seq, result } => self.discover.arrived(seq, result),
+            Msg::SearchCf { seq, reset, result } => self.discover.cf_arrived(seq, reset, result),
+            Msg::SearchSmithed { seq, reset, result } => self.discover.sm_arrived(seq, reset, result),
+            Msg::GithubReleases { seq, result } => self.gh_arrived(seq, result),
             Msg::Icon { url, bytes } => match bytes {
                 Some(b) => {
                     self.ctx.include_bytes(icon_uri(&url), b);
@@ -1946,6 +1970,7 @@ impl eframe::App for App {
             });
         // below the other windows: the first start's questions come first
         self.update_dialog(&ctx);
+        self.gh_dialog(&ctx);
         self.import_modal(&ctx);
         self.export_modal(&ctx);
         self.toasts_ui(&ctx);
@@ -1994,7 +2019,7 @@ struct Shot {
     waiting: Arc<std::sync::atomic::AtomicBool>,
 }
 
-const SHOT_PAGES: [&str; 34] = [
+const SHOT_PAGES: [&str; 37] = [
     "home",
     "library",
     "instance",
@@ -2004,6 +2029,9 @@ const SHOT_PAGES: [&str; 34] = [
     "instance-settings-java",
     "instance-settings-cmd",
     "discover",
+    "discover-both",
+    "discover-datapacks",
+    "github-add",
     "create",
     "accounts",
     "settings",
@@ -2144,6 +2172,29 @@ impl App {
                     self.discover.query = "sodium".into();
                     self.discover_search(true);
                 }
+                "discover-both" => {
+                    self.page = Page::Discover;
+                    self.cf.active = false;
+                    self.discover.both = true;
+                    self.discover.query = "sodium".into();
+                    self.discover_search(true);
+                }
+                "discover-datapacks" => {
+                    self.page = Page::Discover;
+                    self.cf.active = false;
+                    self.discover.both = true;
+                    self.discover.kind = crate::modrinth::Kind::DataPack;
+                    self.discover.query = "terralith".into();
+                    self.discover_search(true);
+                }
+                "github-add" => {
+                    self.page = Page::Discover;
+                    self.cf.active = false;
+                    self.discover.target = self.instances.first().map(|i| i.folder.clone());
+                    self.gh_open();
+                    self.gh.input = "https://github.com/IrisShaders/Iris".into();
+                    self.gh_find();
+                }
                 "create" => self.page = Page::Create,
                 "create-fabric" => {
                     self.page = Page::Create;
@@ -2243,7 +2294,10 @@ impl App {
             "offline-enter" if frame == 10 => press(egui::Key::Enter),
             _ => {}
         }
-        let wait = if matches!(
+        // both sites at once: the slower of the two decides
+        let wait = if matches!(name.trim_end_matches("-light"), "discover-both" | "discover-datapacks" | "github-add") {
+            400
+        } else if matches!(
             name.trim_end_matches("-light"),
             "discover" | "create-fabric" | "instance-mods" | "mods" | "packs" | "ftb" | "about" | "loader"
         ) || name.trim_end_matches("-light").starts_with("craft")

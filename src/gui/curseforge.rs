@@ -183,7 +183,7 @@ enum CardAct {
 }
 
 impl App {
-    fn cf_settings(&self) -> CfSettings {
+    pub(super) fn cf_settings(&self) -> CfSettings {
         CfSettings::from_settings(&self.settings)
     }
 
@@ -197,15 +197,36 @@ impl App {
         self.cf.active = self.cf_settings().prefer_curseforge;
     }
 
-    /// The "Modrinth | CurseForge" switch at the right end of Discover's title. Returns `true` when it was changed.
+    /// Whether the launcher's configuration allows CurseForge, read once until the platform is chosen again.
+    pub(super) fn cf_enabled(&mut self) -> bool {
+        *self.cf.enabled.get_or_insert_with(|| curseforge::platform_enabled(&self.dirs, "modsEnabled"))
+    }
+
+    /// The "Modrinth | CurseForge | All" switch at the right end of Discover's title, with "Add from GitHub" before
+    /// it. "All" searches the sites together on Modrinth's page (see `discover_both`). Returns `true` when it was
+    /// changed.
     pub(super) fn cf_platform_switch(&mut self, ui: &mut Ui) -> bool {
         self.cf_init();
-        match segmented(ui, &["Modrinth", "CurseForge"], usize::from(self.cf.active)) {
-            Some(i) if (i == 1) != self.cf.active => {
+        let current = if self.discover.both { 2 } else { usize::from(self.cf.active) };
+        let picked = segmented(ui, &["Modrinth", "CurseForge", "All"], current);
+        if ghost(ui, "Add from GitHub")
+            .on_hover_text("For a mod that is only on GitHub: paste the link to its page")
+            .clicked()
+        {
+            self.gh_open();
+        }
+        match picked {
+            Some(i) if i != current => {
                 self.cf.active = i == 1;
-                if self.cf.active {
+                self.discover.both = i == 2;
+                if i != 0 {
                     // the launcher's configuration may have changed since it was last read
                     self.cf.enabled = None;
+                }
+                if self.discover.both {
+                    // a fresh search on every site; Modrinth's rows stay until the new ones arrive
+                    self.discover.searched = false;
+                    self.discover.remerge();
                 }
                 true
             }

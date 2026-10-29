@@ -43,8 +43,9 @@
   is optional.
 - **Every modpack source in one place.** ATLauncher, CurseForge, Modrinth, FTB and Technic packs, or any Minecraft version
   with Fabric, Quilt, Forge or NeoForge.
-- **Mods, resource packs and shaders** with one-click installs from Modrinth and CurseForge, automatic dependencies,
-  update checks, switch-off and a safety scan before the game starts.
+- **Mods, resource packs, shaders and data packs** with one-click installs from Modrinth and CurseForge (searched one
+  at a time or together), data packs from Smithed too, and mods that are only on GitHub from a link. Automatic
+  dependencies, update checks, switch-off and a safety scan before the game starts.
 - **Bring your instances.** Imports from Prism, MultiMC, CurseForge, GDLauncher and ATLauncher, and exports to Modrinth,
   CurseForge and MultiMC formats.
 - **Set up for your PC automatically.** Game memory is picked from your RAM, free memory and cores and from the game

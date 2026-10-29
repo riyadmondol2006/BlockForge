@@ -38,6 +38,7 @@ pub mod diagnostics;
 pub mod disk;
 pub mod export;
 pub mod ftb;
+pub mod github;
 pub mod gpu;
 pub mod http;
 pub mod i18n;
@@ -69,6 +70,7 @@ pub mod runtime;
 pub mod servers;
 pub mod skins;
 mod skins_data;
+pub mod smithed;
 pub mod snapshots;
 pub mod svcsettings;
 #[cfg(test)]

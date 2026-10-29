@@ -831,9 +831,14 @@ impl ContentService {
             .await
             .map_err(|e| e.context("Couldn't reach Modrinth. Check your connection and try again."))?;
         let mc = self.minecraft_version();
-        let chosen = version_picker::pick(&versions, &[], Some(&mc), &[]).cloned().ok_or_else(|| {
-            anyhow::Error::from(NoCompatibleVersion(format!("{} has no version for Minecraft {mc}", project.title)))
-        })?;
+        // a project that is also a mod has jars too: its data pack zips come first
+        let data_pack = ["datapack".to_string()];
+        let chosen = version_picker::pick(&versions, &data_pack, Some(&mc), &[])
+            .or_else(|| version_picker::pick(&versions, &[], Some(&mc), &[]))
+            .cloned()
+            .ok_or_else(|| {
+                anyhow::Error::from(NoCompatibleVersion(format!("{} has no version for Minecraft {mc}", project.title)))
+            })?;
         progress.stage(project.title.clone());
         self.download(&project, &chosen, ContentKind::ResourcePacks, Placement::DataPacks(worlds.to_vec()), progress)
             .await?;

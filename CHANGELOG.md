@@ -3,6 +3,25 @@
 The section for a version is used as the text of its release on GitHub. Older releases (the Java versions, up to
 3.4.42.x) are on the [releases page](https://github.com/riyadmondol2006/BlockForge/releases).
 
+## 4.8.4
+
+Search every site at once, data packs in Discover, and mods that are only on GitHub.
+
+### What is new
+
+- **All sites together.** Discover's switch is now **Modrinth | CurseForge | All**. **All** searches Modrinth and
+  CurseForge at the same time and shows one list. A project that is on both sites is one row, with the downloads of
+  both. Its **Install** button uses Modrinth, and its ⋯ menu has **Install from CurseForge instead**. The search
+  words, the instance (its Minecraft version and loader) and the order apply to both sites. When one site can't be
+  reached, the other's results are still shown, with a note and **Try again**.
+- **Data packs.** Discover has a **Data packs** tab. **Install** asks which world to add the pack to (or all of them),
+  because a data pack lives in a world. A world that has the pack already is ticked.
+- **Smithed.** With **All**, the Data packs tab searches [Smithed](https://smithed.net) too, the main site for data
+  packs. A pack from Smithed comes with the packs it needs inside it.
+- **Add from GitHub.** For a mod that is on neither Modrinth nor CurseForge, paste the link to its GitHub page. The
+  release made for your instance's Minecraft version and the file for its loader are chosen for you. The file is
+  then added the way a file dropped on the Mods tab is.
+
 ## 4.8.3
 
 A lighter launcher while something is going on: far less processor time while a game loads or a job runs.
