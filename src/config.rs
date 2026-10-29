@@ -320,7 +320,7 @@ pub fn auto_memory_mb(mod_count: usize, total_mb: u64, free_mb: u64) -> u32 {
         return ideal.min(4096) as u32;
     }
     // never more than 70% of the memory the computer has, nor more than what is free right now plus a margin
-    let ceiling = (total_mb * 7 / 10).min(free_mb.saturating_add(1024).max(2048));
+    let ceiling = (total_mb / 10).saturating_mul(7).min(free_mb.saturating_add(1024).max(2048));
     ideal.min(ceiling).max(1024) as u32
 }
 

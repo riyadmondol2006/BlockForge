@@ -330,17 +330,12 @@ pub fn tab_marked(ui: &mut Ui, text: &str, selected: bool, mark: Option<bool>) -
         ui.painter().circle_filled(egui::pos2(text_right + DOT_ROOM / 2.0 + 1.0, rect.center().y - 5.0), 3.0, c_warn());
     }
     if selected {
-        // the bar itself is drawn by the tab bar, which slides it from tab to tab
+        // the bar itself is drawn by the tab bar, which slides it from tab to tab. The text is measured before the
+        // data is locked: laying text out needs that lock too
         let key = ui.scope_id().with("tab-selected");
-        ui.data_mut(|d| {
-            d.insert_temp(
-                key,
-                egui::Rect::from_min_max(
-                    egui::pos2(rect.left(), rect.top()),
-                    egui::pos2(rect.left() + galley_w(text, ui), rect.bottom()),
-                ),
-            )
-        });
+        let underline =
+            egui::Rect::from_min_max(rect.left_top(), egui::pos2(rect.left() + galley_w(text, ui), rect.bottom()));
+        ui.data_mut(|d| d.insert_temp(key, underline));
     }
     focus_ring(ui, &resp, rect.expand2(vec2(4.0, -2.0)), 6);
     resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Tab, true, selected, text));

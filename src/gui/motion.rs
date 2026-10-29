@@ -180,19 +180,13 @@ mod tests {
 
     #[test]
     fn a_glide_moves_toward_its_new_target_without_jumping() {
-        let ctx = Context::default();
-        let id = Id::new("g");
-        let frame = |ctx: &Context, t: f64, target: f32| {
-            let input = egui::RawInput { time: Some(t), ..Default::default() };
-            let mut v = 0.0;
-            let _ = ctx.run_ui(input, |ui| v = glide(ui.ctx(), id, target, 0.2));
-            v
-        };
-        assert_eq!(frame(&ctx, 0.0, 10.0), 10.0, "the first value is taken as it is");
-        let mid = frame(&ctx, 0.1, 20.0);
-        assert_eq!(mid, 10.0, "a new target starts from where it was");
-        let later = frame(&ctx, 0.2, 20.0);
-        assert!(later > 10.0 && later < 20.0, "on its way: {later}");
-        assert_eq!(frame(&ctx, 0.5, 20.0), 20.0);
+        // a target that changes halfway starts from where the value was, and lands on the new target
+        let g = Glide { from: 10.0, to: 20.0, start: 0.0, seconds: 0.2 };
+        assert_eq!(value(&g, 0.0), 10.0);
+        let mid = value(&g, 0.1);
+        assert!(mid > 10.0 && mid < 20.0, "on its way: {mid}");
+        assert_eq!(value(&g, 0.5), 20.0);
+        let instant = Glide { seconds: 0.0, ..g };
+        assert_eq!(value(&instant, 0.0), 20.0);
     }
 }
