@@ -562,12 +562,17 @@ public final class SelfTest {
         check("agent: ... and a new one is written", r3b.code == 0 && r3b.out.contains("wrote 400"), r3b.out);
 
         // 2b. the game's own loader defines the listed classes too (a list from a start that ran differently): the
-        // helper's copies were for nothing, and the list is removed
-        Result rd = runGame(agent, gameJar, opts.replace("key=k1", "key=k2"), "dupes", rec);
-        if (!(rd.code == 0 && rd.out.contains("belong to another class loader") && rd.out.contains("fake game: list removed"))) {
-            // a busy machine can end the fake game before the helper looked at the classes: one more try
-            rd = runGame(agent, gameJar, opts.replace("key=k1", "key=k2"), "dupes", rec);
+        // helper's copies were for nothing, and the list is removed. The helper looks at the classes when the list's
+        // own start had written it, and the fake game makes its copies only after waiting for the helper's threads (up
+        // to 10 seconds when it never sees them run); a slow machine could have the helper look first, find nothing
+        // and keep the list while the game waited for it to go. The list says it was written 20 seconds in, so the
+        // helper looks after the copies are made however slow the machine is.
+        String fp2 = fingerprintIn(list);
+        Boost.ListFile before = Boost.read(list, fp2, why);
+        if (before != null) {
+            Boost.write(list, fp2, 20000, before.names);
         }
+        Result rd = runGame(agent, gameJar, opts.replace("key=k1", "key=k2"), "dupes", rec);
         check("agent: a list whose classes another loader defines is removed", rd.code == 0
                 && rd.out.contains("belong to another class loader") && rd.out.contains("fake game: list removed"),
                 rd.out);
