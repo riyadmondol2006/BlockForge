@@ -208,12 +208,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-22.04, windows-latest, macos-15]
+        os: [ubuntu-22.04, windows-latest]
         java: [8, 17, 21, 25]
     runs-on: ${{ matrix.os }}
-    # the checks take a few minutes, but the wait for a free macOS machine counts too, and when GitHub is short of
-    # them that wait alone outran a 15 minute limit and held the release back
-    timeout-minutes: 45
+    timeout-minutes: 15
     defaults:
       run:
         shell: bash
@@ -223,48 +221,48 @@ jobs:
         with:
           distribution: zulu
           java-version: ${{ matrix.java }}
-      - name: Self-tests of the committed jars (the ones the launcher embeds)
-        run: |
-          java -version
-          java -cp packaging/lite/blockforge-lite.jar com.blockforge.lite.SelfTest
-          if jar tf packaging/boost/blockforge-boost.jar | grep -q "com/blockforge/boost/SelfTest.class"; then
-            java -cp packaging/boost/blockforge-boost.jar com.blockforge.boost.SelfTest
-          fi
-      - name: Both start as agents of one Java, from a folder with a space in its name
-        run: |
-          mkdir -p "agent test"
-          java -javaagent:packaging/boost/blockforge-boost.jar=preload="agent test/x.classes" \
-            -javaagent:packaging/lite/blockforge-lite.jar=report="agent test/lite.txt" -version 2>&1 | tee agents.txt
-          if grep -q "problem\|Error occurred\|agent library failed" agents.txt; then
-            echo "::error::an agent reported a problem"; exit 1
-          fi
-      - name: The jars build from their sources and the builds pass the self-tests
-        # javac 8 can't compile for an older release; the jars are built with a newer JDK and run on Java 8
-        if: matrix.java != 8
-        run: |
-          # a failure says what went wrong in its annotation (the log of a finished job needs a sign-in to read)
-          step() {
-            if ! out="$("$@" 2>&1)"; then
-              echo "$out" | tail -40
-              echo "::error::$* failed: $(echo "$out" | tail -12 | tr '\n' '|' | cut -c1-1500)"
-              exit 1
-            fi
-            echo "$out" | tail -3
-          }
-          export OUT="$PWD/built"
-          step ./packaging/boost/build.sh
-          step ./packaging/lite/build.sh
-          for j in boost lite; do
-            if cmp -s "built/blockforge-$j.jar" "packaging/$j/blockforge-$j.jar"; then
-              echo "blockforge-$j.jar: the build is identical to the committed jar"
-            else
-              echo "::notice::blockforge-$j.jar built with Java ${{ matrix.java }} differs from the committed one"
-            fi
-          done
+      - name: Self-tests, both agents in one Java, and the jars built from their sources
+        run: .github/scripts/agents-check.sh ${{ matrix.java }}
+
+  agents-macos:
+    # the same checks on macOS, every Java one after another on one machine: GitHub is often short of macOS
+    # machines, and four jobs waiting for one each failed to get them and held the release back
+    name: Game helpers (macos-15, Java 8, 17, 21 and 25)
+    runs-on: macos-15
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: zulu
+          java-version: 8
+      - name: Java 8
+        run: .github/scripts/agents-check.sh 8
+      - uses: actions/setup-java@v6
+        with:
+          distribution: zulu
+          java-version: 17
+      - name: Java 17
+        run: .github/scripts/agents-check.sh 17
+      - uses: actions/setup-java@v6
+        with:
+          distribution: zulu
+          java-version: 21
+      - name: Java 21
+        run: .github/scripts/agents-check.sh 21
+      - uses: actions/setup-java@v6
+        with:
+          distribution: zulu
+          java-version: 25
+      - name: Java 25
+        run: .github/scripts/agents-check.sh 25
 
   release:
     name: Publish
-    needs: [checks, linux, windows, macos, agents]
+    needs: [checks, linux, windows, macos, agents, agents-macos]
     runs-on: ubuntu-22.04
     timeout-minutes: 15
     if: >-
