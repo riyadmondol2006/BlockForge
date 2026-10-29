@@ -1,7 +1,7 @@
 //! The Servers page: pack servers installed on this computer. Start one in a terminal window, open its folder,
 //! back it up or delete it.
 
-use egui::{Align, Layout, RichText, ScrollArea, Ui};
+use egui::{Align, Color32, CornerRadius, Layout, RichText, ScrollArea, Sense, Stroke, Ui, vec2};
 
 use super::App;
 use super::icons::Icon;
@@ -82,7 +82,7 @@ impl App {
                 ui.horizontal(|ui| {
                     heading(ui, "Servers");
                     if !self.svc.servers.is_empty() {
-                        ui.label(RichText::new(self.svc.servers.len().to_string()).color(c_faint()));
+                        count_pill(ui, &self.svc.servers.len().to_string());
                     }
                 });
                 muted(ui, "Servers installed from modpacks. They run in their own window.");
@@ -124,37 +124,48 @@ impl App {
             ui.set_max_width(width);
             if self.svc.servers.is_empty() {
                 card(ui, |ui| {
-                    ui.label(RichText::new("No servers yet").semibold());
-                    muted(ui, "Servers are installed from a modpack's server files. Ones the Java edition installed show up here too.");
+                    ui.add_space(18.0);
+                    ui.vertical_centered(|ui| {
+                        badge(ui, Icon::Server);
+                        ui.add_space(8.0);
+                        ui.label(RichText::new("No servers yet").size(FS_SECTION).semibold());
+                        ui.scope(|ui| {
+                            ui.set_max_width(420.0);
+                            ui.add(egui::Label::new(RichText::new("Servers are installed from a modpack's server files. Ones the Java edition installed show up here too.").color(c_muted())).wrap());
+                        });
+                    });
+                    ui.add_space(18.0);
                 });
             } else {
-                card(ui, |ui| {
-                    // the title of a row sits close to its line of facts
-                    ui.spacing_mut().item_spacing.y = 2.0;
-                    let mut rows = super::settings::Rows::new();
-                    for ((s, row), busy) in self.svc.servers.iter().zip(&self.svc.server_rows).zip(busy) {
-                        rows.gap(ui);
-                        let collapsed = account.as_ref().is_some_and(|a| servers::is_collapsed(a, s));
-                        // the buttons keep their room on the right (as wide as on the last frame)
-                        let id = ui.scope_id().with(("server-buttons", &s.name));
-                        let buttons_w = remembered_width(ui, id, 160.0);
-                        let mut used = buttons_w;
+                // a card of its own for every server, the gap between them a little less than between the page's blocks
+                ui.spacing_mut().item_spacing.y = 12.0;
+                for ((s, row), busy) in self.svc.servers.iter().zip(&self.svc.server_rows).zip(busy) {
+                    let collapsed = account.as_ref().is_some_and(|a| servers::is_collapsed(a, s));
+                    // the buttons keep their room on the right (as wide as on the last frame)
+                    let id = ui.scope_id().with(("server-buttons", &s.name));
+                    let buttons_w = remembered_width(ui, id, 160.0);
+                    let mut used = buttons_w;
+                    server_card(ui, collapsed, |ui| {
+                        // the title of a card sits close to its line of facts
+                        ui.spacing_mut().item_spacing.y = 2.0;
                         ui.horizontal(|ui| {
-                            ui.set_min_height(40.0);
-                            avatar(ui, &s.name, 32.0);
+                            ui.set_min_height(if collapsed { 32.0 } else { 44.0 });
+                            ui.spacing_mut().item_spacing.x = 12.0;
+                            avatar(ui, &s.name, if collapsed { 28.0 } else { 40.0 });
                             ui.vertical(|ui| {
                                 ui.set_max_width((ui.available_width() - buttons_w - 12.0).max(80.0));
                                 server_title(ui, s, row, collapsed);
                             });
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                ui.spacing_mut().item_spacing.x = 8.0;
                                 if collapsed {
-                                    // folding a row away is remembered per account, so it needs one
+                                    // folding a card away is remembered per account, so it needs one
                                     if secondary(ui, "Show").clicked() {
                                         act = Some(Act::Collapse(s.name.clone(), false));
                                     }
                                 } else if busy {
                                     ui.horizontal(|ui| {
-                                        spinner(ui);
+                                        spinner_sized(ui, 22.0);
                                         muted(ui, "Backing up or deleting\u{2026}");
                                     });
                                 } else {
@@ -190,9 +201,9 @@ impl App {
                                 used = ui.min_rect().width();
                             });
                         });
-                        remember_width(ui, id, used);
-                    }
-                });
+                    });
+                    remember_width(ui, id, used);
+                }
             }
             ui.add_space(16.0);
         });
@@ -298,23 +309,75 @@ impl App {
     }
 }
 
-/// A server's name, what is wrong with it if anything, and under it the line of facts (the folder in its tooltip).
+/// A server's name and how it stands (what is wrong with it if anything), and under it the line of facts and the
+/// folder (the whole of both in its tooltip).
 fn server_title(ui: &mut Ui, s: &Server, row: &ServerRow, collapsed: bool) {
-    ui.spacing_mut().item_spacing.y = 2.0;
-    // as tall as a tag, so the line of facts sits right under the name
-    ui.spacing_mut().interact_size.y = 20.0;
+    ui.spacing_mut().item_spacing.y = 3.0;
+    // as tall as a pill, so the line of facts sits right under the name
+    ui.spacing_mut().interact_size.y = 22.0;
     ui.horizontal_wrapped(|ui| {
-        ui.add(egui::Label::new(RichText::new(&s.name).semibold()).wrap());
-        // red and amber are for what is actually wrong; nothing else here has a colour
+        ui.spacing_mut().item_spacing.x = 8.0;
+        let name = RichText::new(&s.name).size(if collapsed { FS_BODY } else { FS_SECTION - 1.0 }).semibold();
+        ui.add(egui::Label::new(if collapsed { name.color(c_muted()) } else { name }).wrap());
+        // red and amber are for what is actually wrong; a server with nothing wrong gets the quiet brand colour
         if !s.is_patched_for_log4_shell {
-            tag(ui, "Not patched for Log4Shell", c_danger());
+            pill(ui, "Not patched for Log4Shell", c_danger());
         }
         if !row.has_script {
-            tag(ui, "No start script", c_warn());
+            pill(ui, "No start script", c_warn());
+        }
+        if s.is_patched_for_log4_shell && row.has_script && !collapsed {
+            pill(ui, "Ready", c_accent());
         }
     });
     if !collapsed {
+        let tip = format!("{}\n{}", row.details, row.folder);
         ui.add(egui::Label::new(RichText::new(&row.details).size(FS_META).color(c_muted())).truncate())
-            .on_hover_text(format!("{}\n{}", row.details, row.folder));
+            .on_hover_text(&tip);
+        ui.add(egui::Label::new(RichText::new(&row.folder).size(FS_META).color(c_faint())).truncate())
+            .on_hover_text(&tip);
     }
+}
+
+/// The glass card of one server. A hidden server's card is flatter and quieter, so the ones in use stand out.
+fn server_card(ui: &mut Ui, collapsed: bool, add: impl FnOnce(&mut Ui)) {
+    if !collapsed {
+        card(ui, add);
+        return;
+    }
+    egui::Frame::new()
+        .fill(c_surface())
+        .stroke(Stroke::new(1.0, c_border()))
+        .corner_radius(CornerRadius::same(R_CARD))
+        .inner_margin(egui::Margin::symmetric(18, 10))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            add(ui)
+        });
+}
+
+/// A status as a rounded pill: a dot and the words, in a pale tint of the colour.
+fn pill(ui: &mut Ui, text: &str, color: Color32) {
+    let galley = ui.painter().layout_no_wrap(text.to_string(), super::fonts::medium(FS_META), color);
+    let size = vec2(galley.size().x + 28.0, 22.0);
+    let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
+    let p = ui.painter();
+    p.rect_filled(rect, CornerRadius::same(11), color.gamma_multiply(0.14));
+    p.circle_filled(egui::pos2(rect.left() + 11.0, rect.center().y), 3.0, color);
+    p.galley(egui::pos2(rect.left() + 19.0, rect.center().y - galley.size().y / 2.0), galley, color);
+}
+
+/// The number of servers beside the title, in a neutral pill.
+fn count_pill(ui: &mut Ui, text: &str) {
+    let galley = ui.painter().layout_no_wrap(text.to_string(), super::fonts::medium(FS_META), c_muted());
+    let (rect, _) = ui.allocate_exact_size(vec2(galley.size().x.max(10.0) + 16.0, 22.0), Sense::hover());
+    ui.painter().rect(rect, CornerRadius::same(11), c_field(), Stroke::new(1.0, c_border()), egui::StrokeKind::Inside);
+    ui.painter().galley(rect.center() - galley.size() / 2.0, galley, c_muted());
+}
+
+/// A picture in a soft brand-tinted square, over an empty state.
+fn badge(ui: &mut Ui, icon: Icon) {
+    let (rect, _) = ui.allocate_exact_size(vec2(52.0, 52.0), Sense::hover());
+    ui.painter().rect_filled(rect, CornerRadius::same(R_CARD), c_accent_soft());
+    super::icons::paint(ui.painter(), icon, rect.center(), 22.0, c_accent());
 }

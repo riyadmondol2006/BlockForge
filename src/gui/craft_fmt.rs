@@ -3,8 +3,9 @@
 use super::fonts::TextExt;
 use egui::{CornerRadius, FontId, RichText, Sense, Stroke, Ui, vec2};
 
+use super::motion;
 use super::theme::*;
-use super::widgets::{NoticeKind, card, facts, small_muted};
+use super::widgets::{NoticeKind, card, facts};
 use crate::craft::MAX_QUANTITY;
 
 pub use crate::craft::saved::thousands;
@@ -93,25 +94,30 @@ pub fn panel<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
     })
 }
 
-/// The box of a tick box: outlined while off, filled with ink and a check mark when on.
-fn paint_check(ui: &Ui, boxed: egui::Rect, on: bool, enabled: bool, hovered: bool) {
+/// The box of a tick box: outlined while off, filled with the brand gradient and a check mark when on. The fill fades
+/// in and out, and the outline brightens under the pointer.
+fn paint_check(ui: &Ui, id: egui::Id, boxed: egui::Rect, on: bool, enabled: bool, hovered: bool) {
     let radius = CornerRadius::same(R_TAG);
-    if on {
-        let (fill, mark) = match (enabled, hovered) {
-            (false, _) => (c_active(), c_muted()),
-            (true, true) => (c_ink_hover(), c_on_ink()),
-            (true, false) => (c_ink(), c_on_ink()),
-        };
-        ui.painter().rect_filled(boxed, radius, fill);
-        let c = boxed.center();
-        let stroke = Stroke::new(1.8, mark);
-        ui.painter().line_segment([c + vec2(-4.0, 0.5), c + vec2(-1.0, 3.5)], stroke);
-        ui.painter().line_segment([c + vec2(-1.0, 3.5), c + vec2(4.5, -3.0)], stroke);
-    } else {
-        let fill = if hovered && enabled { c_hover() } else { c_field() };
-        let edge = if enabled { c_control() } else { c_border() };
-        ui.painter().rect(boxed, radius, fill, Stroke::new(1.0, edge), egui::StrokeKind::Inside);
+    let p = ui.painter();
+    let hot = motion::hover(ui, id, hovered && enabled);
+    let t = motion::toward(ui.ctx(), id.with("check-on"), on, motion::FAST);
+    let edge = if enabled { motion::mix(c_control(), c_accent(), hot * 0.8) } else { c_border() };
+    let fill = if enabled { motion::mix(c_field(), c_hover(), hot) } else { c_field() };
+    p.rect(boxed, radius, fill, Stroke::new(1.0, edge), egui::StrokeKind::Inside);
+    if t <= 0.0 {
+        return;
     }
+    let mark = if enabled {
+        motion::gradient_rect(p, boxed, R_TAG, c_accent().gamma_multiply(t), c_accent2().gamma_multiply(t));
+        c_on_accent()
+    } else {
+        p.rect_filled(boxed, radius, c_active().gamma_multiply(t));
+        c_muted()
+    };
+    let c = boxed.center();
+    let stroke = Stroke::new(1.8, mark.gamma_multiply(t));
+    p.line_segment([c + vec2(-4.0, 0.5), c + vec2(-1.0, 3.5)], stroke);
+    p.line_segment([c + vec2(-1.0, 3.5), c + vec2(4.5, -3.0)], stroke);
 }
 
 /// A tick box on its own. The hit area is larger than the box; `label` is what a screen reader says.
@@ -123,7 +129,7 @@ pub fn check_box(ui: &mut Ui, on: &mut bool, enabled: bool, label: &str) -> egui
         resp.mark_changed();
     }
     let boxed = egui::Rect::from_center_size(rect.center(), vec2(18.0, 18.0));
-    paint_check(ui, boxed, *on, enabled, resp.hovered());
+    paint_check(ui, resp.id, boxed, *on, enabled, resp.hovered());
     super::widgets::focus_ring(ui, &resp, boxed, R_TAG);
     let state = *on;
     resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, enabled, state, label));
@@ -140,7 +146,7 @@ pub fn check_labeled(ui: &mut Ui, on: &mut bool, label: &str) -> egui::Response 
         resp.mark_changed();
     }
     let boxed = egui::Rect::from_center_size(rect.left_center() + vec2(12.0, 0.0), vec2(18.0, 18.0));
-    paint_check(ui, boxed, *on, true, resp.hovered());
+    paint_check(ui, resp.id, boxed, *on, true, resp.hovered());
     let at = egui::pos2(rect.left() + 28.0, rect.center().y - galley.size().y / 2.0);
     ui.painter().galley(at, galley, c_text());
     super::widgets::focus_ring(ui, &resp, boxed, R_TAG);
@@ -152,10 +158,11 @@ pub fn check_labeled(ui: &mut Ui, on: &mut bool, label: &str) -> egui::Response 
 /// A small cross button; true when clicked.
 pub fn x_button(ui: &mut Ui, hint: &str) -> bool {
     let (rect, resp) = ui.allocate_exact_size(vec2(26.0, 26.0), Sense::click());
-    if resp.hovered() {
-        ui.painter().rect_filled(rect, CornerRadius::same(R_CONTROL), c_hover());
+    let t = motion::hover(ui, resp.id, resp.hovered());
+    if t > 0.0 {
+        ui.painter().rect_filled(rect, CornerRadius::same(R_CONTROL), c_hover().gamma_multiply(t));
     }
-    let color = if resp.hovered() { c_text() } else { c_muted() };
+    let color = motion::mix(c_muted(), c_text(), t);
     let c = rect.center();
     let stroke = Stroke::new(1.6, color);
     ui.painter().line_segment([c + vec2(-4.5, -4.5), c + vec2(4.5, 4.5)], stroke);
@@ -185,23 +192,28 @@ pub fn small_faint(ui: &mut Ui, text: impl Into<String>) {
     ui.label(RichText::new(text.into()).color(c_faint()).size(FS_META));
 }
 
-/// How the plan stands, as plain small text with a mark in front: a check when all is well, an exclamation mark when
-/// it needs a look.
+/// How the plan stands, as a small pill with a mark in front: a check when all is well, an exclamation mark when it
+/// needs a look.
 pub fn status_text(ui: &mut Ui, good: bool, text: &str) {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
-        let (rect, _) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::hover());
-        let c = rect.center();
-        let stroke = Stroke::new(1.5, c_muted());
+        ui.spacing_mut().item_spacing.x = 6.0;
+        // a pill in a pale tint: the brand colour when all is well, amber when it needs a look
+        let color = if good { c_accent() } else { c_warn() };
+        let galley = ui.painter().layout_no_wrap(text.to_string(), super::fonts::medium(FS_META), color);
+        let (rect, _) = ui.allocate_exact_size(vec2(galley.size().x + 30.0, 22.0), Sense::hover());
+        let p = ui.painter();
+        p.rect_filled(rect, CornerRadius::same(11), color.gamma_multiply(0.14));
+        let c = egui::pos2(rect.left() + 12.0, rect.center().y);
+        let stroke = Stroke::new(1.5, color);
         if good {
-            ui.painter().line_segment([c + vec2(-4.0, 0.5), c + vec2(-1.5, 3.0)], stroke);
-            ui.painter().line_segment([c + vec2(-1.5, 3.0), c + vec2(4.0, -3.0)], stroke);
+            p.line_segment([c + vec2(-4.0, 0.5), c + vec2(-1.5, 3.0)], stroke);
+            p.line_segment([c + vec2(-1.5, 3.0), c + vec2(4.0, -3.0)], stroke);
         } else {
-            ui.painter().circle_stroke(c, 6.0, stroke);
-            ui.painter().line_segment([c + vec2(0.0, -3.0), c + vec2(0.0, 0.5)], stroke);
-            ui.painter().circle_filled(c + vec2(0.0, 3.0), 0.9, c_muted());
+            p.line_segment([c + vec2(0.0, -4.0), c + vec2(0.0, 1.0)], stroke);
+            p.circle_filled(c + vec2(0.0, 3.8), 1.0, color);
         }
-        small_muted(ui, text);
+        p.galley(egui::pos2(rect.left() + 21.0, rect.center().y - galley.size().y / 2.0), galley, color);
     });
 }
 

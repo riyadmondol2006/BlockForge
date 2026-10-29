@@ -140,26 +140,28 @@ impl CraftState {
         if !ui.is_rect_visible(rect) {
             return false;
         }
-        let bg = if selected {
-            c_selection()
-        } else if resp.hovered() {
-            c_hover()
-        } else {
-            egui::Color32::TRANSPARENT
-        };
-        ui.painter().rect_filled(rect, CornerRadius::same(R_CONTROL), bg);
-        let icon = egui::Rect::from_min_size(rect.left_top() + vec2(8.0, (ROW_H - 28.0) / 2.0), vec2(28.0, 28.0));
-        self.paint_icon(ui, icon, &e.id, &e.name);
+        // the hover fill fades in; the chosen row has the selection fill and a short bar of the brand gradient
+        let t = super::motion::hover(ui, resp.id, resp.hovered() || selected);
+        if t > 0.0 {
+            let fill = if selected { c_selection() } else { c_hover() };
+            ui.painter().rect_filled(rect, CornerRadius::same(R_CONTROL), fill.gamma_multiply(t));
+        }
+        if selected {
+            let bar = egui::Rect::from_min_size(rect.left_top() + vec2(0.0, 10.0), vec2(3.0, ROW_H - 20.0));
+            super::motion::gradient_rect(ui.painter(), bar, 1, c_accent(), c_accent2());
+        }
+        let icon = egui::Rect::from_min_size(rect.left_top() + vec2(8.0, (ROW_H - 32.0) / 2.0), vec2(32.0, 32.0));
+        self.paint_slot(ui, icon, &e.id, &e.name);
         let short = e.id.rsplit(':').next().unwrap_or(&e.id);
         let sub = if e.stack > 1 { format!("{short}  \u{00B7}  stacks of {}", e.stack) } else { short.to_string() };
         let clip = rect.shrink2(vec2(2.0, 0.0));
         let p = ui.painter().with_clip_rect(clip);
         let font = if selected { super::fonts::semibold(FS_BODY) } else { FontId::proportional(FS_BODY) };
-        p.text(rect.left_top() + vec2(46.0, 5.0), egui::Align2::LEFT_TOP, &e.name, font, c_text());
+        p.text(rect.left_top() + vec2(50.0, 4.0), egui::Align2::LEFT_TOP, &e.name, font, c_text());
         // faint text never sits on the selection fill
         let sub_color = if selected { c_muted() } else { c_faint() };
         p.text(
-            rect.left_top() + vec2(46.0, 23.0),
+            rect.left_top() + vec2(50.0, 22.0),
             egui::Align2::LEFT_TOP,
             sub,
             FontId::proportional(FS_META),
@@ -177,9 +179,10 @@ impl CraftState {
         let name = item.map_or_else(|| book.ds.name(&target), |i| i.name.clone());
         let stack = item.map_or(64, |i| i.stack);
         ui.horizontal(|ui| {
-            self.icon(ui, &target, &name, 32.0);
+            ui.spacing_mut().item_spacing.x = 12.0;
+            self.slot_icon(ui, &target, &name, 44.0);
             ui.vertical(|ui| {
-                ui.spacing_mut().item_spacing.y = 0.0;
+                ui.spacing_mut().item_spacing.y = 2.0;
                 ui.label(RichText::new(&name).size(FS_SECTION).semibold());
                 small_muted(ui, if stack > 1 { format!("Stacks of {stack}") } else { "Does not stack".to_string() });
             });
@@ -273,7 +276,7 @@ impl CraftState {
                 let name = book.ds.name(id);
                 let value = self.stock().and_then(|s| s.get(id)).copied().unwrap_or(0);
                 ui.horizontal(|ui| {
-                    self.icon(ui, id, &name, 28.0);
+                    self.slot_icon(ui, id, &name, 32.0);
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if x_button(ui, "Remove") {
                             remove = Some(id.clone());
@@ -346,8 +349,9 @@ impl CraftState {
             for k in 0..self.stock_hits.len() {
                 let e = &book.entries[self.stock_hits[k] as usize];
                 let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 34.0), Sense::click());
-                if resp.hovered() {
-                    ui.painter().rect_filled(rect, CornerRadius::same(R_CONTROL), c_hover());
+                let t = super::motion::hover(ui, resp.id, resp.hovered());
+                if t > 0.0 {
+                    ui.painter().rect_filled(rect, CornerRadius::same(R_CONTROL), c_hover().gamma_multiply(t));
                 }
                 let icon = egui::Rect::from_min_size(rect.left_top() + vec2(4.0, 5.0), vec2(24.0, 24.0));
                 self.paint_icon(ui, icon, &e.id, &e.name);
@@ -375,7 +379,7 @@ impl CraftState {
             let mut add = false;
             let mut cancel = false;
             ui.horizontal(|ui| {
-                self.icon(ui, &id, &name, 28.0);
+                self.slot_icon(ui, &id, &name, 32.0);
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if x_button(ui, "Cancel") {
                         cancel = true;
@@ -429,10 +433,10 @@ impl CraftState {
                 for id in &items {
                     let name = book.ds.name(id);
                     egui::Frame::new()
-                        .fill(c_hover())
+                        .fill(c_field())
                         .stroke(Stroke::new(1.0, c_border()))
-                        .corner_radius(CornerRadius::same(R_CONTROL))
-                        .inner_margin(egui::Margin { left: 6, right: 4, top: 2, bottom: 2 })
+                        .corner_radius(CornerRadius::same(16))
+                        .inner_margin(egui::Margin { left: 5, right: 3, top: 3, bottom: 3 })
                         .show(ui, |ui| {
                             ui.spacing_mut().item_spacing.x = 6.0;
                             ui.horizontal(|ui| {

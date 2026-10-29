@@ -1,15 +1,17 @@
 //! The Tools page: clean up, diagnose problems and keep things tidy.
 
-use egui::{Align, Layout, RichText, ScrollArea, Ui};
+use egui::{Align, Color32, CornerRadius, Layout, RichText, ScrollArea, Stroke, Ui, vec2};
 
+use super::icons::{self, Icon};
+use super::motion;
 use super::services::{NetReport, SvcMsg, confirm_modal, modal_scroll_height, modal_width};
 use super::theme::*;
 use super::widgets::*;
 use super::{App, Msg, Page};
 use crate::tools::{self, NetworkCheckOptions, TOOLS};
 
-/// The widest the list of tools gets.
-const LIST_WIDTH: f32 = 720.0;
+/// The widest the grid of tools gets.
+const GRID_WIDTH: f32 = 1040.0;
 
 /// The tools that look at things and the ones that tidy up, in the order each group shows them. Every tool of
 /// [`TOOLS`] is in one of the two.
@@ -95,80 +97,78 @@ impl App {
         #[cfg(feature = "converter")]
         let mut open_convert = false;
         ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
-            // at most 720 wide, but never wider than the window
-            ui.set_max_width((ui.available_width() - 14.0).min(LIST_WIDTH));
+            // as wide as the grid gets, but never wider than the window
+            ui.set_max_width((ui.available_width() - 14.0).min(GRID_WIDTH));
             for (title, ids) in [("Diagnose", &DIAGNOSE[..]), ("Clean up", &CLEAN_UP[..])] {
-                group(ui, title, |ui, rows| {
-                    for tool in ids.iter().filter_map(|id| TOOLS.iter().find(|t| t.id == *id)) {
-                        rows.gap(ui);
-                        // what stops a tool from running now, and where that is fixed
-                        let (enabled, hint): (bool, Option<(&str, Option<Fix>)>) = match tool.id {
-                            "network_checker" if !logs_on => (
-                                false,
-                                Some((
-                                    "Turn on \"Report pack installs and play time\" in Settings first.",
-                                    Some(Fix::Settings),
-                                )),
-                            ),
-                            "debug_mode" if flatpak => (false, Some(("Not available in a Flatpak.", None))),
-                            "debug_mode" if tools::is_debug_enabled() => {
-                                (false, Some(("Debug mode is already on.", None)))
-                            }
-                            "skin_updater" if no_accounts => {
-                                (false, Some(("Add an account first.", Some(Fix::Accounts))))
-                            }
-                            id if task_label(id).is_some_and(|l| running.iter().any(|r| r == l)) => {
-                                (false, Some(("Running now. Its progress is in the sidebar.", None)))
-                            }
-                            "debug_mode" if games_running => (
-                                false,
-                                Some((
-                                    "Close Minecraft first. The restarted launcher can't follow a game that runs.",
-                                    None,
-                                )),
-                            ),
-                            "debug_mode" if !running.is_empty() => (
-                                false,
-                                Some(("Wait for the jobs in progress to finish first. A restart stops them.", None)),
-                            ),
-                            "download_clearer" | "libraries_deleter" if busy.is_some() => {
-                                (false, busy.map(|why| (why, None)))
-                            }
-                            "class_cache_clearer" if games_running => {
-                                (false, Some(("Close Minecraft first, it is using the cache.", None)))
-                            }
-                            _ => (true, None),
-                        };
-                        let action = if is_destructive(tool.id) {
-                            format!("{}\u{2026}", tool.action)
-                        } else {
-                            tool.action.to_string()
-                        };
-                        let out = tool_row(
-                            ui,
-                            tool.name,
-                            tool.description,
-                            &action,
-                            if is_destructive(tool.id) { Button::Danger } else { Button::Plain },
-                            enabled,
-                            hint,
-                        );
-                        if out.pressed {
-                            clicked = Some(tool.id);
+                let mut tiles = Vec::new();
+                for tool in ids.iter().filter_map(|id| TOOLS.iter().find(|t| t.id == *id)) {
+                    // what stops a tool from running now, and where that is fixed
+                    let (enabled, hint): (bool, Option<(&str, Option<Fix>)>) = match tool.id {
+                        "network_checker" if !logs_on => (
+                            false,
+                            Some((
+                                "Turn on \"Report pack installs and play time\" in Settings first.",
+                                Some(Fix::Settings),
+                            )),
+                        ),
+                        "debug_mode" if flatpak => (false, Some(("Not available in a Flatpak.", None))),
+                        "debug_mode" if tools::is_debug_enabled() => (false, Some(("Debug mode is already on.", None))),
+                        "skin_updater" if no_accounts => (false, Some(("Add an account first.", Some(Fix::Accounts)))),
+                        id if task_label(id).is_some_and(|l| running.iter().any(|r| r == l)) => {
+                            (false, Some(("Running now. Its progress is in the sidebar.", None)))
                         }
-                        if out.fix.is_some() {
-                            go = out.fix;
+                        "debug_mode" if games_running => (
+                            false,
+                            Some((
+                                "Close Minecraft first. The restarted launcher can't follow a game that runs.",
+                                None,
+                            )),
+                        ),
+                        "debug_mode" if !running.is_empty() => (
+                            false,
+                            Some(("Wait for the jobs in progress to finish first. A restart stops them.", None)),
+                        ),
+                        "download_clearer" | "libraries_deleter" if busy.is_some() => {
+                            (false, busy.map(|why| (why, None)))
                         }
+                        "class_cache_clearer" if games_running => {
+                            (false, Some(("Close Minecraft first, it is using the cache.", None)))
+                        }
+                        _ => (true, None),
+                    };
+                    let action = if is_destructive(tool.id) {
+                        format!("{}\u{2026}", tool.action)
+                    } else {
+                        tool.action.to_string()
+                    };
+                    tiles.push(Tile {
+                        glyph: glyph_of(tool.id),
+                        name: tool.name,
+                        description: tool.description,
+                        action,
+                        button: if is_destructive(tool.id) { Button::Danger } else { Button::Plain },
+                        enabled,
+                        hint,
+                    });
+                }
+                section_head(ui, title);
+                for (out, tool) in tile_grid(ui, title, &tiles).into_iter().zip(ids) {
+                    if out.pressed {
+                        clicked = Some(*tool);
                     }
-                });
+                    if out.fix.is_some() {
+                        go = out.fix;
+                    }
+                }
             }
-            // the world converter has a row of its own (it opens a page, not a job)
+            // the world converter has a tile of its own (it opens a page, not a job)
             #[cfg(feature = "converter")]
-            group(ui, "Worlds", |ui, _rows| {
+            {
+                section_head(ui, "Worlds");
                 if self.convert_tool_card(ui) {
                     open_convert = true;
                 }
-            });
+            }
             ui.add_space(16.0);
         });
         if let Some(fix) = go {
@@ -421,82 +421,220 @@ impl App {
     }
 }
 
-/// A titled group of rows in one card, divided by rules: call `rows.gap(ui)` before each row.
-fn group(ui: &mut Ui, title: &str, rows: impl FnOnce(&mut Ui, &mut super::settings::Rows)) {
+/// The title of a group of tiles, with the room above and under it.
+fn section_head(ui: &mut Ui, title: &str) {
     super::settings::section_head(ui, title, "");
-    card(ui, |ui| {
-        // the name of a row sits close to what it says
-        ui.spacing_mut().item_spacing.y = 2.0;
-        rows(ui, &mut super::settings::Rows::new());
-    });
 }
 
-/// How a row's button looks.
+/// How a tile's button looks.
 #[derive(Clone, Copy, PartialEq)]
 enum Button {
     Plain,
     Danger,
 }
 
-/// What a row did this frame.
+/// The picture in a tile's badge: one of the shared icons, or one drawn here for a tool the set has none for.
+#[derive(Clone, Copy)]
+enum Glyph {
+    Icon(Icon),
+    Network,
+    Terminal,
+    Logs,
+    Download,
+    Bolt,
+}
+
+/// The picture of each tool.
+fn glyph_of(id: &str) -> Glyph {
+    match id {
+        "network_checker" => Glyph::Network,
+        "support_bundle" => Glyph::Icon(Icon::Package),
+        "debug_mode" => Glyph::Terminal,
+        "log_clearer" => Glyph::Logs,
+        "download_clearer" => Glyph::Download,
+        "class_cache_clearer" => Glyph::Bolt,
+        "libraries_deleter" => Glyph::Icon(Icon::Library),
+        "skin_updater" => Glyph::Icon(Icon::User),
+        _ => Glyph::Icon(Icon::Wrench),
+    }
+}
+
+/// Draw `glyph` centred on `c` in a square of side `size`, in the line style of the shared icons.
+fn paint_glyph(p: &egui::Painter, glyph: Glyph, c: egui::Pos2, size: f32, color: Color32) {
+    let s = size / 2.0;
+    let stroke = Stroke::new((size / 11.0).max(1.4), color);
+    let at = |x: f32, y: f32| egui::pos2(c.x + x * s, c.y + y * s);
+    let line = |pts: &[(f32, f32)]| {
+        p.add(egui::Shape::line(pts.iter().map(|&(x, y)| at(x, y)).collect(), stroke));
+    };
+    match glyph {
+        Glyph::Icon(icon) => icons::paint(p, icon, c, size, color),
+        Glyph::Network => {
+            // three arcs over a dot, the usual picture of a connection
+            for r in [0.45, 0.9, 1.35] {
+                let arc: Vec<(f32, f32)> = (0..=10)
+                    .map(|i| {
+                        let a = -std::f32::consts::FRAC_PI_4 * 3.0 + std::f32::consts::FRAC_PI_2 * i as f32 / 10.0;
+                        (r * a.cos(), 0.8 + r * a.sin())
+                    })
+                    .collect();
+                line(&arc);
+            }
+            p.circle_filled(at(0.0, 0.8), 0.12 * s + 0.6, color);
+        }
+        Glyph::Terminal => {
+            p.rect_stroke(
+                egui::Rect::from_min_max(at(-0.95, -0.75), at(0.95, 0.75)),
+                2.5,
+                stroke,
+                egui::StrokeKind::Inside,
+            );
+            line(&[(-0.5, -0.28), (-0.15, 0.02), (-0.5, 0.32)]);
+            line(&[(0.05, 0.34), (0.5, 0.34)]);
+        }
+        Glyph::Logs => {
+            p.rect_stroke(
+                egui::Rect::from_min_max(at(-0.72, -0.92), at(0.72, 0.92)),
+                2.5,
+                stroke,
+                egui::StrokeKind::Inside,
+            );
+            for y in [-0.4, 0.0, 0.4] {
+                line(&[(-0.36, y), (0.36, y)]);
+            }
+        }
+        Glyph::Download => {
+            line(&[(0.0, -0.92), (0.0, 0.3)]);
+            line(&[(-0.45, -0.12), (0.0, 0.32), (0.45, -0.12)]);
+            line(&[(-0.9, 0.3), (-0.9, 0.85), (0.9, 0.85), (0.9, 0.3)]);
+        }
+        Glyph::Bolt => {
+            line(&[
+                (0.18, -0.95),
+                (-0.6, 0.15),
+                (-0.02, 0.15),
+                (-0.18, 0.95),
+                (0.6, -0.15),
+                (0.02, -0.15),
+                (0.18, -0.95),
+            ]);
+        }
+    }
+}
+
+/// One tile of the grid: what it shows and whether it can be used now.
+struct Tile<'a> {
+    glyph: Glyph,
+    name: &'a str,
+    description: &'a str,
+    action: String,
+    button: Button,
+    enabled: bool,
+    /// Why the tool can't run now, with where that is fixed.
+    hint: Option<(&'a str, Option<Fix>)>,
+}
+
+/// What a tile did this frame.
 struct RowOut {
     pressed: bool,
     /// The link next to the reason a tool can't run was pressed.
     fix: Option<Fix>,
 }
 
-/// A row of the list: the name, what the tool does and, when it can't be used now, why (with a link to where that is
-/// fixed); then its button on the right.
-fn tool_row(
-    ui: &mut Ui,
-    name: &str,
-    description: &str,
-    action: &str,
-    button: Button,
-    enabled: bool,
-    hint: Option<(&str, Option<Fix>)>,
-) -> RowOut {
-    let mut out = RowOut { pressed: false, fix: None };
-    // the text makes room for the button (as wide as it was on the last frame)
-    let id = ui.scope_id().with(("tool-row", name));
-    let button_w = remembered_width(ui, id, 80.0);
-    ui.horizontal(|ui| {
-        ui.vertical(|ui| {
-            ui.set_max_width((ui.available_width() - button_w - 16.0).max(140.0));
-            ui.spacing_mut().item_spacing.y = 2.0;
-            ui.label(RichText::new(name).semibold());
-            ui.add(egui::Label::new(RichText::new(description).color(c_muted()).size(FS_META)).wrap());
-            if let Some((reason, fix)) = hint {
-                ui.horizontal_wrapped(|ui| {
-                    ui.spacing_mut().item_spacing = egui::vec2(6.0, 2.0);
-                    ui.spacing_mut().interact_size.y = 16.0;
-                    ui.label(RichText::new(reason).color(c_faint()).size(FS_META));
-                    if let Some(fix) = fix {
-                        if ui.link(RichText::new(fix.label()).size(FS_META).underline()).clicked() {
-                            out.fix = Some(fix);
-                        }
-                    }
-                });
+/// The narrowest a tile gets before the grid takes a column away, and the room between tiles.
+const TILE_MIN: f32 = 250.0;
+const TILE_GAP: f32 = 14.0;
+/// The side of the badge with a tool's picture.
+const BADGE: f32 = 40.0;
+
+/// The tiles in a grid that fills the width. The tiles of one row are as tall as each other, with their buttons on
+/// one line along the bottom: each row remembers the tallest text of its tiles. Returns what each tile did.
+fn tile_grid(ui: &mut Ui, salt: &str, tiles: &[Tile]) -> Vec<RowOut> {
+    let (cols, w) = grid_columns(ui.available_width(), TILE_MIN, TILE_GAP);
+    let mut outs = Vec::with_capacity(tiles.len());
+    for (r, row) in tiles.chunks(cols).enumerate() {
+        let row_id = ui.scope_id().with(("tool-tiles", salt, r, cols));
+        let row_h = ui.data(|d| d.get_temp::<f32>(row_id)).unwrap_or(0.0);
+        let mut tallest = 0.0f32;
+        ui.horizontal_top(|ui| {
+            ui.spacing_mut().item_spacing.x = TILE_GAP;
+            for t in row {
+                let out = ui
+                    .allocate_ui_with_layout(vec2(w, 600.0), Layout::top_down(Align::Min), |ui| {
+                        ui.set_width(w);
+                        let (out, text_h) = tile(ui, row_id.with(t.name), t, row_h);
+                        tallest = tallest.max(text_h);
+                        out
+                    })
+                    .inner;
+                outs.push(out);
             }
         });
-        let used = ui
-            .with_layout(Layout::right_to_left(Align::Center), |ui| {
-                // a tool that can't run now shows its button greyed out, and the reason under its name
-                out.pressed = match (button, enabled) {
-                    (Button::Plain, _) => secondary_enabled(ui, action, enabled).clicked(),
-                    (Button::Danger, true) => danger(ui, action).clicked(),
-                    (Button::Danger, false) => danger_enabled(ui, action, false).clicked(),
-                };
-                ui.min_rect().width()
-            })
-            .inner;
-        remember_width(ui, id, used);
+        if (tallest - row_h).abs() > 0.5 {
+            // the row learned how tall its text is: draw it again at once with the buttons lined up
+            ui.data_mut(|d| d.insert_temp(row_id, tallest));
+            ui.ctx().request_discard("a row of tool tiles changed its height");
+        }
+        ui.add_space(TILE_GAP - ui.spacing().item_spacing.y);
+    }
+    outs
+}
+
+/// A tile: the badge, the name, what the tool does and, when it can't be used now, why (with a link to where that is
+/// fixed); then its button along the bottom, `text_h` under the top of the text. Returns what it did and how tall its
+/// own text was.
+fn tile(ui: &mut Ui, id: egui::Id, t: &Tile, text_h: f32) -> (RowOut, f32) {
+    let mut out = RowOut { pressed: false, fix: None };
+    let was_hot = ui.data(|d| d.get_temp::<bool>(id.with("hot"))).unwrap_or(false);
+    let lit = motion::hover(ui, id.with("badge"), was_hot && t.enabled);
+    let (natural, _) = hover_card(ui, id, |ui| {
+        ui.set_width(ui.available_width());
+        ui.spacing_mut().item_spacing.y = 4.0;
+        let top = ui.cursor().top();
+        let (badge, _) = ui.allocate_exact_size(vec2(BADGE, BADGE), egui::Sense::hover());
+        let destructive = t.button == Button::Danger;
+        let (fill, fg) = match (t.enabled, destructive) {
+            (false, _) => (c_hover(), c_faint()),
+            (true, true) => (c_danger_bg(), c_danger()),
+            (true, false) => (c_accent_soft(), c_accent()),
+        };
+        let p = ui.painter();
+        p.rect_filled(badge, CornerRadius::same(R_CONTROL), fill);
+        // the badge of a tool that is safe to run takes the brand gradient while its tile is under the pointer
+        let fg = if !destructive && lit > 0.0 {
+            motion::gradient_rect(p, badge, R_CONTROL, c_accent().gamma_multiply(lit), c_accent2().gamma_multiply(lit));
+            motion::mix(fg, c_on_accent(), lit)
+        } else {
+            fg
+        };
+        paint_glyph(p, t.glyph, badge.center(), 18.0, fg);
+        ui.add_space(6.0);
+        ui.add(egui::Label::new(RichText::new(t.name).size(FS_SECTION - 1.0).semibold()).wrap());
+        ui.add(egui::Label::new(RichText::new(t.description).color(c_muted()).size(FS_META)).wrap());
+        if let Some((reason, fix)) = t.hint {
+            ui.add_space(4.0);
+            ui.add(egui::Label::new(RichText::new(reason).color(c_faint()).size(FS_META)).wrap());
+            if let Some(fix) = fix {
+                if ui.link(RichText::new(fix.label()).size(FS_META).underline()).clicked() {
+                    out.fix = Some(fix);
+                }
+            }
+        }
+        let natural = ui.cursor().top() - top;
+        ui.add_space((text_h - natural).max(0.0) + 8.0);
+        // a tool that can't run now shows its button greyed out, and the reason above it
+        out.pressed = match (t.button, t.enabled) {
+            (Button::Plain, _) => secondary_enabled(ui, &t.action, t.enabled).clicked(),
+            (Button::Danger, true) => danger(ui, &t.action).clicked(),
+            (Button::Danger, false) => danger_enabled(ui, &t.action, false).clicked(),
+        };
+        natural
     });
-    out
+    (out, natural)
 }
 
 #[cfg_attr(not(feature = "converter"), allow(dead_code))]
-/// A row of the list, as the world converter's entry uses it. Returns whether its button was pressed.
+/// A tile on its own in the grid, as the world converter's entry uses it. Returns whether its button was pressed.
 pub(super) fn card_frame(
     ui: &mut Ui,
     name: &str,
@@ -505,7 +643,16 @@ pub(super) fn card_frame(
     enabled: bool,
     hint: Option<&str>,
 ) -> bool {
-    tool_row(ui, name, description, action, Button::Plain, enabled, hint.map(|h| (h, None))).pressed
+    let tile = Tile {
+        glyph: Glyph::Icon(Icon::Convert),
+        name,
+        description,
+        action: action.to_string(),
+        button: Button::Plain,
+        enabled,
+        hint: hint.map(|h| (h, None)),
+    };
+    tile_grid(ui, name, &[tile]).into_iter().any(|o| o.pressed)
 }
 
 #[cfg(test)]

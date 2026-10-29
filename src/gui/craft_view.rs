@@ -15,6 +15,8 @@ use crate::craft::{self, Kind, Node, Recipe, Stop, Storage};
 
 /// How wide the plan gets on a wide window: past this the amounts are too far from their names.
 const PLAN_WIDTH: f32 = 780.0;
+/// How far the lines of a step are indented: past its tick box and its station, under its title.
+const STEP_INDENT: f32 = 80.0;
 
 impl CraftState {
     /// Both columns (or one under the other when the window is narrow).
@@ -70,8 +72,14 @@ impl CraftState {
         match self.plan.clone() {
             None => {
                 let bad = self.target.is_some() && parse_qty(&self.qty_text).is_err();
-                ui.add_space(72.0);
+                ui.add_space(64.0);
                 ui.vertical_centered(|ui| {
+                    // a soft badge with the crafting grid over the sentence, in the warning tint when the amount is wrong
+                    let (rect, _) = ui.allocate_exact_size(vec2(56.0, 56.0), egui::Sense::hover());
+                    let (fill, fg) = if bad { (c_warn_bg(), c_warn()) } else { (c_accent_soft(), c_accent()) };
+                    ui.painter().rect_filled(rect, egui::CornerRadius::same(R_CARD), fill);
+                    super::icons::paint(ui.painter(), super::icons::Icon::Craft, rect.center(), 24.0, fg);
+                    ui.add_space(10.0);
                     ui.label(
                         RichText::new(if bad { "Check the amount" } else { "Pick something to build" })
                             .size(FS_SECTION)
@@ -150,8 +158,8 @@ impl CraftState {
         let plan = &v.plan;
         let name = book.ds.name(&plan.request.item);
         ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 12.0;
-            self.icon(ui, &plan.request.item, &name, 44.0);
+            ui.spacing_mut().item_spacing.x = 14.0;
+            self.slot_icon(ui, &plan.request.item, &name, 60.0);
             ui.vertical(|ui| {
                 ui.spacing_mut().item_spacing.y = 3.0;
                 ui.add(
@@ -163,7 +171,8 @@ impl CraftState {
                     .truncate(),
                 );
                 ui.horizontal_wrapped(|ui| {
-                    ui.spacing_mut().item_spacing.x = 14.0;
+                    ui.spacing_mut().item_spacing.x = 12.0;
+                    ui.spacing_mut().interact_size.y = 22.0;
                     let good = plan.complete && plan.warnings.is_empty();
                     status_text(ui, good, if good { "Complete plan" } else { "Needs a look" });
                     if let Some(p) = self.active.and_then(|id| self.store.get(id)) {
@@ -385,11 +394,12 @@ impl CraftState {
         ui.scope(|ui| {
             ui.spacing_mut().item_spacing.y = 0.0;
             ui.horizontal(|ui| {
-                ui.set_min_height(44.0);
+                ui.set_min_height(48.0);
+                ui.spacing_mut().item_spacing.x = 10.0;
                 if let Some(on) = check {
                     check_box(ui, on, true, &name);
                 }
-                self.icon(ui, id, &name, 28.0);
+                self.slot_icon(ui, id, &name, 36.0);
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.allocate_ui_with_layout(vec2(104.0, 38.0), Layout::top_down(Align::Max), |ui| {
                         ui.spacing_mut().item_spacing.y = 0.0;
@@ -447,7 +457,30 @@ impl CraftState {
                 ui.add_space(10.0);
                 rule(ui);
                 ui.add_space(10.0);
-                self.step_card(ui, book, v, i);
+                let step = &v.plan.steps[i];
+                let next = !self.done.contains(&format!("step:{}", step.recipe))
+                    && v.deps[i].iter().all(|&j| self.done.contains(&format!("step:{}", v.plan.steps[j].recipe)));
+                let rect = ui.scope(|ui| self.step_card(ui, book, v, i)).response.rect;
+                // a step that can be done now has a short bar of the brand gradient in the card's margin beside it
+                let t = super::motion::toward(
+                    ui.ctx(),
+                    ui.scope_id().with(("craft-step-next", i)),
+                    next,
+                    super::motion::MEDIUM,
+                );
+                if t > 0.0 {
+                    let bar = egui::Rect::from_min_max(
+                        egui::pos2(rect.left() - 12.0, rect.top() + 2.0),
+                        egui::pos2(rect.left() - 9.0, rect.bottom() - 2.0),
+                    );
+                    super::motion::gradient_rect(
+                        ui.painter(),
+                        bar,
+                        2,
+                        c_accent().gamma_multiply(t),
+                        c_accent2().gamma_multiply(t),
+                    );
+                }
             }
         });
     }
@@ -462,6 +495,8 @@ impl CraftState {
         let out_name = book.ds.name(&step.item);
         ui.spacing_mut().item_spacing.y = 6.0;
         ui.horizontal(|ui| {
+            // the tick box (24), the station (36) and the gaps add up to the indent of the lines under the title
+            ui.spacing_mut().item_spacing.x = 10.0;
             let mut on = ticked;
             let r = check_box(ui, &mut on, ready || ticked, &format!("Step {}", i + 1));
             if !ready && !ticked {
@@ -482,7 +517,7 @@ impl CraftState {
                 self.done_changed();
             }
             let station = station_item(step.kind);
-            self.icon(ui, station, step.kind.station(), 28.0);
+            self.slot_icon(ui, station, step.kind.station(), 36.0);
             ui.vertical(|ui| {
                 ui.spacing_mut().item_spacing.y = 1.0;
                 let title = RichText::new(format!("{} {} \u{00D7}", step.kind.verb(), thousands(step.operations)))
@@ -500,7 +535,7 @@ impl CraftState {
         // what goes in and what comes out, lined up under the name
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = vec2(8.0, 6.0);
-            ui.add_space(36.0);
+            ui.add_space(STEP_INDENT);
             for (k, (id, qty)) in step.inputs.iter().enumerate() {
                 if k > 0 {
                     ui.label(RichText::new("+").color(c_muted()));
@@ -519,7 +554,8 @@ impl CraftState {
             || recipe.and_then(|r| r.manual.as_ref()).is_some();
         if has_notes {
             ui.horizontal_wrapped(|ui| {
-                ui.add_space(36.0);
+                ui.spacing_mut().item_spacing.x = 8.0;
+                ui.add_space(STEP_INDENT);
                 if recipe.is_some_and(|r| r.small_grid && matches!(r.kind, Kind::Shaped | Kind::Shapeless)) {
                     small_faint(ui, "Fits the inventory grid");
                 }
@@ -535,7 +571,8 @@ impl CraftState {
             let text: Vec<String> =
                 step.byproducts.iter().map(|(id, n)| format!("{} {}", thousands(*n), book.ds.name(id))).collect();
             ui.horizontal(|ui| {
-                ui.add_space(36.0);
+                ui.spacing_mut().item_spacing.x = 8.0;
+                ui.add_space(STEP_INDENT);
                 small_muted(ui, format!("You get back: {}", text.join(", ")));
             });
         }
@@ -552,7 +589,7 @@ impl CraftState {
         if any {
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing = vec2(8.0, 6.0);
-                ui.add_space(36.0);
+                ui.add_space(STEP_INDENT);
                 self.recipe_combo(ui, book, &step.item, &step.recipe, i as u64);
                 if let Some(r) = recipe {
                     for (key, current) in &step.choices {
@@ -673,8 +710,8 @@ impl CraftState {
 
     fn tree_row(&mut self, ui: &mut Ui, book: &Arc<Book>, n: &Node, path: u64) {
         let name = book.ds.name(&n.item);
-        ui.set_min_height(30.0);
-        self.icon(ui, &n.item, &name, 24.0);
+        ui.set_min_height(34.0);
+        self.slot_icon(ui, &n.item, &name, 28.0);
         ui.label(RichText::new(&name).semibold());
         small_muted(ui, format!("need {}", thousands(n.required)));
         match n.stop {
@@ -756,8 +793,8 @@ impl CraftState {
                         format!("{} full stacks, {} slots", thousands(r.full_stacks), thousands(r.slots))
                     };
                     ui.horizontal(|ui| {
-                        ui.set_min_height(38.0);
-                        self.icon(ui, &r.item, &name, 24.0);
+                        ui.set_min_height(44.0);
+                        self.slot_icon(ui, &r.item, &name, 32.0);
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             let (dr, _) = ui.allocate_exact_size(vec2(190.0, 20.0), egui::Sense::hover());
                             ui.painter().text(

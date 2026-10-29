@@ -26,7 +26,13 @@ const BUTTON_H: f32 = 32.0;
 /// The room below the blocks inside the scrolling part.
 const TAIL: f32 = 8.0;
 /// The height of the dashed area that waits for a world.
-const ZONE_HEIGHT: f32 = 112.0;
+const ZONE_HEIGHT: f32 = 168.0;
+/// The room on the left of the steps, where their badges and the line between them sit.
+const GUTTER: f32 = 42.0;
+/// The side of a step's badge.
+const STEP_BADGE: f32 = 28.0;
+/// The room between two steps.
+const STEP_GAP: f32 = 20.0;
 
 /// A text of a button or a wait with its closing "..." typeset as one ellipsis character. The text in `tr!` stays the
 /// key of the translations as it was written; a translation that ends in three dots is shown the same way.
@@ -56,6 +62,88 @@ fn sentence(text: &str) -> String {
 fn block_title(ui: &mut Ui, text: &str) {
     ui.label(RichText::new(sentence(text)).size(FS_SECTION).semibold());
     ui.add_space(2.0);
+}
+
+/// A step of the set-up: its numbered badge and title, then its block, indented past the badge. A step that is
+/// `done` has its badge filled with the brand gradient and a check mark. Returns where the badge is, and `done`, so
+/// the line down to the next badge can be drawn.
+fn step(ui: &mut Ui, n: usize, title: &str, done: bool, add: impl FnOnce(&mut Ui)) -> (egui::Rect, bool) {
+    let badge = ui
+        .horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = GUTTER - STEP_BADGE;
+            let (rect, _) = ui.allocate_exact_size(vec2(STEP_BADGE, STEP_BADGE), Sense::hover());
+            // the fill fades in as the step becomes ready
+            let t = super::motion::toward(
+                ui.ctx(),
+                ui.scope_id().with(("convert-step-done", n)),
+                done,
+                super::motion::MEDIUM,
+            );
+            let p = ui.painter();
+            let r = (STEP_BADGE / 2.0) as u8;
+            p.rect(rect, CornerRadius::same(r), c_card(), Stroke::new(1.5, c_control()), egui::StrokeKind::Inside);
+            if t > 0.0 {
+                super::motion::gradient_rect(p, rect, r, c_accent().gamma_multiply(t), c_accent2().gamma_multiply(t));
+            }
+            if t > 0.5 {
+                let c = rect.center();
+                let mark = Stroke::new(2.0, c_on_accent().gamma_multiply(t));
+                p.line_segment([c + vec2(-5.0, 0.5), c + vec2(-1.5, 4.0)], mark);
+                p.line_segment([c + vec2(-1.5, 4.0), c + vec2(5.0, -3.5)], mark);
+            } else {
+                p.text(
+                    rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    n.to_string(),
+                    super::fonts::semibold(FS_META + 1.0),
+                    c_muted(),
+                );
+            }
+            ui.label(RichText::new(sentence(title)).size(FS_SECTION).semibold());
+            rect
+        })
+        .inner;
+    ui.add_space(6.0);
+    ui.horizontal_top(|ui| {
+        ui.add_space(GUTTER - ui.spacing().item_spacing.x);
+        ui.vertical(|ui| {
+            ui.set_width(ui.available_width());
+            add(ui);
+        });
+    });
+    (badge, done)
+}
+
+/// The picture beside a world's name: a stack of layers in a soft brand tint.
+fn world_badge(ui: &mut Ui) {
+    let (rect, _) = ui.allocate_exact_size(vec2(48.0, 48.0), Sense::hover());
+    ui.painter().rect_filled(rect, CornerRadius::same(R_CONTROL + 2), c_accent_soft());
+    super::icons::paint(ui.painter(), Icon::Layers, rect.center(), 22.0, c_accent());
+}
+
+/// A round badge at the head of the result: the brand gradient with a check mark when the world was converted, the
+/// danger tint with an exclamation mark when it was not.
+fn result_badge(ui: &mut Ui, good: bool) {
+    let (rect, _) = ui.allocate_exact_size(vec2(44.0, 44.0), Sense::hover());
+    let p = ui.painter();
+    let c = rect.center();
+    if good {
+        super::motion::glow(p, c, 46.0, c_accent().gamma_multiply(if is_dark() { 0.22 } else { 0.18 }));
+        super::motion::brand_rect(p, rect, 22);
+        let mark = Stroke::new(2.6, c_on_accent());
+        p.line_segment([c + vec2(-8.0, 0.5), c + vec2(-2.5, 6.0)], mark);
+        p.line_segment([c + vec2(-2.5, 6.0), c + vec2(8.5, -6.0)], mark);
+    } else {
+        p.rect(
+            rect,
+            CornerRadius::same(22),
+            c_danger_bg(),
+            Stroke::new(1.0, c_danger_line()),
+            egui::StrokeKind::Inside,
+        );
+        p.line_segment([c + vec2(0.0, -9.0), c + vec2(0.0, 3.0)], Stroke::new(2.6, c_danger()));
+        p.circle_filled(c + vec2(0.0, 8.5), 1.7, c_danger());
+    }
 }
 
 /// One option of a card: its name on the left, its control on the right, both centred on the row. (The shared
@@ -97,7 +185,7 @@ impl ConvertState {
                     if self.screen != Screen::Running {
                         // the standalone converter is a page of its own in the sidebar: nowhere to go back to
                         if let Some(d) = &self.dest {
-                            if ui.link(RichText::new(tr!("Back to {0}", &d.name)).color(c_muted())).clicked() {
+                            if back_link(ui, &tr!("Back to {0}", &d.name)).clicked() {
                                 acts.push(Act::BackToInstance(d.folder.clone()));
                             }
                         }
@@ -148,7 +236,8 @@ impl ConvertState {
         if needs_pin {
             // a hairline where the blocks are cut off, so the clipped edge reads as an edge
             let y = page.inner_rect.bottom() + 0.5;
-            ui.painter().hline(ui.max_rect().x_range(), y, Stroke::new(1.0, c_border()));
+            let left = ui.max_rect().left();
+            ui.painter().hline(left..=ui.max_rect().right().min(left + PAGE_WIDTH), y, Stroke::new(1.0, c_border()));
             self.start_bar(ui, &mut acts, true);
         }
         self.footer(ui, &mut acts);
@@ -179,14 +268,26 @@ impl ConvertState {
     // Set up
 
     fn setup(&mut self, ui: &mut Ui, acts: &mut Vec<Act>) {
-        self.world_block(ui, acts);
-        if self.found().is_none() {
-            return;
+        // the three blocks are the steps of a stepper: a numbered badge each, joined by a line down the left, a step
+        // that is ready ticked off in the brand gradient
+        let found = self.found().is_some();
+        let target_ready = !self.version.is_empty() && self.dims.iter().any(|(_, on)| *on);
+        let output_ready = found && matches!(self.output_check(), OutputCheck::Ok);
+        let mut badges = Vec::new();
+        badges.push(step(ui, 1, &tr!("BEDROCK WORLD"), found, |ui| self.world_block(ui, acts)));
+        if found {
+            ui.add_space(STEP_GAP);
+            badges.push(step(ui, 2, &tr!("CONVERT TO"), target_ready, |ui| self.target_block(ui)));
+            ui.add_space(STEP_GAP);
+            let title = if self.dest.is_some() { tr!("ADD TO THE INSTANCE AS") } else { tr!("SAVE AS") };
+            badges.push(step(ui, 3, &title, output_ready, |ui| self.output_block(ui, acts)));
         }
-        ui.add_space(16.0);
-        self.target_block(ui);
-        ui.add_space(16.0);
-        self.output_block(ui, acts);
+        // the line between two badges: in the brand colour once the step above it is ready
+        for pair in badges.windows(2) {
+            let ((a, done), (b, _)) = (pair[0], pair[1]);
+            let color = if done { c_accent().gamma_multiply(0.6) } else { c_border() };
+            ui.painter().vline(a.center().x, a.bottom() + 5.0..=b.top() - 5.0, Stroke::new(2.0, color));
+        }
     }
 
     /// The Convert button, and why it cannot be pressed yet when that is so. `pinned`: it sits under the scrolling
@@ -197,6 +298,8 @@ impl ConvertState {
             ui.add_space(4.0);
         }
         ui.horizontal(|ui| {
+            // lined up with the blocks of the steps, not with their badges
+            ui.add_space(GUTTER - ui.spacing().item_spacing.x);
             if primary_enabled_icon(ui, Icon::Convert, &tr!("Convert"), blocked.is_none()).clicked() {
                 acts.push(Act::Start);
             }
@@ -207,7 +310,6 @@ impl ConvertState {
     }
 
     fn world_block(&mut self, ui: &mut Ui, acts: &mut Vec<Act>) {
-        block_title(ui, &tr!("BEDROCK WORLD"));
         match &self.look {
             Look::Nothing => {
                 self.drop_zone(ui, acts);
@@ -232,6 +334,8 @@ impl ConvertState {
             Look::Found(d) => {
                 card(ui, |ui| {
                     ui.horizontal_top(|ui| {
+                        ui.spacing_mut().item_spacing.x = 14.0;
+                        world_badge(ui);
                         ui.vertical(|ui| {
                             ui.set_max_width((ui.available_width() - 120.0).max(160.0));
                             ui.spacing_mut().item_spacing.y = 2.0;
@@ -282,25 +386,36 @@ impl ConvertState {
     /// The calm dashed area that waits for a world: one sentence, and the two ways to choose one. It takes the hover
     /// fill under the pointer and the selection fill while a file is dragged over the window.
     fn drop_zone(&self, ui: &mut Ui, acts: &mut Vec<Act>) {
-        let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), ZONE_HEIGHT), Sense::hover());
+        let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), ZONE_HEIGHT), Sense::hover());
         let dragging = ui.ctx().input(|i| !i.raw.hovered_files.is_empty());
-        let (fill, edge) = if dragging {
-            (Some(c_selection()), c_text())
-        } else if ui.rect_contains_pointer(rect) {
-            (Some(c_hover()), c_control())
-        } else {
-            (None, c_control())
-        };
-        if let Some(fill) = fill {
-            ui.painter().rect_filled(rect, CornerRadius::same(R_CARD), fill);
-        }
+        // glass at rest; the hover fill fades in under the pointer, the brand tint while a file is dragged over
+        let hot = super::motion::hover(ui, resp.id, ui.rect_contains_pointer(rect));
+        let drag = super::motion::toward(ui.ctx(), resp.id.with("drag"), dragging, super::motion::FAST);
+        let fill = super::motion::mix(super::motion::mix(c_card(), c_hover(), hot), c_accent_soft(), drag);
+        let edge = super::motion::mix(c_control(), c_accent(), drag);
+        ui.painter().add(card_shadow().as_shape(rect, CornerRadius::same(R_CARD)));
+        ui.painter().rect_filled(rect, CornerRadius::same(R_CARD), fill);
         let outline = rounded_outline(rect.shrink(0.5), f32::from(R_CARD));
-        ui.painter().extend(egui::Shape::dashed_line(&outline, Stroke::new(1.0, edge), 5.0, 4.0));
+        ui.painter().extend(egui::Shape::dashed_line(&outline, Stroke::new(1.0 + drag, edge), 6.0, 4.0));
         let mut inner = ui.new_child(
             egui::UiBuilder::new().max_rect(rect.shrink2(vec2(16.0, 0.0))).layout(Layout::top_down(Align::Center)),
         );
         inner.spacing_mut().item_spacing.y = 4.0;
-        inner.add_space(14.0);
+        inner.add_space(18.0);
+        // the picture of the area: a soft badge that lights up in the brand gradient while a file is dragged over
+        let (badge, _) = inner.allocate_exact_size(vec2(40.0, 40.0), Sense::hover());
+        inner.painter().rect_filled(badge, CornerRadius::same(R_CONTROL), c_accent_soft());
+        if drag > 0.0 {
+            super::motion::gradient_rect(
+                inner.painter(),
+                badge,
+                R_CONTROL,
+                c_accent().gamma_multiply(drag),
+                c_accent2().gamma_multiply(drag),
+            );
+        }
+        icons_arrow_down(inner.painter(), badge.center(), super::motion::mix(c_accent(), c_on_accent(), drag));
+        inner.add_space(4.0);
         inner.label(RichText::new(tr!("Drop a world here")).font(super::fonts::medium(FS_BODY)));
         inner.add(
             egui::Label::new(
@@ -340,7 +455,6 @@ impl ConvertState {
     }
 
     fn target_block(&mut self, ui: &mut Ui) {
-        block_title(ui, &tr!("CONVERT TO"));
         card(ui, |ui| {
             // the target is always Java Edition: there is nothing to choose
             option_row(ui, &tr!("Game"), |ui| {
@@ -394,7 +508,6 @@ impl ConvertState {
 
     fn output_block(&mut self, ui: &mut Ui, acts: &mut Vec<Act>) {
         let check = self.output_check();
-        block_title(ui, &if self.dest.is_some() { tr!("ADD TO THE INSTANCE AS") } else { tr!("SAVE AS") });
         card(ui, |ui| {
             ui.horizontal(|ui| {
                 let button_w = 130.0;
@@ -486,14 +599,34 @@ impl ConvertState {
         let mut confirmed = false;
         block_title(ui, &tr!("CONVERTING"));
         card(ui, |ui| {
-            ui.add(egui::Label::new(RichText::new(&name).size(FS_SECTION).semibold()).truncate());
-            small_muted(ui, format!("{} {}", run.job.target.edition.label(), run.job.target.version));
-            ui.add_space(12.0);
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 14.0;
+                world_badge(ui);
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing.y = 2.0;
+                    ui.set_max_width((ui.available_width() - 90.0).max(120.0));
+                    ui.add(egui::Label::new(RichText::new(&name).size(FS_SECTION).semibold()).truncate());
+                    small_muted(ui, format!("{} {}", run.job.target.edition.label(), run.job.target.version));
+                });
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    // the figure that moves, large, in the brand colour
+                    if run.progress > 0.0 {
+                        ui.label(
+                            RichText::new(format!("{:.0}%", run.progress * 100.0))
+                                .font(super::fonts::semibold(FS_TITLE))
+                                .color(c_accent()),
+                        );
+                    } else {
+                        spinner_sized(ui, 24.0);
+                    }
+                });
+            });
+            ui.add_space(14.0);
             let stage = if run.stopping { ellipsis(tr!("Stopping...")) } else { run.stage.clone() };
             ui.add(egui::Label::new(RichText::new(stage).color(c_muted())).truncate());
-            ui.add_space(2.0);
-            progress_bar(ui, (run.progress > 0.0).then_some(run.progress), 6.0);
-            ui.add_space(12.0);
+            ui.add_space(4.0);
+            progress_bar(ui, (run.progress > 0.0).then_some(run.progress), 10.0);
+            ui.add_space(14.0);
             // "Time passed: 0:42" is one text in the translations; its label and value are told apart again here
             let passed = tr!("Time passed: {0}", format_elapsed(run.started.elapsed()));
             let (passed_label, passed_value) = match passed.split_once(": ") {
@@ -543,16 +676,32 @@ impl ConvertState {
         let mut again = false;
         let dest = self.dest.clone();
         card(ui, |ui| {
-            match &dest {
-                Some(d) => {
-                    ui.label(RichText::new(tr!("Your world was added to {0}", &d.name)).size(FS_SECTION).semibold());
-                    small_muted(ui, tr!("It is in the instance's saves folder and shows up in Singleplayer."));
-                }
-                None => {
-                    ui.label(RichText::new(tr!("Your world was converted")).size(FS_SECTION).semibold());
-                }
-            }
-            ui.add_space(12.0);
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 14.0;
+                result_badge(ui, true);
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing.y = 2.0;
+                    match &dest {
+                        Some(d) => {
+                            ui.add(
+                                egui::Label::new(
+                                    RichText::new(tr!("Your world was added to {0}", &d.name))
+                                        .size(FS_FIGURE)
+                                        .semibold(),
+                                )
+                                .wrap(),
+                            );
+                            small_muted(ui, tr!("It is in the instance's saves folder and shows up in Singleplayer."));
+                        }
+                        None => {
+                            // one line: centred on the badge
+                            ui.add_space(9.0);
+                            ui.label(RichText::new(tr!("Your world was converted")).size(FS_FIGURE).semibold());
+                        }
+                    }
+                });
+            });
+            ui.add_space(14.0);
             let kinds = s.unmapped_blocks.len();
             let (columns_label, time_label, unmatched_label) =
                 (tr!("Columns converted"), tr!("Time taken"), tr!("Blocks without a match"));
@@ -640,40 +789,54 @@ impl ConvertState {
     fn failed(&mut self, ui: &mut Ui, acts: &mut Vec<Act>) {
         let message = self.error.clone().unwrap_or_default();
         let details = self.details();
-        notice(ui, NoticeKind::Error, &sentence(&tr!("THE WORLD COULD NOT BE CONVERTED")), None);
-        ui.add_space(8.0);
-        ui.add(egui::Label::new(RichText::new(message).size(FS_BODY).color(c_text())).wrap());
-        ui.add_space(8.0);
-        small_muted(
-            ui,
-            tr!("The original world is not changed. \"Copy details\" copies what to send when you ask for help."),
-        );
-        ui.add_space(4.0);
-        egui::CollapsingHeader::new(RichText::new(tr!("Details")).color(c_muted())).id_salt("convert-details").show(
-            ui,
-            |ui| {
-                ScrollArea::vertical().max_height(160.0).auto_shrink([false, true]).show(ui, |ui| {
-                    ui.add(egui::Label::new(RichText::new(details).monospace().size(FS_META).color(c_muted())).wrap());
+        card(ui, |ui| {
+            ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 14.0;
+            result_badge(ui, false);
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = 2.0;
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(sentence(&tr!("THE WORLD COULD NOT BE CONVERTED")))
+                            .size(FS_FIGURE)
+                            .semibold()
+                            .color(c_danger()),
+                    )
+                    .wrap(),
+                );
+                small_muted(ui, tr!("The original world is not changed. \"Copy details\" copies what to send when you ask for help."));
+            });
+        });
+            ui.add_space(12.0);
+            notice(ui, NoticeKind::Error, &message, None);
+            ui.add_space(6.0);
+            egui::CollapsingHeader::new(RichText::new(tr!("Details")).color(c_muted()))
+                .id_salt("convert-details")
+                .show(ui, |ui| {
+                    ScrollArea::vertical().max_height(160.0).auto_shrink([false, true]).show(ui, |ui| {
+                        ui.add(
+                            egui::Label::new(RichText::new(details).monospace().size(FS_META).color(c_muted())).wrap(),
+                        );
+                    });
                 });
-            },
-        );
-        ui.add_space(12.0);
-        ui.horizontal(|ui| {
-            if self.error_final {
-                // the world itself is the problem: going back to its settings can't help
-                if secondary(ui, &tr!("Choose another world")).clicked() {
+            ui.add_space(12.0);
+            ui.horizontal(|ui| {
+                if self.error_final {
+                    // the world itself is the problem: going back to its settings can't help
+                    if secondary(ui, &tr!("Choose another world")).clicked() {
+                        self.start_over();
+                    }
+                } else if secondary(ui, &tr!("Back to the settings")).clicked() {
+                    // the check of the output folder is made afresh: what made the run fail may have changed
+                    self.back_to_setup();
+                }
+                if ghost(ui, &tr!("Copy details")).clicked() {
+                    acts.push(Act::Copy(self.details()));
+                }
+                if !self.error_final && ghost(ui, &tr!("Choose another world")).clicked() {
                     self.start_over();
                 }
-            } else if secondary(ui, &tr!("Back to the settings")).clicked() {
-                // the check of the output folder is made afresh: what made the run fail may have changed
-                self.back_to_setup();
-            }
-            if ghost(ui, &tr!("Copy details")).clicked() {
-                acts.push(Act::Copy(self.details()));
-            }
-            if !self.error_final && ghost(ui, &tr!("Choose another world")).clicked() {
-                self.start_over();
-            }
+            });
         });
     }
 }
@@ -755,6 +918,15 @@ fn drop_hint(ui: &mut Ui) {
         super::fonts::semibold(FS_TITLE),
         c_text(),
     );
+}
+
+/// An arrow down into a tray: "drop it here".
+fn icons_arrow_down(p: &egui::Painter, c: egui::Pos2, color: Color32) {
+    let stroke = Stroke::new(1.8, color);
+    let at = |x: f32, y: f32| c + vec2(x, y) * 9.0;
+    p.line_segment([at(0.0, -0.95), at(0.0, 0.35)], stroke);
+    p.add(egui::Shape::line(vec![at(-0.45, -0.1), at(0.0, 0.35), at(0.45, -0.1)], stroke));
+    p.add(egui::Shape::line(vec![at(-0.95, 0.3), at(-0.95, 0.9), at(0.95, 0.9), at(0.95, 0.3)], stroke));
 }
 
 /// The outline of a rectangle with round corners, as points to draw a dashed line along.

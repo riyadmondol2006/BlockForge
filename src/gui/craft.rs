@@ -722,6 +722,29 @@ impl CraftState {
         self.paint_icon(ui, rect, id, name);
     }
 
+    /// [`Self::icon`] on a slot: a small rounded tile under the picture, like a slot of the game's inventory, so the
+    /// pictures of a list line up and sit on something. `size` is the side of the slot.
+    pub(super) fn slot_icon(&mut self, ui: &mut Ui, id: &str, name: &str, size: f32) {
+        let (rect, _) = ui.allocate_exact_size(vec2(size, size), Sense::hover());
+        self.paint_slot(ui, rect, id, name);
+    }
+
+    /// The slot of [`Self::slot_icon`] in `rect`.
+    pub(super) fn paint_slot(&mut self, ui: &Ui, rect: egui::Rect, id: &str, name: &str) {
+        if !ui.is_rect_visible(rect) {
+            return;
+        }
+        ui.painter().rect(
+            rect,
+            CornerRadius::same(R_TAG + 2),
+            c_field(),
+            egui::Stroke::new(1.0, c_rule()),
+            egui::StrokeKind::Inside,
+        );
+        let pad = (rect.width() * 0.16).round();
+        self.paint_icon(ui, rect.shrink(pad), id, name);
+    }
+
     pub(super) fn paint_icon(&mut self, ui: &Ui, rect: egui::Rect, id: &str, name: &str) {
         if !ui.is_rect_visible(rect) {
             return;
@@ -955,7 +978,7 @@ impl CraftState {
                         ui.set_height(45.0);
                         ui.label(RichText::new(&v.id).semibold());
                         if v.id == latest {
-                            small_faint(ui, "Latest");
+                            tag(ui, "Latest", c_accent());
                         }
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             if have {
