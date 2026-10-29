@@ -173,7 +173,9 @@ jobs:
   macos:
     name: macOS disk image (Apple Silicon)
     needs: checks
-    runs-on: macos-15
+    # macOS 26 is GitHub's own Apple Silicon machine now: the older macOS 15 machines got too few to be had, and a
+    # build waiting for one was dropped after 15 minutes. The disk image still runs on macOS 11 and newer (below).
+    runs-on: macos-26
     timeout-minutes: 45
     env:
       VERSION: ${{ needs.checks.outputs.version }}

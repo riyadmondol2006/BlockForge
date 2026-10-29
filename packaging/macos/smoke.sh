@@ -1,6 +1,6 @@
 #!/bin/bash
 # Mounts the BlockForge disk image and checks what a person gets from it: the app's layout, its Info.plist, its icon,
-# its signature, the Applications link, and that the program starts. Meant for CI (macos-15), but works on any
+# its signature, the Applications link, and that the program starts. Meant for CI (macos-26), but works on any
 # Apple Silicon Mac. It only reads the image and copies the app into a temporary folder.
 #
 #   packaging/macos/smoke.sh [dist/BlockForge-<version>-macos-arm64.dmg]

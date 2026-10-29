@@ -3,7 +3,7 @@
 #
 #   packaging/macos/build.sh <version> [path/to/blockforge]
 #
-# Build the program first, on an Apple Silicon Mac (or a macos-15 runner):
+# Build the program first, on an Apple Silicon Mac (or a macos-26 runner):
 #   MACOSX_DEPLOYMENT_TARGET=11.0 cargo build --release
 # The result is dist/BlockForge-<version>-macos-arm64.dmg (override the folder with OUT_DIR=...). The app inside is
 # signed ad hoc ("codesign --sign -"): that is what lets an unsigned program run on Apple Silicon, but it isn't a
