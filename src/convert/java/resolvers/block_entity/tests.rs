@@ -929,3 +929,28 @@ fn uuid_to_ints() {
     assert_eq!(skull::uuid_ints(UUID), Some(UUID_INTS.to_vec()));
     assert_eq!(skull::uuid_ints("nonsense"), None);
 }
+
+/// [`write`] with the hooks the world writer gives every block entity (the block entity data of items, map ids).
+fn write_in_world(be: &BlockEntity, v: V) -> Option<Compound> {
+    let f = fmt(v);
+    let items = items_for(&f);
+    let hooks = crate::convert::java::resolvers::hooks::WorldItemHooks::new(&items, &f, 0);
+    write_block_entity_with(&items, &f, be, &hooks)
+}
+
+#[test]
+fn shulker_boxes_in_a_chest_keep_their_contents() {
+    let mut shulker = ItemStack::new(BlockType::SHULKER_BOX);
+    shulker.props.block_entity = Some(Box::new(be(BlockEntityData::ShulkerBox(chest_like()))));
+    let mut chest = RandomContainer::default();
+    chest.container.items.insert(4, shulker);
+    let entity = be(BlockEntityData::Chest(chest));
+    let new = write_in_world(&entity, (26, 3, 0)).unwrap();
+    let held = new.get_list("Items").unwrap()[0].as_compound().unwrap();
+    let inner = held.get_compound("components").and_then(|c| c.get_list("minecraft:container")).expect("contents");
+    assert_eq!(inner.len(), 2);
+    let old = write_in_world(&entity, (1, 20, 4)).unwrap();
+    let held = old.get_list("Items").unwrap()[0].as_compound().unwrap();
+    let tag = held.get_compound("tag").and_then(|t| t.get_compound("BlockEntityTag")).expect("BlockEntityTag");
+    assert_eq!(tag.get_list("Items").map(<[Tag]>::len), Some(2));
+}

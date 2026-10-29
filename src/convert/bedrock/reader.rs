@@ -13,21 +13,24 @@
 //!   database holds, filtered by the conversion settings (dimension mapping and pruning);
 //! - [`read_column`](BedrockWorldReader::read_column) reads one column: its sub-chunks (`reader_blocks`), biomes and
 //!   height map (`reader_biomes`), block entities and the block fix-ups that go with them (`resolvers::block_entity::read_into_column`), then
-//!   hands it to the pre-transform of the world's version.
+//!   hands it to the pre-transform of the world's version;
+//! - [`entities`](BedrockWorldReader::entities) reads every actor of a dimension at once (`reader_entities`), so each
+//!   one can go to the column it stands in rather than the one it is stored with.
 //!
 //! The reader is `Sync`. Every database access goes through one thread that owns the LevelDB handle
 //! (`rusty-leveldb` handles are `!Send` and need `&mut`), so any number of workers may call `read_column` at once:
 //! they queue for the raw bytes of a column, which is quick, and decode in parallel, which is the slow part. A call
 //! holds one column in memory plus whatever the database caches (8 MiB).
 //!
-//! Not read in this version: entities (`digp`/`actorprefix` and the pre-1.18.30 `Entity` record; item frames and
-//! paintings included), pending and random ticks, the legacy terrain record and sub-chunk versions before 8. The
+//! Not read in this version: pending and random ticks, the legacy terrain record and sub-chunk versions before 8. The
 //! chunk `Version` and `FinalizedState` records are checked for sanity and otherwise ignored, like Chunker does.
 
 #[path = "reader_biomes.rs"]
 mod reader_biomes;
 #[path = "reader_blocks.rs"]
 mod reader_blocks;
+#[path = "reader_entities.rs"]
+mod reader_entities;
 #[path = "reader_io.rs"]
 mod reader_io;
 #[cfg(test)]
@@ -40,6 +43,7 @@ use std::sync::{Arc, Mutex};
 
 use self::reader_biomes::{BiomeReader, height_map};
 use self::reader_blocks::{BlockReader, build_chunk};
+pub use self::reader_entities::ColumnEntities;
 use self::reader_io::{DbHandle, DbOpener, Want};
 use super::BedrockError;
 use super::data_version::{BedrockVersion, GameVersion};
@@ -85,6 +89,8 @@ pub struct ReaderStats {
     pub block_entities: u64,
     /// Columns whose `FinalizedState` says generation was not finished.
     pub unfinalized: u64,
+    /// Actors read from the entity storage (after removing duplicates), before the filters.
+    pub entities: u64,
 }
 
 /// A player other than the host (`player_server_<uuid>`).
@@ -121,7 +127,7 @@ pub struct BedrockWorldReader {
     dimensions: Vec<DimensionColumns>,
     blocks: BlockReader,
     biomes: BiomeReader,
-    items: BedrockItems,
+    items: Arc<BedrockItems>,
     /// Added to the y of version 8 sub-chunks in the overworld (-4 for 1.17.0 to 1.17.20 caves and cliffs worlds).
     chunk_y_offset: i32,
     warnings: Mutex<Vec<String>>,
@@ -132,6 +138,8 @@ pub struct BedrockWorldReader {
     sub_chunks_read: AtomicU64,
     block_entities_read: AtomicU64,
     unfinalized: AtomicU64,
+    entities_read: AtomicU64,
+    unmapped_entities: Mutex<HashMap<String, u64>>,
 }
 
 fn convert_error(e: BedrockError) -> ConvertError {
@@ -262,7 +270,7 @@ impl BedrockWorldReader {
             dimensions,
             blocks: BlockReader::new(mapping, settings.custom_identifiers),
             biomes,
-            items,
+            items: Arc::new(items),
             chunk_y_offset,
             warnings,
             warnings_dropped: AtomicU64::new(0),
@@ -272,6 +280,8 @@ impl BedrockWorldReader {
             sub_chunks_read: AtomicU64::new(0),
             block_entities_read: AtomicU64::new(0),
             unfinalized: AtomicU64::new(0),
+            entities_read: AtomicU64::new(0),
+            unmapped_entities: Mutex::default(),
         })
     }
 
@@ -502,6 +512,10 @@ impl BedrockWorldReader {
                 }
                 Err(e) => self.warn(format!("{}: block entities: {e}", at())),
             }
+            // The item frames the block entities turned into entities.
+            if !(s.process_entities && s.convert_item_frames) {
+                column.entities.retain(|e| !matches!(e.data, crate::convert::model::EntityData::ItemFrame(_)));
+            }
         }
 
         self.check_status(&records, &at);
@@ -577,7 +591,18 @@ impl BedrockWorldReader {
             sub_chunks: self.sub_chunks_read.load(Ordering::Relaxed),
             block_entities: self.block_entities_read.load(Ordering::Relaxed),
             unfinalized: self.unfinalized.load(Ordering::Relaxed),
+            entities: self.entities_read.load(Ordering::Relaxed),
         }
+    }
+
+    /// Entity identifiers that have no vanilla type, with counts.
+    pub fn unmapped_entities(&self) -> HashMap<String, u64> {
+        self.unmapped_entities.lock().map(|m| m.clone()).unwrap_or_default()
+    }
+
+    /// The item and block readers, for the writer's entity resolver (items of mobs, minecarts, frames...).
+    pub fn entity_source(&self) -> Arc<dyn crate::convert::model::EntitySource> {
+        self.items.clone()
     }
 }
 

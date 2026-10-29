@@ -650,3 +650,78 @@ fn a_world_whose_last_files_cant_be_written_is_removed_not_left_half_made() {
     assert!(!out.exists(), "the half-made world was removed, so the folder can be used again");
     let _ = std::fs::remove_dir_all(&base);
 }
+
+/// A column with a cow read from a Bedrock actor and an item frame.
+fn column_with_entities() -> Column {
+    use crate::convert::model::entity::{ItemFrame, Tile};
+    use crate::convert::model::{Entity, EntityData, EntityType, FacingDirection, VanillaEntityType};
+    let mut c = sample_column(0, 0);
+    let mut cow = Entity::unknown(EntityType::Vanilla(VanillaEntityType::COW));
+    cow.position = [4.5, 64.0, 4.5];
+    let mut source = Compound::new();
+    source.insert("identifier", Tag::String("minecraft:cow".into()));
+    source.insert("UniqueID", Tag::Long(42));
+    cow.source_nbt = Some(source);
+    c.entities.push(cow);
+    let frame =
+        ItemFrame { tile: Tile { x: 2, y: 64, z: 3 }, direction: Some(FacingDirection::UP), ..ItemFrame::default() };
+    c.entities.push(Entity::new(EntityData::ItemFrame(frame)));
+    c
+}
+
+#[test]
+fn entities_are_written_where_the_version_keeps_them() {
+    use crate::convert::bedrock::data_version::BedrockVersion;
+    use crate::convert::bedrock::resolvers::itemstack::BedrockItems;
+    let ids = |list: &[Tag]| -> Vec<String> {
+        list.iter().filter_map(|e| e.as_compound()?.get_str("id").map(str::to_owned)).collect()
+    };
+    for target in targets() {
+        let tmp = TestDir::new("entities");
+        let fmt = JavaFormat::for_version(target);
+        let mut w = JavaWorldWriter::create(tmp.path(), target, &level(), &ConversionSettings::default()).unwrap();
+        w.set_entity_source(Arc::new(BedrockItems::new(BedrockVersion::exact([1, 26, 50]).unwrap())));
+        let dim = Dimension::overworld();
+        w.write_column(&dim, &column_with_entities()).unwrap();
+        w.finish_dimension(&dim).unwrap();
+        let summary = w.finish_with_summary().unwrap();
+        assert_eq!((summary.entities, summary.dropped_entities), (2, 0), "{target}");
+        let root = read_chunk(tmp.path(), &fmt, 0, 0);
+        let entities_dir = LevelDirs::new(tmp.path(), &fmt).entities_dir(&JavaDimension::Overworld);
+        let list = if fmt.entities_separate {
+            assert!(!root.get("Level").and_then(Tag::as_compound).unwrap_or(&root).contains_key("Entities"));
+            let mut region = RegionFile::open_read(entities_dir.join("r.0.0.mca")).unwrap();
+            let chunk = region.read_chunk(0, 0).unwrap().expect("entity chunk");
+            assert_eq!(chunk.get("DataVersion").and_then(Tag::as_integer), Some(fmt.row_data_version as i64));
+            assert_eq!(chunk.get("Position").and_then(Tag::as_int_array), Some(&vec![0, 0]));
+            chunk.get("Entities").and_then(Tag::as_list).unwrap().clone()
+        } else {
+            assert!(!entities_dir.exists(), "{target}");
+            let level = root.get("Level").and_then(Tag::as_compound).unwrap();
+            level.get("Entities").and_then(Tag::as_list).unwrap().clone()
+        };
+        assert_eq!(ids(&list), ["minecraft:cow", "minecraft:item_frame"], "{target}");
+    }
+}
+
+#[test]
+fn entities_need_their_source_and_the_switch() {
+    let tmp = TestDir::new("entities-off");
+    let target = Version::new(26, 3, 0);
+    // Without the reader's resolvers the actor is left out; the item frame needs none.
+    let mut w = JavaWorldWriter::create(tmp.path(), target, &level(), &ConversionSettings::default()).unwrap();
+    let dim = Dimension::overworld();
+    w.write_column(&dim, &column_with_entities()).unwrap();
+    w.finish_dimension(&dim).unwrap();
+    let summary = w.finish_with_summary().unwrap();
+    assert_eq!((summary.entities, summary.dropped_entities), (2, 1));
+
+    let tmp = TestDir::new("entities-none");
+    let settings = ConversionSettings::builder().process_entities(false).build();
+    let mut w = JavaWorldWriter::create(tmp.path(), target, &level(), &settings).unwrap();
+    w.write_column(&dim, &column_with_entities()).unwrap();
+    w.finish_dimension(&dim).unwrap();
+    assert_eq!(w.finish_with_summary().unwrap().entities, 0);
+    let fmt = JavaFormat::for_version(target);
+    assert!(!LevelDirs::new(tmp.path(), &fmt).entities_dir(&JavaDimension::Overworld).join("r.0.0.mca").exists());
+}

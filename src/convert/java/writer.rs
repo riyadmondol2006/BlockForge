@@ -83,6 +83,9 @@ pub struct WriterSummary {
     pub dropped_sections: u64,
     pub block_entities: u64,
     pub dropped_block_entities: u64,
+    pub entities: u64,
+    /// Entities the target has no type for.
+    pub dropped_entities: u64,
     /// Columns of dimensions the target version cannot hold (custom dimensions before 1.16, invalid names).
     pub skipped_columns: u64,
     /// Blocks written as air because the tables have no Java form for them, with the count of blocks.
@@ -98,6 +101,8 @@ pub struct PreparedColumn {
     data: Vec<u8>,
     /// The compressed `poi/` chunk when the column holds nether portal blocks.
     poi: Option<(PathBuf, Vec<u8>)>,
+    /// The compressed `entities/` chunk (1.17+) when the column has entities.
+    entities: Option<(PathBuf, Vec<u8>)>,
     stats: ColumnStats,
 }
 
@@ -140,6 +145,8 @@ pub struct JavaWorldWriter {
     player_items: BTreeMap<i8, ItemStack>,
     ender_items: BTreeMap<i8, ItemStack>,
     guests: Vec<GuestPlayer>,
+    /// The reader's item and block resolvers, for entities kept as source NBT (Bedrock actors).
+    entity_source: Option<std::sync::Arc<dyn crate::convert::model::EntitySource>>,
     dimensions_seen: Vec<Dimension>,
     source_from_minus_64: bool,
     tall_overworld: bool,
@@ -194,6 +201,7 @@ impl JavaWorldWriter {
             player_items: BTreeMap::new(),
             ender_items: BTreeMap::new(),
             guests: Vec::new(),
+            entity_source: None,
             dimensions_seen: Vec::new(),
             source_from_minus_64: level.settings.caves_and_cliffs,
             tall_overworld,
@@ -246,6 +254,12 @@ impl JavaWorldWriter {
         &self.item_hooks
     }
 
+    /// The reader's item and block resolvers: without them the entities read from a Bedrock world (mobs, minecarts,
+    /// paintings...) are not written. Item frames need none.
+    pub fn set_entity_source(&mut self, source: std::sync::Arc<dyn crate::convert::model::EntitySource>) {
+        self.entity_source = Some(source);
+    }
+
     /// Blocks that had no Java form and were written as air (with how many), most frequent first.
     pub fn unmapped_blocks(&self) -> Vec<(String, u64)> {
         self.blocks.unmapped()
@@ -295,6 +309,7 @@ impl JavaWorldWriter {
             settings: &self.settings,
             source_from_minus_64: self.source_from_minus_64,
             tall_overworld: self.tall_overworld,
+            entity_source: self.entity_source.as_deref(),
         };
         let encoded = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| encode_column(&ctx, dim, column)))
             .map_err(|_| {
@@ -310,6 +325,10 @@ impl JavaWorldWriter {
                 column.position.x, column.position.z
             )));
         }
+        let entities = encoded.entities.map(|root| {
+            let bytes = nbtio::to_vec("", &Tag::Compound(root));
+            (self.dirs.entities_dir(&java), self.options.compression.compress(&bytes))
+        });
         Ok(Some(PreparedColumn {
             region_dir: self.dirs.region_dir(&java),
             chunk_x: column.position.x,
@@ -317,6 +336,7 @@ impl JavaWorldWriter {
             compression: self.options.compression,
             data: self.options.compression.compress(&bytes),
             poi: self.poi_chunk(dim, &java, column),
+            entities,
             stats: encoded.stats,
         }))
     }
@@ -369,7 +389,7 @@ impl JavaWorldWriter {
         self.regions
             .write_chunk(&prepared.region_dir, prepared.chunk_x, prepared.chunk_z, prepared.compression, &prepared.data)
             .map_err(io_error)?;
-        if let Some((dir, data)) = &prepared.poi {
+        for (dir, data) in prepared.poi.iter().chain(&prepared.entities) {
             self.regions
                 .write_chunk(dir, prepared.chunk_x, prepared.chunk_z, prepared.compression, data)
                 .map_err(io_error)?;
@@ -380,6 +400,8 @@ impl JavaWorldWriter {
         s.dropped_sections += prepared.stats.dropped_sections as u64;
         s.block_entities += prepared.stats.block_entities as u64;
         s.dropped_block_entities += prepared.stats.dropped_block_entities as u64;
+        s.entities += prepared.stats.entities as u64;
+        s.dropped_entities += prepared.stats.dropped_entities as u64;
         if !self.dimensions_seen.contains(dim) {
             self.dimensions_seen.push(dim.clone());
         }

@@ -1,6 +1,6 @@
 // Derived from Chunker (https://github.com/HiveGamesOSS/Chunker), Copyright (c) 2024 Hive Games, MIT License.
 //! A model column as the chunk NBT of a Java version (`JavaColumnWriter`, `JavaChunkWriter` and the `v1_13` ...
-//! `v1_18` overrides): sections with packed block palettes, biomes, block entities.
+//! `v1_18` overrides): sections with packed block palettes, biomes, block entities and entities.
 //!
 //! What is written (1.13 and later):
 //! - 1.18+: a flat root `{DataVersion, xPos, zPos, yPos, Status, LastUpdate, InhabitedTime, isLightOn, sections,
@@ -9,16 +9,19 @@
 //!   biomes as one int array per column (1.13, 1.14: 256 entries, 1.15+: 4x4x4 cells).
 //! - Heightmaps and light are left out on purpose: the game recomputes both (`isLightOn` is 0, like a column that
 //!   has never been lit). Chunker does the same.
-//! - Entities are not written in this version of the writer.
+//! - Entities (`resolvers::entity`): from 1.17 in their own chunk for `entities/`
+//!   (`{DataVersion, Position, Entities}`), before that as `Level.Entities`.
 
 use super::writer_biomes::BiomeWriter;
 use super::writer_blocks::{BlockWriter, JavaBlock};
 use super::{ItemsImpl, write_block_entity_impl};
 use crate::convert::java::format::{BiomeKind, JavaFormat, LightFlag, SectionLayout};
 use crate::convert::java::palette::{BIOMES_PER_SECTION, BLOCKS_PER_SECTION, pack_palette};
+use crate::convert::java::region::entities_root;
+use crate::convert::java::resolvers::entity::{EntityContext, write_entity};
 use crate::convert::java::resolvers::itemstack::ItemHooks;
 use crate::convert::level::{ConversionSettings, Dimension};
-use crate::convert::model::{Biome, Biomes, BlockPalette, CellPalette, Chunk, Column, Palette};
+use crate::convert::model::{Biome, Biomes, BlockPalette, CellPalette, Chunk, Column, EntitySource, Palette};
 use crate::convert::nbt::{Compound, Tag};
 use std::collections::HashMap;
 use std::hash::Hash;
@@ -37,6 +40,8 @@ pub struct EncodeContext<'a> {
     pub source_from_minus_64: bool,
     /// 1.17 only: the height pack is installed, so the overworld has sections -4 to 19.
     pub tall_overworld: bool,
+    /// The reader's item and block resolvers, for the entities kept as source NBT.
+    pub entity_source: Option<&'a dyn EntitySource>,
 }
 
 /// What happened while encoding a column.
@@ -48,12 +53,18 @@ pub struct ColumnStats {
     pub block_entities: usize,
     /// Block entities on air or on blocks without a Java form, outside the height range, or with no handler.
     pub dropped_block_entities: usize,
+    pub entities: usize,
+    /// Entities the target version has no type for (or that lost what they are made of, like an item entity
+    /// without an item).
+    pub dropped_entities: usize,
 }
 
 /// A column ready to be compressed.
 pub struct EncodedColumn {
     /// The chunk root compound (including `DataVersion`).
     pub root: Compound,
+    /// The `entities/` chunk root (1.17+), when the column has entities.
+    pub entities: Option<Compound>,
     pub stats: ColumnStats,
 }
 
@@ -340,8 +351,11 @@ pub fn encode_column(ctx: &EncodeContext<'_>, dim: &Dimension, column: &Column) 
         }
     }
 
+    // ---- entities ----
+    let entities = encode_entities(ctx, column, &mut stats);
+
     // ---- the column compound ----
-    let mut level = Compound::with_capacity(12);
+    let mut level = Compound::with_capacity(13);
     if nested {
         level.insert("DataVersion", Tag::Int(fmt.row_data_version));
     }
@@ -374,6 +388,13 @@ pub fn encode_column(ctx: &EncodeContext<'_>, dim: &Dimension, column: &Column) 
     }
     level.insert(fmt.sections_key, Tag::List(sections));
     level.insert(fmt.block_entities_key, Tag::List(block_entities));
+    let entities = if fmt.entities_separate {
+        (!entities.is_empty())
+            .then(|| entities_root(fmt.row_data_version, column.position.x, column.position.z, Tag::List(entities)))
+    } else {
+        level.insert("Entities", Tag::List(entities));
+        None
+    };
 
     let root = if fmt.level_wrapper {
         let mut root = Compound::with_capacity(2);
@@ -383,5 +404,37 @@ pub fn encode_column(ctx: &EncodeContext<'_>, dim: &Dimension, column: &Column) 
     } else {
         level
     };
-    EncodedColumn { root, stats }
+    EncodedColumn { root, entities, stats }
+}
+
+/// The entity compounds of a column (a failing entity is dropped, not the column).
+fn encode_entities(ctx: &EncodeContext<'_>, column: &Column, stats: &mut ColumnStats) -> Vec<Tag> {
+    if !ctx.settings.process_entities || column.entities.is_empty() {
+        return Vec::new();
+    }
+    let renamed = ctx.format.renamed_block_state_fields;
+    let block_state = |block: &crate::convert::model::BlockIdentifier| {
+        let java = ctx.blocks.resolve(&Arc::new(block.clone()))?;
+        (!java.is_air()).then(|| java.to_nbt(renamed))
+    };
+    let entity_ctx = EntityContext {
+        items: ctx.items,
+        format: ctx.format,
+        hooks: ctx.hooks,
+        source: ctx.entity_source,
+        block_state: &block_state,
+        // the account the world is converted for owns the host's pets, unless the pets are given to another one
+        pet_owner: ctx.settings.pet_owner_uuid.or(ctx.settings.player.owner_uuid),
+    };
+    let mut out = Vec::with_capacity(column.entities.len());
+    for entity in &column.entities {
+        stats.entities += 1;
+        let written = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| write_entity(&entity_ctx, entity)))
+            .unwrap_or(None);
+        match written {
+            Some(c) => out.push(Tag::Compound(c)),
+            None => stats.dropped_entities += 1,
+        }
+    }
+    out
 }

@@ -36,7 +36,7 @@ pub use color::Color;
 pub use column::{BlockPalette, Chunk, Column, HeightMap, Neighbours};
 pub use coords::{ChunkCoord, Edge, EdgeSet, RegionCoord};
 pub use dimension::Dimension;
-pub use entity::{Entity, EntityData, EntityType};
+pub use entity::{Entity, EntityData, EntitySource, EntityType};
 pub use generated::*;
 pub use identifier::{Identifier, StateValue};
 pub use item::{ItemId, ItemProps, ItemStack};

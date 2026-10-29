@@ -5,10 +5,32 @@ The section for a version is used as the text of its release on GitHub. Older re
 
 ## Unreleased
 
-The world converter keeps much more of the players, their maps and the world's settings.
+The world converter keeps much more of a Bedrock world: its mobs and pets, item frames, the players, their maps and
+the world's settings.
 
 ### World converter
 
+- **Mobs, pets and the rest come along.** A converted Bedrock world now has its entities: animals and monsters,
+  villagers with their job, level and trades, wandering traders, armor stands with what they wear, paintings on their
+  wall, minecarts with their loot or contents, boats, end crystals and the rest. Before, a converted world had none.
+- **Pets stay yours.** Tamed wolves, cats, parrots, horses, donkeys and llamas keep being tamed, sitting where they
+  sat, with their names, collars, coats, saddles, armor and chests. When the owner's Java account is known, the
+  host's pets belong to it; otherwise they stay tamed under an owner made from the Bedrock host.
+- **Item frames.** Item frames and glow item frames become Java item frames again, with the item in them turned the
+  same way.
+- **What mobs carry.** Weapons, armor and held items are kept, with what a mob picked up still sure to drop. Shulker
+  boxes keep their contents, and enchanted items their enchantments, wherever they are: held by a mob, in a frame, on
+  a villager's trade or in a minecart. This also fixes shulker boxes in chests and other containers, which lost their
+  contents.
+- **Mobs stay where they were.** Each entity goes to the chunk it stands in, leashed mobs stay tied to their fence,
+  bees and turtles remember their home, and a mob that appears twice in the world's data comes over once.
+- **For every Java version.** Entities are written the way each target version keeps them, from 1.13 to 26.3
+  (separate entity files from 1.17).
+- **Options, all on by default.** Convert entities at all; which mobs (all, no hostile ones, only pets and named
+  mobs, or none); leave out what lies around only for a moment (dropped items, experience orbs, falling sand and
+  projectiles); convert item frames. The converter page will show them in a later step.
+- **Not yet.** Riders are written next to their mount instead of on it, and armor stands in a pose other than the
+  default stand straight.
 - **Your character comes along whole.** A converted Bedrock world keeps the host's inventory and armor (they were
   dropped before), the ender chest, the experience level, health, food, active effects and the bed or respawn anchor
   you respawn at. Each Java version gets the player in its own format.

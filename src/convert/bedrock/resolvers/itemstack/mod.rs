@@ -218,6 +218,18 @@ impl BedrockItems {
     }
 }
 
+/// The item and block readers of the entity writer (items of mobs, frames, minecarts, villager trades; carried
+/// blocks). Air is no item.
+impl crate::convert::model::EntitySource for BedrockItems {
+    fn item(&self, nbt: &Compound) -> Option<ItemStack> {
+        self.read(nbt).filter(|stack| !stack.is_air())
+    }
+
+    fn block(&self, nbt: &Compound) -> Option<BlockIdentifier> {
+        self.read_block_compound(nbt, false)
+    }
+}
+
 /// Remove the waterlogged state (`copyWithout(WATERLOGGED)`).
 pub(crate) fn without_waterlogged(block: BlockIdentifier) -> BlockIdentifier {
     let mut block = block;

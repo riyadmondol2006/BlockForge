@@ -57,6 +57,22 @@ pub struct PruningConfig {
     pub regions: Vec<PruningRegion>,
 }
 
+/// Which Bedrock entities are converted ([`ConversionSettings::entity_filter`]). Entities that are not mobs
+/// (paintings, armor stands, minecarts, boats, end crystals) are kept by every choice but [`EntityFilter::None`];
+/// item frames have their own switch ([`ConversionSettings::convert_item_frames`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum EntityFilter {
+    /// Every mob. Hostile ones still vanish on Peaceful, which is the game's own doing.
+    #[default]
+    All,
+    /// Every mob but the hostile ones (zombies, creepers, drowned, endermen, piglins, ghasts...).
+    NoHostile,
+    /// Only mobs that are tamed or owned, named, leashed, villagers, wandering traders and golems.
+    PetsAndNamedOnly,
+    /// No entity read from the world's entity storage.
+    None,
+}
+
 /// The settings of one conversion (the options of Chunker's `WorldConverter`).
 #[derive(Clone, Debug)]
 pub struct ConversionSettings {
@@ -102,6 +118,22 @@ pub struct ConversionSettings {
     /// Level settings forced on the converted world (difficulty, game mode, cheats, hardcore); applied after
     /// [`Self::changed_settings`]. Every one left at `None` keeps the source world's value.
     pub level_overrides: LevelOverrides,
+
+    // ---- Entities (BlockForge's own options, read by the Bedrock reader and the Java entity writer) ----
+    // `process_entities` above switches them off altogether, item frames included.
+    /// Which mobs to keep (default: all).
+    pub entity_filter: EntityFilter,
+    /// Leave out what lies around for a moment only: dropped items, experience orbs, falling blocks and
+    /// projectiles (default: on).
+    pub drop_transient_entities: bool,
+    /// Bedrock item frames (a block with a block entity) become Java item frame entities, with their item; off
+    /// drops them (default: on). The frame block becomes air either way: Java has no such block.
+    pub convert_item_frames: bool,
+    /// The Java account that owns the pets of the world's host (Bedrock `OwnerNew` equal to the host's
+    /// `UniqueID`), when they should go to another account than the world's owner. `None` gives them to
+    /// [`PlayerOptions::owner_uuid`]; with neither, they stay tamed, owned by a UUID derived from the host's
+    /// `UniqueID` (the same one every time).
+    pub pet_owner_uuid: Option<uuid::Uuid>,
 }
 
 /// Whose inventory the owner of the converted world starts with ([`PlayerOptions::inventory_source`]).
@@ -275,6 +307,10 @@ impl Default for ConversionSettings {
             session_id: None,
             player: PlayerOptions::default(),
             level_overrides: LevelOverrides::default(),
+            entity_filter: EntityFilter::All,
+            drop_transient_entities: true,
+            convert_item_frames: true,
+            pet_owner_uuid: None,
         }
     }
 }
@@ -435,7 +471,23 @@ impl ConversionSettingsBuilder {
         discard_empty_chunks,
         prevent_y_biome_blending,
         custom_identifiers,
+        /// Leave out dropped items, experience orbs, falling blocks and projectiles.
+        drop_transient_entities,
+        /// Bedrock item frames become Java item frame entities.
+        convert_item_frames,
     );
+
+    /// Which mobs to keep.
+    pub fn entity_filter(mut self, filter: EntityFilter) -> Self {
+        self.settings.entity_filter = filter;
+        self
+    }
+
+    /// The Java account that owns the host's pets.
+    pub fn pet_owner_uuid(mut self, owner: Option<uuid::Uuid>) -> Self {
+        self.settings.pet_owner_uuid = owner;
+        self
+    }
 
     /// Converts exactly these dimensions, each as itself.
     pub fn dimensions<'a>(mut self, dimensions: impl IntoIterator<Item = &'a Dimension>) -> Self {
@@ -514,6 +566,23 @@ mod tests {
         assert!(!s.allow_nbt_copying && !s.discard_empty_chunks && !s.prevent_y_biome_blending);
         assert!(s.pruning_configs.is_none() && s.dimension_mapping.is_none() && s.biome_mapping.is_none());
         assert_eq!(s.dimension_registry.dimensions().count(), 3);
+    }
+
+    #[test]
+    fn entity_options_default_on() {
+        let s = ConversionSettings::default();
+        assert_eq!(s.entity_filter, EntityFilter::All);
+        assert!(s.drop_transient_entities && s.convert_item_frames && s.pet_owner_uuid.is_none());
+        let owner = uuid::Uuid::from_u128(7);
+        let s = ConversionSettings::builder()
+            .entity_filter(EntityFilter::NoHostile)
+            .drop_transient_entities(false)
+            .convert_item_frames(false)
+            .pet_owner_uuid(Some(owner))
+            .build();
+        assert_eq!(s.entity_filter, EntityFilter::NoHostile);
+        assert!(!s.drop_transient_entities && !s.convert_item_frames);
+        assert_eq!(s.pet_owner_uuid, Some(owner));
     }
 
     #[test]

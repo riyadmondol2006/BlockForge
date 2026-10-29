@@ -352,6 +352,7 @@ impl ConvertState {
             keep_unknown_nbt: false,
             player: Default::default(),
             level_overrides: Default::default(),
+            entities: Default::default(),
         })
     }
 
@@ -956,6 +957,7 @@ impl ConvertState {
             keep_unknown_nbt: false,
             player: Default::default(),
             level_overrides: Default::default(),
+            entities: Default::default(),
         };
         match variant {
             "convert-instance-done" => {
@@ -1381,6 +1383,7 @@ mod tests {
             keep_unknown_nbt: false,
             player: Default::default(),
             level_overrides: Default::default(),
+            entities: Default::default(),
         };
         let (id, cancel) = st.begin_run(job);
         assert_eq!(st.screen, Screen::Running);
@@ -1413,6 +1416,7 @@ mod tests {
             keep_unknown_nbt: false,
             player: Default::default(),
             level_overrides: Default::default(),
+            entities: Default::default(),
         };
         let (_, cancel) = st.begin_run(job);
         st.run.as_mut().unwrap().started = Instant::now() - Duration::from_secs(6);
@@ -1434,6 +1438,7 @@ mod tests {
             keep_unknown_nbt: false,
             player: Default::default(),
             level_overrides: Default::default(),
+            entities: Default::default(),
         };
         let (id, _) = st.begin_run(job);
         let summary = Summary {
@@ -1460,6 +1465,7 @@ mod tests {
             keep_unknown_nbt: false,
             player: Default::default(),
             level_overrides: Default::default(),
+            entities: Default::default(),
         };
         let (id, _) = st.begin_run(job);
         st.on_event(id, Event::Warning("odd".into()));

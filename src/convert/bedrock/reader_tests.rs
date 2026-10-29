@@ -302,3 +302,137 @@ fn real_world_mace_map() {
         (positions.len() * rounds) as f64 / again.as_secs_f64()
     );
 }
+
+fn actor(identifier: &str, unique_id: i64, pos: [f32; 3]) -> Compound {
+    let mut c = Compound::new();
+    c.insert("identifier", Tag::String(identifier.into()));
+    c.insert("UniqueID", Tag::Long(unique_id));
+    c.insert("Pos", Tag::List(pos.iter().map(|v| Tag::Float(*v)).collect()));
+    c.insert("Rotation", Tag::List(vec![Tag::Float(45.0), Tag::Float(0.0)]));
+    c
+}
+
+/// The synthetic world plus actors in both stores: two back-to-back legacy compounds (one standing in the next
+/// column), a `digp` list in the overworld and in the nether, a duplicate, a stale actor and a Bedrock-only type.
+fn entity_db() -> MemDb {
+    use crate::convert::bedrock::keys::{actor_key, actor_storage_key, digp_key};
+    let mut db = synthetic_db();
+    let ow = DimensionId::OVERWORLD;
+    let sub = RawSubChunk { version: 9, y: 0, layers: vec![RawPalette::uniform(raw("minecraft:stone"))] };
+    db.put(&sub_chunk_key(ow, 2, -2, 0), &encode_sub_chunk(&sub).unwrap()).unwrap();
+    let cow = actor("minecraft:cow", 10, [20.5, 64.0, -20.5]);
+    // Stored with column 1,-2 but standing in column 2,-2.
+    let sheep = actor("minecraft:sheep", 11, [33.0, 64.0, -30.0]);
+    // Standing in a column without chunk data: it stays where it was stored.
+    let pig = actor("minecraft:pig", 12, [-5.0, 64.0, -20.0]);
+    let legacy = encode_nbt_concat(&[Tag::Compound(cow.clone()), Tag::Compound(sheep), Tag::Compound(pig)]).unwrap();
+    db.put(&chunk_key(ow, 1, -2, ChunkTag::Entity), &legacy).unwrap();
+
+    let mut cow_again = cow;
+    cow_again.insert("CustomName", Tag::String("from digp".into()));
+    let wolf = actor("minecraft:wolf", 13, [17.0, 64.0, -17.0]);
+    let npc = actor("minecraft:npc", 14, [18.0, 64.0, -18.0]);
+    let mut list = Vec::new();
+    for tag in [cow_again, wolf, npc] {
+        let key = actor_storage_key(tag.get_i64("UniqueID").unwrap());
+        db.put(&actor_key(key), &encode_nbt_concat(&[Tag::Compound(tag)]).unwrap()).unwrap();
+        list.extend_from_slice(&key);
+    }
+    db.put(&digp_key(ow, 1, -2), &list).unwrap();
+    let stale = actor("minecraft:creeper", 15, [20.0, 64.0, -20.0]);
+    db.put(&actor_key(actor_storage_key(15)), &encode_nbt_concat(&[Tag::Compound(stale)]).unwrap()).unwrap();
+
+    let piglin = actor("minecraft:zombie_pigman", 16, [-10.0, 40.0, 85.0]);
+    let key = actor_storage_key(16);
+    db.put(&actor_key(key), &encode_nbt_concat(&[Tag::Compound(piglin)]).unwrap()).unwrap();
+    db.put(&digp_key(DimensionId::NETHER, -1, 5), &key).unwrap();
+    db
+}
+
+fn entity_reader(settings: &ConversionSettings) -> BedrockWorldReader {
+    let db = entity_db();
+    let opener: DbOpener = Box::new(move || Ok(Box::new(db) as Box<dyn BedrockDb>));
+    let version = BedrockVersion::exact([1, 26, 50]).unwrap();
+    BedrockWorldReader::from_parts(opener, level_dat(), version, [1, 26, 50], settings).unwrap()
+}
+
+fn types(list: &[crate::convert::model::Entity]) -> Vec<&'static str> {
+    let mut names: Vec<&'static str> = list
+        .iter()
+        .map(|e| match e.entity_type() {
+            crate::convert::model::EntityType::Vanilla(v) => v.name(),
+            _ => "custom",
+        })
+        .collect();
+    names.sort();
+    names
+}
+
+#[test]
+fn entities_of_both_stores() {
+    let r = entity_reader(&ConversionSettings::default());
+    let ow = r.entities(&Dimension::overworld()).unwrap();
+    assert_eq!(types(&ow[&(1, -2)]), ["COW", "PIG", "WOLF"]);
+    assert_eq!(types(&ow[&(2, -2)]), ["SHEEP"], "an entity goes to the column it stands in");
+    assert_eq!(ow.len(), 2);
+    // The duplicate is read once, from the digp store; the stale actor is not read.
+    let cow = ow[&(1, -2)].iter().find(|e| types(std::slice::from_ref(*e)) == ["COW"]).unwrap();
+    assert_eq!(cow.source_nbt.as_ref().unwrap().get_str("CustomName"), Some("from digp"));
+    assert_eq!(cow.position, [20.5, 64.0, -20.5]);
+    assert_eq!(cow.yaw, 45.0);
+    assert_eq!(r.unmapped_entities().get("minecraft:npc"), Some(&1));
+    assert_eq!(r.stats().entities, 5);
+
+    let nether = r.entities(&Dimension::nether()).unwrap();
+    assert_eq!(types(&nether[&(-1, 5)]), ["ZOMBIFIED_PIGLIN"]);
+    assert_eq!(r.stats().entities, 6);
+    assert!(r.entities(&Dimension::the_end()).unwrap().is_empty());
+}
+
+#[test]
+fn entity_switches_are_honoured() {
+    let off = ConversionSettings::builder().process_entities(false).build();
+    assert!(entity_reader(&off).entities(&Dimension::overworld()).unwrap().is_empty());
+    let none = ConversionSettings::builder().entity_filter(crate::convert::level::EntityFilter::None).build();
+    assert!(entity_reader(&none).entities(&Dimension::overworld()).unwrap().is_empty());
+    let pets =
+        ConversionSettings::builder().entity_filter(crate::convert::level::EntityFilter::PetsAndNamedOnly).build();
+    let kept = entity_reader(&pets).entities(&Dimension::overworld()).unwrap();
+    // Only the cow named in the digp store.
+    assert_eq!(kept.values().map(Vec::len).sum::<usize>(), 1);
+}
+
+#[test]
+fn item_frames_follow_their_switch() {
+    let frame_db = || {
+        let mut db = synthetic_db();
+        let ow = DimensionId::OVERWORLD;
+        let mut frame = Compound::new();
+        frame.insert("id", Tag::String("ItemFrame".into()));
+        for (k, v) in [("x", 16), ("y", 0), ("z", -32)] {
+            frame.insert(k, Tag::Int(v));
+        }
+        let mut states = Compound::new();
+        states.insert("facing_direction", Tag::Int(3));
+        let block = BlockStateRaw::new("minecraft:frame", states, 18168865);
+        let sub = RawSubChunk { version: 9, y: 0, layers: vec![RawPalette::uniform(block)] };
+        db.put(&sub_chunk_key(ow, 1, -2, 0), &encode_sub_chunk(&sub).unwrap()).unwrap();
+        db.put(&chunk_key(ow, 1, -2, ChunkTag::BlockEntity), &encode_nbt_concat(&[Tag::Compound(frame)]).unwrap())
+            .unwrap();
+        db
+    };
+    let read = |settings: &ConversionSettings| {
+        let db = frame_db();
+        let opener: DbOpener = Box::new(move || Ok(Box::new(db) as Box<dyn BedrockDb>));
+        let version = BedrockVersion::exact([1, 26, 50]).unwrap();
+        let r = BedrockWorldReader::from_parts(opener, level_dat(), version, [1, 26, 50], settings).unwrap();
+        r.read_column(&Dimension::overworld(), 1, -2).unwrap().unwrap()
+    };
+    let c = read(&ConversionSettings::default());
+    assert_eq!(types(&c.entities), ["ITEM_FRAME"]);
+    assert!(c.block(0, 0, 0).is_air(), "the frame block becomes air");
+    let c = read(&ConversionSettings::builder().convert_item_frames(false).build());
+    assert!(c.entities.is_empty() && c.block(0, 0, 0).is_air());
+    let c = read(&ConversionSettings::builder().process_entities(false).build());
+    assert!(c.entities.is_empty());
+}

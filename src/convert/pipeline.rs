@@ -11,6 +11,9 @@
 //! ([`ConversionSettings::apply_to_level_settings`]) and the players are chosen and their items converted
 //! (`pipeline_players`). Map links need nothing here: the reader gives items the index of their map and the writer's
 //! item hooks ([`JavaWorldWriter::item_hooks`]) turn it into the map's Java id wherever an item is written.
+//!
+//! The entities of a dimension are read before its columns (`BedrockWorldReader::entities`): an entity goes to the
+//! column it stands in, which is not always the one Bedrock stored it with.
 
 #[path = "pipeline_players.rs"]
 mod players;
@@ -23,6 +26,7 @@ use std::time::Instant;
 
 use crate::convert::bedrock::detect::detect_bedrock;
 use crate::convert::bedrock::reader::BedrockWorldReader;
+use crate::convert::bedrock::reader::ColumnEntities;
 use crate::convert::java::dirs::detect_java;
 use crate::convert::java::writer::{JavaWorldWriter, PreparedColumn};
 use crate::convert::level::encoding::EncodingType;
@@ -93,6 +97,7 @@ fn convert_opened(
     for guest in players.guests {
         writer.add_guest_player(guest);
     }
+    writer.set_entity_source(reader.entity_source());
 
     match run(reader, &mut writer, sink, cancel) {
         Ok(columns) => {
@@ -103,10 +108,23 @@ fn convert_opened(
             }
             let mut warnings = reader.warnings();
             warnings.extend(players.warnings);
+            let mut unmapped_entities: Vec<(String, u64)> = reader.unmapped_entities().into_iter().collect();
+            if !unmapped_entities.is_empty() {
+                unmapped_entities.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+                let list: Vec<String> =
+                    unmapped_entities.iter().take(10).map(|(id, n)| format!("{id} ({n})")).collect();
+                warnings.push(format!("Entities with no Java Edition equivalent were left out: {}", list.join(", ")));
+            }
             let written = writer.finish_with_summary();
             let _ = &written;
             match written {
-                Ok(_) => {
+                Ok(written) => {
+                    if written.dropped_entities > 0 {
+                        warnings.push(format!(
+                            "{} entities could not be written for this Java version (it has no such entity).",
+                            written.dropped_entities
+                        ));
+                    }
                     let mut unmapped: Vec<(String, u64)> = blocks.into_iter().collect();
                     unmapped.sort();
                     warnings.dedup();
@@ -199,6 +217,7 @@ fn convert_dimension(
     let next = AtomicUsize::new(0);
     let stop = AtomicBool::new(false);
     let cache = NeighbourCache { columns: Mutex::new(HashMap::new()) };
+    let entities = Mutex::new(reader.entities(dim)?);
     let (tx, rx) = sync_channel::<Result<Option<PreparedColumn>, ConvertError>>(QUEUE);
     let mut written = 0usize;
     let mut failure: Option<ConvertError> = None;
@@ -206,7 +225,7 @@ fn convert_dimension(
     std::thread::scope(|scope| {
         for _ in 0..workers {
             let tx = tx.clone();
-            let (next, stop, cache, shared) = (&next, &stop, &cache, &shared);
+            let (next, stop, cache, shared, entities) = (&next, &stop, &cache, &shared, &entities);
             scope.spawn(move || {
                 loop {
                     if stop.load(Ordering::Relaxed) || cancel.load(Ordering::Relaxed) {
@@ -214,7 +233,7 @@ fn convert_dimension(
                     }
                     let i = next.fetch_add(1, Ordering::Relaxed);
                     let Some(&(x, z)) = columns.get(i) else { break };
-                    let item = prepare(reader, shared, cache, dim, x, z);
+                    let item = prepare(reader, shared, cache, entities, dim, x, z);
                     let failed = item.is_err();
                     if tx.send(item).is_err() || failed {
                         break;
@@ -266,11 +285,15 @@ fn prepare(
     reader: &BedrockWorldReader,
     writer: &std::sync::RwLock<&mut JavaWorldWriter>,
     cache: &NeighbourCache,
+    entities: &Mutex<ColumnEntities>,
     dim: &Dimension,
     x: i32,
     z: i32,
 ) -> Result<Option<PreparedColumn>, ConvertError> {
     let Some(mut column) = reader.read_column(dim, x, z)? else { return Ok(None) };
+    if let Some(list) = entities.lock().unwrap_or_else(|e| e.into_inner()).remove(&(x, z)) {
+        column.entities.extend(list);
+    }
     if column.has_pre_transform() {
         let mut held: Vec<(crate::convert::model::Edge, Arc<Column>)> = Vec::new();
         for edge in column.required_edges().iter() {
@@ -292,3 +315,119 @@ fn prepare(
 #[cfg(test)]
 #[path = "pipeline_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod entity_tests {
+    use super::*;
+    use crate::convert::bedrock::db::{BedrockDb, DbOptions, LevelDb, ScratchDir};
+    use crate::convert::bedrock::keys::{self, ChunkTag, DimensionId};
+    use crate::convert::bedrock::level_dat::LevelDat;
+    use crate::convert::bedrock::palette::{
+        BlockStateRaw, RawPalette, RawSubChunk, encode_nbt_concat, encode_sub_chunk,
+    };
+    use crate::convert::java::region::RegionFile;
+    use crate::convert::level::{NullSink, TargetVersion, VersionTriple};
+    use crate::convert::nbt::{Compound, Tag};
+
+    fn actor(identifier: &str, unique_id: i64, pos: [f32; 3]) -> Compound {
+        Compound::new()
+            .with("identifier", identifier)
+            .with("UniqueID", unique_id)
+            .with("Pos", Tag::List(pos.iter().map(|v| Tag::Float(*v)).collect()))
+            .with("Rotation", Tag::List(vec![Tag::Float(0.0), Tag::Float(0.0)]))
+    }
+
+    /// A Bedrock world with stone in columns 0,0 and 1,0, a cow in the legacy store (standing in column 1,0), a cat
+    /// of the host in the digp store and an item frame block with its block entity.
+    fn make_world(dir: &std::path::Path) {
+        std::fs::create_dir_all(dir).unwrap();
+        let version = Tag::List([1, 21, 50, 0, 0].into_iter().map(Tag::Int).collect());
+        let root = Compound::new().with("LevelName", "Entities").with("lastOpenedWithVersion", version);
+        LevelDat { storage_version: 10, root_name: String::new(), root }.write(&dir.join("level.dat")).unwrap();
+        let mut db = LevelDb::create_new(&dir.join("db"), &DbOptions::default()).unwrap();
+        let ow = DimensionId::OVERWORLD;
+        let stone = BlockStateRaw::new("minecraft:stone", Compound::new(), 18168865);
+        for x in [0, 1] {
+            let sub = RawSubChunk { version: 9, y: 0, layers: vec![RawPalette::uniform(stone.clone())] };
+            db.put(&keys::sub_chunk_key(ow, x, 0, 0), &encode_sub_chunk(&sub).unwrap()).unwrap();
+        }
+        let frame = BlockStateRaw::new("minecraft:frame", Compound::new().with("facing_direction", 1), 18168865);
+        let sub = RawSubChunk { version: 9, y: 4, layers: vec![RawPalette::uniform(frame)] };
+        db.put(&keys::sub_chunk_key(ow, 0, 0, 4), &encode_sub_chunk(&sub).unwrap()).unwrap();
+        let item = Compound::new().with("Name", "minecraft:diamond").with("Count", 1i8).with("Damage", 0i16);
+        let be = Compound::new().with("id", "ItemFrame").with("x", 3).with("y", 64).with("z", 3).with("Item", item);
+        db.put(&keys::chunk_key(ow, 0, 0, ChunkTag::BlockEntity), &encode_nbt_concat(&[Tag::Compound(be)]).unwrap())
+            .unwrap();
+        let cow = actor("minecraft:cow", 7, [20.0, 64.0, 4.0]);
+        db.put(&keys::chunk_key(ow, 0, 0, ChunkTag::Entity), &encode_nbt_concat(&[Tag::Compound(cow)]).unwrap())
+            .unwrap();
+        let mut cat = actor("minecraft:cat", 8, [5.0, 64.0, 5.0]);
+        cat.put("OwnerNew", crate::convert::bedrock::resolvers::entity::HOST_UNIQUE_ID);
+        cat.put("IsTamed", 1i8);
+        cat.put("Variant", 5);
+        let key = keys::actor_storage_key(8);
+        db.put(&keys::actor_key(key), &encode_nbt_concat(&[Tag::Compound(cat)]).unwrap()).unwrap();
+        db.put(&keys::digp_key(ow, 0, 0), &key).unwrap();
+        db.compact().unwrap();
+    }
+
+    fn entity_ids(chunk: &Compound) -> Vec<String> {
+        let list = chunk.get("Entities").and_then(Tag::as_list).cloned().unwrap_or_default();
+        let mut ids: Vec<String> =
+            list.iter().filter_map(|e| e.as_compound()?.get_str("id").map(str::to_owned)).collect();
+        ids.sort();
+        ids
+    }
+
+    #[test]
+    fn a_world_keeps_its_entities() {
+        let tmp = ScratchDir::new("pipeline-entities").unwrap();
+        let world = tmp.path().join("world");
+        make_world(&world);
+        for (version, separate) in [("26.3", true), ("1.16.5", false)] {
+            let out = tmp.path().join(version);
+            let owner = uuid::Uuid::from_u128(0x1234);
+            let request = ConvertRequest {
+                input: world.clone(),
+                output: out.clone(),
+                target: TargetVersion::new(EncodingType::Java, VersionTriple::from_string(version).unwrap()),
+                settings: crate::convert::level::ConversionSettings::builder().pet_owner_uuid(Some(owner)).build(),
+            };
+            let cancel = CancelToken::default();
+            convert_world(&request, &NullSink, &cancel).unwrap();
+            let read = |dir: &str, x: u8| {
+                let path = out.join(dir).join("r.0.0.mca");
+                RegionFile::open_read(&path).unwrap().read_chunk(x, 0).unwrap()
+            };
+            if separate {
+                let dir = "dimensions/minecraft/overworld/entities";
+                let first = read(dir, 0).expect("entity chunk 0,0");
+                assert_eq!(entity_ids(&first), ["minecraft:cat", "minecraft:item_frame"]);
+                let cat = first.get("Entities").and_then(Tag::as_list).unwrap().iter().filter_map(Tag::as_compound);
+                let cat = cat.clone().find(|e| e.get_str("id") == Some("minecraft:cat")).unwrap();
+                let ints = crate::convert::java::resolvers::entity::uuid_of_unique_id(8);
+                assert!(cat.contains_key("UUID") && ints.get_version_num() == 3);
+                let owner_ints: Vec<i32> =
+                    (0..4).map(|i| ((0x1234u128 >> (96 - 32 * i)) & 0xffff_ffff) as i32).collect();
+                assert_eq!(cat.get("Owner").and_then(Tag::as_int_array), Some(&owner_ints));
+                // The cow stands in the next column.
+                assert_eq!(entity_ids(&read(dir, 1).expect("entity chunk 1,0")), ["minecraft:cow"]);
+            } else {
+                let root = read("region", 0).unwrap();
+                let level = root.get("Level").and_then(Tag::as_compound).unwrap();
+                assert_eq!(entity_ids(level), ["minecraft:cat", "minecraft:item_frame"]);
+                let next = read("region", 1).unwrap();
+                assert_eq!(entity_ids(next.get("Level").and_then(Tag::as_compound).unwrap()), ["minecraft:cow"]);
+            }
+            // For the game's DataFixer harness: the entity region file of the newest target.
+            if let Some(dump) = std::env::var_os("BF_PIPELINE_DUMP")
+                && separate
+            {
+                let dump = std::path::PathBuf::from(dump);
+                std::fs::create_dir_all(&dump).unwrap();
+                let file = out.join("dimensions/minecraft/overworld/entities/r.0.0.mca");
+                std::fs::copy(file, dump.join("r.0.0.mca")).unwrap();
+            }
+        }
+    }
+}

@@ -37,7 +37,8 @@ impl<'a> Ctx<'a> {
         json_text::to_nbt_list(lines, minimum, self.version).ok()
     }
 
-    /// An item compound, `None` when the stack is air or has no Java form.
+    /// An item compound with the writer's hooks (the data of shulker boxes and other block items), `None` when the
+    /// stack is air or has no Java form.
     pub fn item(&self, stack: &ItemStack) -> Option<Compound> {
         if stack.is_air() {
             return None;

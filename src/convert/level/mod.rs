@@ -26,7 +26,7 @@ pub use map::LevelMap;
 pub use player::{LevelPlayer, PlayerAbilities, PlayerEffect, PlayerStats, SpawnPoint};
 pub use portal::Portal;
 pub use settings::{
-    ConversionSettings, ConversionSettingsBuilder, Difficulty, GameType, InventorySource, LevelOverrides,
+    ConversionSettings, ConversionSettingsBuilder, Difficulty, EntityFilter, GameType, InventorySource, LevelOverrides,
     PlayerOptions, PruningConfig, PruningRegion,
 };
 pub use task::{CancelToken, Job, Progress, ProgressEvent, TaskContext, TaskReport, TaskRunner, Weight};

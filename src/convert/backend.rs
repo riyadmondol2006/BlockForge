@@ -15,7 +15,7 @@ use crate::convert::bedrock::reader::BedrockWorldReader;
 use crate::convert::java::dirs::detect_java;
 use crate::convert::level::encoding::{EncodingType, TargetVersion, VersionTriple};
 use crate::convert::level::{
-    ConversionSettings, ConvertError, ConvertRequest, LevelOverrides, PlayerOptions, ProgressSink,
+    ConversionSettings, ConvertError, ConvertRequest, EntityFilter, LevelOverrides, PlayerOptions, ProgressSink,
 };
 use crate::convert::pipeline::convert_world;
 
@@ -71,6 +71,36 @@ impl DimensionSelection {
     }
 }
 
+/// What happens to the world's entities (the entity options of `ConversionSettings`, with the same defaults: all
+/// on). The account that owns the host's pets comes from the player options.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EntityOptions {
+    /// Convert entities at all (mobs, pets, villagers, armor stands, paintings, minecarts, boats, item frames).
+    pub convert: bool,
+    /// Which mobs to keep.
+    pub filter: EntityFilter,
+    /// Leave out dropped items, experience orbs, falling blocks and projectiles.
+    pub drop_transient: bool,
+    /// Bedrock item frames become Java item frames, with their item.
+    pub item_frames: bool,
+}
+
+impl Default for EntityOptions {
+    fn default() -> Self {
+        EntityOptions { convert: true, filter: EntityFilter::All, drop_transient: true, item_frames: true }
+    }
+}
+
+impl EntityOptions {
+    /// Put the options into the settings of a conversion.
+    pub fn apply(&self, settings: &mut ConversionSettings) {
+        settings.process_entities = self.convert;
+        settings.entity_filter = self.filter;
+        settings.drop_transient_entities = self.drop_transient;
+        settings.convert_item_frames = self.item_frames;
+    }
+}
+
 /// One conversion to run.
 #[derive(Clone, Debug)]
 pub struct ConvertJob {
@@ -88,6 +118,8 @@ pub struct ConvertJob {
     /// Difficulty, game mode, cheats and hardcore to force ([`ConversionSettings::level_overrides`]; the default
     /// keeps the world's own).
     pub level_overrides: LevelOverrides,
+    /// Mobs, pets, item frames and the other entities.
+    pub entities: EntityOptions,
 }
 
 /// What a world turned out to be.
@@ -285,6 +317,7 @@ impl Backend for Engine {
         settings.allow_nbt_copying = job.keep_unknown_nbt;
         settings.player = job.player.clone();
         settings.level_overrides = job.level_overrides;
+        job.entities.apply(&mut settings);
         let request = ConvertRequest {
             input: job.input.clone(),
             output: job.output.clone(),
@@ -382,6 +415,7 @@ mod tests {
             keep_unknown_nbt: false,
             player: PlayerOptions::default(),
             level_overrides: LevelOverrides::default(),
+            entities: EntityOptions::default(),
         };
         b.run(job, tx, Arc::new(AtomicBool::new(false)));
         let events: Vec<Event> = rx.iter().collect();
@@ -403,7 +437,25 @@ mod tests {
             keep_unknown_nbt: false,
             player: PlayerOptions::default(),
             level_overrides: LevelOverrides::default(),
+            entities: EntityOptions::default(),
         }
+    }
+
+    #[test]
+    fn entity_options_reach_the_settings() {
+        let mut settings = ConversionSettings::default();
+        EntityOptions::default().apply(&mut settings);
+        assert!(settings.process_entities && settings.drop_transient_entities && settings.convert_item_frames);
+        assert_eq!(settings.entity_filter, EntityFilter::All);
+        let off = EntityOptions {
+            convert: false,
+            filter: EntityFilter::NoHostile,
+            drop_transient: false,
+            item_frames: false,
+        };
+        off.apply(&mut settings);
+        assert!(!settings.process_entities && !settings.drop_transient_entities && !settings.convert_item_frames);
+        assert_eq!(settings.entity_filter, EntityFilter::NoHostile);
     }
 
     #[test]

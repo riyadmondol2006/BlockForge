@@ -48,7 +48,8 @@ surveys: core, model, java, bedrock).
   heights, chests/signs/command blocks/pistons/furnaces/beds/banners/skulls, items in containers, level.dat basics.
   Test world: `~/Downloads/Mace, Spear, Sword PvP Map! V4.mcworld` (Bedrock 1.26.51, 93 columns, v9 sub-chunks).
 - **Out of scope (decided by the owner): Java -> Bedrock.** BlockForge converts Bedrock worlds to Java Edition only.
-- **M3:** entities, players, maps, legacy (< 1.13) Java, older Bedrock, Java <-> Java version changes.
+- **M3:** entities (done, see Phase 5), players, maps, legacy (< 1.13) Java, older Bedrock, Java <-> Java version
+  changes.
 
 ## Phases
 
@@ -83,7 +84,13 @@ surveys: core, model, java, bedrock).
 - [ ] release-size check (growth < 5 MB), clippy `-D warnings`, fmt
 
 ### Phase 5 - later
-- [ ] entities (`digp`/`actorprefix`, entity tables), portals, lodestones
+- [x] entities: Bedrock actors from both stores (the legacy chunk `Entity` record and `digp`/`actorprefix`), read a
+  dimension at a time and put in the column they stand in (`bedrock/reader_entities.rs`), typed and filtered by
+  `bedrock/resolvers/entity.rs`, and item frames from their block entities; written per Java version by
+  `java/resolvers/entity/` (`entities/` region files from 1.17, `Level.Entities` before) with items through the same
+  writer and hooks as containers. The version switches were checked with the game's own DataFixer: an entity written
+  for an older version and upgraded by the 26.3 game equals what is written for 26.3. Not converted: passengers,
+  armor stand poses other than the default and the zero pose, villager professions for 1.13.
 - [x] players: the host (`~local_player`) with inventory, armor, off hand, ender chest, experience, health, food,
   respawn point, effects and abilities (`bedrock/level_reader.rs` `parse_player`, `java/level_writer.rs`
   `fill_player`, one format per Java version); the other profiles (`player_server_<uuid>`, `player_<id>`) as their own
@@ -93,9 +100,10 @@ surveys: core, model, java, bedrock).
   map in id order (`with_map_indexes`), the writer's `WorldItemHooks` (`java/resolvers/hooks.rs`, from
   `JavaWorldWriter::item_hooks`) turns the index into the Java id, which is that same index; the hooks also write the
   block entity data of items (shulker box contents). Every item path must use them: chunk block entities
-  (`EncodeContext::hooks`), the players (`LevelFiles::hooks`) and, when they come, entities
+  (`EncodeContext::hooks`), the players (`LevelFiles::hooks`) and entities (`EntityContext::hooks`)
 - [x] level setting overrides (`ConversionSettings::level_overrides`, applied with `changed_settings` by
   `apply_to_level_settings` in the pipeline; 26.1+ difficulty is `difficulty_settings.difficulty`)
+- [ ] portals, lodestones
 - [ ] legacy Java (< 1.13) numeric ids, older Bedrock, Java <-> Java up/downgrade
 
 ## Package map (Chunker -> Rust)
@@ -124,6 +132,6 @@ surveys: core, model, java, bedrock).
   `Backend` trait in `src/convert/backend.rs`, currently `NotReady`).
 - Wave 2 (in progress): Bedrock pre-transforms, Bedrock items + block entities (read), Java items (write), Java block
   entities (write), Bedrock world/level reader, Java world/level writer. Contracts: `docs/porting/CONTRACTS.md`.
-- Next: pipeline (`convert_world`), wire the GUI backend, test world end to end, then entities and the remaining Bedrock -> Java gaps. Java -> Bedrock is not planned.
+- Next: pipeline (`convert_world`), wire the GUI backend, test world end to end, then the remaining Bedrock -> Java gaps (entities are done). Java -> Bedrock is not planned.
 - Players, map links and level overrides done (Phase 5): see the Phase 5 list. The GUI does not show the new options
   yet (`ConvertJob::player`, `ConvertJob::level_overrides` carry them, default = everything kept).
