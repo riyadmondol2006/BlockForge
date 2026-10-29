@@ -3,6 +3,35 @@
 The section for a version is used as the text of its release on GitHub. Older releases (the Java versions, up to
 3.4.42.x) are on the [releases page](https://github.com/riyadmondol2006/BlockForge/releases).
 
+## 4.9.0
+
+A new look for the whole launcher: deeper colours, glass and soft depth, and motion that makes it feel smooth.
+
+### What is new
+
+- **New look everywhere.** Deep layered backgrounds with a soft glow behind the pages, a glass sidebar, cards with
+  soft shadows and rounder corners, and an emerald-to-cyan gradient for Play and the main button of each screen.
+  Both the dark and the light look are new.
+- **Smooth motion.** Pages fade in as they open. Hovers fade in instead of switching, the underline of the open tab
+  and the pill of a switch slide to the one you chose, cards lift a little under the pointer, and progress bars
+  ease forward. Everything stays still when "Reduce motion" is on, and nothing is drawn again while nothing moves.
+- **Home and Library.** A large banner for the instance you play, with a glowing Play button. Instance tiles lift
+  under the pointer and light up their Play button.
+- **Instance page.** The instance's picture, name and Play sit on a banner above its tabs. The Mods tab has a
+  sliding Mods / Resource packs / Shaders switch with counts, filter chips, a clearer state for mods that are
+  switched off, and update badges. Its settings sit in cards with a "Saved" or "Unsaved changes" note by Save.
+- **Discover, ATLauncher, Technic and FTB.** Results fade into a card under the pointer, the site a result comes
+  from is a small coloured pill, and the search and filters sit together in one bar.
+- **Settings, Accounts, About and New instance.** Settings come in titled cards. The account that plays is
+  highlighted. New instance is a set of numbered steps, with the mod loaders as cards to pick from.
+- **Tools, Servers, World converter and Crafting.** Tools are tiles, each server is a card with its status, and the
+  converter's set-up is a stepper that ticks off each step.
+
+### Fixed
+
+- In a narrow window, the buttons under a mod's details and in the selection bar of the Mods tab now wrap instead of
+  running past the edge of the page.
+
 ## 4.8.4
 
 Search every site at once, data packs in Discover, and mods that are only on GitHub.
