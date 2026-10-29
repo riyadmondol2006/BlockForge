@@ -4,9 +4,8 @@
 use egui::{RichText, ScrollArea, Ui};
 use serde_json::{Value, json};
 
-use super::instance_menu::SplitRow;
+use super::instance_menu::{SplitRow, ghost_button};
 use super::library::FORM_COLUMN;
-use super::settings::{Rows, section_head};
 use super::theme::*;
 use super::widgets::*;
 use super::{App, Msg};
@@ -300,6 +299,31 @@ fn tri(ui: &mut Ui, id: &str, value: &mut Option<bool>) {
     }
 }
 
+/// The rows of one card of a settings tab: call [`Rows::gap`] before each row.
+pub(super) struct Rows {
+    first: bool,
+}
+
+impl Rows {
+    fn new() -> Rows {
+        Rows { first: true }
+    }
+
+    /// Nothing before the first row, a hairline with the same air above and below it before every other.
+    pub(super) fn gap(&mut self, ui: &mut Ui) {
+        if std::mem::take(&mut self.first) {
+            return;
+        }
+        let pad = (ROW_AIR - ui.spacing().item_spacing.y).max(0.0);
+        ui.add_space(pad);
+        rule(ui);
+        ui.add_space(pad);
+    }
+}
+
+/// The room above and below the hairline between two rows.
+const ROW_AIR: f32 = 13.0;
+
 /// A row with the title above a text field as wide as the form (long paths and commands).
 fn stacked(ui: &mut Ui, rows: &mut Rows, title: &str, hint: &str, value: &mut String, placeholder: &str) {
     rows.gap(ui);
@@ -307,7 +331,7 @@ fn stacked(ui: &mut Ui, rows: &mut Rows, title: &str, hint: &str, value: &mut St
     if !hint.is_empty() {
         small_muted(ui, hint);
     }
-    ui.add_space(4.0);
+    ui.add_space(6.0);
     let width = ui.available_width().min(FORM_COLUMN);
     search_field(ui, value, placeholder, width);
 }
@@ -318,15 +342,64 @@ fn row(ui: &mut Ui, rows: &mut Rows, title: &str, hint: &str, control: impl FnOn
     setting_row(ui, title, hint, control);
 }
 
-/// A titled group of a settings tab: its name and one line about it, then one card with its rows divided by rules
-/// (the same look as the groups of Settings).
+/// A titled group of a settings tab: one glass card with its name and one line about it at the top, a hairline
+/// across the card under them, then its rows divided by hairlines.
 fn group(ui: &mut Ui, title: &str, hint: &str, add: impl FnOnce(&mut Ui, &mut Rows)) {
-    section_head(ui, title, hint);
+    ui.add_space(14.0);
     card(ui, |ui| {
         // the title of a row sits close to its explanation
         ui.spacing_mut().item_spacing.y = 2.0;
+        ui.label(RichText::new(title).size(FS_SECTION).semibold());
+        if !hint.is_empty() {
+            ui.label(RichText::new(hint).size(FS_META).color(c_muted()));
+        }
+        ui.add_space(ROW_AIR);
+        // from edge to edge of the card, through its padding: the head of the card is set apart from its rows
+        let (line, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 1.0), egui::Sense::hover());
+        let bleed = card_frame().inner_margin.leftf();
+        ui.painter().hline(
+            line.left() - bleed..=line.right() + bleed,
+            line.center().y,
+            egui::Stroke::new(1.0, c_rule()),
+        );
+        ui.add_space(ROW_AIR);
         add(ui, &mut Rows::new());
+        ui.add_space(2.0);
     });
+}
+
+/// A name to type, such as a variable of the commands: monospace on a small tinted plate.
+fn code(ui: &mut Ui, text: &str) {
+    egui::Frame::new()
+        .fill(c_field())
+        .stroke(egui::Stroke::new(1.0, c_border()))
+        .corner_radius(egui::CornerRadius::same(R_TAG))
+        .inner_margin(egui::Margin::symmetric(7, 2))
+        .show(ui, |ui| ui.label(RichText::new(text).monospace().color(c_text())));
+}
+
+/// A warning under the row it is about: one line of small text on a tint of the warning colour.
+fn warning(ui: &mut Ui, text: &str) {
+    egui::Frame::new()
+        .fill(c_warn_bg())
+        .stroke(egui::Stroke::new(1.0, c_warn().gamma_multiply(0.3)))
+        .corner_radius(egui::CornerRadius::same(R_CONTROL - 2))
+        .inner_margin(egui::Margin::symmetric(12, 8))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.add(egui::Label::new(RichText::new(text).size(FS_META).color(c_warn())).wrap());
+        });
+}
+
+/// A small status beside Save: a dot of its colour and a word.
+fn save_state(ui: &mut Ui, text: &str, color: egui::Color32) {
+    let font = super::fonts::medium(FS_META);
+    let w = ui.painter().layout_no_wrap(text.to_string(), font.clone(), color).size().x;
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(w + 30.0, 26.0), egui::Sense::hover());
+    ui.painter().rect_filled(rect, egui::CornerRadius::same(13), color.gamma_multiply(0.12));
+    ui.painter().circle_filled(egui::pos2(rect.left() + 12.0, rect.center().y), 3.5, color);
+    let galley = ui.painter().layout_no_wrap(text.to_string(), font, color);
+    ui.painter().galley(egui::pos2(rect.left() + 21.0, rect.center().y - galley.size().y / 2.0), galley, color);
 }
 
 /// The folders in `saves`, sorted by name.
@@ -444,10 +517,11 @@ impl App {
         let mut rename = false;
         let mut helper_change = None;
 
-        // the tabs and Save sit over the form, so Save ends where the rows end
+        // the tabs and Save sit over the form, so Save ends where the cards end; the scroll bar has a strip of its own
+        // at the window's edge, kept whether or not it shows
+        let form_w = (ui.available_width() - ui.spacing().scroll.allocated_width()).min(FORM_COLUMN);
         ui.scope(|ui| {
-            // ends where the cards below end: the scroll bar has a strip of its own at the window's edge
-            ui.set_max_width((ui.available_width() - ui.spacing().scroll.allocated_width()).min(FORM_COLUMN));
+            ui.set_max_width(form_w);
             let mut bar = SplitRow::new(ui, egui::Id::unique("instance-settings-bar"), 32.0);
             bar.left(ui, |ui| {
                 if let Some(i) = segmented(ui, &["General", "Java and Minecraft", "Commands"], d.tab as usize) {
@@ -458,14 +532,14 @@ impl App {
                 const SHOWN: std::time::Duration = std::time::Duration::from_secs(3);
                 let dirty = d.dirty();
                 if dirty {
-                    ui.label(RichText::new("Unsaved changes").size(FS_META).color(c_warn()));
+                    save_state(ui, "Unsaved changes", c_warn());
                 } else if let Some(left) = d.saved.and_then(|t| SHOWN.checked_sub(t.elapsed())) {
-                    small_muted(ui, "Saved");
+                    save_state(ui, "Saved", if is_dark() { c_accent() } else { c_accent_hover() });
                     ui.ctx().request_repaint_after(left);
                 }
                 // Discard puts back what is saved (the launcher defaults are reset row by row below); it is there only
                 // when there is something to put back
-                if dirty && secondary(ui, "Discard changes").clicked() {
+                if dirty && ghost_button(ui, "Discard changes", None, None, true).clicked() {
                     reset = true;
                 }
                 if primary_enabled(ui, "Save", dirty).on_disabled_hover_text("Nothing was changed").clicked() {
@@ -476,11 +550,12 @@ impl App {
         });
         ui.add_space(4.0);
         if let Some(e) = &d.error {
-            ui.label(RichText::new(e).color(c_danger()));
+            ui.add_space(6.0);
+            notice(ui, NoticeKind::Error, e, None);
         }
         ScrollArea::vertical().id_salt("instance-settings").auto_shrink(false).show(ui, |ui| {
-            // as wide as a form should be, and never wider than the window
-            ui.set_max_width(ui.available_width().min(FORM_COLUMN));
+            // as wide as the bar above, and never wider than the window
+            ui.set_max_width(ui.available_width().min(form_w));
             ui.spacing_mut().item_spacing.y = 4.0;
             match d.tab {
                 0 => {
@@ -569,25 +644,30 @@ impl App {
                             });
                         });
                         if d.mem == MemChoice::Custom {
-                            ui.add_space(6.0);
+                            ui.add_space(10.0);
                             ui.horizontal(|ui| {
-                                ui.spacing_mut().slider_width = 360.0;
+                                ui.spacing_mut().slider_width = (ui.available_width() - 110.0).clamp(160.0, 420.0);
+                                // the part of the rail up to the handle in the brand colour: how much is given
+                                ui.visuals_mut().selection.bg_fill = c_accent();
                                 let max = if total_mb == 0 { 16384 } else { total_mb as u32 }.max(1024);
                                 // only moving it changes the value: an amount of another computer (or not on the 256
                                 // steps) shown here isn't rounded into an unsaved change
-                                ui.add(egui::Slider::new(&mut d.mem_custom, 512..=max).step_by(256.0).show_value(false).clamping(egui::SliderClamping::Edits));
+                                ui.add(egui::Slider::new(&mut d.mem_custom, 512..=max).step_by(256.0).show_value(false).trailing_fill(true).clamping(egui::SliderClamping::Edits));
                                 // in GB, as the rest of the launcher says it
-                                ui.label(RichText::new(super::settings::memory_text(d.mem_custom)).font(super::fonts::medium(FS_BODY)));
+                                ui.add_space(6.0);
+                                ui.label(RichText::new(super::settings::memory_text(d.mem_custom)).font(super::fonts::medium(FS_FIGURE)));
                             });
                             if too_much_memory(d.mem_custom, total_mb) {
-                                ui.label(RichText::new(format!("That leaves too little for the rest of this computer ({} in all). The game may fail to start, or freeze the computer.", gigabytes(total_mb))).size(FS_META).color(c_warn()));
+                                ui.add_space(8.0);
+                                warning(ui, &format!("That leaves too little for the rest of this computer ({} in all). The game may fail to start, or freeze the computer.", gigabytes(total_mb)));
                             }
                         }
                         row(ui, r, "PermGen size", "Memory for loaded code, only used by Java 7 and by older modpacks that ask for it", |ui| {
                             ui.add(egui::DragValue::new(&mut d.perm_gen).range(32..=total_mb.max(256) as u32).speed(8.0).suffix(" MB"));
                         });
                         if d.perm_gen > 256 && d.perm_gen != metaspace {
-                            ui.label(RichText::new("Setting PermGen size above 256MB is not recommended and can cause issues.").color(c_warn()));
+                            ui.add_space(8.0);
+                            warning(ui, "Setting PermGen size above 256MB is not recommended and can cause issues.");
                         }
                     });
                     group(ui, "Java", "Which Java starts the game, and how", |ui, r| {
@@ -652,21 +732,26 @@ impl App {
                     });
                     group(ui, "Variables", "Available in every command", |ui, _| {
                         small_muted(ui, "Commands run in the folder of the instance that is launched or exited");
-                        ui.add_space(6.0);
-                        egui::Grid::new("command-variables").num_columns(2).spacing([20.0, 6.0]).min_row_height(20.0).show(ui, |ui| {
-                            for (k, v) in [
-                                ("$INST_NAME", "The name of the instance"),
-                                ("$INST_ID", "The name of the instance's root directory"),
-                                ("$INST_DIR", "The absolute path to the instance directory"),
-                                ("$INST_MC_DIR", "Alias for $INST_DIR"),
-                                ("$INST_JAVA", "The absolute path to the java executable used for launch"),
-                                ("$INST_JAVA_ARGS", "The JVM parameters used for launch"),
-                            ] {
-                                ui.label(RichText::new(k).monospace());
+                        ui.add_space(10.0);
+                        ui.spacing_mut().item_spacing.y = 6.0;
+                        ui.spacing_mut().interact_size.y = 26.0;
+                        for (k, v) in [
+                            ("$INST_NAME", "The name of the instance"),
+                            ("$INST_ID", "The name of the instance's root directory"),
+                            ("$INST_DIR", "The absolute path to the instance directory"),
+                            ("$INST_MC_DIR", "Alias for $INST_DIR"),
+                            ("$INST_JAVA", "The absolute path to the java executable used for launch"),
+                            ("$INST_JAVA_ARGS", "The JVM parameters used for launch"),
+                        ] {
+                            ui.horizontal(|ui| {
+                                // the names in one column, so the explanations start at one edge
+                                ui.allocate_ui_with_layout(egui::vec2(140.0, 24.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                                    ui.set_min_width(140.0);
+                                    code(ui, k);
+                                });
                                 small_muted(ui, v);
-                                ui.end_row();
-                            }
-                        });
+                            });
+                        }
                     });
                 }
             }

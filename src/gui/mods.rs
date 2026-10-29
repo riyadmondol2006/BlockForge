@@ -14,8 +14,9 @@ use std::time::SystemTime;
 
 use egui::{Align, CornerRadius, Layout, RichText, ScrollArea, Stroke, Ui};
 
-use super::icons::Icon;
-use super::instance_menu::{ghost_button, secondary_menu, split_or_stack};
+use super::icons::{self, Icon};
+use super::instance_menu::{secondary_menu, split_or_stack};
+use super::motion;
 use super::theme::*;
 use super::widgets::*;
 use super::{App, InstTab, Msg, Page};
@@ -30,8 +31,11 @@ use crate::mods::{ModContext, ModSettings, install, performance, versions};
 use crate::snapshots;
 
 /// How tall a row of the list is, and how big the picture in it.
-const ROW_H: f32 = 56.0;
-const ICON: f32 = 36.0;
+const ROW_H: f32 = 60.0;
+const ICON: f32 = 38.0;
+
+/// How wide the grey names before the values of a mod's details are.
+const FACT_W: f32 = 84.0;
 
 /// Between the parts of the grey line after a mod's name (its version, where it came from).
 const META_SEP: &str = " \u{00B7} ";
@@ -230,10 +234,16 @@ fn modified(path: &Path) -> Option<SystemTime> {
 
 /// A long list in a scroll area where only the rows in view (and a little around them) are laid out; the others
 /// take the height they had when last drawn, or `guess`. Hundreds of rows then cost what a screenful costs.
-pub(super) fn lazy_list<T>(ui: &mut Ui, id: egui::Id, items: &[T], guess: f32, mut row: impl FnMut(&mut Ui, &T)) {
+pub(super) fn lazy_list<T>(ui: &mut Ui, id: egui::Id, items: &[T], guess: f32, row: impl FnMut(&mut Ui, &T)) {
+    lazy_list_in(ui, id, items, guess, false, row);
+}
+
+/// [`lazy_list`], and with `shrink` the list is only as tall as its rows (up to the room there is), so the card
+/// around a short list ends under its last row.
+fn lazy_list_in<T>(ui: &mut Ui, id: egui::Id, items: &[T], guess: f32, shrink: bool, mut row: impl FnMut(&mut Ui, &T)) {
     let mut heights: Vec<f32> = ui.data(|d| d.get_temp(id)).unwrap_or_default();
     heights.resize(items.len(), guess);
-    ScrollArea::vertical().id_salt(id).auto_shrink(false).show_viewport(ui, |ui, viewport| {
+    ScrollArea::vertical().id_salt(id).auto_shrink([false, shrink]).show_viewport(ui, |ui, viewport| {
         let origin = ui.max_rect().top();
         let margin = 120.0;
         for (i, item) in items.iter().enumerate() {
@@ -264,6 +274,212 @@ fn short(text: &str, max: usize) -> String {
     } else {
         format!("{}…", text.chars().take(max).collect::<String>())
     }
+}
+
+/// The kinds of content as one control: each a tab with its count in a small badge, the open one on a raised pill
+/// that slides to the one opened next. Returns the kind that was opened.
+fn kind_tabs(ui: &mut Ui, kinds: &[(ContentKind, usize)], open: ContentKind) -> Option<ContentKind> {
+    const PAD: f32 = 14.0;
+    let font = super::fonts::medium(13.0);
+    let badge_font = super::fonts::medium(FS_META - 1.0);
+    let badge_w = |n: usize, ui: &Ui| {
+        ui.painter().layout_no_wrap(n.to_string(), badge_font.clone(), c_text()).size().x.max(8.0) + 12.0
+    };
+    let widths: Vec<f32> = kinds
+        .iter()
+        .map(|(k, n)| {
+            let label = ui.painter().layout_no_wrap(k.label().to_string(), font.clone(), c_text()).size().x;
+            label + 2.0 * PAD + if *n > 0 { badge_w(*n, ui) + 7.0 } else { 0.0 }
+        })
+        .collect();
+    let total: f32 = widths.iter().sum::<f32>() + 6.0;
+    let (outer, outer_resp) = ui.allocate_exact_size(egui::vec2(total, 36.0), egui::Sense::hover());
+    let p = ui.painter();
+    p.rect(outer, CornerRadius::same(R_CONTROL + 1), c_field(), Stroke::new(1.0, c_border()), egui::StrokeKind::Inside);
+    let chosen = kinds.iter().position(|(k, _)| *k == open).unwrap_or(0);
+    let sel_x = outer.left() + 3.0 + widths.iter().take(chosen).sum::<f32>();
+    if let Some(w) = widths.get(chosen) {
+        let id = outer_resp.id.with("pill");
+        let x = motion::glide(ui.ctx(), id.with("x"), sel_x, motion::MEDIUM);
+        let pw = motion::glide(ui.ctx(), id.with("w"), *w, motion::MEDIUM);
+        let pill = egui::Rect::from_min_size(egui::pos2(x, outer.top() + 3.0), egui::vec2(pw, 30.0));
+        let radius = CornerRadius::same(R_CONTROL - 2);
+        let shade = egui::Color32::from_black_alpha(if is_dark() { 90 } else { 26 });
+        p.add(egui::Shadow { offset: [0, 2], blur: 8, spread: 0, color: shade }.as_shape(pill, radius));
+        p.rect_filled(pill, radius, if is_dark() { c_active() } else { c_card() });
+        glass_edge(p, pill, R_CONTROL - 2);
+    }
+    let mut pressed = None;
+    let mut x = outer.left() + 3.0;
+    for (i, ((k, n), w)) in kinds.iter().zip(widths).enumerate() {
+        let rect = egui::Rect::from_min_size(egui::pos2(x, outer.top() + 3.0), egui::vec2(w, 30.0));
+        x += w;
+        let resp = ui.interact(rect, ui.scope_id().with(("kind-tab", i)), egui::Sense::click());
+        let on = *k == open;
+        let t = motion::hover(ui, resp.id, on || resp.hovered());
+        let s = motion::toward(ui.ctx(), resp.id.with("on"), on, motion::MEDIUM);
+        let fg = motion::mix(c_muted(), c_text(), t);
+        let galley = ui.painter().layout_no_wrap(k.label().to_string(), font.clone(), fg);
+        let label_y = rect.center().y - galley.size().y / 2.0;
+        let label_w = galley.size().x;
+        ui.painter().galley(egui::pos2(rect.left() + PAD, label_y), galley, fg);
+        if *n > 0 {
+            // the count: a quiet badge, in the brand's soft tint on the open kind
+            let bw = badge_w(*n, ui);
+            let badge = egui::Rect::from_min_size(
+                egui::pos2(rect.left() + PAD + label_w + 7.0, rect.center().y - 9.0),
+                egui::vec2(bw, 18.0),
+            );
+            let ink = if is_dark() { c_accent() } else { c_accent_hover() };
+            let bg = motion::mix(c_hover(), c_accent_soft(), s);
+            ui.painter().rect_filled(badge, CornerRadius::same(9), bg);
+            let bfg = motion::mix(c_muted(), ink, s);
+            let g = ui.painter().layout_no_wrap(n.to_string(), badge_font.clone(), bfg);
+            ui.painter().galley(badge.center() - g.size() / 2.0, g, bfg);
+        }
+        focus_ring(ui, &resp, rect, R_CONTROL - 2);
+        let label = if *n > 0 { format!("{} {n}", k.label()) } else { k.label().to_string() };
+        resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Tab, true, on, &label));
+        if resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() && !on {
+            pressed = Some(*k);
+        }
+    }
+    pressed
+}
+
+/// The search box of the list, with a magnifier at its start.
+fn filter_field(ui: &mut Ui, text: &mut String, hint: &str, width: f32) -> egui::Response {
+    let r = ui.add_sized(
+        [width, 34.0],
+        egui::TextEdit::singleline(text)
+            .hint_text(RichText::new(hint).color(c_faint()))
+            .margin(egui::Margin { left: 32, right: 10, top: 7, bottom: 7 })
+            .background_color(c_field()),
+    );
+    let color = if r.has_focus() { c_text() } else { c_faint() };
+    icons::paint(ui.painter(), Icon::Search, egui::pos2(r.rect.left() + 17.0, r.rect.center().y), 13.0, color);
+    r
+}
+
+/// Something running for the list: a small spinner and what it is.
+fn working(ui: &mut Ui, text: &str) {
+    spinner_sized(ui, 14.0);
+    ui.label(RichText::new(text).size(FS_META).color(c_muted()));
+}
+
+/// The picture of an empty list of a kind.
+fn kind_icon(kind: ContentKind) -> Icon {
+    match kind {
+        ContentKind::Mods => Icon::Package,
+        ContentKind::ResourcePacks => Icon::Layers,
+        ContentKind::Shaders => Icon::Sliders,
+    }
+}
+
+/// An empty list: a soft round picture, one sentence and, if there is one, the action. Returns the action's response.
+fn empty_state(ui: &mut Ui, icon: Icon, text: &str, action: Option<&str>) -> Option<egui::Response> {
+    ui.add_space(18.0);
+    let out = ui
+        .vertical_centered(|ui| {
+            let (r, _) = ui.allocate_exact_size(egui::vec2(48.0, 48.0), egui::Sense::hover());
+            ui.painter().circle_filled(r.center(), 24.0, c_hover());
+            icons::paint(ui.painter(), icon, r.center(), 20.0, c_muted());
+            ui.add_space(6.0);
+            ui.label(RichText::new(text).color(c_muted()));
+            action.map(|a| {
+                ui.add_space(6.0);
+                secondary(ui, a)
+            })
+        })
+        .inner;
+    ui.add_space(18.0);
+    out
+}
+
+/// A quiet action of a list row: text that fades in with the row's fill (`shown`, 0 to 1) while the row is pointed
+/// at, or at once when the keyboard reaches it, with a fill of its own under the pointer. `hot` is its colour then.
+fn row_action(ui: &mut Ui, text: &str, hot: Option<egui::Color32>, shown: f32) -> egui::Response {
+    let font = super::fonts::medium(FS_BODY);
+    let w = ui.painter().layout_no_wrap(text.to_string(), font.clone(), c_muted()).size().x;
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(w + 20.0, 28.0), egui::Sense::click());
+    let pointed = resp.hovered() || resp.is_pointer_button_down_on();
+    let p = motion::hover(ui, resp.id, pointed);
+    let alpha = if resp.has_focus() { 1.0 } else { shown.max(p) };
+    if ui.is_rect_visible(rect) && alpha > 0.0 {
+        if p > 0.0 {
+            ui.painter().rect_filled(rect, CornerRadius::same(R_CONTROL - 2), c_active().gamma_multiply(p));
+        }
+        let fg = motion::mix(c_muted(), hot.unwrap_or_else(c_text), p).gamma_multiply(alpha);
+        let galley = ui.painter().layout_no_wrap(text.to_string(), font, fg);
+        ui.painter().galley(rect.center() - galley.size() / 2.0, galley, fg);
+    }
+    focus_ring(ui, &resp, rect, R_CONTROL - 2);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, text));
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+/// The tick box of a row while choosing several: an outlined rounded square, filled with the brand gradient and a
+/// tick when it is ticked.
+fn check(ui: &mut Ui, on: &mut bool) -> egui::Response {
+    let (rect, mut resp) = ui.allocate_exact_size(egui::vec2(20.0, 20.0), egui::Sense::click());
+    if resp.clicked() {
+        *on = !*on;
+        resp.mark_changed();
+    }
+    let t = motion::toward(ui.ctx(), resp.id.with("on"), *on, motion::FAST);
+    let h = motion::hover(ui, resp.id, resp.hovered());
+    let r = rect.shrink(1.0);
+    let line = motion::mix(c_control(), c_text(), h * 0.5).gamma_multiply(1.0 - t);
+    ui.painter().rect(r, CornerRadius::same(R_TAG), c_field(), Stroke::new(1.5, line), egui::StrokeKind::Inside);
+    if t > 0.0 {
+        motion::gradient_rect(ui.painter(), r, R_TAG, c_accent().gamma_multiply(t), c_accent2().gamma_multiply(t));
+        let c = r.center();
+        let tick = vec![c + egui::vec2(-4.5, 0.2), c + egui::vec2(-1.3, 3.4), c + egui::vec2(4.6, -3.2)];
+        ui.painter().add(egui::Shape::line(tick, Stroke::new(2.0, c_on_accent().gamma_multiply(t))));
+    }
+    focus_ring(ui, &resp, r, R_TAG);
+    let state = *on;
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, true, state, ""));
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+/// What an update pill adds to the width of its text: the arrow and the padding.
+const UPDATE_PAD: f32 = 36.0;
+
+/// A row's update: a small pill in the brand's soft tint with an arrow, always shown so what can be updated is seen at
+/// a glance, that turns into the brand gradient under the pointer. Greyed while the list is busy.
+fn update_pill(ui: &mut Ui, text: &str) -> egui::Response {
+    let enabled = ui.is_enabled();
+    let font = super::fonts::medium(FS_META);
+    let w = ui.painter().layout_no_wrap(text.to_string(), font.clone(), c_text()).size().x;
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(w + UPDATE_PAD, 26.0), egui::Sense::click());
+    if ui.is_rect_visible(rect) {
+        let t = motion::hover(ui, resp.id, enabled && resp.hovered());
+        let ink = if is_dark() { c_accent() } else { c_accent_hover() };
+        let fg = if enabled { motion::mix(ink, c_on_accent(), t) } else { c_faint() };
+        let line = if enabled { c_accent().gamma_multiply(0.35 * (1.0 - t)) } else { c_border() };
+        ui.painter().rect(
+            rect,
+            CornerRadius::same(13),
+            if enabled { c_accent_soft() } else { c_field() },
+            Stroke::new(1.0, line),
+            egui::StrokeKind::Inside,
+        );
+        if t > 0.0 {
+            motion::gradient_rect(ui.painter(), rect, 13, c_accent().gamma_multiply(t), c_accent2().gamma_multiply(t));
+        }
+        // an arrow pointing up: a newer version
+        let a = egui::pos2(rect.left() + 15.0, rect.center().y);
+        let s = Stroke::new(1.6, fg);
+        ui.painter().line_segment([a + egui::vec2(0.0, 4.5), a + egui::vec2(0.0, -4.5)], s);
+        ui.painter().line_segment([a + egui::vec2(-3.5, -1.0), a + egui::vec2(0.0, -4.5)], s);
+        ui.painter().line_segment([a + egui::vec2(3.5, -1.0), a + egui::vec2(0.0, -4.5)], s);
+        let galley = ui.painter().layout_no_wrap(text.to_string(), font, fg);
+        ui.painter().galley(egui::pos2(rect.left() + 25.0, rect.center().y - galley.size().y / 2.0), galley, fg);
+    }
+    focus_ring(ui, &resp, rect, 13);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, text));
+    if enabled { resp.on_hover_cursor(egui::CursorIcon::PointingHand) } else { resp }
 }
 
 impl App {
@@ -804,13 +1020,10 @@ impl App {
             34.0,
             &mut st,
             |ui, (this, acts)| {
-                ui.spacing_mut().item_spacing.x = 22.0;
-                for k in ContentKind::ALL {
-                    let count = this.mods.entries.get(&k).map_or(0, Vec::len);
-                    let label = if count > 0 { format!("{} {count}", k.label()) } else { k.label().to_string() };
-                    if tab(ui, &label, kind == k).clicked() && kind != k {
-                        acts.push(Act::Kind(k));
-                    }
+                let kinds: Vec<(ContentKind, usize)> =
+                    ContentKind::ALL.iter().map(|k| (*k, this.mods.entries.get(k).map_or(0, Vec::len))).collect();
+                if let Some(k) = kind_tabs(ui, &kinds, kind) {
+                    acts.push(Act::Kind(k));
                 }
             },
             |ui, (_, acts)| {
@@ -822,34 +1035,34 @@ impl App {
                 }
             },
         );
-        ui.add_space(6.0);
+        ui.add_space(10.0);
         split_or_stack(
             ui,
             tools_id,
-            32.0,
+            34.0,
             &mut st,
             |ui, (this, _)| {
                 let mut f = std::mem::take(&mut this.mods.filter);
-                let width = 200.0f32.min(ui.available_width());
-                search_field(ui, &mut f, &format!("Filter {}", kind.label().to_lowercase()), width);
+                let width = 220.0f32.min(ui.available_width());
+                filter_field(ui, &mut f, &format!("Filter {}", kind.label().to_lowercase()), width);
                 this.mods.filter = f;
+                ui.add_space(4.0);
                 let updates = if offers_n > 0 { format!("Updates {offers_n}") } else { "Updates".to_string() };
                 let choices =
                     [(Show::All, "All"), (Show::On, "On"), (Show::Off, "Off"), (Show::Updates, updates.as_str())];
-                let labels: Vec<&str> = choices.iter().map(|c| c.1).collect();
-                let chosen = choices.iter().position(|c| c.0 == this.mods.show).unwrap_or(0);
-                if let Some(i) = segmented(ui, &labels, chosen) {
-                    this.mods.show = choices[i].0;
+                ui.spacing_mut().item_spacing.x = 6.0;
+                for (show, label) in choices {
+                    if chip(ui, label, this.mods.show == show).clicked() {
+                        this.mods.show = show;
+                    }
                 }
             },
             |ui, (this, acts)| {
                 if let Some(b) = &this.mods.busy {
-                    muted(ui, format!("{b}\u{2026}"));
-                    spinner_sized(ui, 14.0);
+                    working(ui, &format!("{b}\u{2026}"));
                 }
                 if this.mods.checking {
-                    muted(ui, "Checking for updates");
-                    spinner_sized(ui, 14.0);
+                    working(ui, "Checking for updates");
                 } else {
                     if let Some(e) = &this.mods.update_error {
                         ui.label(RichText::new("Couldn't check").size(FS_META).color(c_warn()))
@@ -919,27 +1132,38 @@ impl App {
 
         if self.mods.select_mode {
             let chosen: Vec<ModKey> = self.mods.selected.iter().cloned().collect();
-            ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                small_muted(ui, format!("{} selected", chosen.len()));
-                let any = !chosen.is_empty();
-                ui.add_enabled_ui(any, |ui| {
-                    if secondary(ui, "Switch on").clicked() {
-                        acts.push(Act::EnableAll(chosen.clone(), true));
-                    }
-                    if secondary(ui, "Switch off").clicked() {
-                        acts.push(Act::EnableAll(chosen.clone(), false));
-                    }
-                    if secondary(ui, "Refresh names").clicked() {
-                        acts.push(Act::Refresh(chosen.clone()));
-                    }
-                    if danger(ui, "Remove").clicked() {
-                        acts.push(Act::Remove(chosen.clone()));
-                    }
+            ui.add_space(10.0);
+            // the selection and what can be done with it, on a strip in the brand's soft tint
+            egui::Frame::new()
+                .fill(c_accent_soft())
+                .stroke(Stroke::new(1.0, c_accent().gamma_multiply(0.35)))
+                .corner_radius(CornerRadius::same(R_CONTROL))
+                .inner_margin(egui::Margin::symmetric(14, 6))
+                .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.horizontal_wrapped(|ui| {
+                        let ink = if is_dark() { c_accent() } else { c_accent_hover() };
+                        let n = RichText::new(format!("{} selected", chosen.len())).font(super::fonts::medium(FS_BODY));
+                        ui.label(n.color(ink));
+                        ui.add_space(8.0);
+                        // greyed in place (not in a scope of their own), so they still wrap in a narrow window
+                        let any = !chosen.is_empty();
+                        if ui.add_enabled(any, |ui: &mut Ui| secondary(ui, "Switch on")).clicked() {
+                            acts.push(Act::EnableAll(chosen.clone(), true));
+                        }
+                        if ui.add_enabled(any, |ui: &mut Ui| secondary(ui, "Switch off")).clicked() {
+                            acts.push(Act::EnableAll(chosen.clone(), false));
+                        }
+                        if ui.add_enabled(any, |ui: &mut Ui| secondary(ui, "Refresh names")).clicked() {
+                            acts.push(Act::Refresh(chosen.clone()));
+                        }
+                        if ui.add_enabled(any, |ui: &mut Ui| danger(ui, "Remove")).clicked() {
+                            acts.push(Act::Remove(chosen.clone()));
+                        }
+                    });
                 });
-            });
         }
-        ui.add_space(6.0);
+        ui.add_space(12.0);
 
         // things worth knowing before the list
         self.mods_banners(ui, inst, &target, kind, &mut acts);
@@ -966,15 +1190,14 @@ impl App {
                 matches && shown
             })
             .collect();
-        if total == 0 {
-            let loading = self.mods.last_report.is_none() && self.mods.sync_error.is_none();
+        let loading = total == 0 && self.mods.last_report.is_none() && self.mods.sync_error.is_none();
+        if total == 0 && !loading {
+            // nothing to list: why, and what to do, without a card around nothing
             if let Some(e) = &self.mods.sync_error {
                 let text = format!("Couldn't look through the folders: {}", short(e, 200));
                 if notice(ui, NoticeKind::Error, &text, Some("Try again")).is_some_and(|r| r.clicked()) {
                     acts.push(Act::Rescan);
                 }
-            } else if loading {
-                skeleton_rows(ui, 6, ROW_H);
             } else if kind == ContentKind::Mods && target.loader_key.is_none() {
                 let text =
                     "No mod loader yet. This instance runs plain Minecraft, and mods need a mod loader such as Fabric.";
@@ -989,20 +1212,31 @@ impl App {
                     }
                     ContentKind::Shaders => "No shaders yet. Browse Modrinth, or drop .zip files onto this window.",
                 };
-                empty_row(ui, text, None);
+                card(ui, |ui| empty_state(ui, kind_icon(kind), text, None));
             }
-        } else if rows.is_empty() {
-            let what = kind.label().to_lowercase();
-            if empty_row(ui, &format!("No {what} match your filter."), Some("Clear filter"))
-                .is_some_and(|r| r.clicked())
-            {
-                acts.push(Act::ClearFilter);
-            }
+        } else {
+            // one glass card holds the list; it ends under the last row, or at the bottom of the window
+            let last = rows.last().map(|e| e.key());
+            let out = card_frame().inner_margin(egui::Margin::same(6)).show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                if loading {
+                    skeleton_rows(ui, 6, ROW_H);
+                } else if rows.is_empty() {
+                    let what = kind.label().to_lowercase();
+                    let text = format!("No {what} match your filter.");
+                    if empty_state(ui, Icon::Search, &text, Some("Clear filter")).is_some_and(|r| r.clicked()) {
+                        acts.push(Act::ClearFilter);
+                    }
+                } else {
+                    lazy_list_in(ui, egui::Id::unique(("mod-list", kind)), &rows, ROW_H, true, |ui, e| {
+                        ui.spacing_mut().item_spacing.y = 0.0;
+                        let is_last = last.as_ref() == Some(&e.key());
+                        self.mod_row(ui, e, busy, is_last, &mut acts);
+                    });
+                }
+            });
+            glass_edge(ui.painter(), out.response.rect, R_CARD);
         }
-        lazy_list(ui, egui::Id::unique(("mod-list", kind)), &rows, ROW_H + 1.0, |ui, e| {
-            ui.spacing_mut().item_spacing.y = 0.0;
-            self.mod_row(ui, e, busy, &mut acts);
-        });
 
         let ctx = ui.ctx().clone();
         self.mods_dialogs(&ctx, inst);
@@ -1074,13 +1308,13 @@ impl App {
     }
 
     /// One mod as a row: its picture, its name with the version and where it came from, a line about it, and on the
-    /// right its actions (shown while the row is pointed at) and its switch.
-    fn mod_row(&self, ui: &mut Ui, e: &ModEntry, busy: bool, acts: &mut Vec<Act>) {
+    /// right its update, its actions (shown while the row is pointed at) and its switch.
+    fn mod_row(&self, ui: &mut Ui, e: &ModEntry, busy: bool, last: bool, acts: &mut Vec<Act>) {
         let key = e.key();
-        ui.push_id(&key.file, |ui| self.mod_row_inner(ui, e, &key, busy, acts));
+        ui.push_id(&key.file, |ui| self.mod_row_inner(ui, e, &key, busy, last, acts));
     }
 
-    fn mod_row_inner(&self, ui: &mut Ui, e: &ModEntry, key: &ModKey, busy: bool, acts: &mut Vec<Act>) {
+    fn mod_row_inner(&self, ui: &mut Ui, e: &ModEntry, key: &ModKey, busy: bool, last: bool, acts: &mut Vec<Act>) {
         let rec = &e.record;
         let offer = self.mods.updates.get(key);
         let details = self.mods.details.get(key);
@@ -1088,26 +1322,27 @@ impl App {
         let name = e.name();
         let off = rec.disabled;
 
+        // the fill under the row is laid down first and sized at the end, when it is known how far the details reach
+        let fill = ui.painter().add(egui::Shape::Noop);
         let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), ROW_H), egui::Sense::hover());
         let hovered = ui.rect_contains_pointer(rect);
-        if hovered || expanded {
-            ui.painter().rect_filled(rect, CornerRadius::same(R_CONTROL), c_hover());
-        }
-        let inner = rect.shrink2(egui::vec2(8.0, 0.0));
+        // the row's fill and its quiet actions fade in together under the pointer
+        let hot = motion::hover(ui, ui.scope_id().with("row"), hovered || expanded);
+        let inner = rect.shrink2(egui::vec2(10.0, 0.0));
         let mut left = inner.left();
         if self.mods.select_mode {
             let mut on = self.mods.selected.contains(key);
             let r = egui::Rect::from_center_size(egui::pos2(left + 10.0, rect.center().y), egui::vec2(20.0, 20.0));
-            if ui.new_child(egui::UiBuilder::new().max_rect(r)).add(egui::Checkbox::new(&mut on, "")).changed() {
+            if check(&mut ui.new_child(egui::UiBuilder::new().max_rect(r)), &mut on).changed() {
                 acts.push(Act::Select(key.clone(), on));
             }
-            left += 30.0;
+            left += 32.0;
         }
         // the picture, dimmed while the mod is off
         let icon = egui::Rect::from_min_size(egui::pos2(left, rect.center().y - ICON / 2.0), egui::vec2(ICON, ICON));
         let mut picture = ui.new_child(egui::UiBuilder::new().max_rect(icon));
         if off {
-            picture.set_opacity(0.45);
+            picture.set_opacity(0.4);
         }
         match self.mods.textures.get(key) {
             Some(tex) => {
@@ -1119,7 +1354,7 @@ impl App {
             }
             None => paint_avatar(&picture, icon, &name),
         }
-        left += ICON + 12.0;
+        left += ICON + 14.0;
         // the switch, at the right edge
         let mut on = !off;
         let switch =
@@ -1138,38 +1373,40 @@ impl App {
             + 20.0
             + text_w(ui, "Details", FS_BODY)
             + 20.0
-            + update_label.as_deref().map_or(0.0, |t| text_w(ui, t, FS_BODY) + 20.0 + 4.0);
+            + update_label.as_deref().map_or(0.0, |t| text_w(ui, t, FS_META) + UPDATE_PAD + 8.0);
         let actions = egui::Rect::from_min_max(
-            egui::pos2((switch.left() - 12.0 - actions_w).max(left + 120.0), rect.top()),
-            egui::pos2(switch.left() - 12.0, rect.bottom()),
+            egui::pos2((switch.left() - 14.0 - actions_w).max(left + 120.0), rect.top()),
+            egui::pos2(switch.left() - 14.0, rect.bottom()),
         );
         let mut ac =
             ui.new_child(egui::UiBuilder::new().max_rect(actions).layout(Layout::right_to_left(Align::Center)));
         ac.spacing_mut().item_spacing.x = 0.0;
-        if ghost_button(&mut ac, "Remove", None, Some(c_danger()), hovered).clicked() {
+        if row_action(&mut ac, "Remove", Some(c_danger()), hot).clicked() {
             acts.push(Act::Remove(vec![key.clone()]));
         }
-        if ghost_button(&mut ac, if expanded { "Hide" } else { "Details" }, None, None, hovered || expanded).clicked() {
+        if row_action(&mut ac, if expanded { "Hide" } else { "Details" }, None, hot).clicked() {
             acts.push(Act::Details(key.clone()));
         }
         if let (Some(o), Some(label)) = (offer, update_label) {
-            // plain text in the text colour: green is kept for starting the game
-            let r = ac
-                .add_enabled_ui(!busy, |ui| ghost_button(ui, &label, Some(c_text()), Some(c_text()), true))
-                .inner
-                .on_hover_text(format!("{} \u{2192} {} on {}", o.current, o.newer, o.platform.label()));
+            ac.add_space(8.0);
+            let r = ac.add_enabled_ui(!busy, |ui| update_pill(ui, &label)).inner.on_hover_text(format!(
+                "{} \u{2192} {} on {}",
+                o.current,
+                o.newer,
+                o.platform.label()
+            ));
             if r.clicked() {
                 acts.push(Act::Update(key.clone()));
             }
         }
         // the name and what is known about it
         let text = egui::Rect::from_min_max(
-            egui::pos2(left, rect.top() + 8.0),
-            egui::pos2(actions.left() - 8.0, rect.bottom() - 8.0),
+            egui::pos2(left, rect.top() + 9.0),
+            egui::pos2(actions.left() - 8.0, rect.bottom() - 9.0),
         );
         let mut tc = ui.new_child(egui::UiBuilder::new().max_rect(text).layout(Layout::top_down(Align::Min)));
         tc.set_clip_rect(tc.clip_rect().intersect(text));
-        tc.spacing_mut().item_spacing = egui::vec2(6.0, 2.0);
+        tc.spacing_mut().item_spacing = egui::vec2(8.0, 3.0);
         tc.spacing_mut().interact_size.y = 20.0;
         let version =
             if rec.version.is_empty() || rec.version == "Unknown" { String::new() } else { short(&rec.version, 40) };
@@ -1178,13 +1415,13 @@ impl App {
         if !e.exists {
             tags.push(("File missing", c_danger()));
         }
-        let tags_w: f32 = tags.iter().map(|(t, _)| text_w(&tc, t, FS_META) + 12.0 + 6.0).sum();
+        let tags_w: f32 = tags.iter().map(|(t, _)| text_w(&tc, t, FS_META) + 12.0 + 8.0).sum();
         let name_text = RichText::new(&name).semibold().color(if off { c_muted() } else { c_text() });
         let name_nat = tc.painter().layout_no_wrap(name.clone(), super::fonts::semibold(FS_BODY), c_text()).size().x;
-        let name_w = name_nat.min((text.width() - tags_w - 6.0).max(text.width() * 0.4));
+        let name_w = name_nat.min((text.width() - tags_w - 8.0).max(text.width() * 0.4));
         // the version and the rest take what is left on the line: a part that does not fit is left out whole, and
         // all of it is left to the details when there is no room
-        let left_over = text.width() - name_w - tags_w - 12.0;
+        let left_over = text.width() - name_w - tags_w - 16.0;
         let mut meta: Vec<&str> = Vec::new();
         if !version.is_empty() {
             meta.push(&version);
@@ -1215,7 +1452,7 @@ impl App {
                 ui.scope(|ui| {
                     ui.set_max_width(left_over);
                     ui.add(
-                        egui::Label::new(RichText::new(meta.join(META_SEP)).color(c_muted()).size(FS_META)).truncate(),
+                        egui::Label::new(RichText::new(meta.join(META_SEP)).color(c_faint()).size(FS_META)).truncate(),
                     );
                 });
             }
@@ -1229,25 +1466,39 @@ impl App {
                     .truncate(),
             );
         } else if !rec.description.is_empty() {
-            tc.add(
-                egui::Label::new(RichText::new(short(&rec.description, 160)).color(c_muted()).size(FS_META)).truncate(),
-            );
+            let color = if off { c_faint() } else { c_muted() };
+            tc.add(egui::Label::new(RichText::new(short(&rec.description, 160)).color(color).size(FS_META)).truncate());
         }
         if expanded {
-            ui.add_space(4.0);
+            ui.add_space(2.0);
             ui.horizontal(|ui| {
-                ui.add_space(left - rect.left() + 8.0 - ui.spacing().item_spacing.x);
+                ui.add_space(left - rect.left());
                 ui.vertical(|ui| {
+                    ui.set_max_width(inner.right() - left);
                     ui.spacing_mut().interact_size.y = 20.0;
                     ui.spacing_mut().item_spacing.y = 4.0;
                     self.mod_details(ui, e, details, offer, busy, acts)
                 });
             });
-            ui.add_space(8.0);
+            ui.add_space(14.0);
         }
-        // one hairline between rows
-        let y = if expanded { ui.cursor().top() } else { rect.bottom() - 0.5 };
-        ui.painter().hline(rect.left()..=rect.right(), y, Stroke::new(1.0, c_rule()));
+        let bottom = if expanded { ui.cursor().top() } else { rect.bottom() };
+        let block = egui::Rect::from_min_max(rect.min, egui::pos2(rect.right(), bottom));
+        if hot > 0.0 {
+            let shape = egui::epaint::RectShape::new(
+                block,
+                CornerRadius::same(R_CONTROL),
+                c_hover().gamma_multiply(hot),
+                Stroke::new(1.0, c_border().gamma_multiply(if expanded { hot } else { 0.0 })),
+                egui::StrokeKind::Inside,
+            );
+            ui.painter().set(fill, shape);
+        }
+        // a hairline between rows, from where the text starts; it gives way to the fill of a row that is pointed at
+        if !last && hot < 1.0 {
+            let y = bottom - 0.5;
+            ui.painter().hline(left..=inner.right(), y, Stroke::new(1.0, c_rule().gamma_multiply(1.0 - hot)));
+        }
     }
 
     /// The details of one mod: what the file says about itself, links, and the actions that need a closer look.
@@ -1263,12 +1514,23 @@ impl App {
         let rec = &e.record;
         let key = e.key();
         let info = details.map(|d| &d.info);
-        egui::Grid::new(("mod-details", &key.file)).num_columns(2).spacing([24.0, 6.0]).show(ui, |ui| {
+        // what is known, a grey name before each value; a long value wraps under itself, never past the card
+        ui.scope(|ui| {
+            ui.spacing_mut().item_spacing.y = 6.0;
             let row = |ui: &mut Ui, k: &str, v: String| {
                 if !v.is_empty() {
-                    small_muted(ui, k);
-                    ui.add(egui::Label::new(v).wrap());
-                    ui.end_row();
+                    ui.horizontal_top(|ui| {
+                        let name = RichText::new(k).size(FS_META).color(c_faint());
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(FACT_W, 18.0),
+                            Layout::left_to_right(Align::Center),
+                            |ui| {
+                                ui.set_min_width(FACT_W);
+                                ui.add(egui::Label::new(name).truncate());
+                            },
+                        );
+                        ui.add(egui::Label::new(v).wrap());
+                    });
                 }
             };
             row(ui, "File", format!("{}  ({})", rec.file, human_size(e.size)));
@@ -1351,22 +1613,21 @@ impl App {
                 acts.push(Act::ShowInFolder(key.clone()));
             }
             if files::is_from_modrinth(rec) {
-                if ui.add_enabled_ui(!busy, |ui| secondary(ui, "Check this one")).inner.clicked() {
+                if ui.add_enabled(!busy, |ui: &mut Ui| secondary(ui, "Check this one")).clicked() {
                     acts.push(Act::CheckOne(key.clone()));
                 }
                 if ui
-                    .add_enabled_ui(!busy, |ui| secondary(ui, "Versions\u{2026}"))
-                    .inner
+                    .add_enabled(!busy, |ui: &mut Ui| secondary(ui, "Versions\u{2026}"))
                     .on_hover_text("Pick another version, or go back to an older one")
                     .clicked()
                 {
                     acts.push(Act::Versions(key.clone()));
                 }
-                if ui.add_enabled_ui(!busy, |ui| secondary(ui, "Reinstall")).inner.clicked() {
+                if ui.add_enabled(!busy, |ui: &mut Ui| secondary(ui, "Reinstall")).clicked() {
                     acts.push(Act::Reinstall(key.clone()));
                 }
             }
-            if ui.add_enabled_ui(!busy, |ui| secondary(ui, "Refresh from Modrinth")).inner.clicked() {
+            if ui.add_enabled(!busy, |ui: &mut Ui| secondary(ui, "Refresh from Modrinth")).clicked() {
                 acts.push(Act::Refresh(vec![key.clone()]));
             }
         });

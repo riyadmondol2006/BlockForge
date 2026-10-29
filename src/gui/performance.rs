@@ -9,7 +9,9 @@ use egui::{RichText, Ui};
 
 use super::App;
 use super::instance_menu::Act;
-use super::settings::{Rows, wide_row};
+use super::instance_settings::Rows;
+use super::motion;
+use super::settings::wide_row;
 use super::theme::*;
 use super::widgets::*;
 use crate::config::Settings;
@@ -224,8 +226,7 @@ impl App {
     /// The Low-end choices of an instance, as menu items.
     fn low_end_choices(&self, ui: &mut Ui, inst: &Instance) -> Option<Act> {
         let mut act = None;
-        ui.set_min_width(220.0);
-        small_muted(ui, "Low-end mode for this instance");
+        menu_heading(ui, "Low-end mode for this instance");
         let own = lowend::instance_override(inst);
         let launcher = Mode::parse(&self.settings.low_end_mode);
         let choices = [
@@ -235,7 +236,7 @@ impl App {
             (Some(Mode::Off), "Off".to_string()),
         ];
         for (value, label) in choices {
-            if ui.radio(own == value, label).clicked() {
+            if menu_choice(ui, own == value, &label).clicked() {
                 if own != value {
                     act = Some(Act::Helper(inst.folder.clone(), HelperChange::LowEnd(value)));
                 }
@@ -258,8 +259,12 @@ impl App {
     pub(super) fn performance_button(&self, ui: &mut Ui, inst: &Instance) -> Option<Act> {
         let (resp, act) = super::instance_menu::secondary_switch_menu(ui, "Performance", |ui| {
             let act = self.helpers_contents(ui, inst);
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.add_space(10.0);
+                ui.label(RichText::new("Changes apply the next time the game starts.").size(FS_META).color(c_faint()));
+            });
             ui.add_space(2.0);
-            small_muted(ui, "Changes apply the next time the game starts.");
             act
         });
         resp.on_hover_text(self.speed_summary(inst));
@@ -269,7 +274,6 @@ impl App {
     /// Fast start, the smoothness helper and Low-end mode of one instance, as switches and choices in a menu.
     fn helpers_contents(&self, ui: &mut Ui, inst: &Instance) -> Option<Act> {
         let mut act = None;
-        ui.set_min_width(240.0);
         let mut fast = crate::launch::fast_start_enabled(&self.settings, inst);
         if menu_switch(ui, &mut fast, "Fast start", "Opens the game sooner") {
             act = Some(Act::FastStart(inst.folder.clone(), fast));
@@ -278,7 +282,10 @@ impl App {
         if menu_switch(ui, &mut smooth, "Smoothness helper", LITE_HINT) {
             act = Some(Act::Helper(inst.folder.clone(), HelperChange::Lite(Some(smooth))));
         }
-        ui.separator();
+        ui.add_space(4.0);
+        let (line, _) = ui.allocate_exact_size(egui::vec2(MENU_W, 1.0), egui::Sense::hover());
+        ui.painter().rect_filled(line, 0.0, c_border());
+        ui.add_space(4.0);
         if let Some(a) = self.low_end_choices(ui, inst) {
             act = Some(a);
         }
@@ -491,18 +498,76 @@ impl App {
     }
 }
 
-/// A switch with its label in a menu.
+/// How wide the lines of the Performance menu are (a menu is as wide as what is put in it).
+const MENU_W: f32 = 270.0;
+
+/// A switch with its label in a menu: the whole line takes the click, with a fill under the pointer, and the switch
+/// sits at its right end. The hint shows on hover.
 fn menu_switch(ui: &mut Ui, on: &mut bool, label: &str, hint: &str) -> bool {
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(MENU_W, 36.0), egui::Sense::click());
+    let changed = resp.clicked();
+    if changed {
+        *on = !*on;
+    }
+    let t = motion::hover(ui, resp.id, resp.hovered());
+    if t > 0.0 {
+        ui.painter().rect_filled(rect, egui::CornerRadius::same(R_CONTROL - 2), c_hover().gamma_multiply(t));
+    }
+    let galley = ui.painter().layout_no_wrap(label.to_string(), super::fonts::medium(FS_BODY), c_text());
+    ui.painter().galley(egui::pos2(rect.left() + 10.0, rect.center().y - galley.size().y / 2.0), galley, c_text());
+    // the switch, drawn as the launcher's other switches are: the brand gradient sliding in as it turns on
+    let s = motion::toward(ui.ctx(), resp.id.with("on"), *on, motion::MEDIUM);
+    let track = egui::Rect::from_center_size(egui::pos2(rect.right() - 28.0, rect.center().y), egui::vec2(36.0, 20.0));
+    ui.painter().rect_filled(track, egui::CornerRadius::same(10), c_active());
+    ui.painter().rect_stroke(
+        track,
+        egui::CornerRadius::same(10),
+        egui::Stroke::new(1.0, c_control().gamma_multiply(1.0 - s)),
+        egui::StrokeKind::Inside,
+    );
+    if s > 0.0 {
+        motion::gradient_rect(ui.painter(), track, 10, c_accent().gamma_multiply(s), c_accent2().gamma_multiply(s));
+    }
+    let knob = egui::pos2(track.left() + 10.0 + s * (track.width() - 20.0), track.center().y);
+    ui.painter().circle_filled(knob + egui::vec2(0.0, 1.0), 7.5, egui::Color32::from_black_alpha(40));
+    ui.painter().circle_filled(knob, 7.0, motion::mix(c_muted(), egui::Color32::WHITE, s));
+    focus_ring(ui, &resp, rect, R_CONTROL - 2);
+    let state = *on;
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Switch, true, state, label));
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(hint);
+    changed
+}
+
+/// A small grey title over a group of menu items.
+fn menu_heading(ui: &mut Ui, text: &str) {
     ui.horizontal(|ui| {
-        let mut changed = toggle(ui, on).on_hover_text(hint).changed();
-        let r = ui.add(egui::Label::new(label).sense(egui::Sense::click())).on_hover_text(hint);
-        if r.clicked() {
-            *on = !*on;
-            changed = true;
-        }
-        changed
-    })
-    .inner
+        ui.add_space(10.0);
+        ui.label(RichText::new(text).size(FS_META).color(c_muted()));
+    });
+}
+
+/// One of several choices in a menu: a line with a fill under the pointer and a round mark, filled with the brand
+/// gradient when it is the chosen one.
+fn menu_choice(ui: &mut Ui, selected: bool, label: &str) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(MENU_W, 32.0), egui::Sense::click());
+    let t = motion::hover(ui, resp.id, resp.hovered());
+    if t > 0.0 {
+        ui.painter().rect_filled(rect, egui::CornerRadius::same(R_CONTROL - 2), c_hover().gamma_multiply(t));
+    }
+    let c = egui::pos2(rect.left() + 18.0, rect.center().y);
+    let s = motion::toward(ui.ctx(), resp.id.with("on"), selected, motion::FAST);
+    ui.painter().circle_stroke(c, 7.5, egui::Stroke::new(1.5, c_control().gamma_multiply(1.0 - s)));
+    if s > 0.0 {
+        let dot = egui::Rect::from_center_size(c, egui::vec2(16.0, 16.0));
+        motion::gradient_rect(ui.painter(), dot, 8, c_accent().gamma_multiply(s), c_accent2().gamma_multiply(s));
+        ui.painter().circle_filled(c, 3.0 * s, c_on_accent());
+    }
+    let fg = if selected { c_text() } else { motion::mix(c_muted(), c_text(), t) };
+    let galley = ui.painter().layout_no_wrap(label.to_string(), super::fonts::medium(FS_BODY), fg);
+    ui.painter().galley(egui::pos2(rect.left() + 34.0, rect.center().y - galley.size().y / 2.0), galley, fg);
+    focus_ring(ui, &resp, rect, R_CONTROL - 2);
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::RadioButton, true, selected, label));
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
 /// "Launcher (on)" / "On" / "Off" for a switch an instance can follow or override. Returns the new choice.
