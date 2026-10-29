@@ -5,7 +5,8 @@ The section for a version is used as the text of its release on GitHub. Older re
 
 ## 4.9.0
 
-A new look for the whole launcher: deeper colours, glass and soft depth, and motion that makes it feel smooth.
+A new look for the whole launcher, with smooth motion, a layout that fits every window, and more options where they
+help.
 
 ### What is new
 
@@ -27,10 +28,36 @@ A new look for the whole launcher: deeper colours, glass and soft depth, and mot
 - **Tools, Servers, World converter and Crafting.** Tools are tiles, each server is a card with its status, and the
   converter's set-up is a stepper that ticks off each step.
 
+### Better layout and more options
+
+- **Fits every window.** Below about 1000 points wide, the sidebar folds smoothly into a rail of icons (names in
+  tooltips; the account, downloads and running games stay in it). On wide screens, pages of text and forms stay at a
+  readable width in the middle, and lists and grids use the room.
+- **Settings.** A search field (Ctrl+F) that finds a setting by its name, its explanation or a keyword, and a list of
+  the groups that jumps to each one. The groups are reordered (Game, Performance, Appearance, Launcher, Backups,
+  Network and downloads, Privacy), rarely needed settings sit under "Advanced", and a changed setting has a "Reset"
+  back to its default. Units are shown (GB, MB, seconds). An instance's settings use the same layout.
+- **Library.** A grid or list view (the list's columns sort when clicked), more ways to sort (recently added, newest
+  Minecraft, loader), and chips to show one loader or the running games, with counts. The search also finds the
+  Minecraft version and the loader. The view and the order are remembered.
+- **Home.** On a wide window, News sits beside your instances. "Continue playing" lists the others by when they were
+  last played. News can be hidden.
+- **Instance page.** The overview uses two columns on a wide window. The Logs tab has All / Errors / Warnings chips
+  and a "Wrap lines" switch.
+- **Discover and the modpack pages.** Filters for category, Minecraft version, loader and client or server, shown
+  as chips you can remove, with "Clear filters". Results can be shown as cards on a wide window. The Mods tab sorts
+  by name, recently added or updates first, and shows only the mods from Modrinth, CurseForge or added by hand.
+- **New instance.** A version search with Releases, Snapshots and Old versions to switch on, the latest release
+  clearly marked, and the loader's version shown as soon as a loader is picked. "More options" sets the picture,
+  the memory and a description. The Create button stays in view.
+- **Accounts, Export and Who's playing** are laid out more clearly; Export's formats are cards and its folder list
+  has "Select all" and "Select none".
+
 ### Fixed
 
 - In a narrow window, the buttons under a mod's details and in the selection bar of the Mods tab now wrap instead of
   running past the edge of the page.
+- A new Fabric, Quilt or NeoForge instance gets the newest stable loader, not a test build that happens to be newer.
 
 ## 4.8.4
 

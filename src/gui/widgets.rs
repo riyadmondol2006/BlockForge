@@ -208,6 +208,16 @@ pub fn readable_column<R>(ui: &mut Ui, max: f32, add: impl FnOnce(&mut Ui) -> R)
         return add(ui);
     }
     let column = egui::Rect::from_min_size(rect.min + vec2(offset, 0.0), vec2(width, rect.height()));
+    // the wheel over the empty sides scrolls the page too: the movement is handed to the page's scroll area (the
+    // first one laid out in the column) as if the pointer were over it
+    let in_margin = ui.ctx().pointer_hover_pos().is_some_and(|p| rect.contains(p) && !column.contains(p))
+        && ui.ctx().layer_id_at(ui.ctx().pointer_hover_pos().unwrap_or_default()) == Some(ui.layer_id());
+    if in_margin {
+        let delta = ui.input_mut(|i| std::mem::take(&mut i.smooth_scroll_delta));
+        if delta != Vec2::ZERO {
+            ui.scroll_with_delta(delta);
+        }
+    }
     ui.scope_builder(egui::UiBuilder::new().max_rect(column).layout(*ui.layout()), add).inner
 }
 
