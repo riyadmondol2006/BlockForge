@@ -146,6 +146,9 @@ impl App {
         let mut sign_in = false;
         let mut pick: Option<String> = None;
         let mut offline: Option<String> = None;
+        let mut manage = false;
+        // the window lists the three accounts used last; the others are on the Accounts page
+        let hidden = self.accounts.len().saturating_sub(3);
         let accounts: Vec<(String, String, &'static str, bool)> = self
             .accounts
             .iter()
@@ -158,9 +161,16 @@ impl App {
             if !st.name_step {
                 ui.label(RichText::new("Who's playing?").size(FS_FIGURE).semibold());
                 ui.add_space(14.0);
-                let w = ((ui.available_width() - 12.0) / 2.0).floor();
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 12.0;
+                // the two ways side by side, or one above the other when the window is too narrow for both
+                let side_by_side = ui.available_width() >= 2.0 * 170.0 + 12.0;
+                let w = if side_by_side { ((ui.available_width() - 12.0) / 2.0).floor() } else { ui.available_width() };
+                let layout = if side_by_side {
+                    egui::Layout::left_to_right(egui::Align::Min)
+                } else {
+                    egui::Layout::top_down(egui::Align::Min)
+                };
+                ui.with_layout(layout, |ui| {
+                    ui.spacing_mut().item_spacing = egui::vec2(12.0, 12.0);
                     if choice(ui, w, Icon::User, "Sign in with Microsoft", "Use your Microsoft account", true) {
                         sign_in = true;
                     }
@@ -204,6 +214,21 @@ impl App {
                         }
                     }
                 }
+                // the Accounts page has every account, the skins and the other ways to add one
+                ui.add_space(12.0);
+                ui.horizontal(|ui| {
+                    if ghost(ui, "Manage accounts").clicked() {
+                        manage = true;
+                    }
+                    if hidden > 0 {
+                        let more = if hidden == 1 {
+                            "1 more account there".to_string()
+                        } else {
+                            format!("{hidden} more accounts there")
+                        };
+                        small_muted(ui, more);
+                    }
+                });
             } else {
                 ui.label(RichText::new("Play offline").size(FS_FIGURE).semibold());
                 ui.add_space(2.0);
@@ -267,6 +292,10 @@ impl App {
         }
         if sign_in {
             self.start_sign_in();
+            close = true;
+        }
+        if manage {
+            self.page = Page::Accounts;
             close = true;
         }
         if !close {

@@ -854,18 +854,24 @@ impl CraftState {
                 thousands(b.ds.recipes.len() as u64)
             )
         });
-        ui.horizontal(|ui| {
-            heading(ui, "Crafting calculator");
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                self.version_combo(ui, acts);
-                // the plans saved earlier, also when no plan is open (after a restart, or a version that failed)
-                let n = self.store.plans.len();
-                if n > 0 && self.target.is_none() && ghost(ui, &format!("Saved plans ({n})")).clicked() {
-                    self.dialog = Some(Dialog::Saved);
-                }
-                if let (false, Some(s)) = (narrow, &status) {
-                    small_muted(ui, s.clone());
-                }
+        // the head ends where the columns under it end, so the version sits above the plan's right edge and not at
+        // the far side of a wide window
+        let page_w = (ui.available_width() - 12.0).min(LEFT_W + 16.0 + super::craft_view::PLAN_WIDTH);
+        ui.scope(|ui| {
+            ui.set_max_width(page_w);
+            ui.horizontal(|ui| {
+                heading(ui, "Crafting calculator");
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    self.version_combo(ui, acts);
+                    // the plans saved earlier, also when no plan is open (after a restart, or a version that failed)
+                    let n = self.store.plans.len();
+                    if n > 0 && self.target.is_none() && ghost(ui, &format!("Saved plans ({n})")).clicked() {
+                        self.dialog = Some(Dialog::Saved);
+                    }
+                    if let (false, Some(s)) = (narrow, &status) {
+                        small_muted(ui, s.clone());
+                    }
+                });
             });
         });
         muted(ui, "Pick what you want to build. BlockForge works out what to gather, craft and smelt.");

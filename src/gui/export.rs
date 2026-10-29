@@ -78,6 +78,60 @@ fn chevron(ui: &mut Ui, open: bool) -> egui::Response {
     resp.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
+/// What each format makes, in a few words under its name.
+fn format_blurb(f: ExportFormat) -> &'static str {
+    match f {
+        ExportFormat::CurseForge => "A .zip for the CurseForge app",
+        ExportFormat::Modrinth => "An .mrpack for Modrinth",
+        ExportFormat::CurseForgeAndModrinth => "Both files at once",
+        ExportFormat::MultiMc => "A .zip for MultiMC and Prism",
+    }
+}
+
+/// The narrowest a format card gets before the row wraps.
+const FORMAT_CARD_W: f32 = 200.0;
+
+/// One format to choose, as a card: the name and a few words. It lifts a little under the pointer; the chosen one
+/// takes the brand tint and outline and a check in the corner.
+fn format_card(ui: &mut Ui, f: ExportFormat, selected: bool, width: f32) -> egui::Response {
+    use super::motion;
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, 54.0), egui::Sense::click());
+    if ui.is_rect_visible(rect) {
+        let t = motion::hover(ui, resp.id, resp.hovered());
+        let s = motion::toward(ui.ctx(), resp.id.with("on"), selected, motion::MEDIUM);
+        let card = rect.translate(egui::vec2(0.0, -t));
+        let p = ui.painter();
+        let fill = motion::mix(motion::mix(c_field(), c_field_hover(), t), c_accent_soft(), s);
+        let line = motion::mix(motion::mix(c_border(), c_control().gamma_multiply(0.8), t), c_accent(), s);
+        p.rect(card, CornerRadius::same(R_CONTROL), fill, Stroke::new(1.0 + 0.5 * s, line), egui::StrokeKind::Inside);
+        glass_edge(p, card, R_CONTROL);
+        let left = card.left() + 12.0;
+        // room is kept at the right for the check of the chosen one
+        let room = card.right() - left - 26.0;
+        let truncated = |text: &str, font: egui::FontId, color: egui::Color32| {
+            let mut job =
+                egui::text::LayoutJob::single_section(text.to_string(), egui::TextFormat::simple(font, color));
+            job.wrap = egui::text::TextWrapping::truncate_at_width(room);
+            p.layout_job(job)
+        };
+        let name = truncated(f.label(), super::fonts::semibold(FS_BODY), c_text());
+        p.galley(egui::pos2(left, card.center().y - 17.0), name, c_text());
+        let blurb = truncated(format_blurb(f), egui::FontId::proportional(FS_META), c_muted());
+        p.galley(egui::pos2(left, card.center().y + 2.0), blurb, c_muted());
+        if s > 0.0 {
+            let dot = egui::Rect::from_center_size(
+                egui::pos2(card.right() - 16.0, card.top() + 16.0),
+                egui::vec2(18.0, 18.0),
+            );
+            motion::gradient_rect(p, dot, 9, c_accent().gamma_multiply(s), c_accent2().gamma_multiply(s));
+            super::discover::paint_check(p, dot.center(), 10.0, c_on_accent().gamma_multiply(s));
+        }
+    }
+    focus_ring(ui, &resp, rect, R_CONTROL);
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::RadioButton, true, selected, f.label()));
+    resp.on_hover_text(format_blurb(f)).on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
 impl App {
     /// Open the export window for the instance in `folder`.
     pub fn open_export(&mut self, folder: &str) {
@@ -290,13 +344,6 @@ impl App {
                     field(ui, "Name", &mut d.name, "The name of the pack");
                     field(ui, "Version", &mut d.version, "1.0");
                     field(ui, "Author", &mut d.author, "Your name");
-                    muted(ui, "Format");
-                    let labels: Vec<&str> = ExportFormat::ALL.iter().map(|f| f.label()).collect();
-                    let current = ExportFormat::ALL.iter().position(|f| *f == d.format).unwrap_or(0);
-                    if let Some(i) = segmented(ui, &labels, current) {
-                        d.format = ExportFormat::ALL[i];
-                    }
-                    ui.end_row();
                     muted(ui, "Save to");
                     ui.horizontal(|ui| {
                         ui.add_sized([(field_width - 170.0).max(120.0), 32.0], egui::TextEdit::singleline(&mut d.save_to).margin(egui::Margin::symmetric(10, 7)).background_color(c_field()));
@@ -313,8 +360,58 @@ impl App {
                     small_muted(ui, "Waiting for the folder chooser");
                 }
 
-                ui.add_space(20.0);
-                ui.label(RichText::new("Folders and files to include").semibold());
+                // the formats as cards, two by two (one above the other in a very narrow window)
+                ui.add_space(18.0);
+                ui.label(RichText::new("Format").semibold());
+                ui.add_space(2.0);
+                let gap = 10.0;
+                let (cols, w) = grid_columns(ui.available_width(), FORMAT_CARD_W, gap);
+                let (cols, w) = if cols >= 2 { (2, ((ui.available_width() - gap) / 2.0).floor()) } else { (cols, w) };
+                for row in ExportFormat::ALL.chunks(cols) {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = gap;
+                        for f in row {
+                            if format_card(ui, *f, d.format == *f, w).clicked() {
+                                d.format = *f;
+                            }
+                        }
+                    });
+                }
+
+                ui.add_space(18.0);
+                // the title of the tree, with how much of the instance is in, and buttons for all or nothing
+                d.children.entry(String::new()).or_insert_with(|| export::list_dir(&root, ""));
+                let top: Vec<String> = d.children.get("").map(|c| c.iter().map(|e| e.rel.clone()).collect()).unwrap_or_default();
+                let included = top.iter().filter(|r| d.selection.is_checked(r) || d.selection.is_partial(r)).count();
+                let mut all = false;
+                let mut none = false;
+                ui.horizontal(|ui| {
+                    ui.vertical(|ui| {
+                        ui.spacing_mut().item_spacing.y = 2.0;
+                        ui.label(RichText::new("Folders and files to include").semibold());
+                        if !top.is_empty() {
+                            small_muted(ui, format!("{included} of {} in the pack", top.len()));
+                        }
+                    });
+                    if !top.is_empty() {
+                        let id = ui.scope_id().with("tree-buttons");
+                        end_aligned(ui, id, |ui| {
+                            ui.spacing_mut().item_spacing.x = 4.0;
+                            if ghost(ui, "Select all").on_hover_text("Include every folder and file").clicked() {
+                                all = true;
+                            }
+                            if ghost(ui, "Select none").on_hover_text("Include only the mod list").clicked() {
+                                none = true;
+                            }
+                        });
+                    }
+                });
+                if all {
+                    d.selection = Selection::new(top.iter().cloned());
+                }
+                if none {
+                    d.selection = Selection::new(Vec::new());
+                }
                 small_muted(ui, "Mods that Modrinth or CurseForge know are listed by id, so they don't make the file bigger.");
                 ui.add_space(4.0);
                 // the tree on a well of its own

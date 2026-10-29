@@ -14,7 +14,7 @@ use crate::craft::saved;
 use crate::craft::{self, Kind, Node, Recipe, Stop, Storage};
 
 /// How wide the plan gets on a wide window: past this the amounts are too far from their names.
-const PLAN_WIDTH: f32 = 780.0;
+pub(super) const PLAN_WIDTH: f32 = 780.0;
 /// How far the lines of a step are indented: past its tick box and its station, under its title.
 const STEP_INDENT: f32 = 80.0;
 
