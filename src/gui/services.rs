@@ -273,49 +273,87 @@ impl App {
         s
     }
 
-    /// A folded section for the Settings page with the network, folder and backup settings that only exist in the
-    /// Java edition's settings file. Changes are saved as they are made.
-    pub(super) fn services_settings_ui(&mut self, ui: &mut Ui) {
+    /// The Backups and the Network groups of the Settings page: the network, folder and backup settings that only
+    /// exist in the Java edition's settings file. Changes are saved as they are made.
+    pub(super) fn services_settings_ui(
+        &mut self,
+        ui: &mut Ui,
+        view: &super::settings::View,
+        nav: &mut super::settings::Nav,
+    ) {
+        use super::settings::{COMBO_W, CONTROL_W, Group, Part, section};
+        use crate::backups::BackupMode;
+        use crate::svcsettings::{DEFAULT_CONCURRENT_CONNECTIONS, DEFAULT_CONNECTION_TIMEOUT};
         let mut s = self.svc_edit();
         let before = s.clone();
-        super::settings::folding_group(
-            ui,
-            "network-folders-backups",
-            super::icons::Icon::Server,
-            "Network, folders and backups",
-            "Connection changes apply the next time BlockForge starts.",
-            |ui, rows| {
-                rows.gap(ui);
-                setting_row(ui, "Files downloaded at once", "More is faster on a good connection (1 to 100)", |ui| {
-                    ui.add(egui::DragValue::new(&mut s.concurrent_connections).range(1..=100));
-                });
-                rows.gap(ui);
-                setting_row(ui, "Connection timeout", "Seconds to wait for a server (1 to 600)", |ui| {
-                    ui.add(egui::DragValue::new(&mut s.connection_timeout).range(1..=600).suffix(" s"));
-                });
-                let mut key = s.modrinth_api_key.clone().unwrap_or_default();
-                rows.gap(ui);
-                super::settings::wide_row(
-                    ui,
-                    "Modrinth API key",
-                    "Optional. Raises the limits Modrinth puts on requests",
-                    270.0,
-                    |ui| {
-                        ui.add_sized(
-                            [260.0, 32.0],
-                            egui::TextEdit::singleline(&mut key)
-                                .password(true)
-                                .margin(egui::Margin::symmetric(10, 7))
-                                .background_color(c_field()),
-                        );
-                    },
-                );
-                s.modrinth_api_key = Some(key).filter(|k| !k.trim().is_empty());
-                rows.gap(ui);
-                setting_row(ui, "Use a proxy", "Send downloads through a proxy server", |ui| {
-                    toggle(ui, &mut s.enable_proxy);
-                });
-                if s.enable_proxy {
+        // a number field as wide in every row, so they line up
+        let number = [96.0, 30.0];
+        let mut typed_downloads = None;
+        let mut typed_backups = None;
+        let mut reset_downloads = false;
+        let mut reset_backups = false;
+        let own_backups = s.backups_path.is_some() || s.unavailable_backups_path.is_some();
+        section(ui, view, nav, Group::Backups, usize::from(own_backups), |ui, c, part| match part {
+            Part::Main => {
+                c.switch(ui, "auto-backup", &mut s.enable_automatic_backup_after_launch, false);
+                let reset = (s.backups_to_keep != 0).then_some("All");
+                if c.row(ui, "backups-keep", number[0], reset, |ui| {
+                    ui.add_sized(
+                        number,
+                        egui::DragValue::new(&mut s.backups_to_keep)
+                            .range(0..=crate::svcsettings::MAX_BACKUPS_TO_KEEP)
+                            .custom_formatter(|n, _| if n == 0.0 { "All".to_string() } else { format!("{n}") }),
+                    );
+                }) {
+                    s.backups_to_keep = 0;
+                }
+                let reset = (s.backup_mode != BackupMode::default()).then(|| BackupMode::default().label());
+                if c.row(ui, "backup-contents", CONTROL_W, reset, |ui| {
+                    egui::ComboBox::from_id_salt("backup-mode")
+                        .selected_text(s.backup_mode.label())
+                        .width(COMBO_W)
+                        .show_ui(ui, |ui| {
+                            for m in BackupMode::ALL {
+                                ui.selectable_value(&mut s.backup_mode, m, m.label());
+                            }
+                        });
+                }) {
+                    s.backup_mode = BackupMode::default();
+                }
+            }
+            Part::Advanced => {
+                let backups = s.backups_path.clone().or_else(|| s.unavailable_backups_path.clone()).unwrap_or_default();
+                let (typed, reset) =
+                    c.text(ui, "backups-folder", "Default", &backups, own_backups.then_some("the default folder"));
+                typed_backups = typed;
+                reset_backups = reset;
+                if c.shows("backups-folder") {
+                    folder_error_line(ui, "backups");
+                }
+            }
+        });
+        let own_downloads = s.custom_downloads_path.is_some() || s.unavailable_downloads_path.is_some();
+        let net_changed = usize::from(own_downloads) + usize::from(s.modrinth_api_key.is_some());
+        section(ui, view, nav, Group::Network, net_changed, |ui, c, part| match part {
+            Part::Main => {
+                let reset = (s.concurrent_connections != DEFAULT_CONCURRENT_CONNECTIONS)
+                    .then(|| DEFAULT_CONCURRENT_CONNECTIONS.to_string());
+                if c.row(ui, "connections", number[0], reset.as_deref(), |ui| {
+                    ui.add_sized(number, egui::DragValue::new(&mut s.concurrent_connections).range(1..=100));
+                }) {
+                    s.concurrent_connections = DEFAULT_CONCURRENT_CONNECTIONS;
+                }
+                let reset = (s.connection_timeout != DEFAULT_CONNECTION_TIMEOUT)
+                    .then(|| format!("{DEFAULT_CONNECTION_TIMEOUT} s"));
+                if c.row(ui, "timeout", number[0], reset.as_deref(), |ui| {
+                    ui.add_sized(number, egui::DragValue::new(&mut s.connection_timeout).range(1..=600).suffix(" s"));
+                }) {
+                    s.connection_timeout = DEFAULT_CONNECTION_TIMEOUT;
+                }
+                c.switch(ui, "proxy", &mut s.enable_proxy, false);
+                if s.enable_proxy && c.shows("proxy") {
+                    // the proxy itself, under the switch that uses it
+                    ui.add_space(8.0);
                     ui.horizontal_wrapped(|ui| {
                         egui::ComboBox::from_id_salt("proxy-type")
                             .selected_text(s.proxy_type.key())
@@ -332,7 +370,7 @@ impl App {
                                 .margin(egui::Margin::symmetric(10, 7))
                                 .background_color(c_field()),
                         );
-                        ui.add(egui::DragValue::new(&mut s.proxy_port).range(1..=65535));
+                        ui.add_sized(number, egui::DragValue::new(&mut s.proxy_port).range(1..=65535).prefix("Port "));
                         let testing = self.svc.proxy_testing;
                         if secondary(ui, if testing { "Testing\u{2026}" } else { "Test" }).clicked() && !testing {
                             if let Some(proxy) = crate::net::NetConfig::from_settings(&s).proxy {
@@ -353,78 +391,70 @@ impl App {
                         }
                     });
                 }
-                let width = ui.available_width().min(420.0);
-                let margin = egui::Margin::symmetric(10, 7);
-                rows.gap(ui);
-                ui.label(RichText::new("Downloads folder").semibold());
-                small_muted(ui, "Where support bundles are saved. Empty uses your Downloads folder.");
+            }
+            Part::Advanced => {
+                let mut key = s.modrinth_api_key.clone().unwrap_or_default();
+                let reset = s.modrinth_api_key.is_some().then_some("none");
+                if c.row(ui, "modrinth-key", CONTROL_W, reset, |ui| {
+                    let width = ui.available_width().clamp(160.0, CONTROL_W);
+                    ui.add_sized(
+                        [width, 32.0],
+                        egui::TextEdit::singleline(&mut key)
+                            .password(true)
+                            .margin(egui::Margin::symmetric(10, 7))
+                            .background_color(c_field()),
+                    );
+                }) {
+                    key.clear();
+                }
+                s.modrinth_api_key = Some(key).filter(|k| !k.trim().is_empty());
                 let downloads = s
                     .custom_downloads_path
                     .clone()
                     .or_else(|| s.unavailable_downloads_path.clone())
                     .unwrap_or_default();
-                let typed_downloads =
-                    super::settings::draft_text(ui, "downloads-folder", &downloads, "Default", [width, 32.0], margin);
-                folder_error_line(ui, "downloads");
-                rows.gap(ui);
-                ui.label(RichText::new("Backups folder").semibold());
-                small_muted(ui, "Where instance backups are saved. Empty uses the backups folder in the data folder.");
-                let backups = s.backups_path.clone().or_else(|| s.unavailable_backups_path.clone()).unwrap_or_default();
-                let typed_backups =
-                    super::settings::draft_text(ui, "backups-folder", &backups, "Default", [width, 32.0], margin);
-                folder_error_line(ui, "backups");
-                // a typed path is only taken once it names a folder that exists, as the Java edition does; when it
-                // doesn't, that is said under the field
-                for (typed, slot, unavailable, what) in [
-                    (typed_downloads, &mut s.custom_downloads_path, &mut s.unavailable_downloads_path, "downloads"),
-                    (typed_backups, &mut s.backups_path, &mut s.unavailable_backups_path, "backups"),
-                ] {
-                    let Some(text) = typed else { continue };
-                    let key = folder_error_id(what);
-                    match folder_setting(&text) {
-                        Ok(value) => {
-                            *slot = value;
-                            // a folder typed by the player replaces one that wasn't there
-                            *unavailable = None;
-                            ui.data_mut(|d| d.remove::<String>(key));
-                        }
-                        Err(()) => {
-                            let error = format!("The {what} folder \"{}\" doesn't exist", text.trim());
-                            ui.data_mut(|d| d.insert_temp(key, error));
-                            ui.ctx().request_repaint();
-                        }
-                    }
-                }
-                rows.gap(ui);
-                setting_row(ui, "Back up after playing", "Makes a backup every time a game closes", |ui| {
-                    toggle(ui, &mut s.enable_automatic_backup_after_launch);
-                });
-                rows.gap(ui);
-                setting_row(
+                let (typed, reset) = c.text(
                     ui,
-                    "Backups to keep",
-                    "Per instance; the oldest go when a new one is made. 0 keeps them all",
-                    |ui| {
-                        ui.add(
-                            egui::DragValue::new(&mut s.backups_to_keep)
-                                .range(0..=crate::svcsettings::MAX_BACKUPS_TO_KEEP)
-                                .custom_formatter(|n, _| if n == 0.0 { "All".to_string() } else { format!("{n}") }),
-                        );
-                    },
+                    "downloads-folder",
+                    "Default",
+                    &downloads,
+                    own_downloads.then_some("your Downloads folder"),
                 );
-                rows.gap(ui);
-                setting_row(ui, "Backup contents", "What the automatic backup holds", |ui| {
-                    egui::ComboBox::from_id_salt("backup-mode")
-                        .selected_text(s.backup_mode.label())
-                        .width(260.0)
-                        .show_ui(ui, |ui| {
-                            for m in crate::backups::BackupMode::ALL {
-                                ui.selectable_value(&mut s.backup_mode, m, m.label());
-                            }
-                        });
-                });
-            },
-        );
+                typed_downloads = typed;
+                reset_downloads = reset;
+                if c.shows("downloads-folder") {
+                    folder_error_line(ui, "downloads");
+                }
+            }
+        });
+        // a typed path is only taken once it names a folder that exists, as the Java edition does; when it doesn't,
+        // that is said under the field. Reset goes back to the default folder.
+        for (typed, reset, slot, unavailable, what) in [
+            (
+                typed_downloads,
+                reset_downloads,
+                &mut s.custom_downloads_path,
+                &mut s.unavailable_downloads_path,
+                "downloads",
+            ),
+            (typed_backups, reset_backups, &mut s.backups_path, &mut s.unavailable_backups_path, "backups"),
+        ] {
+            let key = folder_error_id(what);
+            let Some(text) = typed.or_else(|| reset.then(String::new)) else { continue };
+            match folder_setting(&text) {
+                Ok(value) => {
+                    *slot = value;
+                    // a folder typed by the player replaces one that wasn't there
+                    *unavailable = None;
+                    ui.data_mut(|d| d.remove::<String>(key));
+                }
+                Err(()) => {
+                    let error = format!("The {what} folder \"{}\" doesn't exist", text.trim());
+                    ui.data_mut(|d| d.insert_temp(key, error));
+                    ui.ctx().request_repaint();
+                }
+            }
+        }
         if s != before {
             s.write_to(&mut self.settings);
             self.save_settings();

@@ -1,6 +1,6 @@
-//! The Performance controls: Fast start, the smoothness helper and Low-end mode, for all games (Settings > Game) and
-//! for one instance (its card, its page and its settings); the hint that suggests Low-end mode on a slow computer; and
-//! what happens when a game closes early while a helper was on.
+//! The Performance controls: Fast start, the smoothness helper and Low-end mode, for all games (Settings >
+//! Performance) and for one instance (its card, its page and its settings); the hint that suggests Low-end mode on a
+//! slow computer; and what happens when a game closes early while a helper was on.
 
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime};
@@ -9,9 +9,8 @@ use egui::{RichText, Ui};
 
 use super::App;
 use super::instance_menu::Act;
-use super::instance_settings::Rows;
 use super::motion;
-use super::settings::wide_row;
+use super::settings::{Card, Rows, wide_row};
 use super::theme::*;
 use super::widgets::*;
 use crate::config::Settings;
@@ -29,11 +28,15 @@ pub enum HelperChange {
     LowEnd(Option<Mode>),
 }
 
-const LOW_END_HINT: &str = "Lowers the view distance, clouds, shadows, particles and smooth lighting so the game runs \
-    smoother. It only ever lowers, and switching it off puts your own settings back.";
+pub(super) const LOW_END_HINT: &str = "Lowers the view distance, clouds, shadows, particles and smooth lighting so the \
+    game runs smoother. It only ever lowers, and switching it off puts your own settings back.";
 
-const LITE_HINT: &str = "Small fixes inside the game that make it run smoother. Works with every Minecraft version and \
-    mod loader (Fabric, Quilt, Forge, NeoForge). Switch it off if a game misbehaves; each instance has its own switch too";
+pub(super) const LITE_HINT: &str = "Small fixes inside the game that make it run smoother. Works with every Minecraft \
+    version and mod loader (Fabric, Quilt, Forge, NeoForge). Switch it off if a game misbehaves; each instance has its \
+    own switch too";
+
+pub(super) const FAST_START_HINT: &str = "A tiny helper that loads Minecraft's classes ahead of time so games open \
+    sooner. Works with every version and mod loader; each instance has its own switch too";
 
 // ---- is this computer a slow one? (found out once, off the window's thread)
 
@@ -82,14 +85,6 @@ fn ago(t: SystemTime) -> String {
     }
 }
 
-/// The hairline between two rows of a card, with the same air on both sides as the rules of the other cards.
-fn row_gap(ui: &mut Ui) {
-    let pad = (10.0 - ui.spacing().item_spacing.y).max(0.0);
-    ui.add_space(pad);
-    rule(ui);
-    ui.add_space(pad);
-}
-
 /// The words of [`App::speed_summary`]: `own` is the instance's own Low-end mode (`None`: it follows the launcher's).
 fn speed_summary_text(fast: bool, smooth: bool, own: Option<Mode>, launcher: Mode) -> String {
     let state = |on: bool| if on { "on" } else { "off" };
@@ -134,46 +129,38 @@ impl SettingsView {
         }
     }
 
-    /// The Performance rows of Settings > Game. Returns true when a setting changed.
-    pub(super) fn rows(&self, ui: &mut Ui, s: &mut Settings) -> bool {
-        let mut dirty = false;
-        ui.scope(|ui| {
-            ui.spacing_mut().item_spacing.y = 2.0;
-            row_gap(ui);
-            ui.label(RichText::new("Performance").size(FS_SECTION).semibold());
-            ui.add_space(6.0);
-            setting_row(
-                ui,
-                "Fast start",
-                "A tiny helper that loads Minecraft's classes ahead of time so games open sooner. Works with every version and mod loader; each instance has its own switch too",
-                |ui| {
-                    dirty |= toggle(ui, &mut s.fast_start).changed();
-                },
-            );
-            row_gap(ui);
-            setting_row(ui, "Smoothness helper", LITE_HINT, |ui| {
-                dirty |= toggle(ui, &mut s.lite).changed();
-            });
-            row_gap(ui);
-            let mode = Mode::parse(&s.low_end_mode);
-            wide_row(ui, "Low-end mode", &format!("{LOW_END_HINT} {}.", self.low_end_status(mode)), 200.0, |ui| {
-                let modes = [Mode::Auto, Mode::On, Mode::Off];
-                let labels: Vec<&str> = modes.iter().map(|m| m.label()).collect();
-                let chosen = modes.iter().position(|m| *m == mode).unwrap_or(0);
-                if let Some(i) = segmented(ui, &labels, chosen) {
-                    if modes[i] != mode {
-                        s.low_end_mode = modes[i].as_setting().to_string();
-                        dirty = true;
-                    }
+    /// The Performance rows of Settings: Fast start, the smoothness helper and Low-end mode, each with a Reset when
+    /// it isn't at its default. Returns true when a setting changed.
+    pub(super) fn rows(&self, ui: &mut Ui, c: &mut Card, s: &mut Settings) -> bool {
+        let mut dirty = c.switch(ui, "fast-start", &mut s.fast_start, true);
+        dirty |= c.switch(ui, "smoothness", &mut s.lite, true);
+        let mode = Mode::parse(&s.low_end_mode);
+        let hint = format!("{LOW_END_HINT} {}.", self.low_end_status(mode));
+        let reset = (mode != Mode::Auto).then_some(Mode::Auto.label());
+        let pressed = c.row_hint(ui, "low-end", &hint, 220.0, reset, |ui| {
+            let modes = [Mode::Auto, Mode::On, Mode::Off];
+            let labels: Vec<&str> = modes.iter().map(|m| m.label()).collect();
+            let chosen = modes.iter().position(|m| *m == mode).unwrap_or(0);
+            if let Some(i) = segmented(ui, &labels, chosen) {
+                if modes[i] != mode {
+                    s.low_end_mode = modes[i].as_setting().to_string();
+                    dirty = true;
                 }
-            });
-            row_gap(ui);
-            egui::CollapsingHeader::new(RichText::new("Details").color(c_muted()))
-                .id_salt("perf-details")
-                .default_open(false)
-                .show(ui, |ui| self.details(ui));
+            }
         });
+        if pressed {
+            s.low_end_mode = Mode::Auto.as_setting().to_string();
+            dirty = true;
+        }
         dirty
+    }
+
+    /// What the smoothness helper did in the last game, folded.
+    pub(super) fn details_fold(&self, ui: &mut Ui) {
+        egui::CollapsingHeader::new(RichText::new("What the smoothness helper did").color(c_muted()))
+            .id_salt("perf-details")
+            .default_open(false)
+            .show(ui, |ui| self.details(ui));
     }
 
     /// What the smoothness helper did in the game that ran last.
@@ -403,7 +390,7 @@ impl App {
         if use_it || dismiss {
             if use_it {
                 self.settings.low_end_mode = Mode::Auto.as_setting().to_string();
-                self.toast("Low-end mode is on (automatic). Settings > Game changes it.");
+                self.toast("Low-end mode is on (automatic). Settings > Performance changes it.");
             }
             self.settings.low_end_hint_dismissed = true;
             self.save_settings();
