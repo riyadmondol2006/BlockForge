@@ -8,7 +8,7 @@ use super::ctx::Ctx;
 use super::misc::container_component;
 use super::skull;
 use super::tables;
-use super::{JavaItems, write_block_entity};
+use super::{ItemHooks, JavaItems, NoHooks, write_block_entity_with};
 use crate::convert::java::format::JavaFormat;
 use crate::convert::model::{BlockEntity, BlockEntityData};
 use crate::convert::nbt::{Compound, Tag};
@@ -17,18 +17,29 @@ use crate::convert::nbt::{Compound, Tag};
 const UNSUPPORTED_LOOT_TABLES: [&str; 2] = ["minecraft:chests/monster_room", "minecraft:chests/village_two_room_house"];
 
 /// Add the block entity to the item compound being written (`item` already has `id`; `components` or `tag` are
-/// created as needed). Returns whether anything was written.
+/// created as needed). Returns whether anything was written. Items inside are written without hooks.
 pub fn write_block_entity_to_item(
     items: &JavaItems,
     format: &JavaFormat,
     be: &BlockEntity,
     item: &mut Compound,
 ) -> bool {
-    let ctx = Ctx::new(items, format);
+    write_block_entity_to_item_with(items, format, be, item, &NoHooks)
+}
+
+/// [`write_block_entity_to_item`] that passes `hooks` to the items inside (a map in a shulker box keeps its id).
+pub fn write_block_entity_to_item_with(
+    items: &JavaItems,
+    format: &JavaFormat,
+    be: &BlockEntity,
+    item: &mut Compound,
+    hooks: &dyn ItemHooks,
+) -> bool {
+    let ctx = Ctx::with_hooks(items, format, hooks);
     let before = item.clone();
     // The hooks of the handlers decide whether the plain block entity data is written too.
     let write_data = if ctx.since(1, 20, 5) { write_components(&ctx, be, item) } else { true };
-    if write_data && let Some(mut tag) = write_block_entity(items, format, be) {
+    if write_data && let Some(mut tag) = write_block_entity_with(items, format, be, hooks) {
         for key in ["x", "y", "z", "Rotation", "Rot", "facing", "Facing"] {
             tag.remove(key);
         }

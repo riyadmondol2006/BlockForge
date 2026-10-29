@@ -16,6 +16,7 @@ use super::writer_blocks::{BlockWriter, JavaBlock};
 use super::{ItemsImpl, write_block_entity_impl};
 use crate::convert::java::format::{BiomeKind, JavaFormat, LightFlag, SectionLayout};
 use crate::convert::java::palette::{BIOMES_PER_SECTION, BLOCKS_PER_SECTION, pack_palette};
+use crate::convert::java::resolvers::itemstack::ItemHooks;
 use crate::convert::level::{ConversionSettings, Dimension};
 use crate::convert::model::{Biome, Biomes, BlockPalette, CellPalette, Chunk, Column, Palette};
 use crate::convert::nbt::{Compound, Tag};
@@ -29,6 +30,8 @@ pub struct EncodeContext<'a> {
     pub blocks: &'a BlockWriter,
     pub biomes: &'a BiomeWriter,
     pub items: &'a ItemsImpl,
+    /// The world's item hooks (map ids, block entity data of items); pass them to every item written.
+    pub hooks: &'a dyn ItemHooks,
     pub settings: &'a ConversionSettings,
     /// The source world's lowest section is -4 (Chunker's `CavesAndCliffs` setting): biome sections are offset by 4.
     pub source_from_minus_64: bool,
@@ -328,7 +331,7 @@ pub fn encode_column(ctx: &EncodeContext<'_>, dim: &Dimension, column: &Column) 
             continue;
         }
         let compound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            write_block_entity_impl(ctx.items, ctx.format, be)
+            write_block_entity_impl(ctx.items, ctx.format, be, ctx.hooks)
         }))
         .unwrap_or(None);
         match compound {

@@ -14,7 +14,9 @@ use crate::convert::bedrock::detect::detect_bedrock;
 use crate::convert::bedrock::reader::BedrockWorldReader;
 use crate::convert::java::dirs::detect_java;
 use crate::convert::level::encoding::{EncodingType, TargetVersion, VersionTriple};
-use crate::convert::level::{ConversionSettings, ConvertError, ConvertRequest, ProgressSink};
+use crate::convert::level::{
+    ConversionSettings, ConvertError, ConvertRequest, LevelOverrides, PlayerOptions, ProgressSink,
+};
 use crate::convert::pipeline::convert_world;
 
 /// Which game a world belongs to.
@@ -80,6 +82,12 @@ pub struct ConvertJob {
     pub dimensions: DimensionSelection,
     /// Keep data that has no equivalent in the other edition (stored as it was) instead of dropping it.
     pub keep_unknown_nbt: bool,
+    /// Who owns the converted world, the ender chest and stats, whose inventory and the other players' profiles
+    /// ([`ConversionSettings::player`]; the default keeps everything of the host and writes the other profiles).
+    pub player: PlayerOptions,
+    /// Difficulty, game mode, cheats and hardcore to force ([`ConversionSettings::level_overrides`]; the default
+    /// keeps the world's own).
+    pub level_overrides: LevelOverrides,
 }
 
 /// What a world turned out to be.
@@ -275,6 +283,8 @@ impl Backend for Engine {
                 Some(names.iter().map(|n| (dimension_identifier(n), dimension_identifier(n))).collect());
         }
         settings.allow_nbt_copying = job.keep_unknown_nbt;
+        settings.player = job.player.clone();
+        settings.level_overrides = job.level_overrides;
         let request = ConvertRequest {
             input: job.input.clone(),
             output: job.output.clone(),
@@ -370,6 +380,8 @@ mod tests {
             target: Target { edition: Edition::Java, version: "1.21.4".into() },
             dimensions: DimensionSelection::All,
             keep_unknown_nbt: false,
+            player: PlayerOptions::default(),
+            level_overrides: LevelOverrides::default(),
         };
         b.run(job, tx, Arc::new(AtomicBool::new(false)));
         let events: Vec<Event> = rx.iter().collect();
@@ -389,6 +401,8 @@ mod tests {
             target: Target { edition, version: version.into() },
             dimensions: DimensionSelection::All,
             keep_unknown_nbt: false,
+            player: PlayerOptions::default(),
+            level_overrides: LevelOverrides::default(),
         }
     }
 

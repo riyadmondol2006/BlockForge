@@ -3,6 +3,27 @@
 The section for a version is used as the text of its release on GitHub. Older releases (the Java versions, up to
 3.4.42.x) are on the [releases page](https://github.com/riyadmondol2006/BlockForge/releases).
 
+## Unreleased
+
+The world converter keeps much more of the players, their maps and the world's settings.
+
+### World converter
+
+- **Your character comes along whole.** A converted Bedrock world keeps the host's inventory and armor (they were
+  dropped before), the ender chest, the experience level, health, food, active effects and the bed or respawn anchor
+  you respawn at. Each Java version gets the player in its own format.
+- **Shulker boxes keep what is inside them.** A shulker box (or a banner, a head ...) inside a chest, in the
+  inventory or in the ender chest is no longer emptied.
+- **Maps still show their picture.** Every map in a chest, a shulker box, the inventory or the ender chest points at
+  its converted map again, in every Java version.
+- **The other players are kept too.** Each player who joined the Bedrock world gets their own player file in the
+  Java world with their inventory, ender chest and level, instead of being lost.
+- **New options, all on by default** (the converter page shows them in a later version): which Java account owns
+  the world, whether to keep the ender chest and the stats, whose inventory the owner gets (the host's, another
+  player's, or the host's with the other player's items filling the free slots), whether to write the other players,
+  and the difficulty, game mode, cheats and hardcore to give the converted world. Java has no lock on advancements
+  for a world that was in Creative or had cheats on, so nothing else needs changing for those.
+
 ## 4.9.0
 
 A new look for the whole launcher, with smooth motion, a layout that fits every window, and more options where they

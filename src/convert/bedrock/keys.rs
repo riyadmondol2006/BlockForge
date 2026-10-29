@@ -15,6 +15,10 @@ pub const DIGP_PREFIX: &[u8] = b"digp";
 pub const DIMENSION_NAME_ID_TABLE: &[u8] = b"DimensionNameIdTable";
 pub const LOCAL_PLAYER: &[u8] = b"~local_player";
 pub const MAP_PREFIX: &[u8] = b"map_";
+/// `player_<id>`: which profile a signed-in player's data is in (`{MsaId, SelfSignedId, ServerId}`).
+pub const PLAYER_PREFIX: &[u8] = b"player_";
+/// `player_server_<uuid>`: the data of a player other than the host, shaped like `~local_player`.
+pub const PLAYER_SERVER_PREFIX: &[u8] = b"player_server_";
 pub const PORTALS: &[u8] = b"portals";
 pub const POS_TRACK_DB: &[u8] = b"PosTrackDB-0x";
 pub const POS_TRACK_DB_LAST_ID: &[u8] = b"PositionTrackDB-LastId";

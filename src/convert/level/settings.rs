@@ -18,6 +18,7 @@
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use super::dimension::{Dimension, DimensionRegistry};
 use super::encoding::EncodingType;
@@ -93,6 +94,159 @@ pub struct ConversionSettings {
     pub custom_identifiers: bool,
     /// An opaque id of the caller's session.
     pub session_id: Option<String>,
+
+    // ---- Players and level settings (players, maps and level overrides) -----------------------------------------
+    /// What happens to the players of the world: who owns it, the ender chest and stats, whose inventory the owner
+    /// gets and whether the other players' profiles are written too.
+    pub player: PlayerOptions,
+    /// Level settings forced on the converted world (difficulty, game mode, cheats, hardcore); applied after
+    /// [`Self::changed_settings`]. Every one left at `None` keeps the source world's value.
+    pub level_overrides: LevelOverrides,
+}
+
+/// Whose inventory the owner of the converted world starts with ([`PlayerOptions::inventory_source`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum InventorySource {
+    /// The host's own (`~local_player`).
+    #[default]
+    Host,
+    /// The inventory, ender chest and experience of another player's profile (`player_server_<uuid>`, the key or just
+    /// the uuid) instead of the host's; position, spawn point, health and food stay the host's.
+    Profile(String),
+    /// The host's inventory, with its empty slots filled from that profile's inventory. Everything else (ender
+    /// chest, experience) stays the host's.
+    MergeHostAnd(String),
+}
+
+impl InventorySource {
+    /// The uuid of the profile named by the choice, without the `player_server_` prefix; `None` for the host.
+    pub fn profile_id(&self) -> Option<&str> {
+        match self {
+            InventorySource::Host => None,
+            InventorySource::Profile(id) | InventorySource::MergeHostAnd(id) => {
+                Some(id.strip_prefix("player_server_").unwrap_or(id))
+            }
+        }
+    }
+}
+
+/// What is converted of the world's players ([`ConversionSettings::player`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PlayerOptions {
+    /// The Java account that owns the converted world. When set, the host's player file is named after it
+    /// (`players/data/<uuid>.dat` from 26.1, `playerdata/<uuid>.dat` before), level.dat's `singleplayer_uuid`
+    /// (26.1+) points at it and the player's own `UUID` is it. `None` keeps the anonymous single-player file, which
+    /// whoever opens the world plays as.
+    pub owner_uuid: Option<Uuid>,
+    /// Write the host's ender chest (`EnderChestInventory`).
+    pub include_ender_chest: bool,
+    /// Write the host's experience, health, food, spawn point (bed or respawn anchor), effects and abilities;
+    /// otherwise the player starts with full health and food and no experience.
+    pub include_stats: bool,
+    /// Whose inventory the owner gets.
+    pub inventory_source: InventorySource,
+    /// Also write the other players' profiles (`player_server_<uuid>`), each as the player file of its uuid (or of
+    /// the Java account [`Self::guest_uuids`] gives it), so their inventories are not lost.
+    pub export_guest_profiles: bool,
+    /// The Java account to write a guest profile as, by profile uuid (`player_server_` prefix optional). A profile
+    /// without an entry keeps its Bedrock uuid.
+    pub guest_uuids: BTreeMap<String, Uuid>,
+}
+
+impl Default for PlayerOptions {
+    fn default() -> Self {
+        PlayerOptions {
+            owner_uuid: None,
+            include_ender_chest: true,
+            include_stats: true,
+            inventory_source: InventorySource::Host,
+            export_guest_profiles: true,
+            guest_uuids: BTreeMap::new(),
+        }
+    }
+}
+
+impl PlayerOptions {
+    /// The Java account a guest profile is written as: its entry in [`Self::guest_uuids`], else its own uuid.
+    pub fn guest_uuid(&self, profile_id: &str) -> Option<Uuid> {
+        let bare = |id: &str| id.strip_prefix("player_server_").unwrap_or(id).to_ascii_lowercase();
+        let id = bare(profile_id);
+        self.guest_uuids
+            .iter()
+            .find(|(key, _)| bare(key) == id)
+            .map(|(_, uuid)| *uuid)
+            .or_else(|| Uuid::parse_str(&id).ok())
+    }
+}
+
+/// The difficulty of a world (`Difficulty` in level.dat; `difficulty_settings.difficulty` from 26.1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Difficulty {
+    Peaceful,
+    Easy,
+    Normal,
+    Hard,
+}
+
+impl Difficulty {
+    /// The number both editions store.
+    pub fn id(self) -> i32 {
+        self as i32
+    }
+}
+
+/// The default game mode of a world (`GameType`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GameType {
+    Survival,
+    Creative,
+    Adventure,
+    Spectator,
+}
+
+impl GameType {
+    /// The number Java stores.
+    pub fn id(self) -> i32 {
+        self as i32
+    }
+}
+
+/// Level settings to force on the converted world ([`ConversionSettings::level_overrides`]). Java has no lock on
+/// advancements for worlds that were in Creative or had cheats on, so nothing else needs changing for them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LevelOverrides {
+    pub difficulty: Option<Difficulty>,
+    /// Also becomes the game mode of every player written.
+    pub game_type: Option<GameType>,
+    /// Cheats (`allowCommands`).
+    pub allow_commands: Option<bool>,
+    pub hardcore: Option<bool>,
+}
+
+impl LevelOverrides {
+    /// Whether any setting is forced.
+    pub fn is_empty(&self) -> bool {
+        *self == LevelOverrides::default()
+    }
+
+    /// Write the forced settings into `settings`.
+    pub fn apply(&self, settings: &mut super::level_settings::LevelSettings) {
+        if let Some(d) = self.difficulty {
+            settings.difficulty = d.id();
+        }
+        if let Some(g) = self.game_type {
+            settings.game_type = g.id();
+        }
+        if let Some(c) = self.allow_commands {
+            settings.commands_enabled = c;
+        }
+        if let Some(h) = self.hardcore {
+            settings.hardcore = h;
+        }
+    }
 }
 
 impl Default for ConversionSettings {
@@ -119,6 +273,8 @@ impl Default for ConversionSettings {
             prevent_y_biome_blending: false,
             custom_identifiers: true,
             session_id: None,
+            player: PlayerOptions::default(),
+            level_overrides: LevelOverrides::default(),
         }
     }
 }
@@ -232,15 +388,18 @@ impl ConversionSettings {
         }
     }
 
-    /// The level settings with [`Self::changed_settings`] applied (what the level handler does before writing).
+    /// The level settings with [`Self::changed_settings`] and then [`Self::level_overrides`] applied (what the level
+    /// handler does before writing).
     pub fn apply_to_level_settings(
         &self,
         settings: &super::level_settings::LevelSettings,
     ) -> Result<super::level_settings::LevelSettings, serde_json::Error> {
-        match &self.changed_settings {
-            Some(changed) => settings.with_overrides(changed),
-            None => Ok(settings.clone()),
-        }
+        let mut out = match &self.changed_settings {
+            Some(changed) => settings.with_overrides(changed)?,
+            None => settings.clone(),
+        };
+        self.level_overrides.apply(&mut out);
+        Ok(out)
     }
 }
 
@@ -319,6 +478,16 @@ impl ConversionSettingsBuilder {
 
     pub fn maps(mut self, maps: Vec<LevelMap>) -> Self {
         self.settings.maps = Some(maps);
+        self
+    }
+
+    pub fn player(mut self, options: PlayerOptions) -> Self {
+        self.settings.player = options;
+        self
+    }
+
+    pub fn level_overrides(mut self, overrides: LevelOverrides) -> Self {
+        self.settings.level_overrides = overrides;
         self
     }
 
@@ -451,6 +620,68 @@ mod tests {
         assert!(s.discard_empty_chunks && s.prevent_y_biome_blending && !s.custom_identifiers);
         assert!(!s.process_loot_tables);
         assert!(s.process_entities);
+    }
+
+    #[test]
+    fn player_and_level_defaults_keep_everything() {
+        let s = ConversionSettings::default();
+        let p = &s.player;
+        assert_eq!(p.owner_uuid, None);
+        assert!(p.include_ender_chest && p.include_stats && p.export_guest_profiles);
+        assert_eq!(p.inventory_source, InventorySource::Host);
+        assert!(p.guest_uuids.is_empty());
+        assert!(s.level_overrides.is_empty());
+        let base = super::super::level_settings::LevelSettings { difficulty: 0, ..Default::default() };
+        assert_eq!(s.apply_to_level_settings(&base).unwrap(), base);
+    }
+
+    #[test]
+    fn level_overrides_apply_after_the_json_overlay() {
+        let overrides = serde_json::json!({"Difficulty": 1, "LevelName": "Renamed"}).as_object().unwrap().clone();
+        let s = ConversionSettings::builder()
+            .changed_settings(overrides)
+            .level_overrides(LevelOverrides {
+                difficulty: Some(Difficulty::Hard),
+                game_type: Some(GameType::Adventure),
+                allow_commands: Some(true),
+                hardcore: Some(true),
+            })
+            .build();
+        let base = super::super::level_settings::LevelSettings {
+            difficulty: 0,
+            game_type: 0,
+            commands_enabled: false,
+            ..Default::default()
+        };
+        let out = s.apply_to_level_settings(&base).unwrap();
+        assert_eq!((out.difficulty, out.game_type, out.commands_enabled, out.hardcore), (3, 2, true, true));
+        assert_eq!(out.level_name, "Renamed");
+        // Only what is set is forced.
+        let s = ConversionSettings::builder()
+            .level_overrides(LevelOverrides { allow_commands: Some(false), ..LevelOverrides::default() })
+            .build();
+        let base = super::super::level_settings::LevelSettings { difficulty: 2, ..Default::default() };
+        let out = s.apply_to_level_settings(&base).unwrap();
+        assert_eq!((out.difficulty, out.commands_enabled), (2, false));
+        assert_eq!((Difficulty::Peaceful.id(), Difficulty::Normal.id(), GameType::Spectator.id()), (0, 2, 3));
+    }
+
+    #[test]
+    fn inventory_source_and_guest_accounts() {
+        assert_eq!(InventorySource::Host.profile_id(), None);
+        assert_eq!(InventorySource::Profile("player_server_abc".into()).profile_id(), Some("abc"));
+        assert_eq!(InventorySource::MergeHostAnd("abc".into()).profile_id(), Some("abc"));
+        let guest = "874d8b7a-1111-4222-8333-444455556666";
+        let account = Uuid::parse_str("11111111-2222-3333-4444-555555555555").unwrap();
+        let mut p = PlayerOptions::default();
+        // Without an entry a profile keeps its own uuid; ids that are no uuid have none.
+        assert_eq!(p.guest_uuid(&format!("player_server_{guest}")), Uuid::parse_str(guest).ok());
+        assert_eq!(p.guest_uuid("not-a-uuid"), None);
+        p.guest_uuids.insert(format!("player_server_{guest}"), account);
+        assert_eq!(p.guest_uuid(guest), Some(account));
+        assert_eq!(p.guest_uuid(&guest.to_uppercase()), Some(account));
+        let s = ConversionSettings::builder().player(p.clone()).build();
+        assert_eq!(s.player, p);
     }
 
     #[test]

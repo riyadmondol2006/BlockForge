@@ -17,7 +17,7 @@ pub mod detect;
 pub mod keys;
 pub mod level_dat;
 pub mod level_reader;
-mod nbt_le;
+pub(crate) mod nbt_le;
 pub mod palette;
 pub mod pretransform;
 pub mod reader;

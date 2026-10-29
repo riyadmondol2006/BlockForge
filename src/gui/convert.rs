@@ -350,6 +350,8 @@ impl ConvertState {
             dimensions: selection,
             // nothing is copied between different editions, so there is nothing to keep
             keep_unknown_nbt: false,
+            player: Default::default(),
+            level_overrides: Default::default(),
         })
     }
 
@@ -952,6 +954,8 @@ impl ConvertState {
             target: Target { edition: Edition::Java, version: "1.21.4".into() },
             dimensions: DimensionSelection::All,
             keep_unknown_nbt: false,
+            player: Default::default(),
+            level_overrides: Default::default(),
         };
         match variant {
             "convert-instance-done" => {
@@ -1375,6 +1379,8 @@ mod tests {
             target: Target { edition: Edition::Java, version: "1.21.4".into() },
             dimensions: DimensionSelection::All,
             keep_unknown_nbt: false,
+            player: Default::default(),
+            level_overrides: Default::default(),
         };
         let (id, cancel) = st.begin_run(job);
         assert_eq!(st.screen, Screen::Running);
@@ -1405,6 +1411,8 @@ mod tests {
             target: Target { edition: Edition::Java, version: "1.21.4".into() },
             dimensions: DimensionSelection::All,
             keep_unknown_nbt: false,
+            player: Default::default(),
+            level_overrides: Default::default(),
         };
         let (_, cancel) = st.begin_run(job);
         st.run.as_mut().unwrap().started = Instant::now() - Duration::from_secs(6);
@@ -1424,6 +1432,8 @@ mod tests {
             target: Target { edition: Edition::Java, version: "1.21.4".into() },
             dimensions: DimensionSelection::All,
             keep_unknown_nbt: false,
+            player: Default::default(),
+            level_overrides: Default::default(),
         };
         let (id, _) = st.begin_run(job);
         let summary = Summary {
@@ -1448,6 +1458,8 @@ mod tests {
             target: Target { edition: Edition::Java, version: "1.21.4".into() },
             dimensions: DimensionSelection::All,
             keep_unknown_nbt: false,
+            player: Default::default(),
+            level_overrides: Default::default(),
         };
         let (id, _) = st.begin_run(job);
         st.on_event(id, Event::Warning("odd".into()));

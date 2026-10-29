@@ -1,22 +1,25 @@
 // Derived from Chunker (https://github.com/HiveGamesOSS/Chunker), Copyright (c) 2024 Hive Games, MIT License.
-//! What every handler needs: the item writer, the format and the game version.
+//! What every handler needs: the item writer and its hooks, the format and the game version.
 
 use serde_json::Value as Json;
 
 use super::JavaItems;
 use crate::convert::java::format::JavaFormat;
+use crate::convert::java::resolvers::itemstack::ItemHooks;
 use crate::convert::model::{ItemId, ItemStack};
 use crate::convert::nbt::{Compound, Tag};
 use crate::convert::util::{Version, json_text};
 
 pub(super) struct Ctx<'a> {
     pub items: &'a JavaItems,
+    /// Passed to every item written (map ids, the block entity data of items inside containers).
+    pub hooks: &'a dyn ItemHooks,
     pub version: Version,
 }
 
 impl<'a> Ctx<'a> {
-    pub fn new(items: &'a JavaItems, format: &'a JavaFormat) -> Ctx<'a> {
-        Ctx { items, version: format.version }
+    pub fn with_hooks(items: &'a JavaItems, format: &'a JavaFormat, hooks: &'a dyn ItemHooks) -> Ctx<'a> {
+        Ctx { items, hooks, version: format.version }
     }
 
     /// `version >= major.minor.patch`.
@@ -39,7 +42,7 @@ impl<'a> Ctx<'a> {
         if stack.is_air() {
             return None;
         }
-        self.items.write(stack)
+        self.items.write_with(stack, self.hooks)
     }
 
     /// The item id string (`minecraft:brick`) of an identity.

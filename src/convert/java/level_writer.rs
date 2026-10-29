@@ -9,14 +9,17 @@
 
 use super::dirs::{JavaDimension, LevelDirs};
 use super::format::{CavesAndCliffs, FeatureState, JavaFormat};
-use super::writer::ItemsImpl;
+use super::resolvers::block_entity::{effect_id, effect_name};
+use super::resolvers::itemstack::ItemHooks;
 use super::writer::writer_biomes::BiomeWriter;
+use super::writer::{GuestPlayer, ItemsImpl};
 use crate::convert::level::level_settings::{SettingKind, SettingValue, SettingsIo};
 use crate::convert::level::{
-    ConversionSettings, ConvertError, Dimension, EncodingType, GeneratorType, Level, LevelMap, LevelSettings,
+    ConversionSettings, ConvertError, Dimension, EncodingType, GeneratorType, Level, LevelMap, LevelPlayer,
+    LevelSettings,
 };
 use crate::convert::mapping::{Edition, Version as MapVersion, tables};
-use crate::convert::model::{Biome, ItemStack, VanillaBiome};
+use crate::convert::model::{Biome, EffectType, ItemStack, VanillaBiome};
 use crate::convert::nbt::file::{Compression, write_java_file};
 use crate::convert::nbt::{Compound, Tag};
 use std::collections::BTreeMap;
@@ -43,8 +46,12 @@ pub(super) struct LevelFiles<'a> {
     pub level: &'a Level,
     pub settings: &'a ConversionSettings,
     pub items: &'a ItemsImpl,
+    /// Every item is written with these (map ids, shulker box contents).
+    pub hooks: &'a dyn ItemHooks,
     pub biomes: &'a BiomeWriter,
     pub player_items: &'a BTreeMap<i8, ItemStack>,
+    pub ender_items: &'a BTreeMap<i8, ItemStack>,
+    pub guests: &'a [GuestPlayer],
     pub icon: Option<&'a [u8]>,
     pub dimensions: &'a [Dimension],
     pub tall_overworld: bool,
@@ -323,10 +330,37 @@ impl JavaSettingsIo<'_, '_> {
     }
 }
 
+/// The single player: `Data.Player`, moved to its own file by [`split_level_dat`] from 26.1. With an owner account
+/// the player carries its `UUID`, and 26.1+ level.dat names it in `singleplayer_uuid`.
 fn write_player(f: &LevelFiles<'_>, level: &mut Compound) {
     let Some(player) = &f.level.player else { return };
-    let fmt = f.format;
+    let owner = f.settings.player.owner_uuid;
     let tag = level.get_or_create_compound("Player");
+    fill_player(f, tag, player, f.player_items, f.ender_items, owner);
+    if let Some(uuid) = owner
+        && f.format.split_level_dat
+    {
+        level.insert("singleplayer_uuid", Tag::IntArray(uuid_ints(uuid).to_vec()));
+    }
+}
+
+/// A uuid as Java's four ints (most significant first).
+fn uuid_ints(uuid: uuid::Uuid) -> [i32; 4] {
+    let v = uuid.as_u128();
+    [(v >> 96) as u32 as i32, (v >> 64) as u32 as i32, (v >> 32) as u32 as i32, v as u32 as i32]
+}
+
+/// Write a player compound of the target version into `tag`.
+fn fill_player(
+    f: &LevelFiles<'_>,
+    tag: &mut Compound,
+    player: &LevelPlayer,
+    items: &BTreeMap<i8, ItemStack>,
+    ender_items: &BTreeMap<i8, ItemStack>,
+    uuid: Option<uuid::Uuid>,
+) {
+    let fmt = f.format;
+    let v = fmt.version;
     tag.insert("DataVersion", Tag::Int(fmt.row_data_version));
     tag.insert("Pos", Tag::List(player.position.iter().map(|v| Tag::Double(*v)).collect()));
     tag.insert("Motion", Tag::List(player.motion.iter().map(|v| Tag::Double(*v)).collect()));
@@ -340,19 +374,62 @@ fn write_player(f: &LevelFiles<'_>, level: &mut Compound) {
     if game_type == 5 {
         game_type = f.level.settings.game_type;
     }
+    // A forced game mode is the player's too.
+    if let Some(forced) = f.settings.level_overrides.game_type {
+        game_type = forced.id();
+    }
     tag.insert("playerGameType", Tag::Int(game_type.clamp(0, 3)));
-    // A player that was never saved starts with full health and food.
-    tag.insert("Health", Tag::Float(20.0));
-    tag.insert("foodLevel", Tag::Int(20));
+    if let Some(uuid) = uuid {
+        if v.is_greater_than_or_equal(1, 16, 0) {
+            tag.insert("UUID", Tag::IntArray(uuid_ints(uuid).to_vec()));
+        } else {
+            let (most, least) = uuid.as_u64_pair();
+            tag.insert("UUIDMost", Tag::Long(most as i64));
+            tag.insert("UUIDLeast", Tag::Long(least as i64));
+        }
+    }
+
+    // A player that was never saved (or whose stats are left out) starts with full health and food.
+    let stats = &player.stats;
+    tag.insert("Health", Tag::Float(stats.health.unwrap_or(20.0)));
+    tag.insert("foodLevel", Tag::Int(stats.food_level.unwrap_or(20)));
+    if let Some(saturation) = stats.saturation {
+        tag.insert("foodSaturationLevel", Tag::Float(saturation));
+    }
+    if let Some(exhaustion) = stats.exhaustion {
+        tag.insert("foodExhaustionLevel", Tag::Float(exhaustion));
+    }
     tag.insert("Air", Tag::Short(300));
+    if stats.xp_level > 0 || stats.xp_progress > 0.0 {
+        let total = stats.xp_total();
+        tag.insert("XpLevel", Tag::Int(stats.xp_level));
+        tag.insert("XpP", Tag::Float(stats.xp_progress));
+        tag.insert("XpTotal", Tag::Int(total));
+        tag.insert("Score", Tag::Int(total));
+    }
+    if let Some(spawn) = &stats.spawn {
+        write_respawn(f, tag, spawn);
+    }
+    write_effects(f, tag, &stats.effects);
+    if let Some(a) = &stats.abilities {
+        let mut abilities = Compound::with_capacity(7);
+        abilities.insert("flying", Tag::Byte(a.flying as i8));
+        abilities.insert("flySpeed", Tag::Float(a.fly_speed));
+        abilities.insert("instabuild", Tag::Byte(a.instabuild as i8));
+        abilities.insert("invulnerable", Tag::Byte(a.invulnerable as i8));
+        abilities.insert("mayBuild", Tag::Byte(a.may_build as i8));
+        abilities.insert("mayfly", Tag::Byte(a.may_fly as i8));
+        abilities.insert("walkSpeed", Tag::Float(a.walk_speed));
+        tag.insert("abilities", Tag::Compound(abilities));
+    }
 
     const EQUIPMENT: [(i8, &str); 5] = [(-106, "offhand"), (100, "feet"), (101, "legs"), (102, "chest"), (103, "head")];
     let mut inventory = Vec::new();
-    for (&slot, stack) in f.player_items {
+    for (&slot, stack) in items {
         if stack.is_air() || (fmt.split_equipment && EQUIPMENT.iter().any(|(s, _)| *s == slot)) {
             continue;
         }
-        let Some(mut item) = f.items.write(stack) else { continue };
+        let Some(mut item) = f.items.write_with(stack, f.hooks) else { continue };
         item.insert("Slot", Tag::Byte(slot));
         inventory.push(Tag::Compound(item));
     }
@@ -360,13 +437,119 @@ fn write_player(f: &LevelFiles<'_>, level: &mut Compound) {
     if fmt.split_equipment {
         let mut equipment = Compound::new();
         for (slot, name) in EQUIPMENT {
-            let Some(stack) = f.player_items.get(&slot).filter(|s| !s.is_air()) else { continue };
-            if let Some(item) = f.items.write(stack) {
+            let Some(stack) = items.get(&slot).filter(|s| !s.is_air()) else { continue };
+            if let Some(item) = f.items.write_with(stack, f.hooks) {
                 equipment.insert(name, Tag::Compound(item));
             }
         }
         tag.insert("equipment", Tag::Compound(equipment));
     }
+    let mut ender = Vec::new();
+    for (&slot, stack) in ender_items.iter().filter(|(slot, _)| (0..27).contains(*slot)) {
+        if stack.is_air() {
+            continue;
+        }
+        let Some(mut item) = f.items.write_with(stack, f.hooks) else { continue };
+        item.insert("Slot", Tag::Byte(slot));
+        ender.push(Tag::Compound(item));
+    }
+    tag.insert("EnderItems", Tag::List(ender));
+}
+
+/// The bed or anchor the player respawns at: `SpawnX/Y/Z` before 1.21.5 (with `SpawnDimension` and `SpawnAngle` from
+/// 1.16; only the overworld before), `respawn{pos, angle, dimension, forced}` in 1.21.5 and
+/// `respawn{pos, yaw, pitch, dimension, forced}` from 1.21.9 (the game's `PlayerRespawnDataFix`).
+fn write_respawn(f: &LevelFiles<'_>, tag: &mut Compound, spawn: &crate::convert::level::SpawnPoint) {
+    let v = f.format.version;
+    let dimension = spawn.dimension.identifier();
+    if v.is_greater_than_or_equal(1, 21, 5) {
+        let mut respawn = Compound::with_capacity(5);
+        respawn.insert("pos", Tag::IntArray(vec![spawn.x, spawn.y, spawn.z]));
+        if v.is_greater_than_or_equal(1, 21, 9) {
+            respawn.insert("yaw", Tag::Float(0.0));
+            respawn.insert("pitch", Tag::Float(0.0));
+        } else {
+            respawn.insert("angle", Tag::Float(0.0));
+        }
+        respawn.insert("dimension", Tag::String(dimension.to_string()));
+        respawn.insert("forced", Tag::Byte(0));
+        tag.insert("respawn", Tag::Compound(respawn));
+        return;
+    }
+    let dimensions_by_name = v.is_greater_than_or_equal(1, 16, 0);
+    if !dimensions_by_name && dimension != "minecraft:overworld" {
+        return;
+    }
+    tag.insert("SpawnX", Tag::Int(spawn.x));
+    tag.insert("SpawnY", Tag::Int(spawn.y));
+    tag.insert("SpawnZ", Tag::Int(spawn.z));
+    tag.insert("SpawnForced", Tag::Byte(0));
+    if dimensions_by_name {
+        tag.insert("SpawnAngle", Tag::Float(0.0));
+        tag.insert("SpawnDimension", Tag::String(dimension.to_string()));
+    }
+}
+
+/// Status effects: `active_effects` with names from 1.20.2, `ActiveEffects` with numeric ids before. Effects the
+/// version does not know are left out.
+fn write_effects(f: &LevelFiles<'_>, tag: &mut Compound, effects: &[crate::convert::level::PlayerEffect]) {
+    let v = f.format.version;
+    let named = v.is_greater_than_or_equal(1, 20, 2);
+    let mut list = Vec::new();
+    for e in effects {
+        // Bedrock's fatal poison is poison that can kill.
+        let effect = if e.effect == EffectType::FATAL_POISON { EffectType::POISON } else { e.effect };
+        let mut c = Compound::with_capacity(6);
+        if named {
+            let name = effect_name(effect, v);
+            if name == "minecraft:empty" {
+                continue;
+            }
+            c.insert("id", Tag::String(name.into()));
+            c.insert("amplifier", Tag::Byte(e.amplifier));
+            c.insert("duration", Tag::Int(e.duration));
+            c.insert("ambient", Tag::Byte(e.ambient as i8));
+            c.insert("show_particles", Tag::Byte(e.show_particles as i8));
+            c.insert("show_icon", Tag::Byte(1));
+        } else {
+            let id = effect_id(effect, v);
+            if id == 0 {
+                continue;
+            }
+            c.insert("Id", Tag::Int(id));
+            c.insert("Amplifier", Tag::Byte(e.amplifier));
+            c.insert("Duration", Tag::Int(e.duration));
+            c.insert("Ambient", Tag::Byte(e.ambient as i8));
+            c.insert("ShowParticles", Tag::Byte(e.show_particles as i8));
+            c.insert("ShowIcon", Tag::Byte(1));
+        }
+        list.push(Tag::Compound(c));
+    }
+    if !list.is_empty() {
+        tag.insert(if named { "active_effects" } else { "ActiveEffects" }, Tag::List(list));
+    }
+}
+
+/// The player files beside level.dat: before 26.1 the owner's (`playerdata/<uuid>.dat`, the same data as
+/// `Data.Player`, which a server or LAN game reads), and the other players' profiles in every version.
+fn write_player_files(f: &LevelFiles<'_>, data: &Compound) -> Result<(), ConvertError> {
+    let owner = f.settings.player.owner_uuid;
+    if !f.format.split_level_dat
+        && let (Some(uuid), Some(Tag::Compound(player))) = (owner, data.get("Player"))
+    {
+        write_player_file(f, uuid, player.clone())?;
+    }
+    for guest in f.guests.iter().filter(|g| Some(g.uuid) != owner) {
+        let mut tag = Compound::new();
+        fill_player(f, &mut tag, &guest.player, &guest.items, &guest.ender_items, Some(guest.uuid));
+        write_player_file(f, guest.uuid, tag)?;
+    }
+    Ok(())
+}
+
+fn write_player_file(f: &LevelFiles<'_>, uuid: uuid::Uuid, player: Compound) -> Result<(), ConvertError> {
+    let Some(file) = f.dirs.player_file(&uuid.hyphenated().to_string()) else { return Ok(()) };
+    write_data_file(f, &file, player, false)
 }
 
 fn get_f64(c: &Compound, key: &str) -> Option<f64> {
@@ -794,6 +977,7 @@ pub(super) fn write_level_files(f: &LevelFiles<'_>) -> Result<(), ConvertError> 
     let io = JavaSettingsIo { f, copying, warnings: Mutex::new(Vec::new()) };
     f.level.settings.to_nbt(&mut data, &io);
     write_player(f, &mut data);
+    write_player_files(f, &data)?;
     extra_settings(f, &mut data);
     if fmt.split_level_dat {
         split_level_dat(f, &mut data)?;

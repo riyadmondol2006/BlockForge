@@ -7,7 +7,8 @@
 //! - [`open`](BedrockWorldReader::open) copies the database to a scratch directory (see `db`), starts the database
 //!   thread (`reader_io`), lists the columns once and reads the custom dimension table;
 //! - [`level`](BedrockWorldReader::level) is `level.dat` plus `~local_player`, the maps and the portals
-//!   (`level_reader`);
+//!   (`level_reader`); [`player_profiles`](BedrockWorldReader::player_profiles) are the other players
+//!   (`player_server_<uuid>`), and [`read_item`](BedrockWorldReader::read_item) turns their items into the model;
 //! - [`dimensions`](BedrockWorldReader::dimensions) and [`columns`](BedrockWorldReader::columns) are what the
 //!   database holds, filtered by the conversion settings (dimension mapping and pruning);
 //! - [`read_column`](BedrockWorldReader::read_column) reads one column: its sub-chunks (`reader_blocks`), biomes and
@@ -46,15 +47,20 @@ use super::db::{BedrockDb, LevelDb};
 use super::detect::BedrockWorldInfo;
 use super::keys::{self, DimensionId, DimensionTable};
 use super::level_dat::LevelDat;
-use super::level_reader::{parse_biome_ids, parse_maps, parse_player, parse_portals, read_level_settings};
+use super::level_reader::{
+    PlayerIdentity, parse_biome_ids, parse_maps, parse_player, parse_player_identity, parse_portals,
+    read_level_settings,
+};
 use super::palette::{decode_data2d, decode_data3d, decode_nbt_concat, decode_sub_chunk};
 use super::resolvers::block_entity::read_into_column;
 use super::resolvers::itemstack::BedrockItems;
+use crate::convert::level::player::PlayerItem;
 use crate::convert::level::{
-    ChunkPos, ConversionSettings, ConvertError, Dimension, DimensionRegistry, Level, LevelSettings, RegionPos,
+    ChunkPos, ConversionSettings, ConvertError, Dimension, DimensionRegistry, Level, LevelPlayer, LevelSettings,
+    RegionPos,
 };
 use crate::convert::mapping::Version;
-use crate::convert::model::{Biome, ChunkCoord, Column};
+use crate::convert::model::{Biome, ChunkCoord, Column, EffectType, ItemStack};
 use crate::convert::nbt::{Compound, Tag};
 
 /// The most warning messages kept (the rest is only counted).
@@ -79,6 +85,29 @@ pub struct ReaderStats {
     pub block_entities: u64,
     /// Columns whose `FinalizedState` says generation was not finished.
     pub unfinalized: u64,
+}
+
+/// A player other than the host (`player_server_<uuid>`).
+#[derive(Clone, Debug)]
+pub struct PlayerProfile {
+    /// The uuid of the key (`player_server_<uuid>` without the prefix).
+    pub id: String,
+    /// The `player_<id>` records that point at this profile (a signed-in player has one with an `MsaId`).
+    pub identities: Vec<PlayerIdentity>,
+    /// The player, parsed like `~local_player` (items stay Bedrock item compounds).
+    pub player: LevelPlayer,
+}
+
+impl PlayerProfile {
+    /// Whether a player signed in to an account owned the profile (Bedrock keeps no gamertag either way).
+    pub fn signed_in(&self) -> bool {
+        self.identities.iter().any(|i| i.msa_id.is_some())
+    }
+
+    /// Stacks in the inventory, armor and off hand.
+    pub fn item_count(&self) -> usize {
+        self.player.inventory.len()
+    }
 }
 
 /// Reads one Bedrock world. See the module documentation.
@@ -197,9 +226,23 @@ impl BedrockWorldReader {
             }
         }
 
+        // Items name maps by `map_uuid`; the Java writer numbers the maps from 0 in the order the level lists them
+        // (sorted by id, the way `level()` parses them), so an item's map index is its map's place in that order.
+        let mut map_indexes: HashMap<i64, i32> = HashMap::new();
+        if settings.process_maps {
+            match db.prefix(keys::MAP_PREFIX) {
+                Ok(entries) => {
+                    let maps = parse_maps(&entries, &registry, false, &mut Vec::new());
+                    map_indexes = maps.iter().enumerate().map(|(index, map)| (map.id, index as i32)).collect();
+                }
+                Err(e) => push_warning(&warnings, format!("Failed to list the maps: {e}")),
+            }
+        }
+
         let unmapped_items: std::sync::Arc<Mutex<HashMap<String, u64>>> = Arc::default();
         let log = unmapped_items.clone();
         let items = BedrockItems::new(version)
+            .with_map_indexes(move |uuid| map_indexes.get(&uuid).copied())
             .with_custom_identifiers(settings.custom_identifiers)
             .with_original_nbt(settings.allow_nbt_copying)
             .with_loot_tables(settings.process_loot_tables)
@@ -232,6 +275,18 @@ impl BedrockWorldReader {
         })
     }
 
+    /// A reader over a world held in memory, as the game `game` saved it (tests of the pipeline).
+    #[cfg(test)]
+    pub(crate) fn from_memory(
+        db: super::db::MemDb,
+        level_dat: LevelDat,
+        game: GameVersion,
+        settings: &ConversionSettings,
+    ) -> Result<BedrockWorldReader, ConvertError> {
+        let opener: DbOpener = Box::new(move || Ok(Box::new(db) as Box<dyn BedrockDb>));
+        Self::from_parts(opener, level_dat, BedrockVersion::nearest_at_or_below(game), game, settings)
+    }
+
     /// The registered version the world's tables were chosen by.
     pub fn version(&self) -> &'static BedrockVersion {
         self.version
@@ -257,7 +312,8 @@ impl BedrockWorldReader {
         match self.db.get(keys::LOCAL_PLAYER) {
             Ok(Some(bytes)) => match super::nbt_le::from_slice(&bytes) {
                 Ok((_, Tag::Compound(player))) => {
-                    level.player = Some(parse_player(&player, &self.registry, self.settings.process_items));
+                    level.player =
+                        Some(parse_player(&player, &self.registry, self.settings.process_items, &|id| self.effect(id)));
                 }
                 Ok(_) => self.warn("~local_player is not a compound".into()),
                 Err(e) => self.warn(format!("~local_player: {e}")),
@@ -284,6 +340,56 @@ impl BedrockWorldReader {
             Err(e) => return Err(convert_error(e)),
         }
         Ok(level)
+    }
+
+    /// The players other than the host (`player_server_<uuid>`), sorted by id, with the `player_<id>` records that
+    /// point at them. Profiles that fail to parse are reported in the warnings.
+    pub fn player_profiles(&self) -> Result<Vec<PlayerProfile>, ConvertError> {
+        let mut identities: Vec<PlayerIdentity> = Vec::new();
+        for (key, value) in self.db.prefix(keys::PLAYER_PREFIX).map_err(convert_error)? {
+            if key.starts_with(keys::PLAYER_SERVER_PREFIX) {
+                continue;
+            }
+            match parse_player_identity(&value) {
+                Ok(identity) => identities.push(identity),
+                Err(e) => self.warn(format!("{}: {e}", String::from_utf8_lossy(&key))),
+            }
+        }
+        let mut profiles = Vec::new();
+        for (key, value) in self.db.prefix(keys::PLAYER_SERVER_PREFIX).map_err(convert_error)? {
+            let name = String::from_utf8_lossy(&key).into_owned();
+            let id = name[keys::PLAYER_SERVER_PREFIX.len()..].to_string();
+            match super::nbt_le::from_slice(&value) {
+                Ok((_, Tag::Compound(player))) => profiles.push(PlayerProfile {
+                    identities: identities.iter().filter(|i| i.server_id.as_deref() == Some(&name)).cloned().collect(),
+                    player: parse_player(&player, &self.registry, self.settings.process_items, &|id| self.effect(id)),
+                    id,
+                }),
+                Ok(_) => self.warn(format!("{name} is not a compound")),
+                Err(e) => self.warn(format!("{name}: {e}")),
+            }
+        }
+        profiles.sort_by(|a, b| a.id.cmp(&b.id));
+        Ok(profiles)
+    }
+
+    /// A Bedrock item compound of a player (`PlayerItem`) as a model stack: `None` for air and for items without an
+    /// equivalent. Maps keep their link (see `with_map_indexes` in `from_parts`).
+    pub fn read_item(&self, item: &PlayerItem) -> Option<ItemStack> {
+        self.items.read(item).filter(|stack| !stack.is_air())
+    }
+
+    /// [`Self::read_item`] for every slot.
+    pub fn read_items(&self, items: &BTreeMap<i8, PlayerItem>) -> BTreeMap<i8, ItemStack> {
+        items.iter().filter_map(|(slot, item)| Some((*slot, self.read_item(item)?))).collect()
+    }
+
+    fn effect(&self, id: i32) -> Option<EffectType> {
+        let effect = self.items.tables.effect(id);
+        if effect.is_none() {
+            self.items.missing(super::resolvers::itemstack::Missing::Effect, &id.to_string());
+        }
+        effect
     }
 
     /// The dimensions that have columns and that the settings convert, overworld first, then by id.

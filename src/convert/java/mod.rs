@@ -27,7 +27,7 @@ pub mod writer;
 #[cfg(test)]
 mod real_world;
 #[cfg(test)]
-mod testutil;
+pub(crate) mod testutil;
 
 pub use dirs::{DimensionInfo, JavaDimension, JavaWorldInfo, LevelDirs, detect_java};
 pub use format::JavaFormat;

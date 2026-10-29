@@ -23,8 +23,11 @@ pub use encoding::{EncodingType, TargetVersion, VersionTriple};
 pub use level::Level;
 pub use level_settings::{GeneratorType, LevelSettings};
 pub use map::LevelMap;
-pub use player::LevelPlayer;
+pub use player::{LevelPlayer, PlayerAbilities, PlayerEffect, PlayerStats, SpawnPoint};
 pub use portal::Portal;
-pub use settings::{ConversionSettings, ConversionSettingsBuilder, PruningConfig, PruningRegion};
+pub use settings::{
+    ConversionSettings, ConversionSettingsBuilder, Difficulty, GameType, InventorySource, LevelOverrides,
+    PlayerOptions, PruningConfig, PruningRegion,
+};
 pub use task::{CancelToken, Job, Progress, ProgressEvent, TaskContext, TaskReport, TaskRunner, Weight};
 pub use world::{ChunkPos, RegionPos, World};

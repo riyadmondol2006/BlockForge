@@ -22,14 +22,15 @@ mod tables;
 #[cfg(test)]
 mod tests;
 
-use crate::convert::java::resolvers::itemstack::JavaItems;
+use crate::convert::java::resolvers::itemstack::{ItemHooks, JavaItems, NoHooks};
 
 use crate::convert::java::format::JavaFormat;
 use crate::convert::model::{BlockEntity, BlockEntityData, BlockEntityKind};
 use crate::convert::nbt::Compound;
 use ctx::Ctx;
 
-pub use item_embed::write_block_entity_to_item;
+pub use item_embed::{write_block_entity_to_item, write_block_entity_to_item_with};
+pub use tables::{effect_id, effect_name};
 
 /// The namespaced id Java stores for a kind (`minecraft:chest`), whatever the version; empty for `Unknown`, whose id is
 /// the raw type kept in the block entity. The id does not depend on the version since 1.11; `format` is taken so the
@@ -125,12 +126,23 @@ pub fn is_supported(kind: BlockEntityKind, format: &JavaFormat) -> bool {
 ///
 /// The original NBT, when the entity carries it, is copied first and the handlers overwrite what they write; the
 /// `id` stays the one of the kind. `None` when the format has no such block entity or a text or item fails to convert.
+/// Items inside are written without hooks (see [`write_block_entity_with`]).
 pub fn write_block_entity(items: &JavaItems, format: &JavaFormat, be: &BlockEntity) -> Option<Compound> {
+    write_block_entity_with(items, format, be, &NoHooks)
+}
+
+/// [`write_block_entity`] that passes `hooks` to every item inside (map ids, shulker boxes in chests ...).
+pub fn write_block_entity_with(
+    items: &JavaItems,
+    format: &JavaFormat,
+    be: &BlockEntity,
+    hooks: &dyn ItemHooks,
+) -> Option<Compound> {
     let kind = be.kind();
     if !is_supported(kind, format) {
         return None;
     }
-    let ctx = Ctx::new(items, format);
+    let ctx = Ctx::with_hooks(items, format, hooks);
     let id = match &be.data {
         BlockEntityData::Unknown(raw) => raw.to_string(),
         _ => java_block_entity_id(kind, format).to_owned(),

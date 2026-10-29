@@ -6,6 +6,14 @@
 //! column's pre-transform with its neighbours (read through a small shared cache), encodes the Java chunk and hands
 //! the bytes to the single writer thread over a bounded channel, which bounds memory. Only the Bedrock to Java
 //! direction exists (by decision); other requests say so plainly.
+//!
+//! Before the columns, the level is made ready: the level setting overrides are applied
+//! ([`ConversionSettings::apply_to_level_settings`]) and the players are chosen and their items converted
+//! (`pipeline_players`). Map links need nothing here: the reader gives items the index of their map and the writer's
+//! item hooks ([`JavaWorldWriter::item_hooks`]) turn it into the map's Java id wherever an item is written.
+
+#[path = "pipeline_players.rs"]
+mod players;
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -19,7 +27,9 @@ use crate::convert::java::dirs::detect_java;
 use crate::convert::java::writer::{JavaWorldWriter, PreparedColumn};
 use crate::convert::level::encoding::EncodingType;
 use crate::convert::level::task::CancelToken;
-use crate::convert::level::{ConvertError, ConvertRequest, ConvertSummary, Dimension, ProgressSink};
+use crate::convert::level::{
+    ConversionSettings, ConvertError, ConvertRequest, ConvertSummary, Dimension, ProgressSink,
+};
 use crate::convert::model::{Column, Neighbours};
 use crate::convert::util::Version;
 
@@ -57,15 +67,34 @@ pub fn convert_world(
         return Err(ConvertError::Cancelled);
     }
     let reader = BedrockWorldReader::open(&info, &req.settings)?;
-    let level = reader.level()?;
+    convert_opened(&reader, req, sink, cancel, started)
+}
+
+/// [`convert_world`] once the input is open: the level, the players, every column, the level files.
+fn convert_opened(
+    reader: &BedrockWorldReader,
+    req: &ConvertRequest,
+    sink: &dyn ProgressSink,
+    cancel: &CancelToken,
+    started: Instant,
+) -> Result<ConvertSummary, ConvertError> {
+    let mut level = reader.level()?;
+    level.settings = ConversionSettings::apply_to_level_settings(&req.settings, &level.settings)
+        .map_err(|e| ConvertError::Unsupported(format!("the changed level settings do not fit: {e}")))?;
+    let players = players::prepare(reader, &mut level, &req.settings)?;
     let target = match req.target.version {
         Some(t) => Version::new(t.major() as i32, t.minor() as i32, t.patch() as i32),
         None => crate::convert::java::version::latest().1,
     };
     sink.stage("Preparing the new world");
     let mut writer = JavaWorldWriter::create(&req.output, target, &level, &req.settings)?;
+    writer.set_player_items(players.items);
+    writer.set_ender_items(players.ender_items);
+    for guest in players.guests {
+        writer.add_guest_player(guest);
+    }
 
-    match run(&reader, &mut writer, sink, cancel) {
+    match run(reader, &mut writer, sink, cancel) {
         Ok(columns) => {
             sink.stage("Finishing");
             let mut blocks: HashMap<String, u64> = reader.unmapped_blocks();
@@ -73,6 +102,7 @@ pub fn convert_world(
                 *blocks.entry(name).or_default() += n;
             }
             let mut warnings = reader.warnings();
+            warnings.extend(players.warnings);
             let written = writer.finish_with_summary();
             let _ = &written;
             match written {
@@ -258,3 +288,7 @@ fn prepare(
     let guard = writer.read().unwrap_or_else(|e| e.into_inner());
     guard.prepare_column(dim, &column)
 }
+
+#[cfg(test)]
+#[path = "pipeline_tests.rs"]
+mod tests;

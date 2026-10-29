@@ -29,22 +29,25 @@ mod writer_tests;
 
 pub(super) use super::resolvers::itemstack::JavaItems as ItemsImpl;
 
-/// The block entity compound for a model block entity.
+/// The block entity compound for a model block entity, its items written with `hooks`.
 ///
 pub(super) fn write_block_entity_impl(
     items: &ItemsImpl,
     format: &JavaFormat,
     be: &crate::convert::model::BlockEntity,
+    hooks: &dyn ItemHooks,
 ) -> Option<crate::convert::nbt::Compound> {
-    super::resolvers::block_entity::write_block_entity(items, format, be)
+    super::resolvers::block_entity::write_block_entity_with(items, format, be, hooks)
 }
 
 use super::dirs::{JavaDimension, LevelDirs};
 use super::format::JavaFormat;
 use super::nbtio;
 use super::region::Compression;
-use crate::convert::level::{ConversionSettings, ConvertError, Dimension, Level};
-use crate::convert::model::{BlockType, Column};
+use super::resolvers::hooks::WorldItemHooks;
+use super::resolvers::itemstack::ItemHooks;
+use crate::convert::level::{ConversionSettings, ConvertError, Dimension, Level, LevelPlayer};
+use crate::convert::model::{BlockType, Column, ItemStack};
 use crate::convert::nbt::{Compound, Tag};
 use crate::convert::util::Version;
 use std::collections::BTreeMap;
@@ -105,6 +108,17 @@ impl PreparedColumn {
     }
 }
 
+/// A player other than the owner, written as the player file of `uuid` (`players/data/` from 26.1, `playerdata/`
+/// before).
+#[derive(Clone, Debug)]
+pub struct GuestPlayer {
+    pub uuid: uuid::Uuid,
+    pub player: LevelPlayer,
+    /// The inventory by slot, like [`JavaWorldWriter::set_player_items`].
+    pub items: BTreeMap<i8, ItemStack>,
+    pub ender_items: BTreeMap<i8, ItemStack>,
+}
+
 /// Writes a Java world folder.
 pub struct JavaWorldWriter {
     out: PathBuf,
@@ -115,13 +129,17 @@ pub struct JavaWorldWriter {
     blocks: BlockWriter,
     biomes: BiomeWriter,
     items: ItemsImpl,
+    /// Passed to every item the writer writes; see [`JavaWorldWriter::item_hooks`].
+    item_hooks: WorldItemHooks,
     settings: ConversionSettings,
     level: Level,
     options: WriterOptions,
     regions: RegionSet,
     summary: WriterSummary,
     icon: Option<Vec<u8>>,
-    player_items: std::collections::BTreeMap<i8, crate::convert::model::ItemStack>,
+    player_items: BTreeMap<i8, ItemStack>,
+    ender_items: BTreeMap<i8, ItemStack>,
+    guests: Vec<GuestPlayer>,
     dimensions_seen: Vec<Dimension>,
     source_from_minus_64: bool,
     tall_overworld: bool,
@@ -160,18 +178,22 @@ impl JavaWorldWriter {
         fs::create_dir_all(out).map_err(io_error)?;
         let tall_overworld =
             format.caves_and_cliffs == super::format::CavesAndCliffs::Datapack && level.settings.caves_and_cliffs;
+        let items = ItemsImpl::new(&format, format.version);
         Ok(JavaWorldWriter {
             dirs: LevelDirs::new(out, &format),
             blocks: BlockWriter::new(format.version, settings.custom_identifiers),
             biomes: BiomeWriter::new(format.version, settings),
-            items: ItemsImpl::new(&format, format.version),
+            item_hooks: WorldItemHooks::new(&items, &format, level.maps.len()),
+            items,
             settings: settings.clone(),
             level: level.clone(),
             regions: RegionSet::new(options.max_open_regions),
             options,
             summary: WriterSummary::default(),
             icon: None,
-            player_items: std::collections::BTreeMap::new(),
+            player_items: BTreeMap::new(),
+            ender_items: BTreeMap::new(),
+            guests: Vec::new(),
             dimensions_seen: Vec::new(),
             source_from_minus_64: level.settings.caves_and_cliffs,
             tall_overworld,
@@ -197,8 +219,31 @@ impl JavaWorldWriter {
     }
 
     /// The single-player inventory by slot (-106 off hand, 100..103 armor), written into the player data.
-    pub fn set_player_items(&mut self, items: std::collections::BTreeMap<i8, crate::convert::model::ItemStack>) {
+    pub fn set_player_items(&mut self, items: BTreeMap<i8, ItemStack>) {
         self.player_items = items;
+    }
+
+    /// The single player's ender chest by slot (0..26), written into the player data as `EnderItems`.
+    pub fn set_ender_items(&mut self, items: BTreeMap<i8, ItemStack>) {
+        self.ender_items = items;
+    }
+
+    /// Another player to write a player file for. A guest with the owner's uuid is not written.
+    pub fn add_guest_player(&mut self, guest: GuestPlayer) {
+        self.guests.retain(|g| g.uuid != guest.uuid);
+        self.guests.push(guest);
+    }
+
+    /// The item writer of the target version.
+    pub fn items(&self) -> &ItemsImpl {
+        &self.items
+    }
+
+    /// The hooks every item of this world must be written with ([`ItemsImpl::write_with`]): they give `filled_map`
+    /// items the id of their map and write the contents of shulker boxes and the like. Code that converts items
+    /// outside of chunks' block entities and the player (entities) should use these too.
+    pub fn item_hooks(&self) -> &WorldItemHooks {
+        &self.item_hooks
     }
 
     /// Blocks that had no Java form and were written as air (with how many), most frequent first.
@@ -246,6 +291,7 @@ impl JavaWorldWriter {
             blocks: &self.blocks,
             biomes: &self.biomes,
             items: &self.items,
+            hooks: &self.item_hooks,
             settings: &self.settings,
             source_from_minus_64: self.source_from_minus_64,
             tall_overworld: self.tall_overworld,
@@ -385,8 +431,11 @@ impl JavaWorldWriter {
             level: &self.level,
             settings: &self.settings,
             items: &self.items,
+            hooks: &self.item_hooks,
             biomes: &self.biomes,
             player_items: &self.player_items,
+            ender_items: &self.ender_items,
+            guests: &self.guests,
             icon: self.icon.as_deref(),
             dimensions: &self.dimensions_seen,
             tall_overworld: self.tall_overworld,

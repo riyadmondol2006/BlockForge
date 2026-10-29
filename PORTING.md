@@ -83,7 +83,19 @@ surveys: core, model, java, bedrock).
 - [ ] release-size check (growth < 5 MB), clippy `-D warnings`, fmt
 
 ### Phase 5 - later
-- [ ] entities (`digp`/`actorprefix`, entity tables), players, maps, portals, lodestones
+- [ ] entities (`digp`/`actorprefix`, entity tables), portals, lodestones
+- [x] players: the host (`~local_player`) with inventory, armor, off hand, ender chest, experience, health, food,
+  respawn point, effects and abilities (`bedrock/level_reader.rs` `parse_player`, `java/level_writer.rs`
+  `fill_player`, one format per Java version); the other profiles (`player_server_<uuid>`, `player_<id>`) as their own
+  player files; owner account, inventory source and what is kept are `ConversionSettings::player`
+  (`src/convert/pipeline_players.rs` applies them)
+- [x] maps: items keep their link (`minecraft:map_id` / `tag.map`). The reader gives each `map_uuid` the index of its
+  map in id order (`with_map_indexes`), the writer's `WorldItemHooks` (`java/resolvers/hooks.rs`, from
+  `JavaWorldWriter::item_hooks`) turns the index into the Java id, which is that same index; the hooks also write the
+  block entity data of items (shulker box contents). Every item path must use them: chunk block entities
+  (`EncodeContext::hooks`), the players (`LevelFiles::hooks`) and, when they come, entities
+- [x] level setting overrides (`ConversionSettings::level_overrides`, applied with `changed_settings` by
+  `apply_to_level_settings` in the pipeline; 26.1+ difficulty is `difficulty_settings.difficulty`)
 - [ ] legacy Java (< 1.13) numeric ids, older Bedrock, Java <-> Java up/downgrade
 
 ## Package map (Chunker -> Rust)
@@ -113,3 +125,5 @@ surveys: core, model, java, bedrock).
 - Wave 2 (in progress): Bedrock pre-transforms, Bedrock items + block entities (read), Java items (write), Java block
   entities (write), Bedrock world/level reader, Java world/level writer. Contracts: `docs/porting/CONTRACTS.md`.
 - Next: pipeline (`convert_world`), wire the GUI backend, test world end to end, then entities and the remaining Bedrock -> Java gaps. Java -> Bedrock is not planned.
+- Players, map links and level overrides done (Phase 5): see the Phase 5 list. The GUI does not show the new options
+  yet (`ConvertJob::player`, `ConvertJob::level_overrides` carry them, default = everything kept).

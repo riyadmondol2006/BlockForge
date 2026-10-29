@@ -7,11 +7,17 @@
 //! way the stack of Chunker's `LevelReader` classes does. It also parses `~local_player`, the `map_*` records, the
 //! `portals` record and the `BiomeIdsTable` of custom biomes (1.21.110+).
 
+use std::collections::BTreeMap;
 use std::sync::Mutex;
 
 use super::data_version::{BedrockVersion, GameVersion};
 use crate::convert::level::level_settings::{GeneratorType, SettingKind, SettingValue, SettingsIo};
-use crate::convert::level::{Dimension, DimensionRegistry, EncodingType, LevelMap, LevelPlayer, LevelSettings, Portal};
+use crate::convert::level::player::PlayerItem;
+use crate::convert::level::{
+    Dimension, DimensionRegistry, EncodingType, LevelMap, LevelPlayer, LevelSettings, PlayerAbilities, PlayerEffect,
+    PlayerStats, Portal, SpawnPoint,
+};
+use crate::convert::model::EffectType;
 use crate::convert::nbt::{Compound, Tag};
 
 /// The height of the player's eyes that Bedrock adds to the stored y (height + 0.00001 as saved).
@@ -214,10 +220,16 @@ fn floats(tag: &Compound, key: &str, default: &[f64]) -> Vec<f64> {
     }
 }
 
-/// Parse `~local_player` (`parseLocalPlayer`). Items stay Bedrock item compounds (`PlayerItem`), keyed by the slot
-/// Java would use: the inventory as stored, armor at `100 + (3 - slot)` and the off hand at `150 + slot`. Empty
-/// stacks are left out.
-pub fn parse_player(player: &Compound, registry: &DimensionRegistry, keep_items: bool) -> LevelPlayer {
+/// Parse `~local_player` (`parseLocalPlayer`), or a `player_server_<uuid>` profile, which has the same shape. Items
+/// stay Bedrock item compounds (`PlayerItem`), keyed by the slot Java would use: the inventory as stored, armor at
+/// `100 + (3 - slot)` and the off hand at `150 + slot`; the ender chest by its slot. Empty stacks are left out.
+/// `effect` turns a Bedrock effect id into the model's (the item tables know them).
+pub fn parse_player(
+    player: &Compound,
+    registry: &DimensionRegistry,
+    keep_items: bool,
+    effect: &dyn Fn(i32) -> Option<EffectType>,
+) -> LevelPlayer {
     let pos = floats(player, "Pos", &[0.0; 3]);
     let motion = floats(player, "Motion", &[0.0; 3]);
     let rotation = floats(player, "Rotation", &[0.0; 2]);
@@ -228,24 +240,118 @@ pub fn parse_player(player: &Compound, registry: &DimensionRegistry, keep_items:
     result.pitch = rotation[1] as f32;
     result.game_type = player.get_i32_or("PlayerGameMode", 0);
     if keep_items {
-        let mut add = |list: &str, slot_of: &dyn Fn(i8) -> i8| {
+        let add = |into: &mut BTreeMap<i8, PlayerItem>, list: &str, slot_of: &dyn Fn(i8) -> i8| {
             if let Some(Tag::List(items)) = player.get(list) {
                 for (index, item) in items.iter().enumerate() {
                     let Tag::Compound(item) = item else { continue };
                     let name = item.get_str("Name").unwrap_or("");
-                    if name.is_empty() || name == "minecraft:air" {
+                    if name.is_empty() || name == "minecraft:air" || item.get_integer("Count") == Some(0) {
                         continue;
                     }
                     let slot = item.get_i8("Slot").unwrap_or(index as i8);
-                    result.inventory.insert(slot_of(slot), item.clone());
+                    into.insert(slot_of(slot), item.clone());
                 }
             }
         };
-        add("Inventory", &|slot| slot);
-        add("Armor", &|slot| (100i32 + (3 - i32::from(slot))) as i8);
-        add("Offhand", &|slot| (150i32 + i32::from(slot)) as i8);
+        add(&mut result.inventory, "Inventory", &|slot| slot);
+        add(&mut result.inventory, "Armor", &|slot| (100i32 + (3 - i32::from(slot))) as i8);
+        add(&mut result.inventory, "Offhand", &|slot| (150i32 + i32::from(slot)) as i8);
+        add(&mut result.ender_items, "EnderChestInventory", &|slot| slot);
     }
+    result.stats = parse_stats(player, registry, effect);
     result
+}
+
+/// Experience, `Attributes` (health, food), the spawn block, `ActiveEffects` and `abilities` of a player.
+fn parse_stats(
+    player: &Compound,
+    registry: &DimensionRegistry,
+    effect: &dyn Fn(i32) -> Option<EffectType>,
+) -> PlayerStats {
+    let mut stats = PlayerStats::default();
+    let attribute = |name: &str| -> Option<f32> {
+        player
+            .get_list("Attributes")?
+            .iter()
+            .filter_map(Tag::as_compound)
+            .find_map(|a| {
+                let id = a.get_str("Name")?;
+                (id.strip_prefix("minecraft:").unwrap_or(id) == name).then(|| a.get_number("Current"))?
+            })
+            .map(|v| v as f32)
+    };
+    stats.xp_level = player
+        .get_integer("PlayerLevel")
+        .map(|v| v as i32)
+        .or_else(|| attribute("player.level").map(|v| v as i32))
+        .unwrap_or(0)
+        .max(0);
+    stats.xp_progress = player
+        .get_number("PlayerLevelProgress")
+        .map(|v| v as f32)
+        .or_else(|| attribute("player.experience"))
+        .unwrap_or(0.0)
+        .clamp(0.0, 1.0);
+    stats.health = attribute("health").filter(|h| *h > 0.0);
+    stats.food_level = attribute("player.hunger").map(|v| (v.round() as i32).clamp(0, 20));
+    stats.saturation = attribute("player.saturation").map(|v| v.max(0.0));
+    stats.exhaustion = attribute("player.exhaustion").map(|v| v.max(0.0));
+
+    // The bed or anchor; unset coordinates are stored as the smallest int.
+    let coordinate = |key: &str| player.get_integer(key).map(|v| v as i32).filter(|v| *v != i32::MIN);
+    if let (Some(x), Some(y), Some(z)) =
+        (coordinate("SpawnBlockPositionX"), coordinate("SpawnBlockPositionY"), coordinate("SpawnBlockPositionZ"))
+    {
+        let dimension = registry.from_bedrock_nbt(player.get("SpawnDimension"), &Dimension::overworld());
+        stats.spawn = Some(SpawnPoint { dimension, x, y, z });
+    }
+
+    for e in player.get_list("ActiveEffects").unwrap_or_default().iter().filter_map(Tag::as_compound) {
+        let Some(kind) = e.get_integer("Id").and_then(|id| effect(id as i32)) else { continue };
+        let duration = e.get_integer("Duration").unwrap_or(0) as i32;
+        if kind == EffectType::EMPTY || duration == 0 {
+            continue;
+        }
+        stats.effects.push(PlayerEffect {
+            effect: kind,
+            amplifier: e.get_integer("Amplifier").unwrap_or(0) as i8,
+            duration,
+            ambient: e.get_bool_or("Ambient", false),
+            show_particles: e.get_bool_or("ShowParticles", true),
+        });
+    }
+
+    if let Some(a) = player.get_compound("abilities") {
+        let defaults = PlayerAbilities::default();
+        stats.abilities = Some(PlayerAbilities {
+            flying: a.get_bool_or("flying", false),
+            may_fly: a.get_bool_or("mayfly", false),
+            instabuild: a.get_bool_or("instabuild", false),
+            invulnerable: a.get_bool_or("invulnerable", false),
+            may_build: a.get_bool_or("build", true),
+            walk_speed: a.get_number("walkSpeed").map_or(defaults.walk_speed, |v| v as f32),
+            fly_speed: a.get_number("flySpeed").map_or(defaults.fly_speed, |v| v as f32),
+        });
+    }
+    stats
+}
+
+/// A `player_<id>` record: `{MsaId, SelfSignedId, ServerId}`, which says that a profile belonged to a signed-in
+/// player and which `player_server_<uuid>` holds its data.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PlayerIdentity {
+    pub msa_id: Option<String>,
+    pub self_signed_id: Option<String>,
+    /// The key of the profile (`player_server_<uuid>`).
+    pub server_id: Option<String>,
+}
+
+/// Parse a `player_<id>` record.
+pub fn parse_player_identity(value: &[u8]) -> Result<PlayerIdentity, String> {
+    let (_, tag) = super::nbt_le::from_slice(value).map_err(|e| e.to_string())?;
+    let Tag::Compound(root) = tag else { return Err("a player record is not a compound".into()) };
+    let text = |key: &str| root.get_str(key).filter(|s| !s.is_empty()).map(str::to_string);
+    Ok(PlayerIdentity { msa_id: text("MsaId"), self_signed_id: text("SelfSignedId"), server_id: text("ServerId") })
 }
 
 /// Parse the `map_<id>` records (`parseMaps`), sorted by id. Records that fail to parse are reported in `warnings`.
@@ -489,7 +595,7 @@ mod tests {
             Tag::List(vec![item("minecraft:iron_helmet", Some(0)), item("minecraft:iron_boots", Some(3))]),
         );
         p.insert("Offhand", Tag::List(vec![item("minecraft:shield", Some(0))]));
-        let player = parse_player(&p, &DimensionRegistry::new(), true);
+        let player = parse_player(&p, &DimensionRegistry::new(), true, &no_effects);
         assert_eq!(player.dimension, Dimension::nether());
         assert!((player.position[1] - 64.0).abs() < 1e-4, "{}", player.position[1]);
         assert_eq!((player.position[0], player.position[2]), (10.5, -3.0));
@@ -498,8 +604,104 @@ mod tests {
         let mut slots = player.inventory.keys().copied().collect::<Vec<_>>();
         slots.sort_unstable();
         assert_eq!(slots, [-106, 2, 4, 100, 103]);
-        let none = parse_player(&p, &DimensionRegistry::new(), false);
+        let none = parse_player(&p, &DimensionRegistry::new(), false, &no_effects);
         assert!(none.inventory.is_empty());
+        // A player saved before any of it has no stats.
+        assert_eq!(player.stats, PlayerStats::default());
+        assert!(player.ender_items.is_empty());
+    }
+
+    fn no_effects(_: i32) -> Option<EffectType> {
+        None
+    }
+
+    fn attribute(name: &str, current: f32) -> Tag {
+        Tag::Compound(Compound::new().with("Name", name).with("Current", current).with("Max", 20.0f32))
+    }
+
+    #[test]
+    fn player_ender_chest_and_stats() {
+        let mut p = Compound::new();
+        p.insert(
+            "EnderChestInventory",
+            Tag::List(vec![item("minecraft:trident", Some(0)), item("", Some(1)), item("minecraft:book", Some(26))]),
+        );
+        p.insert("PlayerLevel", Tag::Int(30));
+        p.insert("PlayerLevelProgress", Tag::Float(0.25));
+        p.insert(
+            "Attributes",
+            Tag::List(vec![
+                attribute("minecraft:health", 13.5),
+                attribute("minecraft:player.hunger", 17.0),
+                attribute("minecraft:player.saturation", 4.5),
+                attribute("minecraft:player.exhaustion", 1.25),
+            ]),
+        );
+        p.insert("SpawnBlockPositionX", Tag::Int(102));
+        p.insert("SpawnBlockPositionY", Tag::Int(67));
+        p.insert("SpawnBlockPositionZ", Tag::Int(-359));
+        p.insert("SpawnDimension", Tag::Int(0));
+        let effect = |id: i64, duration: i32| {
+            Tag::Compound(
+                Compound::new()
+                    .with("Id", id as i8)
+                    .with("Amplifier", 1i8)
+                    .with("Duration", duration)
+                    .with("Ambient", 0i8)
+                    .with("ShowParticles", 0i8),
+            )
+        };
+        p.insert("ActiveEffects", Tag::List(vec![effect(1, 600), effect(99, 600), effect(16, 0)]));
+        p.insert(
+            "abilities",
+            Tag::Compound(Compound::new().with("mayfly", 1i8).with("flying", 1i8).with("walkSpeed", 0.2f32)),
+        );
+        let effects = |id: i32| match id {
+            1 => Some(EffectType::SPEED),
+            16 => Some(EffectType::NIGHT_VISION),
+            _ => None,
+        };
+        let player = parse_player(&p, &DimensionRegistry::new(), true, &effects);
+        assert_eq!(player.ender_items.keys().copied().collect::<Vec<_>>(), [0, 26]);
+        let s = &player.stats;
+        assert_eq!((s.xp_level, s.xp_progress), (30, 0.25));
+        assert_eq!((s.health, s.food_level, s.saturation, s.exhaustion), (Some(13.5), Some(17), Some(4.5), Some(1.25)));
+        assert_eq!(s.spawn, Some(SpawnPoint { dimension: Dimension::overworld(), x: 102, y: 67, z: -359 }));
+        // The unknown effect and the one that ran out are left out.
+        assert_eq!(
+            s.effects,
+            [PlayerEffect {
+                effect: EffectType::SPEED,
+                amplifier: 1,
+                duration: 600,
+                ambient: false,
+                show_particles: false
+            }]
+        );
+        let a = s.abilities.unwrap();
+        assert!(a.may_fly && a.flying && a.may_build && !a.instabuild);
+        assert_eq!((a.walk_speed, a.fly_speed), (0.2, 0.05));
+
+        // Unset spawn coordinates and a dead player keep the defaults.
+        p.insert("SpawnBlockPositionY", Tag::Int(i32::MIN));
+        p.insert("Attributes", Tag::List(vec![attribute("minecraft:health", 0.0)]));
+        let player = parse_player(&p, &DimensionRegistry::new(), false, &effects);
+        assert_eq!((player.stats.spawn.as_ref(), player.stats.health), (None, None));
+        assert!(player.ender_items.is_empty());
+    }
+
+    #[test]
+    fn player_identity_record() {
+        let root = Compound::new()
+            .with("MsaId", "msa")
+            .with("SelfSignedId", "")
+            .with("ServerId", "player_server_874d8b7a-0000-0000-0000-000000000001");
+        let bytes = super::super::nbt_le::to_vec("", &Tag::Compound(root)).unwrap();
+        let identity = parse_player_identity(&bytes).unwrap();
+        assert_eq!(identity.msa_id.as_deref(), Some("msa"));
+        assert_eq!(identity.self_signed_id, None);
+        assert_eq!(identity.server_id.as_deref(), Some("player_server_874d8b7a-0000-0000-0000-000000000001"));
+        assert!(parse_player_identity(&[0]).is_err());
     }
 
     #[test]
