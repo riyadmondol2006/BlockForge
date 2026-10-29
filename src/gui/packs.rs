@@ -550,27 +550,33 @@ impl App {
     }
 
     fn packs_atl_ui(&mut self, ui: &mut Ui) {
-        filter_bar(ui, |ui| {
-            let mut q = std::mem::take(&mut self.packs.query);
-            search_input(ui, &mut q, "Search ATLauncher packs", SEARCH_W);
-            self.packs.query = q;
-            egui::ComboBox::from_id_salt("pack-order")
-                .selected_text(match self.packs.order {
-                    PackOrder::Position => "Order: Featured",
-                    PackOrder::NameAscending => "Order: Name A to Z",
-                    PackOrder::NameDescending => "Order: Name Z to A",
-                })
-                .width(190.0)
-                .show_ui(ui, |ui| {
+        let page_w = ui.available_width();
+        search_bar(
+            ui,
+            "atl",
+            &mut self.packs,
+            |ui, packs, width| {
+                // the whole list is here already, so it is searched on every key
+                search_input(ui, &mut packs.query, "Search ATLauncher packs", width);
+            },
+            |ui, packs| {
+                let value = match packs.order {
+                    PackOrder::Position => "Featured",
+                    PackOrder::NameAscending => "Name A to Z",
+                    PackOrder::NameDescending => "Name Z to A",
+                };
+                dropdown(ui, "pack-order", "Order", value, false, false, |ui| {
                     for (o, l) in [
                         (PackOrder::Position, "Featured order"),
                         (PackOrder::NameAscending, "Name A to Z"),
                         (PackOrder::NameDescending, "Name Z to A"),
                     ] {
-                        ui.selectable_value(&mut self.packs.order, o, l);
+                        ui.selectable_value(&mut packs.order, o, l);
                     }
                 });
-        });
+            },
+            |_, _| {},
+        );
         ui.add_space(6.0);
         if let Some(e) = self.packs.atl_error.clone() {
             if fetch_error(
@@ -617,46 +623,51 @@ impl App {
             self.packs.atl_view = Some((key, packs));
             return;
         }
-        context_line(ui, Some(format!("{} packs", thousands(packs.len() as u64))), false, |_| {});
+        let (cards, mut flip) = (self.results_as_cards(), None);
+        let count = results_text(packs.len() as u64, "pack", "packs");
+        context_line_with(ui, Some(count), false, |_| {}, |ui| flip = view_switch(ui, cards, page_w));
+        self.set_results_view(flip);
         ui.add_space(4.0);
         let mut open: Option<Pack> = None;
-        super::mods::lazy_list(ui, egui::Id::unique("atl-packs"), &packs, ROW_H, |ui, (pack, description)| {
-            let rkey = format!("atl:{}", pack.name);
-            row_frame(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 14.0;
-                    self.result_icon(ui, Some(&pack.image_url()), &pack.name, ICON);
-                    let text_w = row_text_width(ui, &rkey);
-                    ui.vertical(|ui| {
-                        ui.set_max_width(text_w);
-                        ui.spacing_mut().item_spacing.y = 2.0;
-                        // a pack that is not listed for everyone says so on a pill in front of its figures
-                        let mut pills = Vec::new();
-                        if pack.is_private() {
-                            pills.push(("Private".to_string(), c_warn()));
-                        } else if pack.is_semi_public() {
-                            pills.push(("Code".to_string(), c_warn()));
-                        }
-                        name_line(ui, &pack.name, None);
-                        summary_line(ui, description);
-                        let mut parts = Vec::new();
-                        if let Some(v) = pack.latest_version() {
-                            parts.push((v.version.to_string(), c_faint()));
-                            parts.push((format!("Minecraft {}", v.minecraft), c_faint()));
-                        }
-                        parts.push((format!("{} versions", pack.versions.len()), c_faint()));
-                        pill_meta_line(ui, &pills, &parts);
-                    });
-                    row_actions(ui, &rkey, |ui| {
-                        action_cell(ui, &rkey, |ui| {
-                            if secondary(ui, "Details").clicked() {
-                                open = Some(pack.clone());
-                            }
-                        });
-                    });
-                });
+        let mut card = |this: &mut App, ui: &mut Ui, (pack, description): &(Pack, String), width: Option<f32>| {
+            // a pack that is not listed for everyone says so on a pill in front of its figures
+            let mut pills = Vec::new();
+            if pack.is_private() {
+                pills.push(("Private".to_string(), c_warn()));
+            } else if pack.is_semi_public() {
+                pills.push(("Code".to_string(), c_warn()));
+            }
+            let mut parts = Vec::new();
+            if let Some(v) = pack.latest_version() {
+                parts.push((v.version.to_string(), c_faint()));
+                parts.push((format!("Minecraft {}", v.minecraft), c_faint()));
+            }
+            parts.push((results_text(pack.versions.len() as u64, "version", "versions"), c_faint()));
+            let view = ResultView {
+                key: format!("atl:{}", pack.name),
+                title: &pack.name,
+                by: None,
+                summary: description,
+                pills,
+                parts,
+                figure: None,
+            };
+            result_item(ui, width, &view, |ui, slot| match slot {
+                Slot::Icon(size) => this.result_icon(ui, Some(&pack.image_url()), &pack.name, size),
+                Slot::Actions => {
+                    if secondary(ui, "Details").clicked() {
+                        open = Some(pack.clone());
+                    }
+                }
             });
-        });
+        };
+        // hundreds of packs: only the rows (or lines of cards) in view are laid out
+        let list_id = egui::Id::unique("atl-packs");
+        if cards && cards_fit(page_w) {
+            lazy_cards(ui, list_id.with("cards"), &packs, |ui, item, width| card(self, ui, item, Some(width)));
+        } else {
+            super::mods::lazy_list(ui, list_id, &packs, ROW_H, |ui, item| card(self, ui, item, None));
+        }
         self.packs.atl_view = Some((key, packs));
         if let Some(p) = open {
             self.packs_open_atl(&p);
@@ -685,17 +696,40 @@ impl App {
 
     fn packs_technic_ui(&mut self, ui: &mut Ui) {
         let mut search = false;
-        filter_bar(ui, |ui| {
-            let mut q = std::mem::take(&mut self.packs.tech_query);
-            let mut edited = self.packs.edited.take();
-            if live_search(ui, &mut q, "Search Technic packs", &mut edited) {
-                search = true;
-            }
-            self.packs.tech_query = q;
-            self.packs.edited = edited;
-        });
-        if self.packs.tech_query.trim().is_empty() {
-            context_line(ui, None, false, |ui| small_muted(ui, "Showing what's trending"));
+        let page_w = ui.available_width();
+        search_bar(
+            ui,
+            "technic",
+            &mut (&mut self.packs, &mut search),
+            |ui, (packs, search), width| {
+                let mut q = std::mem::take(&mut packs.tech_query);
+                let mut edited = packs.edited.take();
+                if live_search_w(ui, &mut q, "Search Technic packs", &mut edited, width) {
+                    **search = true;
+                }
+                packs.tech_query = q;
+                packs.edited = edited;
+            },
+            |_, _| {},
+            |_, _| {},
+        );
+        let trending = self.packs.tech_query.trim().is_empty();
+        if trending || !self.packs.tech.is_empty() {
+            let count =
+                (!self.packs.tech.is_empty()).then(|| results_text(self.packs.tech.len() as u64, "pack", "packs"));
+            let (cards, mut flip) = (self.results_as_cards(), None);
+            context_line_with(
+                ui,
+                count,
+                false,
+                |ui| {
+                    if trending {
+                        small_muted(ui, "Showing what's trending");
+                    }
+                },
+                |ui| flip = view_switch(ui, cards, page_w),
+            );
+            self.set_results_view(flip);
         }
         ui.add_space(6.0);
         if let Some(e) = self.packs.tech_error.clone() {
@@ -729,30 +763,27 @@ impl App {
         let mut open: Option<Slim> = None;
         // a new search starts at the top of its list
         let list_id = ("tech-list", self.packs.tech_query.trim().to_string());
+        let cards = self.results_as_cards();
         ScrollArea::vertical().id_salt(list_id).auto_shrink(false).show(ui, |ui| {
-            for m in &results {
-                let rkey = format!("tech:{}", m.slug);
-                row_frame(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 14.0;
-                        self.result_icon(ui, m.icon_url.as_deref(), &m.name, ICON);
-                        let text_w = row_text_width(ui, &rkey);
-                        ui.vertical(|ui| {
-                            ui.set_max_width(text_w);
-                            ui.spacing_mut().item_spacing.y = 2.0;
-                            name_line(ui, &m.name, None);
-                            meta_line(ui, &[(m.slug.clone(), c_faint())]);
-                        });
-                        row_actions(ui, &rkey, |ui| {
-                            action_cell(ui, &rkey, |ui| {
-                                if secondary(ui, "Details").clicked() {
-                                    open = Some(m.clone());
-                                }
-                            });
-                        });
-                    });
+            result_list(ui, cards, &results, |ui, m, width| {
+                let view = ResultView {
+                    key: format!("tech:{}", m.slug),
+                    title: &m.name,
+                    by: None,
+                    summary: "",
+                    pills: Vec::new(),
+                    parts: vec![(m.slug.clone(), c_faint())],
+                    figure: None,
+                };
+                result_item(ui, width, &view, |ui, slot| match slot {
+                    Slot::Icon(size) => self.result_icon(ui, m.icon_url.as_deref(), &m.name, size),
+                    Slot::Actions => {
+                        if secondary(ui, "Details").clicked() {
+                            open = Some(m.clone());
+                        }
+                    }
                 });
-            }
+            });
             if self.packs.tech_loading {
                 ui.add_space(8.0);
                 spinner(ui);

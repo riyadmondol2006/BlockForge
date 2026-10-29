@@ -246,9 +246,33 @@ impl super::discover::DiscoverState {
         self.remerge();
     }
 
-    /// Whether Smithed is searched too: it only has data packs.
+    /// Whether Smithed is searched too: it only has data packs, and none of Modrinth's categories.
     pub fn with_smithed(&self) -> bool {
-        self.both && self.kind == Kind::DataPack
+        self.both && self.kind == Kind::DataPack && !self.modrinth_only()
+    }
+
+    /// Leaves CurseForge out of a search on every site while a filter only Modrinth has is on: its rows go, and an
+    /// answer still on its way is ignored.
+    fn cf_left_out(&mut self) {
+        let side = &mut self.cf;
+        side.seq += 1;
+        side.projects.clear();
+        side.total = 0;
+        side.has_more = false;
+        side.page = 0;
+        side.loading = false;
+        side.error = None;
+    }
+
+    /// The same for Smithed.
+    fn sm_left_out(&mut self) {
+        let side = &mut self.sm;
+        side.seq += 1;
+        side.packs.clear();
+        side.total = 0;
+        side.page = 0;
+        side.loading = false;
+        side.error = None;
     }
 
     /// Builds the combined list again from every site's results.
@@ -315,6 +339,10 @@ impl App {
 
     /// CurseForge's half of a search on both sites: the same words, kind, instance and order as Modrinth's half.
     pub(super) fn both_search_cf(&mut self, reset: bool) {
+        if self.discover.modrinth_only() {
+            self.discover.cf_left_out();
+            return;
+        }
         if !self.both_cf_allowed() || (!reset && !self.discover.cf.has_more) {
             return;
         }
@@ -339,6 +367,14 @@ impl App {
             if section.uses_loader() {
                 q.mod_loaders = t.search_loaders();
             }
+        } else {
+            // without an instance (or for modpacks, which make their own), the version and loader of the filters
+            if section.uses_game_version() {
+                q.game_version = self.discover.mc_filter.clone();
+            }
+            if section.uses_loader() {
+                q.mod_loaders = self.discover.loader_filter.as_deref().map(cf_loaders_for).unwrap_or_default();
+            }
         }
         let side = &mut self.discover.cf;
         side.page = if reset { 0 } else { side.page + 1 };
@@ -354,10 +390,17 @@ impl App {
 
     /// Smithed's part of a search for data packs: the same words, Minecraft version and order.
     pub(super) fn both_search_sm(&mut self, reset: bool) {
+        if self.discover.modrinth_only() {
+            self.discover.sm_left_out();
+            return;
+        }
         if !self.discover.with_smithed() || (!reset && !self.discover.sm.has_more()) {
             return;
         }
-        let mc = self.discover.target.as_ref().and_then(|f| self.instance(f)).map(|i| i.mc_version().to_string());
+        let mc = match self.discover.target.as_ref().and_then(|f| self.instance(f)) {
+            Some(inst) => Some(inst.mc_version().to_string()),
+            None => self.discover.mc_filter.clone(),
+        };
         let (text, sort) = (self.discover.query.trim().to_string(), self.discover.sort);
         let side = &mut self.discover.sm;
         side.page = if reset { 0 } else { side.page + 1 };
@@ -408,6 +451,8 @@ impl App {
     pub(super) fn discover_both_list(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
         let allowed = self.both_cf_allowed();
+        // a filter only Modrinth has leaves CurseForge out; the chips above say so
+        let cf_on = allowed && !self.discover.modrinth_only();
         let smithed = self.discover.with_smithed();
         let loading = self.discover.loading || self.discover.cf.loading || (smithed && self.discover.sm.loading);
         // a new search over rows that are already shown: a thin bar says it is on its way
@@ -427,10 +472,10 @@ impl App {
         }
         // the sites that couldn't be reached, and the ones that could
         let mr_error = self.discover.error.clone();
-        let cf_error = self.discover.cf.error.clone().filter(|_| allowed);
+        let cf_error = self.discover.cf.error.clone().filter(|_| cf_on);
         let sm_error = self.discover.sm.error.clone().filter(|_| smithed);
         let mut sites = vec![("Modrinth", &mr_error)];
-        if allowed {
+        if cf_on {
             sites.push(("CurseForge", &cf_error));
         }
         if smithed {
@@ -468,16 +513,7 @@ impl App {
             return;
         }
         if self.discover.merged.is_empty() && failed.is_empty() {
-            let query = self.discover.query.trim().to_string();
-            let text = if query.is_empty() {
-                "Nothing to show. Try another kind, or pick a different instance.".to_string()
-            } else {
-                format!("No results for \u{201C}{query}\u{201D} on {}.", join_or(&working))
-            };
-            if empty_state(ui, &text, (!query.is_empty()).then_some("Clear search")).is_some_and(|r| r.clicked()) {
-                self.discover.query.clear();
-                self.discover_search(true);
-            }
+            self.discover_nothing(ui, &join_or(&working));
             return;
         }
 
@@ -507,8 +543,9 @@ impl App {
             self.instances.iter().map(|i| (i.folder.clone(), instance_choice(i))).collect();
         let mut act: Option<Act> = None;
         let mut more = false;
+        let cards = self.results_as_cards();
         ScrollArea::vertical().id_salt(("discover-both", self.discover.list_gen)).auto_shrink(false).show(ui, |ui| {
-            for entry in &merged {
+            result_list(ui, cards, &merged, |ui, entry, width| {
                 let hit = entry.mr.and_then(|j| hits.get(j));
                 let project = entry.cf.and_then(|i| projects.get(i));
                 let pack = entry.sm.and_then(|k| packs.get(k));
@@ -516,7 +553,7 @@ impl App {
                     (Some(h), _, _) => format!("mr:{}", h.project_id),
                     (None, Some(p), _) => format!("cf:{}", p.id),
                     (None, None, Some(p)) => format!("sm:{}", p.id),
-                    _ => continue,
+                    _ => return,
                 };
                 let title = hit
                     .map(|h| h.title.as_str())
@@ -531,156 +568,131 @@ impl App {
                 let downloads = hit.map_or(0, |h| h.downloads)
                     + project.map_or(0, |p| p.download_count.max(0.0) as u64)
                     + pack.map_or(0, |p| p.downloads);
-                row_frame(ui, |ui| {
-                    let wide = ui.available_width() >= 560.0;
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 14.0;
-                        let icon = hit
-                            .and_then(|h| h.icon_url.as_deref())
-                            .filter(|u| !u.is_empty())
-                            .or_else(|| project.and_then(|p| p.logo_url()))
-                            .or_else(|| pack.and_then(|p| p.icon.as_deref()));
-                        self.result_icon(ui, icon, title, ICON);
-                        let text_w = row_text_width(ui, &key);
-                        ui.vertical(|ui| {
-                            ui.set_max_width(text_w);
-                            ui.spacing_mut().item_spacing.y = 2.0;
-                            let author = hit.map(|h| h.author.clone()).or_else(|| project.map(|p| p.author_names()));
-                            name_line(ui, title, author.as_deref());
-                            let summary = hit
-                                .map(|h| h.description.as_str())
-                                .or(project.map(|p| p.summary.as_str()))
-                                .or(pack.map(|p| p.summary.as_str()));
-                            summary_line(ui, summary.unwrap_or_default());
-                            // where it comes from first, as small pills in each site's colour, then the downloads
-                            // (in a narrow window) and its tags
-                            let mut pills = Vec::new();
-                            if hit.is_some() {
-                                pills.push(("Modrinth".to_string(), modrinth_color()));
-                            }
-                            if project.is_some() {
-                                pills.push(("CurseForge".to_string(), curseforge_color()));
-                            }
-                            if pack.is_some() {
-                                pills.push(("Smithed".to_string(), smithed_color()));
-                            }
-                            let mut parts = Vec::new();
-                            if !wide {
-                                parts.push((format!("{} downloads", human_count(downloads)), c_faint()));
-                            }
-                            match (hit, project, pack) {
-                                (Some(h), _, _) if data_pack => {
-                                    parts.extend(data_pack_tags(h.categories.iter().map(String::as_str), 2))
+                let icon = hit
+                    .and_then(|h| h.icon_url.as_deref())
+                    .filter(|u| !u.is_empty())
+                    .or_else(|| project.and_then(|p| p.logo_url()))
+                    .or_else(|| pack.and_then(|p| p.icon.as_deref()));
+                let author = hit.map(|h| h.author.clone()).or_else(|| project.map(|p| p.author_names()));
+                let summary = hit
+                    .map(|h| h.description.as_str())
+                    .or(project.map(|p| p.summary.as_str()))
+                    .or(pack.map(|p| p.summary.as_str()));
+                // where it comes from first, as small pills in each site's colour, then the downloads (in a narrow
+                // window) and its tags
+                let mut pills = Vec::new();
+                if hit.is_some() {
+                    pills.push(("Modrinth".to_string(), modrinth_color()));
+                }
+                if project.is_some() {
+                    pills.push(("CurseForge".to_string(), curseforge_color()));
+                }
+                if pack.is_some() {
+                    pills.push(("Smithed".to_string(), smithed_color()));
+                }
+                let parts = match (hit, project, pack) {
+                    (Some(h), _, _) if data_pack => data_pack_tags(h.categories.iter().map(String::as_str), 2),
+                    (Some(h), _, _) => tag_parts(h.categories.iter().map(String::as_str), 2),
+                    (None, Some(p), _) => tag_parts(p.categories.iter().map(|c| c.name.as_str()), 2),
+                    (None, None, Some(p)) => tag_parts(p.categories.iter().map(String::as_str), 2),
+                    _ => Vec::new(),
+                };
+                if hit.is_none() && pack.is_none() && project.is_some_and(|p| p.allow_mod_distribution == Some(false)) {
+                    pills.push(("Download in browser".to_string(), c_warn()));
+                }
+                let view = ResultView {
+                    key,
+                    title,
+                    by: author.as_deref(),
+                    summary: summary.unwrap_or_default(),
+                    pills,
+                    parts,
+                    figure: Some((human_count(downloads), "downloads")),
+                };
+                result_item(ui, width, &view, |ui, slot| {
+                    if let Slot::Icon(size) = slot {
+                        self.result_icon(ui, icon, title, size);
+                        return;
+                    }
+                    if busy {
+                        spinner(ui).on_hover_text("Installing");
+                        return;
+                    }
+                    if data_pack && (hit.is_some() || pack.is_some()) {
+                        // a data pack from Modrinth or Smithed goes into worlds of the instance
+                        let have = |inst: &crate::instances::Instance| match (hit, pack) {
+                            (Some(h), _) => worlds_with(inst, Some(&h.project_id), None),
+                            (None, Some(p)) => worlds_with(inst, None, Some(&p.file_name())),
+                            _ => HashSet::new(),
+                        };
+                        if let Some((folder, worlds)) = data_pack_button(ui, &self.instances, target.as_deref(), &have)
+                        {
+                            act = match (hit, pack) {
+                                (Some(h), _) => Some(Act::ModrinthData(h.clone(), folder, worlds)),
+                                (None, Some(p)) => Some(Act::Smithed(p.clone(), folder, worlds)),
+                                _ => None,
+                            };
+                        }
+                    } else if is_installed {
+                        installed_mark(ui);
+                    } else if let Some(folder) = install_button(ui, modpack, &target, &choices) {
+                        // a project on both sites comes from Modrinth: no key, no files to fetch by hand
+                        act = match (hit, project) {
+                            (Some(h), _) => Some(Act::Modrinth(h.clone(), folder)),
+                            (None, Some(p)) => Some(Act::CurseForge(p.clone(), folder)),
+                            _ => None,
+                        };
+                    }
+                    kebab_menu(ui, |ui| {
+                        if let (Some(_), Some(p), false, false) = (hit, project, is_installed, data_pack) {
+                            if modpack || target.is_some() {
+                                if ui.button("Install from CurseForge instead").clicked() {
+                                    act = Some(Act::CurseForge(p.clone(), target.clone().filter(|_| !modpack)));
+                                    ui.close();
                                 }
-                                (Some(h), _, _) => parts.extend(tag_parts(h.categories.iter().map(String::as_str), 2)),
-                                (None, Some(p), _) => {
-                                    parts.extend(tag_parts(p.categories.iter().map(|c| c.name.as_str()), 2))
-                                }
-                                (None, None, Some(p)) => {
-                                    parts.extend(tag_parts(p.categories.iter().map(String::as_str), 2))
-                                }
-                                _ => {}
-                            }
-                            if hit.is_none()
-                                && pack.is_none()
-                                && project.is_some_and(|p| p.allow_mod_distribution == Some(false))
-                            {
-                                pills.push(("Download in browser".to_string(), c_warn()));
-                            }
-                            pill_meta_line(ui, &pills, &parts);
-                        });
-                        row_actions(ui, &key, |ui| {
-                            action_cell(ui, &key, |ui| {
-                                if busy {
-                                    spinner(ui).on_hover_text("Installing");
-                                    return;
-                                }
-                                if data_pack && (hit.is_some() || pack.is_some()) {
-                                    // a data pack from Modrinth or Smithed goes into worlds of the instance
-                                    let have = |inst: &crate::instances::Instance| match (hit, pack) {
-                                        (Some(h), _) => worlds_with(inst, Some(&h.project_id), None),
-                                        (None, Some(p)) => worlds_with(inst, None, Some(&p.file_name())),
-                                        _ => HashSet::new(),
-                                    };
-                                    if let Some((folder, worlds)) =
-                                        data_pack_button(ui, &self.instances, target.as_deref(), &have)
-                                    {
-                                        act = match (hit, pack) {
-                                            (Some(h), _) => Some(Act::ModrinthData(h.clone(), folder, worlds)),
-                                            (None, Some(p)) => Some(Act::Smithed(p.clone(), folder, worlds)),
-                                            _ => None,
-                                        };
+                            } else {
+                                ui.menu_button("Install from CurseForge instead", |ui| {
+                                    if choices.is_empty() {
+                                        ui.label("Create an instance first");
                                     }
-                                } else if is_installed {
-                                    installed_mark(ui);
-                                } else if let Some(folder) = install_button(ui, modpack, &target, &choices) {
-                                    // a project on both sites comes from Modrinth: no key, no files to fetch by hand
-                                    act = match (hit, project) {
-                                        (Some(h), _) => Some(Act::Modrinth(h.clone(), folder)),
-                                        (None, Some(p)) => Some(Act::CurseForge(p.clone(), folder)),
-                                        _ => None,
-                                    };
-                                }
-                                kebab_menu(ui, |ui| {
-                                    if let (Some(_), Some(p), false, false) = (hit, project, is_installed, data_pack) {
-                                        if modpack || target.is_some() {
-                                            if ui.button("Install from CurseForge instead").clicked() {
-                                                act = Some(Act::CurseForge(
-                                                    p.clone(),
-                                                    target.clone().filter(|_| !modpack),
-                                                ));
-                                                ui.close();
-                                            }
-                                        } else {
-                                            ui.menu_button("Install from CurseForge instead", |ui| {
-                                                if choices.is_empty() {
-                                                    ui.label("Create an instance first");
-                                                }
-                                                for (folder, name) in &choices {
-                                                    if ui.button(name).clicked() {
-                                                        act = Some(Act::CurseForge(p.clone(), Some(folder.clone())));
-                                                        ui.close();
-                                                    }
-                                                }
-                                            });
-                                        }
-                                    }
-                                    if let Some(h) = hit {
-                                        if ui.button("Open on Modrinth").clicked() {
-                                            act = Some(Act::Open(modrinth_page(h)));
-                                            ui.close();
-                                        }
-                                    }
-                                    if let Some(url) = project.and_then(|p| p.website_url()) {
-                                        if ui.button("View on CurseForge").clicked() {
-                                            act = Some(Act::Open(url.to_string()));
-                                            ui.close();
-                                        }
-                                    }
-                                    if let Some(p) = pack {
-                                        if ui.button("Open on Smithed").clicked() {
-                                            act = Some(Act::Open(p.page_url()));
+                                    for (folder, name) in &choices {
+                                        if ui.button(name).clicked() {
+                                            act = Some(Act::CurseForge(p.clone(), Some(folder.clone())));
                                             ui.close();
                                         }
                                     }
                                 });
-                            });
-                            if wide {
-                                ui.add_space(8.0);
-                                stat_column(ui, &human_count(downloads), "downloads");
                             }
-                        });
+                        }
+                        if let Some(h) = hit {
+                            if ui.button("Open on Modrinth").clicked() {
+                                act = Some(Act::Open(modrinth_page(h)));
+                                ui.close();
+                            }
+                        }
+                        if let Some(url) = project.and_then(|p| p.website_url()) {
+                            if ui.button("View on CurseForge").clicked() {
+                                act = Some(Act::Open(url.to_string()));
+                                ui.close();
+                            }
+                        }
+                        if let Some(p) = pack {
+                            if ui.button("Open on Smithed").clicked() {
+                                act = Some(Act::Open(p.page_url()));
+                                ui.close();
+                            }
+                        }
                     });
                 });
-            }
+            });
             ui.add_space(8.0);
             let mr_more = (hits.len() as u64) < self.discover.total;
-            let cf_more = allowed && self.discover.cf.has_more;
+            let cf_more = cf_on && self.discover.cf.has_more;
             let sm_more = smithed && (packs.len() as u64) < self.discover.sm.total;
             if mr_more || cf_more || sm_more {
                 ui.vertical_centered(|ui| {
                     let total = self.discover.total
-                        + if allowed { self.discover.cf.total } else { 0 }
+                        + if cf_on { self.discover.cf.total } else { 0 }
                         + if smithed { self.discover.sm.total } else { 0 };
                     if total > merged.len() as u64 {
                         small_faint(

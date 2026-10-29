@@ -317,25 +317,31 @@ impl App {
         let mut search = false;
         heading(ui, "FTB");
         ui.add_space(14.0);
-        filter_bar(ui, |ui| {
-            let mut q = std::mem::take(&mut self.ftb.query);
-            let mut edited = self.ftb.edited.take();
-            if live_search(ui, &mut q, "Search FTB modpacks", &mut edited) {
-                search = true;
-            }
-            self.ftb.query = q;
-            self.ftb.edited = edited;
-            egui::ComboBox::from_id_salt("ftb-sort")
-                .selected_text(format!("Sort: {}", self.ftb.sort.label()))
-                .width(190.0)
-                .show_ui(ui, |ui| {
+        let page_w = ui.available_width();
+        search_bar(
+            ui,
+            "ftb",
+            &mut (&mut self.ftb, &mut search),
+            |ui, (f, search), width| {
+                let mut q = std::mem::take(&mut f.query);
+                let mut edited = f.edited.take();
+                if live_search_w(ui, &mut q, "Search FTB modpacks", &mut edited, width) {
+                    **search = true;
+                }
+                f.query = q;
+                f.edited = edited;
+            },
+            |ui, (f, search)| {
+                dropdown(ui, "ftb-sort", "Sort", f.sort.label(), false, false, |ui| {
                     for s in Sort::ALL {
-                        if ui.selectable_value(&mut self.ftb.sort, s, s.label()).clicked() {
-                            search = true;
+                        if ui.selectable_value(&mut f.sort, s, s.label()).clicked() {
+                            **search = true;
                         }
                     }
                 });
-        });
+            },
+            |_, _| {},
+        );
         if search {
             self.ftb_search();
         }
@@ -379,7 +385,10 @@ impl App {
         self.ftb_details_dialog(ui.ctx());
 
         if !self.ftb.packs.is_empty() {
-            context_line(ui, Some(format!("{} packs", thousands(self.ftb.ids.len() as u64))), false, |_| {});
+            let (count, cards) = (results_text(self.ftb.ids.len() as u64, "pack", "packs"), self.results_as_cards());
+            let mut flip = None;
+            context_line_with(ui, Some(count), false, |_| {}, |ui| flip = view_switch(ui, cards, page_w));
+            self.set_results_view(flip);
         }
         if self.ftb.packs.is_empty() && self.ftb.loading {
             result_skeleton(ui, 6);
@@ -402,44 +411,29 @@ impl App {
             ui.add_space(2.0);
         }
         let packs = std::mem::take(&mut self.ftb.packs);
+        let cards = self.results_as_cards();
         ScrollArea::vertical().id_salt(("ftb-list", self.ftb.list_gen)).auto_shrink(false).show(ui, |ui| {
-            for pack in &packs {
-                let rkey = format!("ftb:{}", pack.id);
-                row_frame(ui, |ui| {
-                    let wide = ui.available_width() >= 560.0;
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 14.0;
-                        self.result_icon(ui, pack.square_art().map(|a| a.url.as_str()), &pack.name, ICON);
-                        let text_w = row_text_width(ui, &rkey);
-                        ui.vertical(|ui| {
-                            ui.set_max_width(text_w);
-                            ui.spacing_mut().item_spacing.y = 2.0;
-                            name_line(ui, &pack.name, None);
-                            summary_line(ui, pack.synopsis.as_deref().unwrap_or_default());
-                            let mut parts = Vec::new();
-                            if !wide {
-                                parts.push((
-                                    format!("{} installs", human_count(pack.installs.max(0) as u64)),
-                                    c_faint(),
-                                ));
-                            }
-                            parts.extend(pack.tags.iter().take(4).map(|t| (t.name.clone(), c_faint())));
-                            meta_line(ui, &parts);
-                        });
-                        row_actions(ui, &rkey, |ui| {
-                            action_cell(ui, &rkey, |ui| {
-                                if secondary(ui, "Details").clicked() {
-                                    open = Some(pack.clone());
-                                }
-                            });
-                            if wide {
-                                ui.add_space(8.0);
-                                stat_column(ui, &human_count(pack.installs.max(0) as u64), "installs");
-                            }
-                        });
-                    });
+            result_list(ui, cards, &packs, |ui, pack, width| {
+                let view = ResultView {
+                    key: format!("ftb:{}", pack.id),
+                    title: &pack.name,
+                    by: None,
+                    summary: pack.synopsis.as_deref().unwrap_or_default(),
+                    pills: Vec::new(),
+                    parts: pack.tags.iter().take(4).map(|t| (t.name.clone(), c_faint())).collect(),
+                    figure: Some((human_count(pack.installs.max(0) as u64), "installs")),
+                };
+                result_item(ui, width, &view, |ui, slot| match slot {
+                    Slot::Icon(size) => {
+                        self.result_icon(ui, pack.square_art().map(|a| a.url.as_str()), &pack.name, size);
+                    }
+                    Slot::Actions => {
+                        if secondary(ui, "Details").clicked() {
+                            open = Some(pack.clone());
+                        }
+                    }
                 });
-            }
+            });
             ui.add_space(8.0);
             let shown = packs.len();
             let total = self.ftb.ids.len();

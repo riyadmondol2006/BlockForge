@@ -50,6 +50,74 @@ enum Show {
     Updates,
 }
 
+/// How the list is ordered.
+#[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
+enum Order {
+    /// By name, as the list comes.
+    #[default]
+    Name,
+    /// The newest files first.
+    Added,
+    /// The ones with an update first, by name within each part.
+    Updates,
+}
+
+impl Order {
+    const ALL: [Order; 3] = [Order::Name, Order::Added, Order::Updates];
+
+    fn label(self) -> &'static str {
+        match self {
+            Order::Name => "Name",
+            Order::Added => "Recently added",
+            Order::Updates => "Updates first",
+        }
+    }
+}
+
+/// Where the items the list shows came from.
+#[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
+enum Origin {
+    #[default]
+    Anywhere,
+    Modrinth,
+    CurseForge,
+    /// Neither site: dropped onto the window, added from GitHub, or put in the folder by hand.
+    ByHand,
+}
+
+impl Origin {
+    const ALL: [Origin; 4] = [Origin::Anywhere, Origin::Modrinth, Origin::CurseForge, Origin::ByHand];
+
+    fn label(self) -> &'static str {
+        match self {
+            Origin::Anywhere => "Anywhere",
+            Origin::Modrinth => "Modrinth",
+            Origin::CurseForge => "CurseForge",
+            Origin::ByHand => "Added by hand",
+        }
+    }
+
+    /// Whether an item came from here.
+    fn has(self, rec: &crate::modrecord::ModRecord) -> bool {
+        match self {
+            Origin::Anywhere => true,
+            Origin::Modrinth => files::is_from_modrinth(rec),
+            Origin::CurseForge => files::is_from_curseforge(rec),
+            Origin::ByHand => !files::is_from_modrinth(rec) && !files::is_from_curseforge(rec),
+        }
+    }
+}
+
+/// Puts the rows in `order`. They come by name; a stable sort keeps that order among equals, and files whose time
+/// isn't known go last.
+fn order_rows<T>(rows: &mut [T], order: Order, added: impl Fn(&T) -> Option<SystemTime>, update: impl Fn(&T) -> bool) {
+    match order {
+        Order::Name => {}
+        Order::Added => rows.sort_by_key(|r| std::cmp::Reverse(added(r))),
+        Order::Updates => rows.sort_by_key(|r| !update(r)),
+    }
+}
+
 /// What was read from inside a jar, kept for the list and the details.
 #[derive(Clone)]
 pub struct Details {
@@ -118,6 +186,10 @@ pub struct ModsState {
     synced: bool,
     filter: String,
     show: Show,
+    order: Order,
+    origin: Origin,
+    /// When each file was last written (put in place or updated), for "Recently added"; read when the list changes.
+    added: HashMap<ModKey, SystemTime>,
     select_mode: bool,
     selected: HashSet<ModKey>,
     expanded: Option<ModKey>,
@@ -345,6 +417,68 @@ fn kind_tabs(ui: &mut Ui, kinds: &[(ContentKind, usize)], open: ContentKind) -> 
         }
     }
     pressed
+}
+
+/// The toolbar over the list: the search and the On / Off choice (`find`), the origin and the order (`view`), and
+/// the tools at the right end. All on one line when they fit; otherwise the search on a line of its own with the
+/// rest sharing the next; and in a very narrow window each part wraps on lines of its own, the tools at the right
+/// while they fit on one line. What the closures share (`state`) is handed to each.
+fn tool_rows<S>(
+    ui: &mut Ui,
+    id: egui::Id,
+    state: &mut S,
+    find: impl FnOnce(&mut Ui, &mut S),
+    view: impl FnOnce(&mut Ui, &mut S),
+    tools: impl FnOnce(&mut Ui, &mut S),
+) {
+    let (find_id, view_id, tools_id) = (id.with("find"), id.with("view"), id.with("tools"));
+    let find_w = remembered_width(ui, find_id, 0.0);
+    let view_w = remembered_width(ui, view_id, 0.0);
+    let tools_w = remembered_width(ui, tools_id, 240.0);
+    let avail = ui.available_width();
+    let gap = ui.spacing().item_spacing.x;
+    /// A part laid out on one line, keeping what it took.
+    fn natural<S>(ui: &mut Ui, state: &mut S, id: egui::Id, add: impl FnOnce(&mut Ui, &mut S)) {
+        let used = ui.horizontal(|ui| add(ui, state)).response.rect.width();
+        remember_width(ui, id, used);
+    }
+    /// A part that wraps, keeping what it took: the whole line once it wraps, so the parts stay apart until there
+    /// is room for them side by side.
+    fn wrapped<S>(ui: &mut Ui, state: &mut S, id: egui::Id, add: impl FnOnce(&mut Ui, &mut S)) {
+        let used = ui
+            .horizontal_wrapped(|ui| {
+                add(ui, state);
+                ui.min_rect().width()
+            })
+            .inner;
+        remember_width(ui, id, used);
+    }
+    /// The tools at the right end of the line they are on.
+    fn at_end<S>(ui: &mut Ui, state: &mut S, id: egui::Id, add: impl FnOnce(&mut Ui, &mut S)) {
+        let used = super::discover::end_aligned(ui, id.with("end"), |ui| add(ui, state));
+        remember_width(ui, id, used);
+    }
+    if avail >= find_w + view_w + tools_w + 2.0 * gap + 16.0 {
+        ui.horizontal(|ui| {
+            natural(ui, state, find_id, find);
+            natural(ui, state, view_id, view);
+            at_end(ui, state, tools_id, tools);
+        });
+    } else if avail >= find_w && avail >= view_w + tools_w + gap + 8.0 {
+        natural(ui, state, find_id, find);
+        ui.horizontal(|ui| {
+            natural(ui, state, view_id, view);
+            at_end(ui, state, tools_id, tools);
+        });
+    } else {
+        wrapped(ui, state, find_id, find);
+        wrapped(ui, state, view_id, view);
+        if tools_w <= avail {
+            ui.horizontal(|ui| at_end(ui, state, tools_id, tools));
+        } else {
+            wrapped(ui, state, tools_id, tools);
+        }
+    }
 }
 
 /// The search box of the list, with a magnifier at its start.
@@ -616,6 +750,13 @@ impl App {
             self.mods.shader_setup = Some(install::shader_setup(inst, &target));
             self.mods.target = Some(target);
             self.mods.entries = ContentKind::ALL.iter().map(|k| (*k, files::entries(inst, *k))).collect();
+            self.mods.added = self
+                .mods
+                .entries
+                .values()
+                .flatten()
+                .filter_map(|e| Some((e.key(), modified(e.path.as_deref()?)?)))
+                .collect();
             let keys: HashSet<ModKey> = self.mods.entries.values().flatten().map(|e| e.key()).collect();
             self.mods.selected.retain(|k| keys.contains(k));
             self.mods.updates.retain(|k, _| keys.contains(k));
@@ -824,6 +965,7 @@ impl App {
             Act::ClearFilter => {
                 self.mods.filter.clear();
                 self.mods.show = Show::All;
+                self.mods.origin = Origin::Anywhere;
             }
             Act::Loader => self.apply(super::instance_menu::Act::ChangeLoader(folder)),
             Act::DismissScan => self.mods.scan = None,
@@ -1036,10 +1178,9 @@ impl App {
             },
         );
         ui.add_space(10.0);
-        split_or_stack(
+        tool_rows(
             ui,
             tools_id,
-            34.0,
             &mut st,
             |ui, (this, _)| {
                 let mut f = std::mem::take(&mut this.mods.filter);
@@ -1056,6 +1197,15 @@ impl App {
                         this.mods.show = show;
                     }
                 }
+            },
+            |ui, (this, _)| {
+                this.mods_origin_dropdown(ui, kind);
+                let order = &mut this.mods.order;
+                super::discover::dropdown(ui, "mods-order", "Sort", order.label(), false, false, |ui| {
+                    for o in Order::ALL {
+                        ui.selectable_value(order, o, o.label());
+                    }
+                });
             },
             |ui, (this, acts)| {
                 if let Some(b) = &this.mods.busy {
@@ -1132,8 +1282,12 @@ impl App {
 
         if self.mods.select_mode {
             let chosen: Vec<ModKey> = self.mods.selected.iter().cloned().collect();
+            let shown: Vec<ModKey> = self.mods_rows(kind).iter().map(|e| e.key()).collect();
+            let all_shown = !shown.is_empty() && shown.iter().all(|k| self.mods.selected.contains(k));
+            let (mut select_all, mut select_none, mut done) = (false, false, false);
             ui.add_space(10.0);
-            // the selection and what can be done with it, on a strip in the brand's soft tint
+            // the selection and what can be done with it, on a strip in the brand's soft tint: how many and the quick
+            // ways to choose at the left, what to do with them at the right
             egui::Frame::new()
                 .fill(c_accent_soft())
                 .stroke(Stroke::new(1.0, c_accent().gamma_multiply(0.35)))
@@ -1141,27 +1295,53 @@ impl App {
                 .inner_margin(egui::Margin::symmetric(14, 6))
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
-                    ui.horizontal_wrapped(|ui| {
-                        let ink = if is_dark() { c_accent() } else { c_accent_hover() };
-                        let n = RichText::new(format!("{} selected", chosen.len())).font(super::fonts::medium(FS_BODY));
-                        ui.label(n.color(ink));
-                        ui.add_space(8.0);
-                        // greyed in place (not in a scope of their own), so they still wrap in a narrow window
-                        let any = !chosen.is_empty();
-                        if ui.add_enabled(any, |ui: &mut Ui| secondary(ui, "Switch on")).clicked() {
-                            acts.push(Act::EnableAll(chosen.clone(), true));
-                        }
-                        if ui.add_enabled(any, |ui: &mut Ui| secondary(ui, "Switch off")).clicked() {
-                            acts.push(Act::EnableAll(chosen.clone(), false));
-                        }
-                        if ui.add_enabled(any, |ui: &mut Ui| secondary(ui, "Refresh names")).clicked() {
-                            acts.push(Act::Refresh(chosen.clone()));
-                        }
-                        if ui.add_enabled(any, |ui: &mut Ui| danger(ui, "Remove")).clicked() {
-                            acts.push(Act::Remove(chosen.clone()));
-                        }
-                    });
+                    let any = !chosen.is_empty();
+                    super::discover::dialog_footer(
+                        ui,
+                        "mods-selection",
+                        |ui| {
+                            let ink = if is_dark() { c_accent() } else { c_accent_hover() };
+                            let n =
+                                RichText::new(format!("{} selected", chosen.len())).font(super::fonts::medium(FS_BODY));
+                            ui.label(n.color(ink));
+                            ui.add_space(4.0);
+                            if !all_shown && ghost(ui, &format!("Select all {}", shown.len())).clicked() {
+                                select_all = true;
+                            }
+                            if any && ghost(ui, "Select none").clicked() {
+                                select_none = true;
+                            }
+                        },
+                        |ui| {
+                            // greyed in place (not in a scope of their own), so they still wrap in a narrow window
+                            if ui.add_enabled(any, |ui: &mut Ui| secondary(ui, "Switch on")).clicked() {
+                                acts.push(Act::EnableAll(chosen.clone(), true));
+                            }
+                            if ui.add_enabled(any, |ui: &mut Ui| secondary(ui, "Switch off")).clicked() {
+                                acts.push(Act::EnableAll(chosen.clone(), false));
+                            }
+                            if ui.add_enabled(any, |ui: &mut Ui| secondary(ui, "Refresh names")).clicked() {
+                                acts.push(Act::Refresh(chosen.clone()));
+                            }
+                            if ui.add_enabled(any, |ui: &mut Ui| danger(ui, "Remove")).clicked() {
+                                acts.push(Act::Remove(chosen.clone()));
+                            }
+                            if ghost(ui, "Done").clicked() {
+                                done = true;
+                            }
+                        },
+                    );
                 });
+            if select_all {
+                self.mods.selected.extend(shown);
+            }
+            if select_none {
+                self.mods.selected.clear();
+            }
+            if done {
+                self.mods.select_mode = false;
+                self.mods.selected.clear();
+            }
         }
         ui.add_space(12.0);
 
@@ -1169,27 +1349,7 @@ impl App {
         self.mods_banners(ui, inst, &target, kind, &mut acts);
 
         // the list
-        let filter = self.mods.filter.trim().to_lowercase();
-        let rows: Vec<&ModEntry> = self
-            .mods
-            .entries
-            .get(&kind)
-            .into_iter()
-            .flatten()
-            .filter(|e| {
-                let matches = filter.is_empty()
-                    || e.name().to_lowercase().contains(&filter)
-                    || e.record.file.to_lowercase().contains(&filter)
-                    || e.record.description.to_lowercase().contains(&filter);
-                let shown = match self.mods.show {
-                    Show::All => true,
-                    Show::On => !e.record.disabled,
-                    Show::Off => e.record.disabled,
-                    Show::Updates => self.mods.updates.contains_key(&e.key()),
-                };
-                matches && shown
-            })
-            .collect();
+        let rows = self.mods_rows(kind);
         let loading = total == 0 && self.mods.last_report.is_none() && self.mods.sync_error.is_none();
         if total == 0 && !loading {
             // nothing to list: why, and what to do, without a card around nothing
@@ -1243,6 +1403,51 @@ impl App {
         for a in acts {
             self.mods_apply(inst, a);
         }
+    }
+
+    /// The items of a kind the list shows: those the filter, the On / Off / Updates choice and the origin let through,
+    /// in the order chosen.
+    fn mods_rows(&self, kind: ContentKind) -> Vec<&ModEntry> {
+        let m = &self.mods;
+        let filter = m.filter.trim().to_lowercase();
+        let mut rows: Vec<&ModEntry> = m
+            .entries
+            .get(&kind)
+            .into_iter()
+            .flatten()
+            .filter(|e| {
+                let matches = filter.is_empty()
+                    || e.name().to_lowercase().contains(&filter)
+                    || e.record.file.to_lowercase().contains(&filter)
+                    || e.record.description.to_lowercase().contains(&filter);
+                let shown = match m.show {
+                    Show::All => true,
+                    Show::On => !e.record.disabled,
+                    Show::Off => e.record.disabled,
+                    Show::Updates => m.updates.contains_key(&e.key()),
+                };
+                matches && shown && m.origin.has(&e.record)
+            })
+            .collect();
+        order_rows(&mut rows, m.order, |e| m.added.get(&e.key()).copied(), |e| m.updates.contains_key(&e.key()));
+        rows
+    }
+
+    /// The control that narrows the list to where its items came from, each choice with how many it has.
+    fn mods_origin_dropdown(&mut self, ui: &mut Ui, kind: ContentKind) {
+        let entries = self.mods.entries.get(&kind);
+        let origin = &mut self.mods.origin;
+        let active = *origin != Origin::Anywhere;
+        super::discover::dropdown(ui, "mods-origin", "From", origin.label(), active, false, |ui| {
+            ui.set_min_width(200.0);
+            for o in Origin::ALL {
+                let n = entries.into_iter().flatten().filter(|e| o.has(&e.record)).count();
+                let r = ui.selectable_value(origin, o, format!("{}  ({n})", o.label()));
+                if o == Origin::ByHand {
+                    r.on_hover_text("Files that are on neither site: dropped onto the window, added from GitHub, or put in the folder");
+                }
+            }
+        });
     }
 
     /// Notes above the list: the malware scan result, shader setup, a missing loader.
@@ -1945,5 +2150,43 @@ mod tests {
     fn long_text_is_cut() {
         assert_eq!(short("abcdef", 4), "abcd…");
         assert_eq!(short("abc", 4), "abc");
+    }
+
+    #[test]
+    fn the_list_is_ordered_as_asked() {
+        let at = |s: u64| Some(SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(s));
+        // (name, when the file was written, has an update), in the name order the list comes in
+        let rows = [("a", at(10), false), ("b", None, true), ("c", at(30), false), ("d", at(20), true)];
+        let names = |order: Order| {
+            let mut v = rows.to_vec();
+            order_rows(&mut v, order, |r| r.1, |r| r.2);
+            v.iter().map(|r| r.0).collect::<Vec<_>>()
+        };
+        assert_eq!(names(Order::Name), ["a", "b", "c", "d"]);
+        // the newest first, a file whose time isn't known last
+        assert_eq!(names(Order::Added), ["c", "d", "a", "b"]);
+        // updates first, each part still by name
+        assert_eq!(names(Order::Updates), ["b", "d", "a", "c"]);
+    }
+
+    #[test]
+    fn items_are_told_apart_by_where_they_came_from() {
+        let by_hand = crate::modrecord::ModRecord::new("Hand", "hand.jar", "mods");
+        let mut mr = by_hand.clone();
+        mr.modrinth_project = Some(serde_json::json!({"id": "AANobbMI"}));
+        mr.modrinth_version = Some(serde_json::json!({"id": "v1"}));
+        let mut cf = by_hand.clone();
+        cf.curse_forge_project_id = Some(394468);
+        cf.curse_forge_file_id = Some(1);
+        // a record with only half of what a site keeps (no version) counts as added by hand
+        let mut half = by_hand.clone();
+        half.modrinth_project = Some(serde_json::json!({"id": "x"}));
+        for (rec, from) in
+            [(&by_hand, Origin::ByHand), (&mr, Origin::Modrinth), (&cf, Origin::CurseForge), (&half, Origin::ByHand)]
+        {
+            for o in Origin::ALL {
+                assert_eq!(o.has(rec), o == from || o == Origin::Anywhere, "{} in {o:?}", rec.name);
+            }
+        }
     }
 }

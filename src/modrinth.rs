@@ -126,15 +126,52 @@ pub async fn search(
     search_for_loaders(query, kind, mc, &loaders, sort, offset, limit).await
 }
 
-/// The search filters: the kind, the Minecraft version, and any one of `loaders` (a Quilt instance also runs Fabric
-/// mods, so both are asked for). Loaders only filter mods and modpacks.
-fn search_facets(kind: Kind, mc: Option<&str>, loaders: &[String]) -> Vec<Vec<String>> {
+/// Where a mod has to run, for the environment filter.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Side {
+    #[default]
+    Any,
+    /// Runs in the player's game and needs nothing on the server (a minimap, a shader loader).
+    Client,
+    /// Runs on a server and needs nothing in the players' games (a backup mod, a permissions mod).
+    Server,
+}
+
+/// What a search is narrowed to besides the kind, the Minecraft version and the loader.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Narrow {
+    /// Modrinth's category names (`optimization`, `16x`); a project needs all of them.
+    pub categories: Vec<String>,
+    pub side: Side,
+}
+
+/// The search filters: the kind, the Minecraft version, any one of `loaders` (a Quilt instance also runs Fabric
+/// mods, so both are asked for), every category in `narrow` and where the mod runs. Loaders only filter mods and
+/// modpacks.
+fn search_facets(kind: Kind, mc: Option<&str>, loaders: &[String], narrow: &Narrow) -> Vec<Vec<String>> {
     let mut facets: Vec<Vec<String>> = vec![vec![format!("project_type:{}", kind.api_name())]];
     if let Some(mc) = mc.filter(|m| !m.is_empty()) {
         facets.push(vec![format!("versions:{mc}")]);
     }
     if (kind == Kind::Mod || kind == Kind::Modpack) && !loaders.is_empty() {
         facets.push(loaders.iter().map(|l| format!("categories:{l}")).collect());
+    }
+    // one group each: a project has to be in every category chosen, as on Modrinth's own site
+    for c in narrow.categories.iter().filter(|c| !c.is_empty()) {
+        facets.push(vec![format!("categories:{c}")]);
+    }
+    // "client" is a mod the game runs that the server can do without, "server" the other way round
+    let side = |s: &str, values: [&str; 2]| values.iter().map(|v| format!("{s}_side:{v}")).collect::<Vec<_>>();
+    match narrow.side {
+        Side::Any => {}
+        Side::Client => {
+            facets.push(side("client", ["required", "optional"]));
+            facets.push(side("server", ["optional", "unsupported"]));
+        }
+        Side::Server => {
+            facets.push(side("server", ["required", "optional"]));
+            facets.push(side("client", ["optional", "unsupported"]));
+        }
     }
     facets
 }
@@ -149,7 +186,22 @@ pub async fn search_for_loaders(
     offset: u32,
     limit: u32,
 ) -> Result<(Vec<Hit>, u64)> {
-    let facets = search_facets(kind, mc, loaders);
+    search_narrowed(query, kind, mc, loaders, &Narrow::default(), sort, offset, limit).await
+}
+
+/// Like [`search_for_loaders`], narrowed further to categories and where the mod runs.
+#[allow(clippy::too_many_arguments)]
+pub async fn search_narrowed(
+    query: &str,
+    kind: Kind,
+    mc: Option<&str>,
+    loaders: &[String],
+    narrow: &Narrow,
+    sort: Sort,
+    offset: u32,
+    limit: u32,
+) -> Result<(Vec<Hit>, u64)> {
+    let facets = search_facets(kind, mc, loaders, narrow);
     let r = client()
         .get(format!("{API}/search"))
         .query(&[
@@ -482,14 +534,42 @@ mod tests {
     #[test]
     fn a_quilt_instance_also_finds_fabric_mods() {
         let loaders = vec!["quilt".to_string(), "fabric".to_string()];
-        let f = search_facets(Kind::Mod, Some("1.21.1"), &loaders);
+        let none = Narrow::default();
+        let f = search_facets(Kind::Mod, Some("1.21.1"), &loaders, &none);
         assert_eq!(f[0], vec!["project_type:mod"]);
         assert_eq!(f[1], vec!["versions:1.21.1"]);
         // one group: any of the loaders matches
         assert_eq!(f[2], vec!["categories:quilt", "categories:fabric"]);
         // resource packs don't have a loader
-        assert_eq!(search_facets(Kind::ResourcePack, Some("1.21.1"), &loaders).len(), 2);
-        assert_eq!(search_facets(Kind::Mod, None, &[]).len(), 1);
+        assert_eq!(search_facets(Kind::ResourcePack, Some("1.21.1"), &loaders, &none).len(), 2);
+        assert_eq!(search_facets(Kind::Mod, None, &[], &none).len(), 1);
+    }
+
+    #[test]
+    fn every_category_chosen_is_needed() {
+        let narrow = Narrow { categories: vec!["optimization".into(), "utility".into()], side: Side::Any };
+        let f = search_facets(Kind::Mod, None, &["fabric".into()], &narrow);
+        // the loader is one group with its alternatives; each category is a group of its own, so all must match
+        assert_eq!(f[1], vec!["categories:fabric"]);
+        assert_eq!(f[2], vec!["categories:optimization"]);
+        assert_eq!(f[3], vec!["categories:utility"]);
+        assert_eq!(f.len(), 4);
+        // resource packs keep their categories but have no loader
+        let f = search_facets(Kind::ResourcePack, Some("1.20.1"), &["fabric".into()], &narrow);
+        assert_eq!(f.len(), 4);
+        assert_eq!(f[2], vec!["categories:optimization"]);
+    }
+
+    #[test]
+    fn the_environment_asks_for_both_sides() {
+        let client = Narrow { side: Side::Client, ..Default::default() };
+        let f = search_facets(Kind::Mod, None, &[], &client);
+        assert_eq!(f[1], vec!["client_side:required", "client_side:optional"]);
+        assert_eq!(f[2], vec!["server_side:optional", "server_side:unsupported"]);
+        let server = Narrow { side: Side::Server, ..Default::default() };
+        let f = search_facets(Kind::Mod, None, &[], &server);
+        assert_eq!(f[1], vec!["server_side:required", "server_side:optional"]);
+        assert_eq!(f[2], vec!["client_side:optional", "client_side:unsupported"]);
     }
 }
 

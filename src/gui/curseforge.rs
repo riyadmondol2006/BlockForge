@@ -284,6 +284,15 @@ impl App {
             if cf.section.uses_loader() {
                 q.mod_loaders = t.search_loaders();
             }
+        } else {
+            // without an instance, the version and loader of the filters (shared with Modrinth's page)
+            if cf.section.uses_game_version() {
+                q.game_version = self.discover.mc_filter.clone();
+            }
+            if cf.section.uses_loader() {
+                let loader = self.discover.loader_filter.as_deref();
+                q.mod_loaders = loader.map(super::discover::cf_loaders_for).unwrap_or_default();
+            }
         }
         let (seq, tx, ctx) = (cf.seq, cf.tx.clone(), ctx.clone());
         self.rt.spawn(async move {
@@ -350,52 +359,35 @@ impl App {
             }
         });
         ui.add_space(14.0);
-        filter_bar(ui, |ui| {
-            let mut q = std::mem::take(&mut self.cf.query);
-            let mut edited = self.cf.edited.take();
-            if live_search(ui, &mut q, &format!("Search {}", self.cf.section.label().to_lowercase()), &mut edited) {
-                search = true;
-            }
-            self.cf.query = q;
-            self.cf.edited = edited;
-            if self.cf.section != Section::Modpacks {
-                self.cf_target_combo(ui, &mut search);
-            }
-            egui::ComboBox::from_id_salt("cf-sort")
-                .selected_text(format!("Sort: {}", self.cf.sort.label()))
-                .width(190.0)
-                .show_ui(ui, |ui| {
-                    for s in Sort::ALL {
-                        if ui.selectable_value(&mut self.cf.sort, s, s.label()).clicked() {
-                            search = true;
-                        }
-                    }
-                });
-            let current = self
-                .cf
-                .category
-                .and_then(|id| self.cf.categories.iter().find(|c| c.id == id))
-                .map(|c| c.name.clone())
-                .unwrap_or_else(|| "All".into());
-            egui::ComboBox::from_id_salt("cf-cat").selected_text(format!("Category: {current}")).width(200.0).show_ui(
-                ui,
-                |ui| {
-                    if ui.selectable_label(self.cf.category.is_none(), "All categories").clicked() {
-                        self.cf.category = None;
-                        search = true;
-                    }
-                    let cats = self.cf.categories.clone();
-                    for c in &cats {
-                        if ui.selectable_label(self.cf.category == Some(c.id), &c.name).clicked() {
-                            self.cf.category = Some(c.id);
-                            search = true;
-                        }
-                    }
-                },
-            );
-        });
+        let page_w = ui.available_width();
+        let hint = format!("Search {}", self.cf.section.label().to_lowercase());
+        let mut st = (&mut *self, &mut search);
+        search_bar(
+            ui,
+            "curseforge",
+            &mut st,
+            |ui, (this, search), width| {
+                let mut q = std::mem::take(&mut this.cf.query);
+                let mut edited = this.cf.edited.take();
+                if live_search_w(ui, &mut q, &hint, &mut edited, width) {
+                    **search = true;
+                }
+                this.cf.query = q;
+                this.cf.edited = edited;
+            },
+            |ui, (this, search)| {
+                if this.cf.section != Section::Modpacks {
+                    this.target_dropdown(ui, search);
+                }
+                this.cf_sort_dropdown(ui, search);
+            },
+            |ui, (this, search)| this.cf_filter_controls(ui, search),
+        );
+        if self.cf_chip_row(ui) {
+            search = true;
+        }
 
-        self.cf_context_line(ui, &mut search);
+        self.cf_context_line(ui, &mut search, page_w);
         if search {
             self.cf_search(&ctx, true);
         }
@@ -419,13 +411,20 @@ impl App {
         }
         if self.cf.projects.is_empty() && self.cf.error.is_none() && self.cf.searched {
             let query = self.cf.query.trim().to_string();
-            let text = if query.is_empty() {
-                "Nothing to show. Try another section, or pick a different instance.".to_string()
-            } else {
-                format!("No results for \u{201C}{query}\u{201D} on CurseForge.")
+            let filtered = !self.cf_chips().is_empty();
+            let text = match (query.is_empty(), filtered) {
+                (true, false) => "Nothing to show. Try another section, or pick a different instance.".to_string(),
+                (true, true) => "Nothing on CurseForge matches these filters.".to_string(),
+                (false, false) => format!("No results for \u{201C}{query}\u{201D} on CurseForge."),
+                (false, true) => format!("No results for \u{201C}{query}\u{201D} on CurseForge with these filters."),
             };
-            if empty_state(ui, &text, (!query.is_empty()).then_some("Clear search")).is_some_and(|r| r.clicked()) {
-                self.cf.query.clear();
+            let action = if filtered { Some("Clear filters") } else { (!query.is_empty()).then_some("Clear search") };
+            if empty_state(ui, &text, action).is_some_and(|r| r.clicked()) {
+                if filtered {
+                    self.cf_clear_filters();
+                } else {
+                    self.cf.query.clear();
+                }
                 self.cf_search(&ctx, true);
             }
             return true;
@@ -441,97 +440,84 @@ impl App {
         let mut more = false;
         let installing: HashSet<String> =
             self.tasks.iter().filter_map(|t| t.label.strip_prefix("Installing ").map(str::to_string)).collect();
+        let cards = self.results_as_cards();
         ScrollArea::vertical().id_salt(("cf-list", self.cf.list_gen)).auto_shrink(false).show(ui, |ui| {
-            for p in &projects {
-                let key = format!("cf:{}", p.id);
+            result_list(ui, cards, &projects, |ui, p, width| {
                 let is_installed = installed.contains_key(&p.id) && section != Section::Modpacks;
                 let busy = installing.contains(&p.name);
-                row_frame(ui, |ui| {
-                    let wide = ui.available_width() >= 560.0;
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 14.0;
-                        self.result_icon(ui, p.logo_url(), &p.name, ICON);
-                        let text_w = row_text_width(ui, &key);
-                        ui.vertical(|ui| {
-                            ui.set_max_width(text_w);
-                            ui.spacing_mut().item_spacing.y = 2.0;
-                            name_line(ui, &p.name, Some(&p.author_names()));
-                            summary_line(ui, &p.summary);
-                            let mut parts = Vec::new();
-                            if !wide {
-                                let downloads = p.download_count.max(0.0) as u64;
-                                parts.push((format!("{} downloads", human_count(downloads)), c_faint()));
+                let mut pills = Vec::new();
+                if p.allow_mod_distribution == Some(false) {
+                    pills.push(("Download in browser".to_string(), c_warn()));
+                }
+                let authors = p.author_names();
+                let view = ResultView {
+                    key: format!("cf:{}", p.id),
+                    title: &p.name,
+                    by: Some(&authors),
+                    summary: &p.summary,
+                    pills,
+                    parts: tag_parts(p.categories.iter().map(|c| c.name.as_str()), 3),
+                    figure: Some((human_count(p.download_count.max(0.0) as u64), "downloads")),
+                };
+                result_item(ui, width, &view, |ui, slot| {
+                    if let Slot::Icon(size) = slot {
+                        self.result_icon(ui, p.logo_url(), &p.name, size);
+                        return;
+                    }
+                    if busy {
+                        // a second click would open the file chooser again (for a modpack, a second instance)
+                        spinner(ui).on_hover_text("Installing");
+                    } else if is_installed {
+                        installed_mark(ui);
+                    } else if section == Section::Modpacks {
+                        if secondary(ui, "Install").clicked() {
+                            act = Some(CardAct::Install(p.clone(), None));
+                        }
+                    } else if let Some(t) = &target {
+                        if secondary(ui, "Install").clicked() {
+                            act = Some(CardAct::Install(p.clone(), Some(t.clone())));
+                        }
+                    } else {
+                        let r = secondary(ui, "Install");
+                        egui::Popup::menu(&r).show(|ui| {
+                            ui.set_min_width(180.0);
+                            if instance_choices.is_empty() {
+                                ui.label("Create an instance first");
                             }
-                            parts.extend(tag_parts(p.categories.iter().map(|c| c.name.as_str()), 3));
-                            let mut pills = Vec::new();
-                            if p.allow_mod_distribution == Some(false) {
-                                pills.push(("Download in browser".to_string(), c_warn()));
-                            }
-                            pill_meta_line(ui, &pills, &parts);
-                        });
-                        row_actions(ui, &key, |ui| {
-                            action_cell(ui, &key, |ui| {
-                                if busy {
-                                    // a second click would open the file chooser again (for a modpack, a second instance)
-                                    spinner(ui).on_hover_text("Installing");
-                                } else if is_installed {
-                                    installed_mark(ui);
-                                } else if section == Section::Modpacks {
-                                    if secondary(ui, "Install").clicked() {
-                                        act = Some(CardAct::Install(p.clone(), None));
-                                    }
-                                } else if let Some(t) = &target {
-                                    if secondary(ui, "Install").clicked() {
-                                        act = Some(CardAct::Install(p.clone(), Some(t.clone())));
-                                    }
-                                } else {
-                                    let r = secondary(ui, "Install");
-                                    egui::Popup::menu(&r).show(|ui| {
-                                        ui.set_min_width(180.0);
-                                        if instance_choices.is_empty() {
-                                            ui.label("Create an instance first");
-                                        }
-                                        for (folder, name) in &instance_choices {
-                                            if ui.button(name).clicked() {
-                                                act = Some(CardAct::Install(p.clone(), Some(folder.clone())));
-                                                ui.close();
-                                            }
-                                        }
-                                    });
+                            for (folder, name) in &instance_choices {
+                                if ui.button(name).clicked() {
+                                    act = Some(CardAct::Install(p.clone(), Some(folder.clone())));
+                                    ui.close();
                                 }
-                                // the three dots hold what is rarely needed: installing again, the project's page,
-                                // and removing it
-                                kebab_menu(ui, |ui| {
-                                    if is_installed {
-                                        if let Some(t) = &target {
-                                            if ui.button("Reinstall").clicked() {
-                                                act = Some(CardAct::Reinstall(p.clone(), Some(t.clone())));
-                                                ui.close();
-                                            }
-                                        }
-                                    }
-                                    if ui.button("View on CurseForge").clicked() {
-                                        act = Some(CardAct::View(p.clone()));
-                                        ui.close();
-                                    }
-                                    if is_installed {
-                                        if let Some(t) = &target {
-                                            if ui.button(RichText::new("Remove").color(c_danger())).clicked() {
-                                                act = Some(CardAct::Remove(p.clone(), t.clone()));
-                                                ui.close();
-                                            }
-                                        }
-                                    }
-                                });
-                            });
-                            if wide {
-                                ui.add_space(8.0);
-                                stat_column(ui, &human_count(p.download_count.max(0.0) as u64), "downloads");
                             }
                         });
+                    }
+                    // the three dots hold what is rarely needed: installing again, the project's page, and
+                    // removing it
+                    kebab_menu(ui, |ui| {
+                        if is_installed {
+                            if let Some(t) = &target {
+                                if ui.button("Reinstall").clicked() {
+                                    act = Some(CardAct::Reinstall(p.clone(), Some(t.clone())));
+                                    ui.close();
+                                }
+                            }
+                        }
+                        if ui.button("View on CurseForge").clicked() {
+                            act = Some(CardAct::View(p.clone()));
+                            ui.close();
+                        }
+                        if is_installed {
+                            if let Some(t) = &target {
+                                if ui.button(RichText::new("Remove").color(c_danger())).clicked() {
+                                    act = Some(CardAct::Remove(p.clone(), t.clone()));
+                                    ui.close();
+                                }
+                            }
+                        }
                     });
                 });
-            }
+            });
             ui.add_space(8.0);
             let shown = projects.len() as u64;
             if self.cf.has_more {
@@ -585,37 +571,106 @@ impl App {
         true
     }
 
-    /// The "For" drop-down of the filter row: the instance the list is matched to and installed into.
-    fn cf_target_combo(&mut self, ui: &mut Ui, search: &mut bool) {
-        let current = self
-            .discover
-            .target
-            .as_ref()
-            .and_then(|f| self.instance(f))
-            .map(|i| i.name().to_string())
-            .unwrap_or_else(|| "Any instance".into());
-        let names: Vec<(String, String)> =
-            self.instances.iter().map(|i| (i.folder.clone(), super::discover::instance_choice(i))).collect();
-        egui::ComboBox::from_id_salt("cf-target").selected_text(format!("For: {current}")).width(220.0).show_ui(
-            ui,
-            |ui| {
-                if ui.selectable_label(self.discover.target.is_none(), "Any instance").clicked() {
-                    self.discover.target = None;
-                    *search = true;
-                }
-                for (folder, name) in &names {
-                    if ui.selectable_label(self.discover.target.as_ref() == Some(folder), name).clicked() {
-                        self.discover.target = Some(folder.clone());
+    /// The filters of the CurseForge page's search bar, after the field, the instance and the order: the version and
+    /// loader while none is chosen, and the category.
+    fn cf_filter_controls(&mut self, ui: &mut Ui, search: &mut bool) {
+        use super::discover::*;
+        let section = self.cf.section;
+        if self.cf_target_info().is_none() {
+            if section.uses_game_version() {
+                self.version_dropdown(ui, search);
+            }
+            if section.uses_loader() {
+                self.loader_dropdown(ui, search);
+            }
+        }
+        let cf = &mut self.cf;
+        let current = cf
+            .category
+            .and_then(|id| cf.categories.iter().find(|c| c.id == id))
+            .map(|c| clip(&c.name, 22))
+            .unwrap_or_else(|| "Any".into());
+        dropdown(ui, "cf-category", "Category", &current, cf.category.is_some(), false, |ui| {
+            ui.set_min_width(220.0);
+            if ui.selectable_label(cf.category.is_none(), "All categories").clicked() {
+                cf.category = None;
+                *search = true;
+            }
+            ScrollArea::vertical().max_height(340.0).show(ui, |ui| {
+                for c in &cf.categories {
+                    if ui.selectable_label(cf.category == Some(c.id), &c.name).clicked() {
+                        cf.category = Some(c.id);
                         *search = true;
                     }
                 }
-            },
-        );
+            });
+        });
+    }
+
+    /// The order of the CurseForge page's list.
+    fn cf_sort_dropdown(&mut self, ui: &mut Ui, search: &mut bool) {
+        let sort = &mut self.cf.sort;
+        super::discover::dropdown(ui, "cf-sort", "Sort", sort.label(), false, false, |ui| {
+            for s in Sort::ALL {
+                if ui.selectable_value(sort, s, s.label()).clicked() {
+                    *search = true;
+                }
+            }
+        });
+    }
+
+    /// The CurseForge page's filters that are on: the version and loader (while no instance is chosen) and the
+    /// category. Each with what taking it off clears.
+    fn cf_chips(&mut self) -> Vec<(String, u8)> {
+        let section = self.cf.section;
+        let mut chips = Vec::new();
+        if self.cf_target_info().is_none() {
+            if let Some(v) = self.discover.mc_filter.as_ref().filter(|_| section.uses_game_version()) {
+                chips.push((format!("Minecraft {v}"), 0));
+            }
+            if let Some(l) = self.discover.loader_filter.as_deref().filter(|_| section.uses_loader()) {
+                let label = super::discover::LOADERS.iter().find(|(n, _)| *n == l).map_or(l, |(_, label)| *label);
+                chips.push((label.to_string(), 1));
+            }
+        }
+        if let Some(c) = self.cf.category.and_then(|id| self.cf.categories.iter().find(|c| c.id == id)) {
+            chips.push((c.name.clone(), 2));
+        }
+        chips
+    }
+
+    /// Takes the CurseForge page's filters off: the version, the loader and the category.
+    fn cf_clear_filters(&mut self) {
+        self.discover.mc_filter = None;
+        self.discover.loader_filter = None;
+        self.cf.category = None;
+    }
+
+    /// The chips of the filters that are on, under the search bar. Returns true when one was taken off.
+    fn cf_chip_row(&mut self, ui: &mut Ui) -> bool {
+        use super::discover::{ChipAct, chip_row};
+        let chips = self.cf_chips();
+        let labels: Vec<String> = chips.iter().map(|(l, _)| l.clone()).collect();
+        match chip_row(ui, &labels, None) {
+            Some(ChipAct::Remove(i)) => {
+                match chips[i].1 {
+                    0 => self.discover.mc_filter = None,
+                    1 => self.discover.loader_filter = None,
+                    _ => self.cf.category = None,
+                }
+                true
+            }
+            Some(ChipAct::Clear) => {
+                self.cf_clear_filters();
+                true
+            }
+            None => false,
+        }
     }
 
     /// Under the filters: what the chosen instance runs and the update check (or, for modpacks, where else to look and
     /// the address field), the number of results, and the loader helper (Fabric API and friends) when it is missing.
-    fn cf_context_line(&mut self, ui: &mut Ui, search: &mut bool) {
+    fn cf_context_line(&mut self, ui: &mut Ui, search: &mut bool, page_w: f32) {
         use super::discover::*;
         let section = self.cf.section;
         let target = if section == Section::Modpacks { None } else { self.discover.target.clone() };
@@ -626,23 +681,31 @@ impl App {
                 inst.loader().map(|(k, _)| format!(" and {k}")).unwrap_or_default()
             )
         });
-        let count = (self.cf.total > 0).then(|| format!("{} results", thousands(self.cf.total)));
+        let count = (self.cf.total > 0).then(|| results_text(self.cf.total, "result", "results"));
         let mut show_everything = false;
+        let (cards, mut flip) = (self.results_as_cards(), None);
         if section == Section::Modpacks || limited_to.is_some() || count.is_some() {
-            context_line(ui, count, limited_to.is_some() && section != Section::Modpacks, |ui| {
-                if section == Section::Modpacks {
-                    self.other_modpack_sources(ui);
-                } else if let (Some(text), Some(folder)) = (limited_to, target) {
-                    small_muted(ui, text);
-                    if ghost(ui, "Show everything").clicked() {
-                        show_everything = true;
+            context_line_with(
+                ui,
+                count,
+                limited_to.is_some() && section != Section::Modpacks,
+                |ui| {
+                    if section == Section::Modpacks {
+                        self.other_modpack_sources(ui);
+                    } else if let (Some(text), Some(folder)) = (limited_to, target) {
+                        small_muted(ui, text);
+                        if ghost(ui, "Show everything").clicked() {
+                            show_everything = true;
+                        }
+                        if ghost(ui, "Check for updates").clicked() {
+                            self.cf_check_mod_updates(ui.ctx(), &folder);
+                        }
                     }
-                    if ghost(ui, "Check for updates").clicked() {
-                        self.cf_check_mod_updates(ui.ctx(), &folder);
-                    }
-                }
-            });
+                },
+                |ui| flip = view_switch(ui, cards, page_w),
+            );
         }
+        self.set_results_view(flip);
         if show_everything {
             self.discover.target = None;
             *search = true;
