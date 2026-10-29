@@ -316,8 +316,8 @@ impl App {
         }
         let mut search = false;
         heading(ui, "FTB");
-        ui.add_space(12.0);
-        ui.horizontal_wrapped(|ui| {
+        ui.add_space(14.0);
+        filter_bar(ui, |ui| {
             let mut q = std::mem::take(&mut self.ftb.query);
             let mut edited = self.ftb.edited.take();
             if live_search(ui, &mut q, "Search FTB modpacks", &mut edited) {
@@ -382,7 +382,7 @@ impl App {
             context_line(ui, Some(format!("{} packs", thousands(self.ftb.ids.len() as u64))), false, |_| {});
         }
         if self.ftb.packs.is_empty() && self.ftb.loading {
-            skeleton_rows(ui, 6, ROW_H);
+            result_skeleton(ui, 6);
         } else if self.ftb.packs.is_empty() && self.ftb.error.is_none() {
             let query = self.ftb.query.trim().to_string();
             let text = if query.is_empty() {
@@ -390,7 +390,7 @@ impl App {
             } else {
                 format!("No packs match \u{201C}{query}\u{201D}.")
             };
-            if empty_row(ui, &text, (!query.is_empty()).then_some("Clear search")).is_some_and(|r| r.clicked()) {
+            if empty_state(ui, &text, (!query.is_empty()).then_some("Clear search")).is_some_and(|r| r.clicked()) {
                 self.ftb.query.clear();
                 self.ftb_search();
             }
@@ -408,13 +408,8 @@ impl App {
                 row_frame(ui, |ui| {
                     let wide = ui.available_width() >= 560.0;
                     ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 12.0;
-                        match pack.square_art() {
-                            Some(art) => self.remote_image(ui, &art.url, 48.0, &pack.name),
-                            None => {
-                                avatar(ui, &pack.name, 48.0);
-                            }
-                        }
+                        ui.spacing_mut().item_spacing.x = 14.0;
+                        self.result_icon(ui, pack.square_art().map(|a| a.url.as_str()), &pack.name, ICON);
                         let text_w = row_text_width(ui, &rkey);
                         ui.vertical(|ui| {
                             ui.set_max_width(text_w);
@@ -489,36 +484,39 @@ impl App {
         let modal = egui::Modal::new(egui::Id::unique("ftb-updates")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
             ui.set_width(width);
             ui.label(RichText::new("FTB pack updates").size(FS_SECTION).semibold());
-            ui.add_space(8.0);
-            ScrollArea::vertical().max_height(list_height.min(340.0)).id_salt("ftb-updates-list").show(ui, |ui| {
-                for (n, (folder, name, v)) in rows.iter().enumerate() {
-                    if n > 0 {
-                        rule(ui);
+            ui.add_space(12.0);
+            well(ui, |ui| {
+                ScrollArea::vertical().max_height(list_height.min(340.0)).id_salt("ftb-updates-list").show(ui, |ui| {
+                    for (n, (folder, name, v)) in rows.iter().enumerate() {
+                        if n > 0 {
+                            rule(ui);
+                        }
+                        ui.add_space(6.0);
+                        ui.horizontal(|ui| {
+                            ui.vertical(|ui| {
+                                ui.set_max_width((ui.available_width() - 120.0).max(160.0));
+                                ui.spacing_mut().item_spacing.y = 0.0;
+                                ui.add(egui::Label::new(RichText::new(name).semibold()).truncate());
+                                small_muted(ui, format!("\u{2192} {}", v.label()));
+                            });
+                            let id = ui.scope_id().with(("ftb-update-row", folder));
+                            end_aligned(ui, id, |ui| {
+                                if self.ftb.updating.contains(folder) {
+                                    spinner(ui).on_hover_text("Updating");
+                                    return;
+                                }
+                                let clicked =
+                                    if rows.len() == 1 { primary(ui, "Update") } else { secondary(ui, "Update") };
+                                if clicked.clicked() {
+                                    update = Some(folder.clone());
+                                }
+                            });
+                        });
+                        ui.add_space(6.0);
                     }
-                    ui.add_space(6.0);
-                    ui.horizontal(|ui| {
-                        ui.vertical(|ui| {
-                            ui.set_max_width((ui.available_width() - 120.0).max(160.0));
-                            ui.spacing_mut().item_spacing.y = 0.0;
-                            ui.add(egui::Label::new(RichText::new(name).semibold()).truncate());
-                            small_muted(ui, format!("\u{2192} {}", v.label()));
-                        });
-                        let id = ui.scope_id().with(("ftb-update-row", folder));
-                        end_aligned(ui, id, |ui| {
-                            if self.ftb.updating.contains(folder) {
-                                spinner(ui).on_hover_text("Updating");
-                                return;
-                            }
-                            let clicked = if rows.len() == 1 { primary(ui, "Update") } else { secondary(ui, "Update") };
-                            if clicked.clicked() {
-                                update = Some(folder.clone());
-                            }
-                        });
-                    });
-                    ui.add_space(6.0);
-                }
+                })
             });
-            ui.add_space(8.0);
+            ui.add_space(12.0);
             dialog_footer(
                 ui,
                 "ftb-updates",
@@ -557,19 +555,33 @@ impl App {
         let mut install: Option<(i64, i64, Option<String>, String)> = None;
         let mut version_change: Option<i64> = None;
         let (width, body_height) = super::curseforge::modal_size(ctx, 620.0, 260.0);
-        let Some(sel) = self.ftb.selected.as_mut() else { return };
+        let Some(mut sel) = self.ftb.selected.take() else { return };
         let modal = egui::Modal::new(egui::Id::unique("ftb-details")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
             ui.set_width(width);
-            if dialog_title(ui, &sel.pack.name) {
-                close = true;
-            }
-            if !sel.pack.authors.is_empty() {
-                small_muted(
-                    ui,
-                    format!("by {}", sel.pack.authors.iter().map(|a| a.name.as_str()).collect::<Vec<_>>().join(", ")),
-                );
-            }
-            ui.add_space(8.0);
+            // the pack's picture beside its name and who made it, the cross at the right
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 14.0;
+                self.result_icon(ui, sel.pack.square_art().map(|a| a.url.as_str()), &sel.pack.name, 44.0);
+                let text_w = (ui.available_width() - 44.0).max(80.0);
+                ui.vertical(|ui| {
+                    ui.set_max_width(text_w);
+                    ui.spacing_mut().item_spacing.y = 2.0;
+                    ui.add(egui::Label::new(RichText::new(&sel.pack.name).size(FS_SECTION).semibold()).truncate());
+                    if !sel.pack.authors.is_empty() {
+                        let by = sel.pack.authors.iter().map(|a| a.name.as_str()).collect::<Vec<_>>().join(", ");
+                        ui.add(
+                            egui::Label::new(RichText::new(format!("by {by}")).size(FS_META).color(c_muted()))
+                                .truncate(),
+                        );
+                    }
+                });
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                    if close_button(ui).clicked() {
+                        close = true;
+                    }
+                });
+            });
+            ui.add_space(14.0);
             ScrollArea::vertical().id_salt("ftb-details-body").max_height(body_height).auto_shrink([false, true]).show(
                 ui,
                 |ui| {
@@ -577,47 +589,53 @@ impl App {
                         ui.add(egui::Label::new(RichText::new(s.clone()).color(c_muted())).wrap());
                         ui.add_space(4.0);
                     }
-                    let tags: Vec<(String, egui::Color32)> =
-                        sel.pack.tags.iter().take(8).map(|t| (t.name.clone(), c_faint())).collect();
-                    if !tags.is_empty() {
-                        ui.add(egui::Label::new(tag_line(&tags)).wrap());
-                        ui.add_space(8.0);
+                    // the tags as small quiet pills
+                    if !sel.pack.tags.is_empty() {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.spacing_mut().item_spacing = egui::vec2(5.0, 5.0);
+                            for t in sel.pack.tags.iter().take(8) {
+                                pill(ui, &t.name, c_muted());
+                            }
+                        });
+                        ui.add_space(10.0);
                     }
-                    ui.horizontal_wrapped(|ui| {
-                        filter_label(ui, "Version");
-                        let current = sel
-                            .pack
-                            .versions
-                            .iter()
-                            .find(|v| v.id == sel.version)
-                            .map(|v| v.label())
-                            .unwrap_or_default();
-                        egui::ComboBox::from_id_salt("ftb-version").selected_text(current).width(200.0).show_ui(
-                            ui,
-                            |ui| {
-                                for v in sel.pack.versions_newest_first().into_iter().take(60) {
-                                    if ui.selectable_label(sel.version == v.id, v.label()).clicked()
-                                        && sel.version != v.id
-                                    {
-                                        sel.version = v.id;
-                                        version_change = Some(v.id);
+                    well(ui, |ui| {
+                        ui.horizontal_wrapped(|ui| {
+                            field_label(ui, "Version");
+                            let current = sel
+                                .pack
+                                .versions
+                                .iter()
+                                .find(|v| v.id == sel.version)
+                                .map(|v| v.label())
+                                .unwrap_or_default();
+                            egui::ComboBox::from_id_salt("ftb-version").selected_text(current).width(200.0).show_ui(
+                                ui,
+                                |ui| {
+                                    for v in sel.pack.versions_newest_first().into_iter().take(60) {
+                                        if ui.selectable_label(sel.version == v.id, v.label()).clicked()
+                                            && sel.version != v.id
+                                        {
+                                            sel.version = v.id;
+                                            version_change = Some(v.id);
+                                        }
                                     }
-                                }
-                            },
-                        );
-                    });
-                    if let Some(text) = targets.get(&sel.version).filter(|t| !t.is_empty()) {
-                        small_muted(ui, text.clone());
-                    }
-                    ui.add_space(4.0);
-                    ui.horizontal(|ui| {
-                        filter_label(ui, "Name");
-                        ui.add_sized(
-                            [300.0, 32.0],
-                            egui::TextEdit::singleline(&mut sel.name)
-                                .margin(egui::Margin::symmetric(10, 7))
-                                .background_color(c_field()),
-                        );
+                                },
+                            );
+                        });
+                        if let Some(text) = targets.get(&sel.version).filter(|t| !t.is_empty()) {
+                            small_muted(ui, text.clone());
+                        }
+                        ui.add_space(4.0);
+                        ui.horizontal(|ui| {
+                            field_label(ui, "Name");
+                            ui.add_sized(
+                                [(ui.available_width() - 4.0).clamp(160.0, 300.0), 34.0],
+                                egui::TextEdit::singleline(&mut sel.name)
+                                    .margin(egui::Margin::symmetric(12, 8))
+                                    .background_color(c_field()),
+                            );
+                        });
                     });
                 },
             );
@@ -650,6 +668,7 @@ impl App {
                 },
             );
         });
+        self.ftb.selected = Some(sel);
         if modal.should_close() {
             close = true;
         }
@@ -678,8 +697,8 @@ impl App {
                 ui,
                 "The authors of these mods don't allow other launchers to download them. Open each page, save the file to your Downloads folder, then press Try again.",
             );
-            ui.add_space(8.0);
-            ScrollArea::vertical().max_height(list_height.min(320.0)).id_salt("ftb-manual-list").show(ui, |ui| {
+            ui.add_space(12.0);
+            well(ui, |ui| ScrollArea::vertical().max_height(list_height.min(320.0)).id_salt("ftb-manual-list").show(ui, |ui| {
                 for (n, f) in files.iter().enumerate() {
                     if n > 0 {
                         rule(ui);
@@ -708,8 +727,8 @@ impl App {
                     });
                     ui.add_space(6.0);
                 }
-            });
-            ui.add_space(8.0);
+            }));
+            ui.add_space(12.0);
             dialog_footer(
                 ui,
                 "ftb-manual",
@@ -743,16 +762,13 @@ impl App {
     }
 }
 
-/// Words divided by dots, as one line of faint text (the tags of a pack).
-fn tag_line(parts: &[(String, egui::Color32)]) -> egui::text::LayoutJob {
-    let mut job = egui::text::LayoutJob::default();
-    let format =
-        |color| egui::text::TextFormat { font_id: egui::FontId::proportional(FS_META), color, ..Default::default() };
-    for (i, (text, color)) in parts.iter().enumerate() {
-        if i > 0 {
-            job.append(" \u{00B7} ", 0.0, format(c_faint()));
-        }
-        job.append(text, 0.0, format(*color));
-    }
-    job
+/// The width of the labels in front of the fields of a pack's window, so the fields line up.
+const LABEL_W: f32 = 56.0;
+
+/// A label in the column in front of the fields.
+fn field_label(ui: &mut Ui, text: &str) {
+    ui.allocate_ui_with_layout(egui::vec2(LABEL_W, 34.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+        ui.set_min_width(LABEL_W);
+        filter_label(ui, text);
+    });
 }

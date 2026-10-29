@@ -7,6 +7,8 @@ use std::time::{Duration, Instant, SystemTime};
 use egui::text::{LayoutJob, TextFormat};
 use egui::{Align, Color32, CornerRadius, FontId, Layout, Response, RichText, ScrollArea, Sense, Stroke, Ui, vec2};
 
+use super::icons::{self, Icon};
+use super::motion;
 use super::theme::*;
 use super::widgets::*;
 use super::{App, Msg, Page};
@@ -223,7 +225,7 @@ const LIVE_DELAY: Duration = Duration::from_millis(300);
 const ACTION_W: f32 = 120.0;
 
 /// The height a result takes (the picture and the room around it), for the grey rows shown while a list loads.
-pub(super) const ROW_H: f32 = 73.0;
+pub(super) const ROW_H: f32 = 80.0;
 
 /// A number with thousands separators: 1,284.
 pub(super) fn thousands(n: u64) -> String {
@@ -261,20 +263,198 @@ pub(super) fn filter_label(ui: &mut Ui, text: &str) {
 /// A search field `width` wide with a magnifier in it.
 pub(super) fn search_input(ui: &mut Ui, text: &mut String, hint: &str, width: f32) -> Response {
     let r = ui.add_sized(
-        [width, 32.0],
+        [width, 34.0],
         egui::TextEdit::singleline(text)
             .hint_text(RichText::new(hint).color(c_faint()))
-            .margin(egui::Margin { left: 34, right: 10, top: 7, bottom: 7 })
+            .margin(egui::Margin { left: 36, right: 12, top: 8, bottom: 8 })
             .background_color(c_field()),
     );
-    super::icons::paint(
+    // the magnifier brightens while the field is being typed in
+    let t = motion::toward(ui.ctx(), r.id.with("search-focus"), r.has_focus(), motion::FAST);
+    icons::paint(
         ui.painter(),
-        super::icons::Icon::Search,
-        egui::pos2(r.rect.left() + 18.0, r.rect.center().y),
+        Icon::Search,
+        egui::pos2(r.rect.left() + 19.0, r.rect.center().y),
         15.0,
-        c_faint(),
+        motion::mix(c_faint(), c_accent(), t),
     );
     r
+}
+
+/// The bar of a list page that holds its search field and filters: a pane of glass the controls sit in, so they
+/// read as one tool rather than loose widgets over the list.
+pub(super) fn filter_bar<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
+    let out = egui::Frame::new()
+        .fill(c_card())
+        .stroke(Stroke::new(1.0, c_border()))
+        .corner_radius(CornerRadius::same(R_CARD))
+        .inner_margin(egui::Margin::same(8))
+        .shadow(card_shadow())
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal_wrapped(add).inner
+        });
+    glass_edge(ui.painter(), out.response.rect, R_CARD);
+    out.inner
+}
+
+/// The ground of a well: a panel set one step into what it sits on (a dialog, a card), for a list inside it.
+pub(super) fn c_well() -> Color32 {
+    if is_dark() { motion::mix(c_raised(), c_bg(), 0.45) } else { motion::mix(c_raised(), c_bg(), 0.6) }
+}
+
+/// A list or a group of fields set into a dialog: the well's ground, a hairline and rounded corners.
+pub(super) fn well<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
+    egui::Frame::new()
+        .fill(c_well())
+        .stroke(Stroke::new(1.0, c_rule()))
+        .corner_radius(CornerRadius::same(R_CONTROL + 2))
+        .inner_margin(egui::Margin::symmetric(14, 10))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            add(ui)
+        })
+        .inner
+}
+
+/// A short word on a small tinted pill: where a result comes from, or something to know about it.
+pub(super) fn pill(ui: &mut Ui, text: &str, color: Color32) -> Response {
+    let galley = ui.painter().layout_no_wrap(text.to_string(), super::fonts::medium(FS_META), color);
+    let size = vec2(galley.size().x + 14.0, 18.0);
+    let (rect, resp) = ui.allocate_exact_size(size, Sense::hover());
+    if ui.is_rect_visible(rect) {
+        let tint = if is_dark() { 0.16 } else { 0.11 };
+        ui.painter().rect(
+            rect,
+            CornerRadius::same(9),
+            color.gamma_multiply(tint),
+            Stroke::new(1.0, color.gamma_multiply(tint * 1.6)),
+            egui::StrokeKind::Inside,
+        );
+        ui.painter().galley(rect.center() - galley.size() / 2.0, galley, color);
+    }
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, text));
+    resp
+}
+
+/// The last line of a result with pills in front: the pills (where it comes from, a warning), then the plain parts.
+pub(super) fn pill_meta_line(ui: &mut Ui, pills: &[(String, Color32)], parts: &[(String, Color32)]) {
+    if pills.is_empty() {
+        meta_line(ui, parts);
+        return;
+    }
+    ui.scope(|ui| {
+        // a line of text with pills is as tall as a pill, not as a button
+        ui.spacing_mut().interact_size.y = 18.0;
+        ui.spacing_mut().item_spacing.x = 5.0;
+        ui.horizontal(|ui| {
+            for (text, color) in pills {
+                pill(ui, text, *color);
+            }
+            if !parts.is_empty() {
+                ui.add_space(3.0);
+                meta_line(ui, parts);
+            }
+        });
+    });
+}
+
+/// The side of a result's picture.
+pub(super) const ICON: f32 = 48.0;
+
+impl App {
+    /// A result's picture (the project's icon, or its first letter while there is none) set on a small tile with a
+    /// soft shadow and a fine edge, so icons with see-through corners and white ones sit alike on the page.
+    pub(super) fn result_icon(&mut self, ui: &mut Ui, url: Option<&str>, title: &str, size: f32) {
+        let under = ui.painter().add(egui::Shape::Noop);
+        let rect = ui
+            .scope(|ui| match url.filter(|u| !u.is_empty()) {
+                Some(url) => self.remote_image(ui, url, size, title),
+                None => {
+                    avatar(ui, title, size);
+                }
+            })
+            .response
+            .rect;
+        let radius = CornerRadius::same((size * 0.22) as u8);
+        let shadow = egui::Shadow {
+            offset: [0, 3],
+            blur: 10,
+            spread: 0,
+            color: Color32::from_black_alpha(if is_dark() { 90 } else { 26 }),
+        };
+        ui.painter().set(
+            under,
+            egui::Shape::Vec(vec![
+                shadow.as_shape(rect, radius).into(),
+                egui::Shape::rect_filled(rect, radius, c_field()),
+            ]),
+        );
+        let edge = if is_dark() { Color32::from_white_alpha(16) } else { Color32::from_black_alpha(18) };
+        ui.painter().rect_stroke(rect, radius, Stroke::new(1.0, edge), egui::StrokeKind::Inside);
+    }
+}
+
+/// What a list says when it has nothing to show: a quiet round mark, one sentence and, if there is one, the action.
+pub(super) fn empty_state(ui: &mut Ui, text: &str, action: Option<&str>) -> Option<Response> {
+    ui.add_space(36.0);
+    ui.vertical_centered(|ui| {
+        let (rect, _) = ui.allocate_exact_size(vec2(56.0, 56.0), Sense::hover());
+        let p = ui.painter();
+        motion::glow(p, rect.center(), 44.0, c_accent().gamma_multiply(if is_dark() { 0.10 } else { 0.14 }));
+        p.circle(rect.center(), 26.0, c_card(), Stroke::new(1.0, c_border()));
+        icons::paint(p, Icon::Search, rect.center(), 20.0, c_faint());
+        ui.add_space(12.0);
+        ui.add(egui::Label::new(RichText::new(text).size(FS_BODY).color(c_muted())).wrap());
+        action.map(|a| {
+            ui.add_space(10.0);
+            secondary(ui, a)
+        })
+    })
+    .inner
+}
+
+/// Rows in the shape of results (picture, name, summary, the button at the right) while the first ones are on their
+/// way; the rows further down are fainter, and they all breathe gently.
+pub(super) fn result_skeleton(ui: &mut Ui, rows: usize) {
+    let reduced = motion::reduced(ui.ctx());
+    let phase = if reduced { 0.5 } else { (ui.input(|i| i.time) * 2.4).sin() as f32 * 0.5 + 0.5 };
+    if !reduced {
+        ui.ctx().request_repaint_after(ANIMATION_FRAME);
+    }
+    let shade = motion::mix(c_field(), c_active(), phase * 0.7);
+    for n in 0..rows {
+        let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_H), Sense::hover());
+        if !ui.is_rect_visible(rect) {
+            continue;
+        }
+        let fade = 1.0 - n as f32 / (rows as f32 + 1.0);
+        let c = shade.gamma_multiply(fade);
+        let p = ui.painter();
+        let icon = egui::Rect::from_min_size(rect.min + vec2(14.0, (ROW_H - ICON) / 2.0), vec2(ICON, ICON));
+        p.rect_filled(icon, CornerRadius::same((ICON * 0.22) as u8), c);
+        let x = icon.right() + 14.0;
+        let bar = |y: f32, w: f32, h: f32| {
+            p.rect_filled(
+                egui::Rect::from_min_size(egui::pos2(x, rect.top() + y), vec2(w, h)),
+                CornerRadius::same(R_TAG),
+                c,
+            )
+        };
+        bar(16.0, (rect.width() * 0.22).min(220.0), 11.0);
+        bar(35.0, (rect.width() * 0.46).min(460.0), 9.0);
+        bar(52.0, (rect.width() * 0.16).min(150.0), 8.0);
+        if rect.width() > 420.0 {
+            let button = egui::Rect::from_min_size(
+                egui::pos2(rect.right() - 14.0 - 86.0, rect.center().y - 16.0),
+                vec2(86.0, 32.0),
+            );
+            p.rect_filled(button, CornerRadius::same(R_CONTROL), c);
+        }
+        if n + 1 < rows {
+            p.hline(rect.x_range().shrink(14.0), rect.bottom() - 0.5, Stroke::new(1.0, c_rule()));
+        }
+    }
 }
 
 /// What the search field wants on a frame.
@@ -409,21 +589,44 @@ pub(super) fn meta_line(ui: &mut Ui, parts: &[(String, Color32)]) {
     ui.add(egui::Label::new(job).truncate());
 }
 
-/// One result in a list: no box at rest, a tone step under it when pointed at, a hairline between rows.
+/// One result in a list: no box at rest and a hairline between rows; under the pointer the row rises into a pane of
+/// glass (its fill, line and soft shadow fade in) and the hairline fades out.
 pub(super) fn row_frame<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
     ui.spacing_mut().item_spacing.y = 0.0;
+    let id = ui.next_auto_id().with("result-row");
     let bg = ui.painter().add(egui::Shape::Noop);
-    let out = egui::Frame::new().inner_margin(egui::Margin::symmetric(12, 10)).show(ui, |ui| {
+    let out = egui::Frame::new().inner_margin(egui::Margin::symmetric(14, 12)).show(ui, |ui| {
         ui.set_width(ui.available_width());
         add(ui)
     });
     let rect = out.response.rect;
     // the row's lower edge belongs to the next row, so two rows never light up at once
     let hot = egui::Rect::from_min_max(rect.min, egui::pos2(rect.max.x, rect.max.y - 1.0));
-    if ui.rect_contains_pointer(hot) {
-        ui.painter().set(bg, egui::Shape::rect_filled(rect, CornerRadius::same(R_CARD), c_hover()));
-    } else {
-        ui.painter().hline(rect.x_range().shrink(12.0), rect.bottom(), Stroke::new(1.0, c_rule()));
+    let t = motion::hover(ui, id, ui.rect_contains_pointer(hot));
+    if t > 0.0 {
+        let radius = CornerRadius::same(R_CARD);
+        let s = card_shadow();
+        let shadow = egui::Shadow { color: s.color.gamma_multiply(t), ..s };
+        let pane = egui::Shape::rect_filled(rect, radius, c_card().gamma_multiply(t));
+        let line = egui::Shape::rect_stroke(
+            rect,
+            radius,
+            Stroke::new(1.0, c_border().gamma_multiply(t)),
+            egui::StrokeKind::Inside,
+        );
+        let edge = egui::Shape::hline(
+            rect.left() + R_CARD as f32..=rect.right() - R_CARD as f32,
+            rect.top() + 0.5,
+            Stroke::new(1.0, c_glass_edge().gamma_multiply(t)),
+        );
+        ui.painter().set(bg, egui::Shape::Vec(vec![shadow.as_shape(rect, radius).into(), pane, line, edge]));
+    }
+    if t < 1.0 {
+        ui.painter().hline(
+            rect.x_range().shrink(14.0),
+            rect.bottom(),
+            Stroke::new(1.0, c_rule().gamma_multiply(1.0 - t)),
+        );
     }
     out.inner
 }
@@ -457,12 +660,25 @@ pub(super) fn action_cell(ui: &mut Ui, key: &str, add: impl FnOnce(&mut Ui)) {
 }
 
 /// A figure with its unit under it, right-aligned in a fixed column so a list of them lines up.
+/// The figure has a small arrow in front of it (down, into the computer) in the faint ink of the unit.
 pub(super) fn stat_column(ui: &mut Ui, figure: &str, unit: &str) {
-    ui.allocate_ui_with_layout(vec2(72.0, 34.0), Layout::top_down(Align::Max), |ui| {
-        ui.spacing_mut().item_spacing.y = 0.0;
-        ui.label(RichText::new(figure).size(FS_BODY).semibold());
-        ui.label(RichText::new(unit).size(FS_META).color(c_faint()));
-    });
+    let (rect, resp) = ui.allocate_exact_size(vec2(78.0, 36.0), Sense::hover());
+    if ui.is_rect_visible(rect) {
+        let p = ui.painter();
+        let fig = p.layout_no_wrap(figure.to_string(), super::fonts::semibold(FS_BODY), c_text());
+        let sub = p.layout_no_wrap(unit.to_string(), FontId::proportional(FS_META), c_faint());
+        let fig_at = egui::pos2(rect.right() - fig.size().x, rect.top() + 1.0);
+        // the arrow: a stem, a head and the tray it falls into
+        let (cx, cy) = (fig_at.x - 9.0, fig_at.y + fig.size().y / 2.0);
+        let stroke = Stroke::new(1.4, c_faint());
+        p.line_segment([egui::pos2(cx, cy - 5.0), egui::pos2(cx, cy + 2.0)], stroke);
+        p.line_segment([egui::pos2(cx - 3.0, cy - 1.0), egui::pos2(cx, cy + 2.0)], stroke);
+        p.line_segment([egui::pos2(cx + 3.0, cy - 1.0), egui::pos2(cx, cy + 2.0)], stroke);
+        p.line_segment([egui::pos2(cx - 4.0, cy + 5.0), egui::pos2(cx + 4.0, cy + 5.0)], stroke);
+        p.galley(fig_at, fig.clone(), c_text());
+        p.galley(egui::pos2(rect.right() - sub.size().x, fig_at.y + fig.size().y + 1.0), sub, c_faint());
+    }
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, format!("{figure} {unit}")));
 }
 
 /// A check mark drawn with two lines, centred on `c`.
@@ -484,18 +700,34 @@ pub(super) fn check_label(ui: &mut Ui, text: &str) {
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, text));
 }
 
-/// "Installed" with a check in front.
+/// "Installed" with a check in front, on a pill in the brand's soft tint: a state, not an action.
 pub(super) fn installed_mark(ui: &mut Ui) {
-    check_label(ui, "Installed");
+    let text = "Installed";
+    let fg = c_accent();
+    let galley = ui.painter().layout_no_wrap(text.into(), super::fonts::medium(FS_META), fg);
+    let (rect, resp) = ui.allocate_exact_size(vec2(32.0 + galley.size().x, 26.0), Sense::hover());
+    if ui.is_rect_visible(rect) {
+        ui.painter().rect(
+            rect,
+            CornerRadius::same(13),
+            c_accent_soft(),
+            Stroke::new(1.0, fg.gamma_multiply(0.25)),
+            egui::StrokeKind::Inside,
+        );
+        paint_check(ui.painter(), egui::pos2(rect.left() + 13.0, rect.center().y), 11.0, fg);
+        ui.painter().galley(egui::pos2(rect.left() + 22.0, rect.center().y - galley.size().y / 2.0), galley, fg);
+    }
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, text));
 }
 
-/// The small cross at the end of a dialog's title.
+/// The small cross at the end of a dialog's title: a round tone fades in under the pointer.
 pub(super) fn close_button(ui: &mut Ui) -> Response {
-    let (rect, resp) = ui.allocate_exact_size(vec2(28.0, 28.0), Sense::click());
-    if resp.hovered() {
-        ui.painter().rect_filled(rect, CornerRadius::same(R_CONTROL), c_hover());
+    let (rect, resp) = ui.allocate_exact_size(vec2(30.0, 30.0), Sense::click());
+    let t = motion::hover(ui, resp.id, resp.hovered());
+    if t > 0.0 {
+        ui.painter().circle_filled(rect.center(), 15.0, c_hover().gamma_multiply(t));
     }
-    let stroke = Stroke::new(1.5, if resp.hovered() { c_text() } else { c_muted() });
+    let stroke = Stroke::new(1.5, motion::mix(c_muted(), c_text(), t));
     let (c, d) = (rect.center(), 5.0);
     ui.painter().line_segment([c + vec2(-d, -d), c + vec2(d, d)], stroke);
     ui.painter().line_segment([c + vec2(-d, d), c + vec2(d, -d)], stroke);
@@ -557,6 +789,7 @@ pub(super) fn small_faint(ui: &mut Ui, text: impl Into<String>) {
 /// The line under the filters of a page: what the list is limited to at the left (drawn by `lead`), the number of
 /// results at the right.
 pub(super) fn context_line(ui: &mut Ui, count: Option<String>, buttons: bool, lead: impl FnOnce(&mut Ui)) {
+    ui.add_space(4.0);
     ui.scope(|ui| {
         // a row of text is as tall as its text, a row with buttons as tall as they are
         ui.spacing_mut().interact_size.y = if buttons { 32.0 } else { 20.0 };
@@ -738,8 +971,8 @@ impl App {
                 }
             }
         });
-        ui.add_space(12.0);
-        ui.horizontal_wrapped(|ui| {
+        ui.add_space(14.0);
+        filter_bar(ui, |ui| {
             let mut q = std::mem::take(&mut self.discover.query);
             let mut edited = self.discover.edited.take();
             if live_search(ui, &mut q, &format!("Search {}", self.discover.kind.label().to_lowercase()), &mut edited) {
@@ -845,7 +1078,7 @@ impl App {
             }
         }
         if self.discover.hits.is_empty() && self.discover.loading {
-            skeleton_rows(ui, 6, ROW_H);
+            result_skeleton(ui, 6);
             return;
         }
         if self.discover.hits.is_empty() && self.discover.error.is_none() {
@@ -855,7 +1088,7 @@ impl App {
             } else {
                 format!("No results for \u{201C}{query}\u{201D} on Modrinth.")
             };
-            if empty_row(ui, &text, (!query.is_empty()).then_some("Clear search")).is_some_and(|r| r.clicked()) {
+            if empty_state(ui, &text, (!query.is_empty()).then_some("Clear search")).is_some_and(|r| r.clicked()) {
                 self.discover.query.clear();
                 self.discover_search(true);
             }
@@ -880,13 +1113,8 @@ impl App {
                 row_frame(ui, |ui| {
                     let wide = ui.available_width() >= 560.0;
                     ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 12.0;
-                        match &hit.icon_url {
-                            Some(url) if !url.is_empty() => self.remote_image(ui, url, 48.0, &hit.title),
-                            _ => {
-                                avatar(ui, &hit.title, 48.0);
-                            }
-                        }
+                        ui.spacing_mut().item_spacing.x = 14.0;
+                        self.result_icon(ui, hit.icon_url.as_deref(), &hit.title, ICON);
                         let text_w = row_text_width(ui, &key);
                         ui.vertical(|ui| {
                             ui.set_max_width(text_w);

@@ -349,8 +349,8 @@ impl App {
                 }
             }
         });
-        ui.add_space(12.0);
-        ui.horizontal_wrapped(|ui| {
+        ui.add_space(14.0);
+        filter_bar(ui, |ui| {
             let mut q = std::mem::take(&mut self.cf.query);
             let mut edited = self.cf.edited.take();
             if live_search(ui, &mut q, &format!("Search {}", self.cf.section.label().to_lowercase()), &mut edited) {
@@ -414,7 +414,7 @@ impl App {
             }
         }
         if self.cf.projects.is_empty() && self.cf.loading {
-            skeleton_rows(ui, 6, ROW_H);
+            result_skeleton(ui, 6);
             return true;
         }
         if self.cf.projects.is_empty() && self.cf.error.is_none() && self.cf.searched {
@@ -424,7 +424,7 @@ impl App {
             } else {
                 format!("No results for \u{201C}{query}\u{201D} on CurseForge.")
             };
-            if empty_row(ui, &text, (!query.is_empty()).then_some("Clear search")).is_some_and(|r| r.clicked()) {
+            if empty_state(ui, &text, (!query.is_empty()).then_some("Clear search")).is_some_and(|r| r.clicked()) {
                 self.cf.query.clear();
                 self.cf_search(&ctx, true);
             }
@@ -449,13 +449,8 @@ impl App {
                 row_frame(ui, |ui| {
                     let wide = ui.available_width() >= 560.0;
                     ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 12.0;
-                        match p.logo_url() {
-                            Some(url) => self.remote_image(ui, url, 48.0, &p.name),
-                            None => {
-                                avatar(ui, &p.name, 48.0);
-                            }
-                        }
+                        ui.spacing_mut().item_spacing.x = 14.0;
+                        self.result_icon(ui, p.logo_url(), &p.name, ICON);
                         let text_w = row_text_width(ui, &key);
                         ui.vertical(|ui| {
                             ui.set_max_width(text_w);
@@ -468,10 +463,11 @@ impl App {
                                 parts.push((format!("{} downloads", human_count(downloads)), c_faint()));
                             }
                             parts.extend(tag_parts(p.categories.iter().map(|c| c.name.as_str()), 3));
+                            let mut pills = Vec::new();
                             if p.allow_mod_distribution == Some(false) {
-                                parts.push(("Download in browser".to_string(), c_warn()));
+                                pills.push(("Download in browser".to_string(), c_warn()));
                             }
-                            meta_line(ui, &parts);
+                            pill_meta_line(ui, &pills, &parts);
                         });
                         row_actions(ui, &key, |ui| {
                             action_cell(ui, &key, |ui| {
@@ -1203,20 +1199,28 @@ impl App {
 
         let modal = egui::Modal::new(Id::unique("cf-file-dialog")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
             ui.set_width(width);
-            ui.add(
-                egui::Label::new(
-                    RichText::new(format!("Installing {}", d.project.name)).size(FS_SECTION).semibold(),
-                )
-                .wrap(),
-            );
-            if let Some((_, name)) = &target {
-                small_muted(ui, format!("into {name}"));
-            } else if is_pack {
-                small_muted(ui, "as a new instance");
-            } else if d.folder.is_some() {
-                ui.label(RichText::new("That instance isn't there any more.").color(c_danger()));
-            }
-            ui.add_space(8.0);
+            // the project's picture beside what is being installed and where it goes
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 14.0;
+                self.result_icon(ui, d.project.logo_url(), &d.project.name, 44.0);
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing.y = 2.0;
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(format!("Installing {}", d.project.name)).size(FS_SECTION).semibold(),
+                        )
+                        .wrap(),
+                    );
+                    if let Some((_, name)) = &target {
+                        small_muted(ui, format!("into {name}"));
+                    } else if is_pack {
+                        small_muted(ui, "as a new instance");
+                    } else if d.folder.is_some() {
+                        ui.label(RichText::new("That instance isn't there any more.").color(c_danger()));
+                    }
+                });
+            });
+            ui.add_space(14.0);
             // one scrolling part: the sections inside it are plain, so nothing scrolls inside the scroll
             let body = ScrollArea::vertical().id_salt("cf-file-body").max_height(body_height).auto_shrink([false, true]);
             body.show(ui, |ui| {
@@ -1231,6 +1235,8 @@ impl App {
                     ui.add_space(8.0);
                 }
                 if !d.files.is_empty() {
+                    // the version and what is known about it, set into the dialog as one group
+                    super::discover::well(ui, |ui| {
                     if let Some(installed) = d.installed_file.and_then(|id| d.all_files.iter().find(|f| f.id == id)) {
                         small_muted(ui, format!("The version currently installed is {}", installed.label()));
                     }
@@ -1250,21 +1256,23 @@ impl App {
                     });
                     if let Some(f) = d.files.get(d.selected) {
                         ui.horizontal_wrapped(|ui| {
+                            ui.spacing_mut().item_spacing.x = 6.0;
+                            // how finished the file is, on a pill: a test version in the colour that warns
                             match f.release_type {
-                                Some(2) => tag(ui, "Beta", c_warn()),
-                                Some(3) => tag(ui, "Alpha", c_danger()),
-                                _ => {}
-                            }
+                                Some(2) => super::discover::pill(ui, "Beta", c_warn()),
+                                Some(3) => super::discover::pill(ui, "Alpha", c_danger()),
+                                _ => super::discover::pill(ui, "Release", c_accent()),
+                            };
                             let mut facts: Vec<String> = Vec::new();
-                            if !matches!(f.release_type, Some(2 | 3)) {
-                                facts.push("Release".into());
-                            }
                             facts.push(f.game_versions.iter().take(8).cloned().collect::<Vec<_>>().join(", "));
                             facts.push(human_size(f.file_length.max(0) as u64));
                             facts.push(f.file_date.chars().take(10).collect::<String>());
                             facts.retain(|t| !t.is_empty());
                             small_muted(ui, facts.join("  \u{00B7}  "));
                         });
+                    }
+                    });
+                    if let Some(f) = d.files.get(d.selected) {
                         if f.download_url.is_none() {
                             ui.add_space(4.0);
                             notice(
@@ -1308,24 +1316,30 @@ impl App {
                                 retry_deps = true;
                             }
                         } else if !d.deps.is_empty() {
-                            ui.add_space(6.0);
+                            ui.add_space(10.0);
                             section(ui, "These mods go with it");
                             small_muted(ui, "Required ones are ticked. Tick the others to add them too.");
-                            for (dep, on) in d.deps.iter_mut() {
-                                ui.horizontal(|ui| {
-                                    let usable = dep.file.is_some();
-                                    ui.add_enabled(usable, egui::Checkbox::new(on, ""));
-                                    ui.vertical(|ui| {
-                                        ui.spacing_mut().item_spacing.y = 0.0;
-                                        ui.label(RichText::new(&dep.project.name).semibold());
-                                        let what = if dep.is_required() { "Required" } else { "Optional" };
-                                        match &dep.file {
-                                            Some(f) => small_muted(ui, format!("{what}  \u{00B7}  {}", f.label())),
-                                            None => small_muted(ui, format!("{what}  \u{00B7}  No file fits this instance")),
-                                        }
+                            ui.add_space(4.0);
+                            super::discover::well(ui, |ui| {
+                                for (n, (dep, on)) in d.deps.iter_mut().enumerate() {
+                                    if n > 0 {
+                                        rule(ui);
+                                    }
+                                    ui.horizontal(|ui| {
+                                        let usable = dep.file.is_some();
+                                        ui.add_enabled(usable, egui::Checkbox::new(on, ""));
+                                        ui.vertical(|ui| {
+                                            ui.spacing_mut().item_spacing.y = 0.0;
+                                            ui.label(RichText::new(&dep.project.name).semibold());
+                                            let what = if dep.is_required() { "Required" } else { "Optional" };
+                                            match &dep.file {
+                                                Some(f) => small_muted(ui, format!("{what}  \u{00B7}  {}", f.label())),
+                                                None => small_muted(ui, format!("{what}  \u{00B7}  No file fits this instance")),
+                                            }
+                                        });
                                     });
-                                });
-                            }
+                                }
+                            });
                         }
                     }
 
@@ -1334,9 +1348,12 @@ impl App {
                         let fid = f.id;
                         match &d.changelog {
                             Some((id, Ok(text))) if *id == fid => {
-                                ui.add_space(6.0);
+                                ui.add_space(10.0);
                                 section(ui, "What changed");
-                                ui.label(text.as_str());
+                                ui.add_space(4.0);
+                                super::discover::well(ui, |ui| {
+                                    ui.add(egui::Label::new(RichText::new(text.as_str()).color(c_muted())).wrap());
+                                });
                             }
                             Some((id, Err(e))) if *id == fid => {
                                 small_muted(ui, format!("Couldn't get the changelog: {e}"));
@@ -1472,11 +1489,11 @@ impl App {
         egui::Modal::new(Id::unique("cf-browser-dialog")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
             ui.set_width(width);
             ui.label(RichText::new("Download these in your browser").size(FS_SECTION).semibold());
-            ui.add_space(4.0);
+            ui.add_space(6.0);
             muted(ui, "The authors of these files do not let launchers download them. Open each one in your browser and save it to your Downloads folder; BlockForge notices it there and carries on by itself.");
             small_faint(ui, format!("Watching: {}", user_folder.display()));
-            ui.add_space(8.0);
-            ScrollArea::vertical().max_height(list_height.min(320.0)).id_salt("cf-browser-list").show(ui, |ui| {
+            ui.add_space(12.0);
+            well(ui, |ui| ScrollArea::vertical().max_height(list_height.min(320.0)).id_salt("cf-browser-list").show(ui, |ui| {
                 for (n, it) in items.iter().enumerate() {
                     if n > 0 {
                         rule(ui);
@@ -1512,8 +1529,8 @@ impl App {
                     });
                     ui.add_space(6.0);
                 }
-            });
-            ui.add_space(8.0);
+            }));
+            ui.add_space(12.0);
             if confirm {
                 notice(ui, NoticeKind::Warn, "Skipping the remaining downloads may cause issues launching the modpack. Are you sure?", None);
                 ui.add_space(8.0);
@@ -1585,7 +1602,7 @@ impl App {
             use super::discover::*;
             ui.set_width(width);
             ui.label(RichText::new(&w.title).size(FS_SECTION).semibold());
-            ui.add_space(6.0);
+            ui.add_space(10.0);
             if w.loading {
                 ui.horizontal(|ui| {
                     spinner(ui);
@@ -1598,69 +1615,77 @@ impl App {
             if !w.loading && w.error.is_none() && w.mods.is_empty() && w.packs.is_empty() {
                 muted(ui, "Everything is up to date.");
             }
-            ScrollArea::vertical().max_height(list_height.min(340.0)).id_salt("cf-updates-list").show(ui, |ui| {
-                let only_one = w.mods.len() + w.packs.len() == 1;
-                let mut first = true;
-                for u in &w.mods {
-                    if !std::mem::take(&mut first) {
-                        rule(ui);
-                    }
-                    ui.add_space(6.0);
-                    ui.horizontal(|ui| {
-                        ui.vertical(|ui| {
-                            ui.set_max_width((ui.available_width() - 120.0).max(160.0));
-                            ui.spacing_mut().item_spacing.y = 0.0;
-                            ui.label(RichText::new(&u.project.name).semibold());
-                            small_muted(ui, format!("{}  ->  {}", u.installed_file, u.latest.label()));
-                        });
-                        let id = ui.scope_id().with(("cf-update-row", u.project.id));
-                        end_aligned(ui, id, |ui| {
-                            let clicked = if only_one {
-                                primary(ui, "Update").clicked()
-                            } else {
-                                secondary(ui, "Update").clicked()
-                            };
-                            if clicked {
-                                apply_mod = Some(u.clone());
+            if !w.mods.is_empty() || !w.packs.is_empty() {
+                ui.add_space(4.0);
+                well(ui, |ui| {
+                    ScrollArea::vertical().max_height(list_height.min(340.0)).id_salt("cf-updates-list").show(
+                        ui,
+                        |ui| {
+                            let only_one = w.mods.len() + w.packs.len() == 1;
+                            let mut first = true;
+                            for u in &w.mods {
+                                if !std::mem::take(&mut first) {
+                                    rule(ui);
+                                }
+                                ui.add_space(6.0);
+                                ui.horizontal(|ui| {
+                                    ui.vertical(|ui| {
+                                        ui.set_max_width((ui.available_width() - 120.0).max(160.0));
+                                        ui.spacing_mut().item_spacing.y = 0.0;
+                                        ui.label(RichText::new(&u.project.name).semibold());
+                                        small_muted(ui, format!("{}  ->  {}", u.installed_file, u.latest.label()));
+                                    });
+                                    let id = ui.scope_id().with(("cf-update-row", u.project.id));
+                                    end_aligned(ui, id, |ui| {
+                                        let clicked = if only_one {
+                                            primary(ui, "Update").clicked()
+                                        } else {
+                                            secondary(ui, "Update").clicked()
+                                        };
+                                        if clicked {
+                                            apply_mod = Some(u.clone());
+                                        }
+                                    });
+                                });
+                                ui.add_space(6.0);
                             }
-                        });
-                    });
-                    ui.add_space(6.0);
-                }
-                for (folder, name, u) in &w.packs {
-                    if !std::mem::take(&mut first) {
-                        rule(ui);
-                    }
-                    ui.add_space(6.0);
-                    ui.horizontal(|ui| {
-                        ui.vertical(|ui| {
-                            ui.set_max_width((ui.available_width() - 200.0).max(160.0));
-                            ui.spacing_mut().item_spacing.y = 0.0;
-                            ui.label(RichText::new(name).semibold());
-                            small_muted(ui, format!("New version: {}", u.latest.label()));
-                            if u.ignored {
-                                small_muted(ui, "You chose to ignore this update");
+                            for (folder, name, u) in &w.packs {
+                                if !std::mem::take(&mut first) {
+                                    rule(ui);
+                                }
+                                ui.add_space(6.0);
+                                ui.horizontal(|ui| {
+                                    ui.vertical(|ui| {
+                                        ui.set_max_width((ui.available_width() - 200.0).max(160.0));
+                                        ui.spacing_mut().item_spacing.y = 0.0;
+                                        ui.label(RichText::new(name).semibold());
+                                        small_muted(ui, format!("New version: {}", u.latest.label()));
+                                        if u.ignored {
+                                            small_muted(ui, "You chose to ignore this update");
+                                        }
+                                    });
+                                    let id = ui.scope_id().with(("cf-pack-row", folder));
+                                    end_aligned(ui, id, |ui| {
+                                        if !u.ignored && ghost(ui, "Ignore").clicked() {
+                                            ignore_pack = Some((folder.clone(), u.latest.id));
+                                        }
+                                        let clicked = if only_one {
+                                            primary(ui, "Update").clicked()
+                                        } else {
+                                            secondary(ui, "Update").clicked()
+                                        };
+                                        if clicked {
+                                            apply_pack = Some((folder.clone(), u.clone()));
+                                        }
+                                    });
+                                });
+                                ui.add_space(6.0);
                             }
-                        });
-                        let id = ui.scope_id().with(("cf-pack-row", folder));
-                        end_aligned(ui, id, |ui| {
-                            if !u.ignored && ghost(ui, "Ignore").clicked() {
-                                ignore_pack = Some((folder.clone(), u.latest.id));
-                            }
-                            let clicked = if only_one {
-                                primary(ui, "Update").clicked()
-                            } else {
-                                secondary(ui, "Update").clicked()
-                            };
-                            if clicked {
-                                apply_pack = Some((folder.clone(), u.clone()));
-                            }
-                        });
-                    });
-                    ui.add_space(6.0);
-                }
-            });
-            ui.add_space(8.0);
+                        },
+                    )
+                });
+            }
+            ui.add_space(12.0);
             dialog_footer(
                 ui,
                 "cf-updates",

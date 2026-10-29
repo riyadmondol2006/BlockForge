@@ -4,9 +4,10 @@
 
 use std::cell::Cell;
 
-use egui::RichText;
+use egui::{CornerRadius, RichText, Sense, Stroke, Ui, vec2};
 
 use super::discover::{dialog_footer, dialog_title, instance_choice};
+use super::motion;
 use super::theme::*;
 use super::widgets::*;
 use super::{App, Msg};
@@ -163,9 +164,9 @@ impl App {
                 action.set(Some(Action::Close));
             }
             small_muted(ui, "For a mod that isn't on Modrinth or CurseForge. Paste the link to its GitHub page.");
-            ui.add_space(10.0);
+            ui.add_space(14.0);
             ui.horizontal(|ui| {
-                let field_w = (ui.available_width() - 90.0).max(160.0);
+                let field_w = (ui.available_width() - 84.0).max(160.0);
                 let r = super::discover::search_input(ui, &mut g.input, "github.com/owner/project", field_w);
                 let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                 if (secondary_enabled(ui, "Find", !g.loading && !g.input.trim().is_empty()).clicked() || enter)
@@ -174,11 +175,13 @@ impl App {
                     action.set(Some(Action::Find));
                 }
             });
-            ui.add_space(8.0);
+            ui.add_space(12.0);
+            // the two choices line up in a column of labels and a column of drop-downs
+            let combo_w = (ui.available_width() - LABEL_W - 8.0).clamp(160.0, 360.0);
             ui.horizontal(|ui| {
-                super::discover::filter_label(ui, "Add to");
+                field_label(ui, "Add to");
                 let current = target_inst.as_ref().map(|i| i.name().to_string()).unwrap_or_else(|| "Choose".into());
-                egui::ComboBox::from_id_salt("github-target").selected_text(current).width(260.0).show_ui(ui, |ui| {
+                egui::ComboBox::from_id_salt("github-target").selected_text(current).width(combo_w).show_ui(ui, |ui| {
                     for (folder, name) in &choices {
                         if ui.selectable_label(g.target.as_ref() == Some(folder), name).clicked() {
                             g.target = Some(folder.clone());
@@ -187,18 +190,6 @@ impl App {
                     }
                 });
             });
-            ui.add_space(10.0);
-            if let Some(e) = &g.error {
-                notice(ui, NoticeKind::Error, e, None);
-                ui.add_space(8.0);
-            }
-            if g.loading {
-                ui.horizontal(|ui| {
-                    spinner(ui);
-                    small_muted(ui, "Reading the releases");
-                });
-                ui.add_space(8.0);
-            }
             let mut chosen: Option<Asset> = None;
             if !g.releases.is_empty() {
                 let names: Vec<String> = g
@@ -206,10 +197,11 @@ impl App {
                     .iter()
                     .map(|r| if r.prerelease { format!("{} (test version)", r.title()) } else { r.title().to_string() })
                     .collect();
+                ui.add_space(6.0);
                 ui.horizontal(|ui| {
-                    super::discover::filter_label(ui, "Release");
+                    field_label(ui, "Release");
                     let shown = names.get(g.release).cloned().unwrap_or_default();
-                    egui::ComboBox::from_id_salt("github-release").selected_text(shown).width(260.0).show_ui(
+                    egui::ComboBox::from_id_salt("github-release").selected_text(shown).width(combo_w).show_ui(
                         ui,
                         |ui| {
                             for (i, n) in names.iter().enumerate() {
@@ -221,32 +213,61 @@ impl App {
                         },
                     );
                 });
-                ui.add_space(6.0);
+            }
+            ui.add_space(14.0);
+            if let Some(e) = &g.error {
+                notice(ui, NoticeKind::Error, e, None);
+                ui.add_space(10.0);
+            }
+            if g.loading {
+                ui.horizontal(|ui| {
+                    spinner_sized(ui, 20.0);
+                    small_muted(ui, "Reading the releases");
+                });
+                ui.add_space(10.0);
+            }
+            if !g.releases.is_empty() {
                 let assets = g
                     .releases
                     .get(g.release)
                     .map(|r| github::ranked_assets(r, loader.as_deref(), &mc))
                     .unwrap_or_default();
                 g.asset = g.asset.min(assets.len().saturating_sub(1));
-                egui::ScrollArea::vertical().id_salt("github-assets").max_height(list_height.min(220.0)).show(
-                    ui,
-                    |ui| {
-                        for (i, a) in assets.iter().enumerate() {
-                            let label = format!("{}   {}", a.name, human_size(a.size));
-                            if ui.radio(g.asset == i, label).clicked() {
-                                g.asset = i;
+                // the files of the release, the one that fits the instance first and chosen
+                super::discover::well(ui, |ui| {
+                    egui::ScrollArea::vertical()
+                        .id_salt("github-assets")
+                        .max_height(list_height.min(220.0))
+                        .auto_shrink([false, true])
+                        .show(ui, |ui| {
+                            ui.spacing_mut().item_spacing.y = 2.0;
+                            for (i, a) in assets.iter().enumerate() {
+                                if asset_row(ui, &a.name, &human_size(a.size), g.asset == i).clicked() {
+                                    g.asset = i;
+                                }
                             }
-                        }
-                    },
-                );
+                        });
+                });
                 chosen = assets.get(g.asset).cloned();
-                ui.add_space(8.0);
-                small_muted(
-                    ui,
-                    "Files from GitHub aren't checked by Modrinth or CurseForge. Add mods only from people you trust.",
-                );
-                ui.add_space(8.0);
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    let (rect, _) = ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
+                    super::icons::paint(ui.painter(), super::icons::Icon::Info, rect.center(), 14.0, c_faint());
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(
+                                "Files from GitHub aren't checked by Modrinth or CurseForge. Add mods only from people you trust.",
+                            )
+                            .size(FS_META)
+                            .color(c_muted()),
+                        )
+                        .wrap(),
+                    );
+                });
+                ui.add_space(6.0);
             }
+            ui.add_space(8.0);
             let page = g.link.as_ref().map(RepoLink::page_url);
             let can_add = chosen.is_some() && target_inst.is_some() && !g.loading;
             dialog_footer(
@@ -288,4 +309,61 @@ impl App {
             None => {}
         }
     }
+}
+
+/// The width of the labels in front of the window's drop-downs.
+const LABEL_W: f32 = 64.0;
+
+/// A label in the column in front of the drop-downs.
+fn field_label(ui: &mut Ui, text: &str) {
+    ui.allocate_ui_with_layout(vec2(LABEL_W, 34.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+        ui.set_min_width(LABEL_W);
+        super::discover::filter_label(ui, text);
+    });
+}
+
+/// One file of a release, chosen the way a radio button is: a ring that fills with the brand colour, the file's name,
+/// its size at the right. The chosen one sits on the brand's soft tint, and the tint slides in.
+fn asset_row(ui: &mut Ui, name: &str, size: &str, selected: bool) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 36.0), Sense::click());
+    if ui.is_rect_visible(rect) {
+        let hover = motion::hover(ui, resp.id, resp.hovered());
+        let on = motion::toward(ui.ctx(), resp.id.with("chosen"), selected, motion::MEDIUM);
+        let p = ui.painter();
+        let radius = CornerRadius::same(R_CONTROL);
+        if hover > 0.0 {
+            p.rect_filled(rect, radius, c_hover().gamma_multiply(hover * (1.0 - on)));
+        }
+        if on > 0.0 {
+            p.rect(
+                rect,
+                radius,
+                c_accent_soft().gamma_multiply(on),
+                Stroke::new(1.0, c_accent().gamma_multiply(0.35 * on)),
+                egui::StrokeKind::Inside,
+            );
+        }
+        // the ring, and the dot that grows in it when the file is chosen
+        let c = egui::pos2(rect.left() + 18.0, rect.center().y);
+        p.circle_stroke(c, 7.0, Stroke::new(1.5, motion::mix(c_control(), c_accent(), on)));
+        if on > 0.0 {
+            p.circle_filled(c, 3.8 * on, c_accent());
+        }
+        let size_galley = p.layout_no_wrap(size.to_string(), egui::FontId::proportional(FS_META), c_faint());
+        let size_at =
+            egui::pos2(rect.right() - 12.0 - size_galley.size().x, rect.center().y - size_galley.size().y / 2.0);
+        let mut job = egui::text::LayoutJob::single_section(
+            name.to_string(),
+            egui::TextFormat { font_id: super::fonts::medium(FS_BODY), color: c_text(), ..Default::default() },
+        );
+        job.wrap = egui::text::TextWrapping::truncate_at_width((size_at.x - c.x - 30.0).max(40.0));
+        let name_galley = p.layout_job(job);
+        p.galley(egui::pos2(c.x + 16.0, rect.center().y - name_galley.size().y / 2.0), name_galley, c_text());
+        p.galley(size_at, size_galley, c_faint());
+    }
+    super::widgets::focus_ring(ui, &resp, rect, R_CONTROL);
+    resp.widget_info(|| {
+        egui::WidgetInfo::selected(egui::Role::RadioButton, true, selected, format!("{name}   {size}"))
+    });
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand)
 }

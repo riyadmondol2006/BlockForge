@@ -464,7 +464,7 @@ impl App {
             }
         }
         if self.discover.merged.is_empty() && loading {
-            skeleton_rows(ui, 6, ROW_H);
+            result_skeleton(ui, 6);
             return;
         }
         if self.discover.merged.is_empty() && failed.is_empty() {
@@ -474,7 +474,7 @@ impl App {
             } else {
                 format!("No results for \u{201C}{query}\u{201D} on {}.", join_or(&working))
             };
-            if empty_row(ui, &text, (!query.is_empty()).then_some("Clear search")).is_some_and(|r| r.clicked()) {
+            if empty_state(ui, &text, (!query.is_empty()).then_some("Clear search")).is_some_and(|r| r.clicked()) {
                 self.discover.query.clear();
                 self.discover_search(true);
             }
@@ -534,18 +534,13 @@ impl App {
                 row_frame(ui, |ui| {
                     let wide = ui.available_width() >= 560.0;
                     ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 12.0;
+                        ui.spacing_mut().item_spacing.x = 14.0;
                         let icon = hit
                             .and_then(|h| h.icon_url.as_deref())
                             .filter(|u| !u.is_empty())
                             .or_else(|| project.and_then(|p| p.logo_url()))
                             .or_else(|| pack.and_then(|p| p.icon.as_deref()));
-                        match icon {
-                            Some(url) => self.remote_image(ui, url, 48.0, title),
-                            None => {
-                                avatar(ui, title, 48.0);
-                            }
-                        }
+                        self.result_icon(ui, icon, title, ICON);
                         let text_w = row_text_width(ui, &key);
                         ui.vertical(|ui| {
                             ui.set_max_width(text_w);
@@ -557,17 +552,19 @@ impl App {
                                 .or(project.map(|p| p.summary.as_str()))
                                 .or(pack.map(|p| p.summary.as_str()));
                             summary_line(ui, summary.unwrap_or_default());
-                            // where it comes from first, then the downloads (in a narrow window) and its tags
-                            let mut parts = Vec::new();
+                            // where it comes from first, as small pills in each site's colour, then the downloads
+                            // (in a narrow window) and its tags
+                            let mut pills = Vec::new();
                             if hit.is_some() {
-                                parts.push(("Modrinth".to_string(), modrinth_color()));
+                                pills.push(("Modrinth".to_string(), modrinth_color()));
                             }
                             if project.is_some() {
-                                parts.push(("CurseForge".to_string(), curseforge_color()));
+                                pills.push(("CurseForge".to_string(), curseforge_color()));
                             }
                             if pack.is_some() {
-                                parts.push(("Smithed".to_string(), smithed_color()));
+                                pills.push(("Smithed".to_string(), smithed_color()));
                             }
+                            let mut parts = Vec::new();
                             if !wide {
                                 parts.push((format!("{} downloads", human_count(downloads)), c_faint()));
                             }
@@ -588,9 +585,9 @@ impl App {
                                 && pack.is_none()
                                 && project.is_some_and(|p| p.allow_mod_distribution == Some(false))
                             {
-                                parts.push(("Download in browser".to_string(), c_warn()));
+                                pills.push(("Download in browser".to_string(), c_warn()));
                             }
-                            meta_line(ui, &parts);
+                            pill_meta_line(ui, &pills, &parts);
                         });
                         row_actions(ui, &key, |ui| {
                             action_cell(ui, &key, |ui| {

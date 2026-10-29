@@ -507,13 +507,14 @@ impl App {
         let modal = egui::Modal::new(egui::Id::unique("pack-code")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
             ui.set_width(width);
             ui.label(RichText::new("Add a private pack").size(FS_SECTION).semibold());
+            ui.add_space(2.0);
             muted(ui, "A pack code opens a pack that is not listed for everyone.");
-            ui.add_space(12.0);
+            ui.add_space(14.0);
             let r = ui.add_sized(
-                [ui.available_width(), 32.0],
+                [ui.available_width(), 34.0],
                 egui::TextEdit::singleline(&mut self.packs.code)
                     .hint_text(RichText::new("Pack code").color(c_faint()))
-                    .margin(egui::Margin::symmetric(10, 7))
+                    .margin(egui::Margin::symmetric(12, 8))
                     .background_color(c_field()),
             );
             focus_when_shown(ui, &r);
@@ -549,7 +550,7 @@ impl App {
     }
 
     fn packs_atl_ui(&mut self, ui: &mut Ui) {
-        ui.horizontal_wrapped(|ui| {
+        filter_bar(ui, |ui| {
             let mut q = std::mem::take(&mut self.packs.query);
             search_input(ui, &mut q, "Search ATLauncher packs", SEARCH_W);
             self.packs.query = q;
@@ -583,7 +584,7 @@ impl App {
             return;
         }
         let Some(list) = self.packs.atl.clone() else {
-            skeleton_rows(ui, 6, ROW_H);
+            result_skeleton(ui, 6);
             return;
         };
         let user = self.packs_user();
@@ -610,7 +611,7 @@ impl App {
             } else {
                 format!("No packs match \u{201C}{query}\u{201D}.")
             };
-            if empty_row(ui, &text, (!query.is_empty()).then_some("Clear search")).is_some_and(|r| r.clicked()) {
+            if empty_state(ui, &text, (!query.is_empty()).then_some("Clear search")).is_some_and(|r| r.clicked()) {
                 self.packs.query.clear();
             }
             self.packs.atl_view = Some((key, packs));
@@ -623,20 +624,20 @@ impl App {
             let rkey = format!("atl:{}", pack.name);
             row_frame(ui, |ui| {
                 ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 12.0;
-                    self.remote_image(ui, &pack.image_url(), 48.0, &pack.name);
+                    ui.spacing_mut().item_spacing.x = 14.0;
+                    self.result_icon(ui, Some(&pack.image_url()), &pack.name, ICON);
                     let text_w = row_text_width(ui, &rkey);
                     ui.vertical(|ui| {
                         ui.set_max_width(text_w);
                         ui.spacing_mut().item_spacing.y = 2.0;
-                        let note = if pack.is_private() {
-                            Some(("Private".to_string(), c_warn()))
+                        // a pack that is not listed for everyone says so on a pill in front of its figures
+                        let mut pills = Vec::new();
+                        if pack.is_private() {
+                            pills.push(("Private".to_string(), c_warn()));
                         } else if pack.is_semi_public() {
-                            Some(("Code".to_string(), c_warn()))
-                        } else {
-                            None
-                        };
-                        name_line_with(ui, &pack.name, note);
+                            pills.push(("Code".to_string(), c_warn()));
+                        }
+                        name_line(ui, &pack.name, None);
                         summary_line(ui, description);
                         let mut parts = Vec::new();
                         if let Some(v) = pack.latest_version() {
@@ -644,7 +645,7 @@ impl App {
                             parts.push((format!("Minecraft {}", v.minecraft), c_faint()));
                         }
                         parts.push((format!("{} versions", pack.versions.len()), c_faint()));
-                        meta_line(ui, &parts);
+                        pill_meta_line(ui, &pills, &parts);
                     });
                     row_actions(ui, &rkey, |ui| {
                         action_cell(ui, &rkey, |ui| {
@@ -684,7 +685,7 @@ impl App {
 
     fn packs_technic_ui(&mut self, ui: &mut Ui) {
         let mut search = false;
-        ui.horizontal_wrapped(|ui| {
+        filter_bar(ui, |ui| {
             let mut q = std::mem::take(&mut self.packs.tech_query);
             let mut edited = self.packs.edited.take();
             if live_search(ui, &mut q, "Search Technic packs", &mut edited) {
@@ -711,7 +712,7 @@ impl App {
             self.packs_search_technic();
         }
         if self.packs.tech_loading && self.packs.tech.is_empty() {
-            skeleton_rows(ui, 6, ROW_H);
+            result_skeleton(ui, 6);
         } else if self.packs.tech.is_empty() && self.packs.tech_error.is_none() && self.packs.tech_started {
             let query = self.packs.tech_query.trim().to_string();
             let text = if query.is_empty() {
@@ -719,7 +720,7 @@ impl App {
             } else {
                 format!("No packs match \u{201C}{query}\u{201D}.")
             };
-            if empty_row(ui, &text, (!query.is_empty()).then_some("Clear search")).is_some_and(|r| r.clicked()) {
+            if empty_state(ui, &text, (!query.is_empty()).then_some("Clear search")).is_some_and(|r| r.clicked()) {
                 self.packs.tech_query.clear();
                 self.packs_search_technic();
             }
@@ -733,13 +734,8 @@ impl App {
                 let rkey = format!("tech:{}", m.slug);
                 row_frame(ui, |ui| {
                     ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 12.0;
-                        match &m.icon_url {
-                            Some(u) if !u.is_empty() => self.remote_image(ui, u, 48.0, &m.name),
-                            _ => {
-                                avatar(ui, &m.name, 48.0);
-                            }
-                        }
+                        ui.spacing_mut().item_spacing.x = 14.0;
+                        self.result_icon(ui, m.icon_url.as_deref(), &m.name, ICON);
                         let text_w = row_text_width(ui, &rkey);
                         ui.vertical(|ui| {
                             ui.set_max_width(text_w);
@@ -801,15 +797,24 @@ impl App {
         if back_link(ui, "ATLauncher & Technic").clicked() {
             back = true;
         }
+        ui.add_space(4.0);
         ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 12.0;
+            ui.spacing_mut().item_spacing.x = 16.0;
             if let Some((url, name)) = &icon {
-                self.remote_image(ui, url, 48.0, name);
+                self.result_icon(ui, Some(url), name, 56.0);
             }
             ui.vertical(|ui| {
-                ui.spacing_mut().item_spacing.y = 2.0;
+                ui.spacing_mut().item_spacing.y = 4.0;
                 heading(ui, &title);
-                meta_line(ui, &facts);
+                // what the version needs, on small pills: the loader in its own colour, the rest quiet
+                if !facts.is_empty() {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.spacing_mut().item_spacing = egui::vec2(5.0, 5.0);
+                        for (text, color) in &facts {
+                            pill(ui, text, *color);
+                        }
+                    });
+                }
             });
             if website.is_some() {
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -819,7 +824,7 @@ impl App {
                 });
             }
         });
-        ui.add_space(8.0);
+        ui.add_space(14.0);
         let Some(d) = self.packs.detail.as_mut() else { return };
         ScrollArea::vertical().auto_shrink(false).max_height((ui.available_height() - 64.0).max(160.0)).show(ui, |ui| {
             // text is easiest to read in a column of its own
@@ -827,8 +832,11 @@ impl App {
             ui.spacing_mut().item_spacing.y = 8.0;
             if !d.description.is_empty() {
                 ui.add(egui::Label::new(RichText::new(plain_text(&d.description)).color(c_muted())).wrap());
-                ui.add_space(8.0);
+                ui.add_space(10.0);
             }
+            // what to install, on a card of its own
+            card(ui, |ui| {
+            ui.spacing_mut().item_spacing.y = 8.0;
             if d.reinstall.is_none() {
                 section(ui, "Name");
                 ui.add_sized(
@@ -909,6 +917,7 @@ impl App {
                     choices_ui(ui, choices, &p);
                 }
             }
+            });
             ui.add_space(16.0);
         });
         // what installing does, and the one button for it
