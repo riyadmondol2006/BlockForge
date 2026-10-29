@@ -137,7 +137,8 @@ pub fn glow(painter: &Painter, center: Pos2, radius: f32, color: Color32) {
     let steps = 48u32;
     mesh.colored_vertex(center, color);
     // two rings: most of the light near the middle, a long soft tail
-    let mid = Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), color.a() / 3);
+    // the colour is already premultiplied: scaling all four parts keeps its hue (unpacking it again would grey it)
+    let mid = color.gamma_multiply(1.0 / 3.0);
     for ring in 0..2u32 {
         let (rr, c) = if ring == 0 { (radius * 0.45, mid) } else { (radius, Color32::TRANSPARENT) };
         for i in 0..steps {

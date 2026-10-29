@@ -29,7 +29,6 @@ pub fn card_frame() -> egui::Frame {
 
 /// A card that rises a little under the pointer (its shadow grows and its line brightens), for things that open
 /// when clicked. Returns what `add` returned and whether the card is under the pointer.
-#[allow(dead_code)]
 pub fn hover_card<R>(ui: &mut Ui, id: egui::Id, add: impl FnOnce(&mut Ui) -> R) -> (R, bool) {
     let was_hot = ui.data(|d| d.get_temp::<bool>(id.with("hot"))).unwrap_or(false);
     let t = motion::hover(ui, id, was_hot);
@@ -805,19 +804,6 @@ pub fn notice(ui: &mut Ui, kind: NoticeKind, text: &str, action: Option<&str>) -
             .inner
         })
         .inner
-}
-
-/// A quiet empty state inside its frame: one sentence and, if there is one, the action.
-pub fn empty_row(ui: &mut Ui, text: &str, action: Option<&str>) -> Option<Response> {
-    ui.add_space(16.0);
-    ui.vertical_centered(|ui| {
-        ui.label(RichText::new(text).color(c_muted()));
-        action.map(|a| {
-            ui.add_space(8.0);
-            secondary(ui, a)
-        })
-    })
-    .inner
 }
 
 /// "‹ Library": the small way back above a page's title.

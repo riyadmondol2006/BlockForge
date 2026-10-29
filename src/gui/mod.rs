@@ -2187,6 +2187,7 @@ impl App {
                 | "instance-settings-java"
                 | "instance-settings-cmd" => {
                     if let Some(f) = first {
+                        let name = name.trim_end_matches("-light");
                         self.open_instance(&f);
                         self.tab = match name {
                             "instance-mods" => InstTab::Mods,

@@ -85,16 +85,6 @@ pub fn c_muted() -> Color32 {
 pub fn c_faint() -> Color32 {
     pick(0x8A94A9, 0x5E6778)
 }
-/// The ink fill: strong neutral emphasis (a selected chip's text, the knob of a switch).
-pub fn c_ink() -> Color32 {
-    pick(0xE9EDF5, 0x111827)
-}
-pub fn c_ink_hover() -> Color32 {
-    pick(0xFFFFFF, 0x273043)
-}
-pub fn c_on_ink() -> Color32 {
-    pick(0x0A0D14, 0xFFFFFF)
-}
 /// A selected list row or combo item, and selected text.
 pub fn c_selection() -> Color32 {
     pick(0x2A3550, 0xDCE3EE)
@@ -143,7 +133,6 @@ pub fn card_shadow() -> egui::Shadow {
 }
 
 /// The shadow of a card under the pointer: it rises a little.
-#[allow(dead_code)]
 pub fn card_shadow_raised() -> egui::Shadow {
     let a = if is_dark() { 130 } else { 30 };
     egui::Shadow { offset: [0, 12], blur: 32, spread: 0, color: Color32::from_black_alpha(a) }
