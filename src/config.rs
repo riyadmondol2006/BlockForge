@@ -78,6 +78,16 @@ pub struct Settings {
     pub ignore_one_drive_warning: bool,
     pub ignore_program_files_warning: bool,
     pub ignore_java_options_warning: bool,
+    /// How the Library shows the instances: `grid` (tiles) or `list` (a compact table). BlockForge only.
+    pub library_view: String,
+    /// A sorting of the Library the Java edition doesn't know (`BY_ADDED`, `BY_MINECRAFT_VERSION`, `BY_LOADER`), or
+    /// empty to use `default_instance_sorting`, which the Java edition shares. Kept apart so the Java edition never
+    /// reads a sorting it can't use.
+    pub library_sort: String,
+    /// Show the launcher news on Home.
+    pub home_news: bool,
+    /// Wrap long lines in an instance's log instead of scrolling sideways.
+    pub log_wrap: bool,
     #[serde(flatten)]
     pub extras: Map<String, Value>,
 }
@@ -146,6 +156,10 @@ impl Default for Settings {
             ignore_one_drive_warning: false,
             ignore_program_files_warning: false,
             ignore_java_options_warning: false,
+            library_view: "grid".to_string(),
+            library_sort: String::new(),
+            home_news: true,
+            log_wrap: false,
             extras: Map::new(),
         }
     }
@@ -334,6 +348,32 @@ mod tests {
         assert_eq!(s.maximum_memory, 2048);
         let back = serde_json::to_value(&s).unwrap();
         assert_eq!(back["someJavaOnlySetting"]["a"], 1);
+    }
+
+    /// A settings file from before the Library and Home remembered their views (or one the Java edition wrote) loads
+    /// with the defaults for them, and they are written back under their own names.
+    #[test]
+    fn an_old_settings_file_gets_the_default_views() {
+        let s: Settings =
+            serde_json::from_str(r#"{"maximumMemory":2048,"defaultInstanceSorting":"BY_LAST_PLAYED"}"#).unwrap();
+        assert_eq!(s.library_view, "grid");
+        assert_eq!(s.library_sort, "");
+        assert!(s.home_news);
+        assert!(!s.log_wrap);
+        assert_eq!(s.default_instance_sorting, "BY_LAST_PLAYED");
+        assert!(s.extras.is_empty(), "the new settings are not taken for the Java edition's");
+        let mut s = s;
+        s.library_view = "list".into();
+        s.library_sort = "BY_LOADER".into();
+        s.home_news = false;
+        s.log_wrap = true;
+        let back = serde_json::to_value(&s).unwrap();
+        assert_eq!(back["libraryView"], "list");
+        assert_eq!(back["librarySort"], "BY_LOADER");
+        assert_eq!(back["homeNews"], false);
+        assert_eq!(back["logWrap"], true);
+        let again: Settings = serde_json::from_value(back).unwrap();
+        assert_eq!((again.library_view.as_str(), again.home_news, again.log_wrap), ("list", false, true));
     }
 
     #[test]

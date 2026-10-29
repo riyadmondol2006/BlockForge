@@ -8,7 +8,6 @@ use std::time::{Duration, Instant};
 use egui::{Color32, CornerRadius, Response, Sense, Stroke, Ui, vec2};
 
 use super::App;
-use super::fonts::TextExt;
 use super::theme::*;
 use super::widgets::{loader_color, small_muted};
 use crate::instances::Instance;
@@ -48,16 +47,25 @@ impl App {
 
     /// The "Play history" block of an instance's overview.
     pub(super) fn play_history(&mut self, ui: &mut Ui, inst: &Instance) {
-        let n = if ui.available_width() >= 560.0 { 56 } else { 28 };
+        let n = history_days(ui.available_width());
         let days = self.play_days(inst, n);
         let played = days.iter().filter(|d| **d > 0).count();
-        ui.add_space(4.0);
-        ui.label(egui::RichText::new("Play history").size(FS_SECTION).semibold());
+        super::instance_menu::block_title(ui, "Play history");
         ui.add_space(2.0);
-        play_strip(ui, &days, Self::strip_hue(inst), 8.0, 2.0);
+        play_strip(ui, &days, Self::strip_hue(inst), HISTORY_CELL, HISTORY_GAP);
         ui.add_space(2.0);
         small_muted(ui, caption(played, n));
     }
+}
+
+/// The cells of the history strip on an instance's overview, and the space between them.
+const HISTORY_CELL: f32 = 8.0;
+const HISTORY_GAP: f32 = 2.0;
+
+/// How many days the history strip shows in `width`: whole weeks, as many as fit, from four weeks to twelve.
+fn history_days(width: f32) -> usize {
+    let fit = ((width + HISTORY_GAP) / (HISTORY_CELL + HISTORY_GAP)).floor().max(0.0) as usize;
+    (fit / 7 * 7).clamp(28, 84)
 }
 
 /// "Played on 9 of the last 56 days", or "Not played yet" when it has not been.
@@ -119,4 +127,25 @@ pub fn play_strip(ui: &mut Ui, days: &[u8], hue: Color32, cell: f32, gap: f32) -
         return resp.on_hover_text(format!("{}: {sessions}", day.format("%a %-d %b")));
     }
     resp
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The strip fills the width it has in whole weeks, never fewer than four nor more than twelve.
+    #[test]
+    fn the_history_strip_is_whole_weeks_that_fit() {
+        assert_eq!(history_days(560.0), 56);
+        assert_eq!(history_days(500.0), 49);
+        assert_eq!(history_days(100.0), 28);
+        assert_eq!(history_days(2000.0), 84);
+        for w in [280.0, 430.0, 600.0, 870.0] {
+            let n = history_days(w);
+            assert_eq!(n % 7, 0);
+            if n > 28 {
+                assert!(n as f32 * (HISTORY_CELL + HISTORY_GAP) - HISTORY_GAP <= w, "{n} days in {w}");
+            }
+        }
+    }
 }

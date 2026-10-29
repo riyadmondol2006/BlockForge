@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use egui::{RichText, Ui};
 
 use super::App;
-use super::instance_menu::{SplitRow, secondary_menu};
+use super::instance_menu::{BLOCK_TITLE_H, SplitRow, secondary_menu, split_or_stack};
 use super::theme::*;
 use super::widgets::*;
 use crate::backups::{self, Backup, BackupMode};
@@ -85,39 +85,45 @@ impl App {
         let mut open_folder = false;
         let mut show: Option<PathBuf> = None;
 
-        // the title, what happens by itself, and the way to make one
-        let mut head = SplitRow::new(ui, egui::Id::unique("backups-head"), 32.0);
-        head.left(ui, |ui| {
-            ui.label(RichText::new("Backups").size(FS_SECTION).semibold());
-            if svc.enable_automatic_backup_after_launch {
-                ui.label(RichText::new("Automatic after playing").size(FS_META).color(c_faint()));
-            }
-        });
-        head.right(ui, |ui| {
-            if secondary_icon(ui, super::icons::Icon::Folder, "Open backups folder").clicked() {
-                open_folder = true;
-            }
-            if working {
-                // a backup or a restore of this instance is running: another one now would read half-written files
-                spinner_sized(ui, 14.0);
-                muted(ui, "A backup or restore of this instance is running\u{2026}");
-            } else {
-                let (_, picked) = secondary_menu(ui, "Back up now", |ui| {
-                    let mut mode = None;
-                    for m in BackupMode::ALL {
-                        if ui.button(m.label()).clicked() {
-                            mode = Some(m);
-                            ui.close();
-                        }
-                    }
-                    mode
-                });
-                if let Some(Some(mode)) = picked {
-                    make = Some(mode);
+        // the title, what happens by itself, and the way to make one: on one row when they fit, otherwise the
+        // buttons go under the title
+        let mut head_state = (&mut open_folder, &mut make);
+        split_or_stack(
+            ui,
+            egui::Id::unique("backups-head"),
+            BLOCK_TITLE_H,
+            &mut head_state,
+            |ui, _| {
+                ui.label(RichText::new("Backups").size(FS_SECTION).semibold());
+                if svc.enable_automatic_backup_after_launch {
+                    ui.label(RichText::new("Automatic after playing").size(FS_META).color(c_faint()));
                 }
-            }
-        });
-        head.finish(ui);
+            },
+            |ui, (open_folder, make)| {
+                if secondary_icon(ui, super::icons::Icon::Folder, "Open backups folder").clicked() {
+                    **open_folder = true;
+                }
+                if working {
+                    // a backup or a restore of this instance is running: another one now would read half-written files
+                    spinner_sized(ui, 14.0);
+                    muted(ui, "A backup or restore of this instance is running\u{2026}");
+                } else {
+                    let (_, picked) = secondary_menu(ui, "Back up now", |ui| {
+                        let mut mode = None;
+                        for m in BackupMode::ALL {
+                            if ui.button(m.label()).clicked() {
+                                mode = Some(m);
+                                ui.close();
+                            }
+                        }
+                        mode
+                    });
+                    if let Some(Some(mode)) = picked {
+                        **make = Some(mode);
+                    }
+                }
+            },
+        );
         small_muted(
             ui,
             "A backup is a zip file of this instance. Worlds and settings are small; adding the mods or everything makes it bigger.",

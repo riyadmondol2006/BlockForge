@@ -183,6 +183,18 @@ pub(super) fn section_break(ui: &mut Ui) {
     ui.add_space(12.0);
 }
 
+/// The height of the title row of a block on the instance page, with or without a button at its end, so the titles
+/// of blocks side by side line up.
+pub(super) const BLOCK_TITLE_H: f32 = 32.0;
+
+/// The title of a block on the instance page, on a row as tall as one that has a button at its end.
+pub(super) fn block_title(ui: &mut Ui, text: &str) {
+    let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), BLOCK_TITLE_H), Sense::hover());
+    ui.scope_builder(UiBuilder::new().max_rect(row).layout(Layout::left_to_right(Align::Center)), |ui| {
+        ui.add(egui::Label::new(RichText::new(text).size(FS_SECTION).semibold()).truncate());
+    });
+}
+
 /// A row with something at each end. The part on the right is laid out left to right in the width it had on the last
 /// frame (see [`remember_width`]), so the keyboard (Tab) visits it in the order it is read; the part on the left gets
 /// what is left. Call `left`, then `right`, then `finish`.

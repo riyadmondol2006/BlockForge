@@ -2,6 +2,7 @@
 
 use egui::{Align, Context, CornerRadius, Layout, RichText, ScrollArea, Sense, Ui};
 
+use super::instance_menu::SplitRow;
 use super::services::{SvcMsg, modal_scroll_height, modal_width};
 use super::theme::*;
 use super::widgets::*;
@@ -128,7 +129,7 @@ fn two_lines(ui: &Ui, text: &str, width: f32) -> std::sync::Arc<egui::Galley> {
 }
 
 impl App {
-    /// The news list for the bottom of the home page.
+    /// The news list of the home page: at its bottom, or beside the instances in a wide window.
     pub(super) fn news_section(&mut self, ui: &mut Ui) {
         if matches!(self.svc.news.status, Status::Idle) {
             self.svc.news.status = Status::Loading;
@@ -137,8 +138,21 @@ impl App {
                 n.send(Msg::Svc(SvcMsg::News(crate::news::load(&dirs).await.map_err(|e| format!("{e:#}")))));
             });
         }
-        ui.add_space(24.0);
-        section(ui, "News");
+        // the title, and the way to hide the news on Home (it comes back with "Show news" at the bottom of the page)
+        let mut hide = false;
+        let mut head = SplitRow::new(ui, egui::Id::unique("home-news-head"), 32.0);
+        head.left(ui, |ui| {
+            ui.label(RichText::new("News").size(FS_SECTION).semibold());
+        });
+        head.right(ui, |ui| {
+            hide = ghost(ui, "Hide").on_hover_text("Hide the news on Home").clicked();
+        });
+        head.finish(ui);
+        if hide {
+            self.settings.home_news = false;
+            self.save_settings();
+            return;
+        }
         ui.add_space(2.0);
         match &self.svc.news.status {
             Status::Idle | Status::Loading => skeleton_rows(ui, 3, 52.0),
