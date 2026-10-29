@@ -14,7 +14,7 @@ pub const API_OVERRIDE: &str = "BLOCKFORGE_UPDATE_API";
 /// Wait this long after start so the check never competes with loading.
 pub const FIRST_CHECK_DELAY: Duration = Duration::from_secs(8);
 /// How often a running launcher looks again.
-pub const CHECK_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
+pub const CHECK_EVERY: Duration = Duration::from_secs(60 * 60);
 
 /// The address the latest release is read from.
 pub fn api_url() -> String {

@@ -168,9 +168,9 @@ Not built yet: Intel Macs, Windows on ARM and Linux on ARM.
 
 ### Updating
 
-BlockForge checks for a new version a few seconds after it opens and every six hours after that (turn it off in
-**Settings**, or press **Check for updates** on the **About** page). When there is one, a banner offers **Update now**
-and installs it the way your copy was installed: the AppImage is replaced in place, deb and rpm go through your package
+BlockForge checks for a new version a few seconds after it opens and every hour after that (turn it off in
+**Settings**, or press **Check for updates** on the **About** page). When there is one, a window pops up with what is
+new in it and offers **Update now**, which installs it the way your copy was installed: the AppImage is replaced in place, deb and rpm go through your package
 manager, the Windows setup replaces the install, and the macOS disk image opens for you.
 
 ### Coming from an older BlockForge (3.x, the Java version) or ATLauncher

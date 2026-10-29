@@ -23,19 +23,35 @@ pub struct Reply {
     pub cut_after: Option<usize>,
     /// Wait this long before answering (a far-away server).
     pub delay_ms: u64,
+    /// The first time only: send this many bytes of the body, then keep the connection open and send nothing more (a
+    /// connection that stalls part-way). Later requests get all of it.
+    pub stall_first: Option<usize>,
+    /// Say `Accept-Ranges: bytes` and answer a `Range: bytes=a-b` request with just those bytes (206).
+    pub ranges: bool,
 }
 
 impl Reply {
     pub fn ok(body: impl Into<Vec<u8>>) -> Reply {
-        Reply { status: 200, body: body.into(), cut_after: None, delay_ms: 0 }
+        Reply { status: 200, body: body.into(), cut_after: None, delay_ms: 0, stall_first: None, ranges: false }
     }
 
     pub fn status(status: u16) -> Reply {
-        Reply { status, body: Vec::new(), cut_after: None, delay_ms: 0 }
+        Reply { status, body: Vec::new(), cut_after: None, delay_ms: 0, stall_first: None, ranges: false }
     }
 
     pub fn cut(body: impl Into<Vec<u8>>, after: usize) -> Reply {
-        Reply { status: 200, body: body.into(), cut_after: Some(after), delay_ms: 0 }
+        Reply { status: 200, body: body.into(), cut_after: Some(after), delay_ms: 0, stall_first: None, ranges: false }
+    }
+
+    /// All of `body`, but the first request gets only `after` bytes of it and then nothing more.
+    pub fn stall_first(body: impl Into<Vec<u8>>, after: usize) -> Reply {
+        Reply { status: 200, body: body.into(), cut_after: None, delay_ms: 0, stall_first: Some(after), ranges: false }
+    }
+
+    /// The same answer, also in pieces to whoever asks for a range.
+    pub fn with_ranges(mut self) -> Reply {
+        self.ranges = true;
+        self
     }
 
     /// The same answer, given after `ms` milliseconds.
@@ -83,7 +99,12 @@ impl Server {
                     let text = String::from_utf8_lossy(&request);
                     let path = text.split_whitespace().nth(1).unwrap_or("/").to_string();
                     t.fetch_add(1, Ordering::SeqCst);
-                    *h.lock().unwrap().entry(path.clone()).or_insert(0) += 1;
+                    let nth = {
+                        let mut hits = h.lock().unwrap();
+                        let n = hits.entry(path.clone()).or_insert(0);
+                        *n += 1;
+                        *n
+                    };
                     let reply = r.lock().unwrap().get(&path).cloned().unwrap_or(Reply::status(404));
                     let now = b.fetch_add(1, Ordering::SeqCst) + 1;
                     m.fetch_max(now, Ordering::SeqCst);
@@ -91,14 +112,33 @@ impl Server {
                         tokio::time::sleep(std::time::Duration::from_millis(reply.delay_ms)).await;
                     }
                     b.fetch_sub(1, Ordering::SeqCst);
+                    let range = text
+                        .lines()
+                        .filter_map(|l| l.split_once(':'))
+                        .find(|(k, _)| k.trim().eq_ignore_ascii_case("range"))
+                        .and_then(|(_, v)| v.trim().strip_prefix("bytes=")?.split_once('-'))
+                        .and_then(|(a, z)| Some((a.parse::<usize>().ok()?, z.parse::<usize>().ok()?)))
+                        .filter(|_| reply.ranges && reply.status == 200);
+                    let total = reply.body.len();
+                    let (status, body, extra) = match range {
+                        Some((a, z)) => {
+                            let z = z.min(total.saturating_sub(1));
+                            (206, &reply.body[a.min(z + 1)..=z], format!("Content-Range: bytes {a}-{z}/{total}\r\n"))
+                        }
+                        None => (reply.status, &reply.body[..], String::new()),
+                    };
+                    let accept = if reply.ranges { "Accept-Ranges: bytes\r\n" } else { "" };
                     let head = format!(
-                        "HTTP/1.1 {} X\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                        reply.status,
-                        reply.body.len()
+                        "HTTP/1.1 {status} X\r\nContent-Length: {}\r\n{accept}{extra}Connection: close\r\n\r\n",
+                        body.len()
                     );
                     let _ = socket.write_all(head.as_bytes()).await;
-                    let send = reply.cut_after.unwrap_or(reply.body.len()).min(reply.body.len());
-                    let _ = socket.write_all(&reply.body[..send]).await;
+                    let stall = reply.stall_first.filter(|_| nth == 1);
+                    let send = stall.or(reply.cut_after).unwrap_or(body.len()).min(body.len());
+                    let _ = socket.write_all(&body[..send]).await;
+                    if stall.is_some() {
+                        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                    }
                     let _ = socket.shutdown().await;
                 });
             }

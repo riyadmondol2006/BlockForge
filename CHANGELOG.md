@@ -3,6 +3,34 @@
 The section for a version is used as the text of its release on GitHub. Older releases (the Java versions, up to
 3.4.42.x) are on the [releases page](https://github.com/riyadmondol2006/BlockForge/releases).
 
+## 4.8.2
+
+Faster downloads that use more of your connection, and a window that tells you when a new BlockForge is out.
+
+### What is new
+
+- **Update window.** When a new version comes out, a window pops up with what is new in it and **Update now**, which
+  downloads it, checks it and installs it the way your copy was installed, then restarts. **Later** and **Skip this
+  version** close it. BlockForge now looks for a new version every hour instead of every six (it can still be turned
+  off in Settings).
+
+### Faster downloads
+
+- Big files (16 MB and more, such as a modpack's zip) come in 8 MB pieces, several at once, when the server allows
+  it. Many servers give one connection only a few MB/s; RLCraft's 339 MB zip went from about 33 to about 25 seconds.
+- Each server gets four connections instead of one, so thousands of small files (the game's assets) no longer wait
+  on a single one: about 16 MB/s became about 24 MB/s on Mojang's asset server, and steadier.
+- 48 files at once instead of 32 when the setting is left at its default (16 on small computers, as before).
+
+### Fixed
+
+- A download that stops part-way is tried again after 15 seconds without data, instead of waiting out the whole
+  connection timeout (a minute by default) while the speed shown sank towards nothing.
+- The download bar no longer shows 100% while a file is still coming: a file whose size the pack doesn't list counts
+  for the size the server says, and while nobody knows it the bar moves and says how much came so far.
+- The downloads in the sidebar no longer cover the menu above them, and each reads from the top down (its name, the
+  bar, the sizes, Cancel).
+
 ## 4.8.1
 
 ### Fixed

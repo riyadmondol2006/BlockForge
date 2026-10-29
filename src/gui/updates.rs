@@ -1,12 +1,14 @@
-//! BlockForge updating itself: the background check, the banner that offers a new version ("Update now" downloads it
-//! with a progress bar and restarts), and what the About page shows about updates.
+//! BlockForge updating itself: the background check, the window that pops up to offer a new version with what is new
+//! in it ("Update now" downloads it with a progress bar and restarts), and what the About page shows about updates.
 
+use std::cell::Cell;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use egui::{CornerRadius, RichText, Stroke, Ui};
 
+use super::discover::{dialog_footer, dialog_title};
 use super::theme::*;
 use super::widgets::*;
 use super::{App, Msg};
@@ -70,7 +72,7 @@ impl Default for UpdateUi {
 }
 
 impl App {
-    /// Starts the background checks: the first a few seconds after start, then every few hours. Also removes what an
+    /// Starts the background checks: the first a few seconds after start, then every hour. Also removes what an
     /// earlier update left behind.
     pub(super) fn start_update_checks(&mut self) {
         let temp = self.dirs.temp.clone();
@@ -227,137 +229,184 @@ impl App {
         }
     }
 
-    /// The banner that offers a new BlockForge. Nothing is installed until "Update now" is pressed.
-    pub(super) fn update_banner(&mut self, ui: &mut Ui) {
+    /// The window that offers a new BlockForge, with what is new in it. It opens by itself when a check finds a
+    /// version the player hasn't skipped; nothing is installed until "Update now" is pressed.
+    pub(super) fn update_dialog(&mut self, ctx: &egui::Context) {
         if !self.upd.shown {
             return;
         }
         let Some(release) = self.upd.latest.clone() else { return };
         let version = update::display_version(&release.tag_name).to_string();
-        let mut action = None;
-        egui::Frame::new()
-            .fill(c_card())
-            .stroke(Stroke::new(1.0, c_border()))
-            .corner_radius(CornerRadius::same(R_CARD))
-            .inner_margin(egui::Margin::symmetric(16, 12))
-            .show(ui, |ui| {
-                ui.set_width(ui.available_width());
+        // installing ends with a restart: jobs in progress would stop halfway, and a game that runs on would be lost
+        // to the launcher (no log, no Stop, no backup after it)
+        let wait = if self.games.values().any(super::Game::active) {
+            Some("Close Minecraft first. The launcher restarts to finish the update.")
+        } else if !self.tasks.is_empty() {
+            Some("Wait for the jobs in progress to finish. The launcher restarts to finish the update.")
+        } else {
+            None
+        };
+        let can_install = self.can_install_update();
+        // what is being done can't be walked away from; what is only being offered or said can
+        let busy = matches!(self.upd.stage, Stage::Downloading { .. } | Stage::Installing | Stage::Restarting);
+        let action: Cell<Option<Action>> = Cell::new(None);
+        let (width, notes_height) = super::curseforge::modal_size(ctx, 560.0, 300.0);
+        let modal =
+            egui::Modal::new(egui::Id::unique("update-dialog")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
+                ui.set_width(width);
                 match &self.upd.stage {
                     Stage::Offer => {
-                        let can_install = self.can_install_update();
-                        // installing ends with a restart: jobs in progress would stop halfway, and a game that runs
-                        // on would be lost to the launcher (no log, no Stop, no backup after it)
-                        let wait = if self.games.values().any(super::Game::active) {
-                            Some("Close Minecraft first. The launcher restarts to finish the update.")
-                        } else if !self.tasks.is_empty() {
-                            Some("Wait for the jobs in progress to finish. The launcher restarts to finish the update.")
-                        } else {
-                            None
-                        };
-                        ui.horizontal_wrapped(|ui| {
-                            ui.label(RichText::new(format!("BlockForge {version} is available")).semibold());
-                            small_muted(ui, format!("You have {}", crate::VERSION));
-                        });
-                        ui.add_space(6.0);
-                        ui.horizontal_wrapped(|ui| {
-                            if can_install {
-                                let now = ui.add_enabled_ui(wait.is_none(), |ui| primary(ui, "Update now")).inner;
-                                if now.on_disabled_hover_text(wait.unwrap_or_default()).clicked() {
-                                    action = Some(Action::Install);
+                        if dialog_title(ui, &format!("BlockForge {version} is available")) {
+                            action.set(Some(Action::Later));
+                        }
+                        small_muted(ui, format!("You have {}", crate::VERSION));
+                        ui.add_space(10.0);
+                        if !release.body.trim().is_empty() {
+                            egui::Frame::new()
+                                .fill(c_card())
+                                .stroke(Stroke::new(1.0, c_border()))
+                                .corner_radius(CornerRadius::same(R_CONTROL))
+                                .inner_margin(egui::Margin::same(12))
+                                .show(ui, |ui| {
+                                    ui.set_width(ui.available_width());
+                                    egui::ScrollArea::vertical()
+                                        .id_salt("update-notes")
+                                        .max_height(notes_height.min(320.0))
+                                        .show(ui, |ui| release_notes(ui, &release.body));
+                                });
+                            ui.add_space(10.0);
+                        }
+                        if let Some(wait) = wait.filter(|_| can_install) {
+                            small_muted(ui, wait);
+                            ui.add_space(6.0);
+                        }
+                        dialog_footer(
+                            ui,
+                            "update-offer",
+                            |ui| {
+                                if ghost(ui, "Skip this version").clicked() {
+                                    action.set(Some(Action::Skip));
                                 }
-                                if secondary(ui, "See what's new").clicked() {
-                                    action = Some(Action::OpenPage);
+                                if can_install && ghost(ui, "Release page").clicked() {
+                                    action.set(Some(Action::OpenPage));
                                 }
-                            } else if primary(ui, "Get the update").clicked() {
-                                action = Some(Action::OpenPage);
-                            }
-                            if ghost(ui, "Skip this version").clicked() {
-                                action = Some(Action::Skip);
-                            }
-                            if ghost(ui, "Later").clicked() {
-                                action = Some(Action::Later);
-                            }
-                        });
+                            },
+                            |ui| {
+                                if secondary(ui, "Later").clicked() {
+                                    action.set(Some(Action::Later));
+                                }
+                                if can_install {
+                                    let now = ui.add_enabled_ui(wait.is_none(), |ui| primary(ui, "Update now")).inner;
+                                    if now.on_disabled_hover_text(wait.unwrap_or_default()).clicked() {
+                                        action.set(Some(Action::Install));
+                                    }
+                                } else if primary(ui, "Get the update").clicked() {
+                                    action.set(Some(Action::OpenPage));
+                                }
+                            },
+                        );
                     }
                     Stage::Downloading { progress, .. } => {
                         let (done, total) =
                             (progress.done.load(Ordering::Relaxed), progress.total.load(Ordering::Relaxed));
-                        ui.label(RichText::new(format!("Downloading BlockForge {version}")).semibold());
-                        ui.add_space(4.0);
+                        ui.label(
+                            RichText::new(format!("Downloading BlockForge {version}")).size(FS_SECTION).semibold(),
+                        );
+                        ui.add_space(10.0);
                         progress_bar(ui, (total > 0).then(|| progress.fraction()), 6.0);
-                        ui.horizontal(|ui| {
-                            let text = if total > 0 {
-                                format!("{} of {}", human_size(done), human_size(total))
-                            } else {
-                                human_size(done)
-                            };
-                            small_muted(ui, text);
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                if ghost(ui, "Cancel").clicked() {
-                                    action = Some(Action::Cancel);
+                        ui.add_space(4.0);
+                        let text = if total > 0 {
+                            format!("{} of {}", human_size(done), human_size(total))
+                        } else {
+                            human_size(done)
+                        };
+                        small_muted(ui, text);
+                        ui.add_space(10.0);
+                        dialog_footer(
+                            ui,
+                            "update-downloading",
+                            |_| {},
+                            |ui| {
+                                if secondary(ui, "Cancel").clicked() {
+                                    action.set(Some(Action::Cancel));
                                 }
-                            });
-                        });
+                            },
+                        );
                         ui.ctx().request_repaint_after(Duration::from_millis(100));
                     }
                     Stage::Installing => {
-                        ui.label(RichText::new(installing_text(self.upd.kind, &version)).semibold());
-                        ui.add_space(4.0);
+                        ui.label(RichText::new(installing_text(self.upd.kind, &version)).size(FS_SECTION).semibold());
+                        ui.add_space(10.0);
                         progress_bar(ui, None, 6.0);
                         ui.ctx().request_repaint_after(Duration::from_millis(100));
                     }
                     Stage::Restarting => {
-                        ui.label(RichText::new(closing_text(self.upd.kind, &version)).semibold());
+                        ui.label(RichText::new(closing_text(self.upd.kind, &version)).size(FS_SECTION).semibold());
                     }
                     Stage::Note { message, command } => {
-                        ui.label(RichText::new(message).semibold());
-                        if let Some(command) = command {
-                            ui.add_space(4.0);
-                            ui.add(egui::Label::new(RichText::new(command).monospace().color(c_text())).wrap());
+                        if dialog_title(ui, &format!("BlockForge {version}")) {
+                            action.set(Some(Action::Later));
                         }
                         ui.add_space(6.0);
-                        ui.horizontal_wrapped(|ui| {
-                            if let Some(command) = command {
-                                if primary(ui, "Copy command").clicked() {
-                                    action = Some(Action::Copy(command.clone()));
+                        ui.add(egui::Label::new(RichText::new(message)).wrap());
+                        if let Some(command) = command {
+                            ui.add_space(6.0);
+                            ui.add(egui::Label::new(RichText::new(command).monospace().color(c_text())).wrap());
+                        }
+                        ui.add_space(10.0);
+                        dialog_footer(
+                            ui,
+                            "update-note",
+                            |_| {},
+                            |ui| {
+                                if secondary(ui, "Close").clicked() {
+                                    action.set(Some(Action::Later));
                                 }
-                            }
-                            if secondary(ui, "Close").clicked() {
-                                action = Some(Action::Later);
-                            }
-                        });
+                                if let Some(command) = command {
+                                    if primary(ui, "Copy command").clicked() {
+                                        action.set(Some(Action::Copy(command.clone())));
+                                    }
+                                }
+                            },
+                        );
                     }
                     Stage::Failed(error) => {
-                        ui.label(
-                            RichText::new(format!("Couldn't update to BlockForge {version}"))
-                                .semibold()
-                                .color(c_danger()),
-                        );
-                        ui.add(egui::Label::new(RichText::new(error).color(c_muted()).size(FS_META)).wrap());
+                        if dialog_title(ui, &format!("Couldn't update to BlockForge {version}")) {
+                            action.set(Some(Action::Later));
+                        }
                         ui.add_space(6.0);
-                        let wait = if self.games.values().any(super::Game::active) {
-                            Some("Close Minecraft first. The launcher restarts to finish the update.")
-                        } else if !self.tasks.is_empty() {
-                            Some("Wait for the jobs in progress to finish. The launcher restarts to finish the update.")
-                        } else {
-                            None
-                        };
-                        ui.horizontal_wrapped(|ui| {
-                            let again = ui.add_enabled_ui(wait.is_none(), |ui| primary(ui, "Try again")).inner;
-                            if again.on_disabled_hover_text(wait.unwrap_or_default()).clicked() {
-                                action = Some(Action::Install);
-                            }
-                            if secondary(ui, "Download from the website").clicked() {
-                                action = Some(Action::OpenPage);
-                            }
-                            if ghost(ui, "Later").clicked() {
-                                action = Some(Action::Later);
-                            }
-                        });
+                        ui.add(egui::Label::new(RichText::new(error).color(c_muted())).wrap());
+                        if let Some(wait) = wait {
+                            ui.add_space(6.0);
+                            small_muted(ui, wait);
+                        }
+                        ui.add_space(10.0);
+                        dialog_footer(
+                            ui,
+                            "update-failed",
+                            |ui| {
+                                if ghost(ui, "Download from the website").clicked() {
+                                    action.set(Some(Action::OpenPage));
+                                }
+                            },
+                            |ui| {
+                                if secondary(ui, "Later").clicked() {
+                                    action.set(Some(Action::Later));
+                                }
+                                let again = ui.add_enabled_ui(wait.is_none(), |ui| primary(ui, "Try again")).inner;
+                                if again.on_disabled_hover_text(wait.unwrap_or_default()).clicked() {
+                                    action.set(Some(Action::Install));
+                                }
+                            },
+                        );
                     }
                 }
             });
-        ui.add_space(8.0);
+        // Escape or a click beside the window is "Later", except while the update is being fetched or put in place
+        let mut action = action.into_inner();
+        if modal.should_close() && !busy && action.is_none() {
+            action = Some(Action::Later);
+        }
         match action {
             Some(Action::Install) => self.start_update(),
             Some(Action::OpenPage) => {
@@ -392,7 +441,87 @@ impl App {
     }
 }
 
-/// The banner's line while the downloaded update is being put in place.
+/// One piece of release notes.
+#[derive(Debug, PartialEq)]
+enum Note {
+    Heading(String),
+    Bullet(String),
+    Text(String),
+}
+
+/// Release notes as GitHub has them (the version's section of CHANGELOG.md) in pieces to show: headings, bullets and
+/// paragraphs, with the lines a bullet or paragraph runs on over joined, and the Markdown marks taken out.
+fn notes(body: &str) -> Vec<Note> {
+    let mut out: Vec<Note> = Vec::new();
+    // whether the next plain line goes on with the last bullet or paragraph
+    let mut open = false;
+    for line in body.lines() {
+        let t = line.trim();
+        if t.is_empty() {
+            open = false;
+        } else if let Some(h) = t.strip_prefix('#') {
+            out.push(Note::Heading(plain(h.trim_start_matches('#').trim())));
+            open = false;
+        } else if let Some(b) = t.strip_prefix("- ").or_else(|| t.strip_prefix("* ")) {
+            out.push(Note::Bullet(plain(b)));
+            open = true;
+        } else if let (true, Some(Note::Bullet(prev) | Note::Text(prev))) = (open, out.last_mut()) {
+            prev.push(' ');
+            prev.push_str(&plain(t));
+        } else {
+            out.push(Note::Text(plain(t)));
+            open = true;
+        }
+    }
+    out
+}
+
+/// A line of Markdown as plain text: `**bold**`, `` `code` `` and `[links](to)` keep only their words.
+fn plain(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(i) = rest.find('[') {
+        out.push_str(&rest[..i]);
+        let after = &rest[i + 1..];
+        match after.find("](").and_then(|j| after[j..].find(')').map(|k| (j, j + k))) {
+            Some((j, end)) => {
+                out.push_str(&after[..j]);
+                rest = &after[end + 1..];
+            }
+            None => {
+                out.push('[');
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    out.replace("**", "").replace("__", "").replace('`', "")
+}
+
+fn release_notes(ui: &mut Ui, body: &str) {
+    ui.spacing_mut().item_spacing.y = 4.0;
+    for (n, note) in notes(body).into_iter().enumerate() {
+        match note {
+            Note::Heading(text) => {
+                if n > 0 {
+                    ui.add_space(6.0);
+                }
+                ui.label(RichText::new(text).semibold());
+            }
+            Note::Bullet(text) => {
+                ui.horizontal_top(|ui| {
+                    ui.label(RichText::new("\u{2022}").color(c_muted()));
+                    ui.add(egui::Label::new(RichText::new(text).color(c_text())).wrap());
+                });
+            }
+            Note::Text(text) => {
+                ui.add(egui::Label::new(RichText::new(text).color(c_muted())).wrap());
+            }
+        }
+    }
+}
+
+/// The window's line while the downloaded update is being put in place.
 fn installing_text(kind: Kind, version: &str) -> String {
     match kind {
         // the package manager asks for the password in a window of its own
@@ -405,7 +534,7 @@ fn installing_text(kind: Kind, version: &str) -> String {
     }
 }
 
-/// The banner's line just before this copy closes for the update.
+/// The window's line just before this copy closes for the update.
 fn closing_text(kind: Kind, version: &str) -> String {
     match kind {
         Kind::WindowsInstaller => {
@@ -431,6 +560,23 @@ enum Action {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn release_notes_read_as_headings_bullets_and_paragraphs() {
+        let body = "Quicker downloads, and a [fix](https://example.com/1).\n\n### Fixed\n\n- **The bar.** It no longer\n  covers `Tools`.\n- Stalls retry.\n\n## 4.8.0\nOlder text\nthat goes on.";
+        assert_eq!(
+            notes(body),
+            vec![
+                Note::Text("Quicker downloads, and a fix.".into()),
+                Note::Heading("Fixed".into()),
+                Note::Bullet("The bar. It no longer covers Tools.".into()),
+                Note::Bullet("Stalls retry.".into()),
+                Note::Heading("4.8.0".into()),
+                Note::Text("Older text that goes on.".into()),
+            ]
+        );
+        assert_eq!(plain("[a](b) and [not a link"), "a and [not a link");
+    }
 
     #[test]
     fn the_banner_says_what_happens_for_each_kind_of_install() {

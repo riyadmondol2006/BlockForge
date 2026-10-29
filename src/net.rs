@@ -159,7 +159,7 @@ pub async fn test_proxy(proxy: &ProxyConfig, url: &str) -> Result<()> {
 // ---------------------------------------------------------------------------------------------------------
 // How many downloads at once (DownloadPool)
 
-/// What the player set, or when it is still the default (16, the Java edition's), what suits this computer: 32 at
+/// What the player set, or when it is still the default (16, the Java edition's), what suits this computer: 48 at
 /// once, or 16 with two cores or 4 GB of memory or less. Waiting on the network costs no processor time: what limits
 /// a download of thousands of small files (the game's assets, a modpack) is the time each request takes to answer,
 /// which a far-away player feels most, so more of them at once is quicker.
@@ -168,7 +168,7 @@ pub fn for_computer(configured: usize, default_configured: usize, total_mb: u64,
         return configured;
     }
     let small = (total_mb > 0 && total_mb <= 4608) || (cores > 0 && cores <= 2);
-    if small { configured.max(16) } else { configured.max(32) }
+    if small { configured.max(16) } else { configured.max(48) }
 }
 
 /// The most files fetched at once, whatever the setting says.
@@ -392,10 +392,10 @@ mod tests {
 
     #[test]
     fn thread_counts_follow_the_download_pool() {
-        // the default setting fetches 32 at once, 16 on a small computer; an explicit setting is kept
+        // the default setting fetches 48 at once, 16 on a small computer; an explicit setting is kept
         assert_eq!(for_computer(16, 16, 4096, 8), 16);
         assert_eq!(for_computer(16, 16, 16384, 2), 16);
-        assert_eq!(for_computer(16, 16, 16384, 8), 32);
+        assert_eq!(for_computer(16, 16, 16384, 8), 48);
         assert_eq!(for_computer(32, 16, 2048, 2), 32);
         assert_eq!(for_computer(4, 16, 2048, 2), 4);
         // never more threads than files, nor more than the cap; the processor count doesn't limit it

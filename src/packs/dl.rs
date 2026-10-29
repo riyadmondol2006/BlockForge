@@ -185,7 +185,9 @@ pub async fn download_all(jobs: Vec<Dl>, progress: &Arc<Progress>) -> Result<usi
     progress.files_total.store(missing.len() as u64, Ordering::Relaxed);
     progress.files_done.store(0, Ordering::Relaxed);
     progress.bytes_done.store(0, Ordering::Relaxed);
-    progress.bytes_total.store(missing.iter().map(|j| j.size.unwrap_or(65_536)).sum(), Ordering::Relaxed);
+    progress
+        .bytes_total
+        .store(missing.iter().map(|j| j.size.unwrap_or(crate::install::SIZE_GUESS)).sum(), Ordering::Relaxed);
 
     let count = missing.len();
     // as many at once as the game's downloader (the setting), the biggest first: a large file begun last is what
@@ -238,6 +240,7 @@ async fn download_one(job: &Dl, progress: &Progress) -> Result<()> {
     }
     let part = PathBuf::from(format!("{}.part", job.dest.display()));
     let mut last: Option<anyhow::Error> = None;
+    let mut planned = job.size.unwrap_or(crate::install::SIZE_GUESS);
     for attempt in 0..ATTEMPTS {
         if attempt > 0 {
             let base = if cfg!(test) { 5 } else { 500 };
@@ -247,10 +250,16 @@ async fn download_one(job: &Dl, progress: &Progress) -> Result<()> {
             bail!("cancelled");
         }
         let mut counted = 0u64;
-        match fetch(&job.url, &part, job.hash.as_deref(), &mut counted, progress).await {
+        let unknown = job.size.is_none().then_some(&mut planned);
+        // a big file comes in pieces the first time; a try after a failure goes the plain way
+        let pieces = attempt == 0;
+        match fetch(&job.url, &part, job.hash.as_deref(), pieces, unknown, &mut counted, progress).await {
             Ok(Verdict::Good) => {
                 tokio::fs::rename(&part, &job.dest).await.with_context(|| format!("saving {}", job.dest.display()))?;
-                settle(job, counted, progress);
+                // a file with no size counts for what really came
+                if job.size.is_none() {
+                    progress.replan(&mut planned, counted);
+                }
                 return Ok(());
             }
             Ok(Verdict::Mismatch { expected, got }) => {
@@ -288,28 +297,47 @@ async fn download_one(job: &Dl, progress: &Progress) -> Result<()> {
     Err(last.unwrap_or_else(|| anyhow::anyhow!("download failed"))).with_context(|| format!("downloading {}", job.url))
 }
 
-/// Correct the books when the real size differs from the planned one.
-fn settle(job: &Dl, counted: u64, progress: &Progress) {
-    if job.size.is_none() {
-        progress.bytes_total.fetch_add(counted.saturating_sub(65_536), Ordering::Relaxed);
-    }
-}
-
 enum Verdict {
     Good,
     Mismatch { expected: String, got: String },
 }
 
-async fn fetch(url: &str, part: &Path, hash: Option<&str>, counted: &mut u64, progress: &Progress) -> Result<Verdict> {
+/// Download `url` into `part`, in pieces when `pieces` allows it and the file is worth it. `unknown` is what a file
+/// with no size is counted as so far; it becomes the size the server says, so the per cent is right while it comes.
+async fn fetch(
+    url: &str,
+    part: &Path,
+    hash: Option<&str>,
+    pieces: bool,
+    unknown: Option<&mut u64>,
+    counted: &mut u64,
+    progress: &Progress,
+) -> Result<Verdict> {
     let r = client().get(url).send().await?;
     if !r.status().is_success() {
         bail!("HTTP {}", r.status());
+    }
+    if let (Some(planned), Some(len)) = (unknown, r.content_length()) {
+        progress.replan(planned, len);
+    }
+    if let Some(len) = crate::ranged::worth_it(&r).filter(|_| pieces) {
+        crate::ranged::download(part, len, r, counted, progress).await?;
+        if let Some(expected) = hash.filter(|h| HashKind::of(h).is_some()) {
+            let (p, like) = (part.to_path_buf(), expected.to_string());
+            let got = tokio::task::spawn_blocking(move || hash_file(&p, &like))
+                .await?
+                .context("reading the download back to check it")?;
+            if !got.eq_ignore_ascii_case(expected) {
+                return Ok(Verdict::Mismatch { expected: expected.to_string(), got });
+            }
+        }
+        return Ok(Verdict::Good);
     }
     let mut hasher = hash.and_then(HashKind::of).map(Hasher::new);
     let mut file =
         tokio::io::BufWriter::with_capacity(crate::install::WRITE_BUFFER, tokio::fs::File::create(part).await?);
     let mut stream = r.bytes_stream();
-    while let Some(chunk) = stream.next().await {
+    while let Some(chunk) = crate::install::next_chunk(&mut stream).await {
         let chunk = chunk?;
         if let Some(h) = hasher.as_mut() {
             h.update(&chunk);
@@ -337,6 +365,27 @@ mod tests {
 
     /// An ATLauncher or Technic mod that arrives whole every time but with another checksum than the pack lists is
     /// kept and said; one that doesn't have the listed size is refused.
+    #[test]
+    fn a_download_that_stalls_part_way_is_tried_again_without_waiting_for_the_timeout() {
+        use crate::testutil::{Reply, Server, runtime, scratch};
+        runtime().block_on(async {
+            let server = Server::start().await;
+            let dir = scratch("packdl-stall");
+            let body = vec![7u8; 400_000];
+            let url = server.route("/forge-installer.jar", Reply::stall_first(body.clone(), 100_000));
+            let progress = Progress::new();
+            let started = std::time::Instant::now();
+            download_all(vec![Dl::new(&url, dir.join("installer.jar"))], &progress).await.unwrap();
+            assert!(started.elapsed() < Duration::from_secs(10), "took {:?}", started.elapsed());
+            assert_eq!(server.hits("/forge-installer.jar"), 2);
+            assert_eq!(std::fs::read(dir.join("installer.jar")).unwrap(), body);
+            // the size the server said counted, not a guess: done is all of it, and nothing more
+            assert_eq!(progress.bytes_total.load(Ordering::Relaxed), body.len() as u64);
+            assert_eq!(progress.bytes_done.load(Ordering::Relaxed), body.len() as u64);
+            let _ = std::fs::remove_dir_all(&dir);
+        });
+    }
+
     #[test]
     fn a_pack_mod_with_an_out_of_date_checksum_is_kept_and_said() {
         use crate::testutil::{Reply, Server, runtime, scratch};

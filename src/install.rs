@@ -57,6 +57,9 @@ pub fn kept_files_message(files: &[String]) -> String {
     )
 }
 
+/// What a file with no size counts for in a download's total until the server says its size or it is in.
+pub const SIZE_GUESS: u64 = 65_536;
+
 /// A number of bytes for people: 845 KB, 12.3 MB, 1.42 GB.
 pub fn human_bytes(n: u64) -> String {
     let b = n as f64;
@@ -111,9 +114,11 @@ impl Progress {
             return None;
         }
         let (got, of) = (self.bytes_done.load(Ordering::Relaxed), self.bytes_total.load(Ordering::Relaxed));
-        let percent = (self.fraction() * 100.0).floor() as u32;
-        let sizes =
-            format!("{percent}% \u{00B7} {} of {}", human_bytes(got.min(of.max(got))), human_bytes(of.max(got)));
+        let sizes = match self.known_fraction() {
+            Some(f) => format!("{}% \u{00B7} {} of {}", (f * 100.0).floor() as u32, human_bytes(got), human_bytes(of)),
+            // more came than was planned and nobody knows how much is left: no per cent that says it is done
+            None => format!("{} so far", human_bytes(got)),
+        };
         let speed = self.speed();
         let mut files = format!("{done} of {total} files");
         if done < total && speed >= 1000.0 {
@@ -141,6 +146,26 @@ impl Progress {
             return 0.0;
         }
         (self.bytes_done.load(Ordering::Relaxed) as f32 / total as f32).clamp(0.0, 1.0)
+    }
+
+    /// [`Progress::fraction`], or `None` while more has arrived than was planned and files are still coming (a file
+    /// whose size the server didn't say): a full bar would say it is done when it isn't.
+    pub fn known_fraction(&self) -> Option<f32> {
+        let over = self.bytes_done.load(Ordering::Relaxed) > self.bytes_total.load(Ordering::Relaxed);
+        let open = self.files_done.load(Ordering::Relaxed) < self.files_total.load(Ordering::Relaxed);
+        (!(over && open)).then(|| self.fraction())
+    }
+
+    /// Count a file as `actual` bytes in the total instead of what was `planned` for it (the guess for a file with
+    /// no size), once the server says its size or once it is in.
+    pub fn replan(&self, planned: &mut u64, actual: u64) {
+        if actual >= *planned {
+            self.bytes_total.fetch_add(actual - *planned, Ordering::Relaxed);
+        } else {
+            let less = (*planned - actual).min(self.bytes_total.load(Ordering::Relaxed));
+            self.bytes_total.fetch_sub(less, Ordering::Relaxed);
+        }
+        *planned = actual;
     }
 
     fn reset_counts(&self) {
@@ -213,7 +238,7 @@ pub async fn download_all(jobs: Vec<Job>, progress: &Arc<Progress>, verify: bool
         return Ok(0);
     }
     progress.files_total.store(missing.len() as u64, Ordering::Relaxed);
-    progress.bytes_total.store(missing.iter().map(|j| j.size.unwrap_or(65_536)).sum(), Ordering::Relaxed);
+    progress.bytes_total.store(missing.iter().map(|j| j.size.unwrap_or(SIZE_GUESS)).sum(), Ordering::Relaxed);
 
     let count = missing.len();
     // the number from the settings (`http::configure`), but never more than there are files
@@ -307,6 +332,22 @@ const DOWNLOAD_TRIES: u32 = 4;
 /// How much of a download is gathered before it is written to the disk.
 pub(crate) const WRITE_BUFFER: usize = 512 * 1024;
 
+/// How long a download may go without a single byte before its connection is dropped and the file tried again. A
+/// connection that stops part-way (it happens with the big download networks) would otherwise sit for the whole read
+/// timeout, a minute by default, while the speed shown sinks towards nothing; a new one is usually at full speed.
+pub(crate) const STALL: Duration = Duration::from_secs(if cfg!(test) { 1 } else { 15 });
+
+/// The next piece of a download, or an error when none has come for [`STALL`].
+pub(crate) async fn next_chunk<T, S>(stream: &mut S) -> Option<Result<T>>
+where
+    S: futures::Stream<Item = reqwest::Result<T>> + Unpin,
+{
+    match tokio::time::timeout(STALL, stream.next()).await {
+        Ok(next) => next.map(|r| r.map_err(anyhow::Error::from)),
+        Err(_) => Some(Err(anyhow::anyhow!("the download stopped for {} seconds", STALL.as_secs()))),
+    }
+}
+
 async fn download_one_now(job: &Job, progress: &Progress) -> Result<()> {
     if job.url.is_empty() {
         bail!("{} is missing and has no address to download it from", job.dest.display());
@@ -319,6 +360,7 @@ async fn download_one_now(job: &Job, progress: &Progress) -> Result<()> {
         job.dest.extension().map(|e| format!("{}.", e.to_string_lossy())).unwrap_or_default()
     ));
     let mut last = None;
+    let mut planned = job.size.unwrap_or(SIZE_GUESS);
     for attempt in 0..DOWNLOAD_TRIES {
         if attempt > 0 {
             let base = if cfg!(test) { 5 } else { 400 };
@@ -328,15 +370,19 @@ async fn download_one_now(job: &Job, progress: &Progress) -> Result<()> {
             bail!("cancelled");
         }
         let mut counted = 0u64;
-        match fetch_to(&job.url, &part, job.sha1.as_deref(), job.size, &mut counted, progress).await {
+        // a big file comes in pieces the first time; a try after a failure goes the plain way
+        let pieces = attempt == 0;
+        match fetch_to(&job.url, &part, job.sha1.as_deref(), job.size, pieces, &mut planned, &mut counted, progress)
+            .await
+        {
             Ok(()) => {
                 if job.executable {
                     set_executable(&part);
                 }
                 tokio::fs::rename(&part, &job.dest).await.with_context(|| format!("saving {}", job.dest.display()))?;
-                // the planned size was a guess for files with no size; settle the books
+                // a file with no size counts for what really came
                 if job.size.is_none() {
-                    progress.bytes_total.fetch_add(counted.saturating_sub(65_536), Ordering::Relaxed);
+                    progress.replan(&mut planned, counted);
                 }
                 return Ok(());
             }
@@ -373,6 +419,8 @@ async fn fetch_to(
     part: &Path,
     sha1: Option<&str>,
     size: Option<u64>,
+    pieces: bool,
+    planned: &mut u64,
     counted: &mut u64,
     progress: &Progress,
 ) -> std::result::Result<(), Failed> {
@@ -393,6 +441,25 @@ async fn fetch_to(
         let tries = if crate::net::is_transient_status(r.status().as_u16()) { DOWNLOAD_TRIES } else { 1 };
         return Err(Failed { error: anyhow::anyhow!("HTTP {}", r.status()), tries, mismatch: false });
     }
+    // a file with no size counts for what the server says it is, so the per cent is right while it comes
+    if let (None, Some(len)) = (size, r.content_length()) {
+        progress.replan(planned, len);
+    }
+    if let Some(len) = crate::ranged::worth_it(&r).filter(|_| pieces) {
+        crate::ranged::download(part, len, r, counted, progress).await.map_err(|e| {
+            if progress.cancelled.load(Ordering::Relaxed) { Failed::fatal(e) } else { Failed::retry(e) }
+        })?;
+        let got = match sha1 {
+            Some(expected) => {
+                let (p, like) = (part.to_path_buf(), expected.to_string());
+                tokio::task::spawn_blocking(move || crate::packs::dl::hash_file(&p, &like))
+                    .await
+                    .map_err(Failed::fatal)?
+            }
+            None => None,
+        };
+        return verify(sha1, size, *counted, got);
+    }
     let file = tokio::fs::File::create(part)
         .await
         .map_err(|e| Failed::fatal(anyhow::Error::from(e).context(format!("writing {}", part.display()))))?;
@@ -402,7 +469,7 @@ async fn fetch_to(
     // pack libraries carry an MD5 in the checksum field (the Java edition tells them apart by length)
     let mut md5 = if sha1.is_some_and(|h| h.len() == 32) { Some(md5::Md5::new()) } else { None };
     let mut stream = r.bytes_stream();
-    while let Some(chunk) = stream.next().await {
+    while let Some(chunk) = next_chunk(&mut stream).await {
         // a big file (the game, a Java runtime) stops when the player presses Cancel, not when it is done
         if progress.cancelled.load(Ordering::Relaxed) {
             return Err(Failed::fatal(anyhow::anyhow!("cancelled")));
@@ -420,23 +487,27 @@ async fn fetch_to(
         progress.bytes_done.fetch_add(chunk.len() as u64, Ordering::Relaxed);
     }
     file.flush().await.map_err(Failed::fatal)?;
+    let got = sha1.map(|_| match md5 {
+        Some(m) => hex::encode(md5::Digest::finalize(m)),
+        None => hex::encode(hasher.finalize()),
+    });
+    verify(sha1, size, *counted, got)
+}
+
+/// Whether the `counted` bytes that came are the file wanted: its checksum, `got` (worked out from what came), is the
+/// one expected, or without a checksum its size is.
+fn verify(sha1: Option<&str>, size: Option<u64>, counted: u64, got: Option<String>) -> std::result::Result<(), Failed> {
     // the size decides only for a file without a checksum: a size from a mod site can be off where the hash is right
     if let Some(expected) = size.filter(|_| sha1.is_none()) {
-        if *counted != expected {
-            return Err(Failed::retry(anyhow::anyhow!(
-                "the file arrived incomplete ({} of {expected} bytes)",
-                *counted
-            )));
+        if counted != expected {
+            return Err(Failed::retry(anyhow::anyhow!("the file arrived incomplete ({counted} of {expected} bytes)")));
         }
     }
     if let Some(expected) = sha1 {
-        let got = match md5 {
-            Some(m) => hex::encode(md5::Digest::finalize(m)),
-            None => hex::encode(hasher.finalize()),
-        };
+        let got = got.unwrap_or_default();
         if !got.eq_ignore_ascii_case(expected) {
             // cut short is damaged; complete but different may only be an out-of-date record of the file
-            let complete = size.is_none_or(|s| *counted == s);
+            let complete = size.is_none_or(|s| counted == s);
             return Err(Failed {
                 error: anyhow::anyhow!("the file arrived damaged (expected {expected}, got {got})"),
                 tries: DOWNLOAD_TRIES,
@@ -790,9 +861,24 @@ mod progress_tests {
         let (sizes, files) = p.summary().unwrap();
         assert_eq!(sizes, "66% \u{00B7} 210.3 MB of 318.0 MB");
         assert_eq!(files, "120 of 187 files", "no speed before there is anything to measure it by");
-        // more arrived than was planned (a file without a size): never "110%" or "330 of 318"
+        // more arrived than was planned (a file without a size) while files are still coming: never "110%", nor a
+        // "100%" for a download that isn't done
         p.bytes_done.store(330_000_000, Ordering::Relaxed);
-        assert_eq!(p.summary().unwrap().0, "100% \u{00B7} 330.0 MB of 330.0 MB");
+        assert_eq!(p.summary().unwrap().0, "330.0 MB so far");
+        assert_eq!(p.known_fraction(), None);
+        p.files_done.store(187, Ordering::Relaxed);
+        assert_eq!(p.known_fraction(), Some(1.0));
+    }
+
+    #[test]
+    fn a_file_without_a_size_counts_for_its_real_size_once_known() {
+        let p = Progress::new();
+        p.bytes_total.store(1_000 + SIZE_GUESS, Ordering::Relaxed);
+        let mut planned = SIZE_GUESS;
+        p.replan(&mut planned, 338_972_290);
+        assert_eq!(p.bytes_total.load(Ordering::Relaxed), 1_000 + 338_972_290);
+        p.replan(&mut planned, 300);
+        assert_eq!(p.bytes_total.load(Ordering::Relaxed), 1_300, "a file smaller than the guess lowers the total");
     }
 
     #[test]

@@ -249,6 +249,9 @@ pub struct App {
     tab: InstTab,
     library_search: String,
     toasts: Vec<Toast>,
+    /// How tall the sidebar's bottom part (account, Settings, downloads, games) was last frame, so the list above
+    /// stops before it.
+    sidebar_bottom: f32,
     tasks: Vec<Task>,
     next_task: u64,
     games: HashMap<String, Game>,
@@ -414,6 +417,7 @@ impl App {
             tab: InstTab::Overview,
             library_search: String::new(),
             toasts: Vec::new(),
+            sidebar_bottom: 0.0,
             tasks: Vec::new(),
             next_task: 1,
             games: HashMap::new(),
@@ -1203,9 +1207,14 @@ impl App {
             .filter_map(|g| Some((g.folder.clone(), self.instance(&g.folder)?.name().to_string(), g.started.elapsed())))
             .collect();
         // the account row and the running downloads need their room at the bottom; the list scrolls if the window is
-        // too short for all the items
-        let reserve =
-            52.0 + 2.0 * 34.0 + 24.0 + self.tasks.len().min(2) as f32 * 52.0 + playing.len().min(2) as f32 * 30.0;
+        // too short for all the items. A download's rows are as tall as last frame measured, or a fair guess when it
+        // has just begun
+        let reserve = (52.0
+            + 2.0 * 34.0
+            + 24.0
+            + self.tasks.len().min(2) as f32 * TASK_ROW_HEIGHT
+            + playing.len().min(2) as f32 * 30.0)
+            .max(self.sidebar_bottom + 8.0);
         let mut go = None;
         egui::ScrollArea::vertical()
             .id_salt("nav")
@@ -1239,7 +1248,7 @@ impl App {
             None => {}
         }
 
-        ui.with_layout(Layout::bottom_up(Align::Min), |ui| {
+        let bottom = ui.with_layout(Layout::bottom_up(Align::Min), |ui| {
             ui.spacing_mut().item_spacing.y = 2.0;
             // who is playing
             let account = self.current_account().map(|a| (a.name().to_string(), a.kind(), a.uuid.clone(), a.offline));
@@ -1343,6 +1352,7 @@ impl App {
                 ui.label(RichText::new(format!("+{} more playing", playing.len() - 2)).size(FS_META).color(c_faint()));
             }
         });
+        self.sidebar_bottom = bottom.response.rect.height();
     }
 
     fn nav_button(&self, ui: &mut Ui, icon: Icon, label: &str, active: bool) -> egui::Response {
@@ -1703,31 +1713,58 @@ fn zoom_that_fits(zoom: f32, monitor: egui::Vec2) -> Option<f32> {
 }
 
 /// The first sentence of a longer explanation, for a toast; the whole of it goes to the log.
+/// About how tall a [`task_row`] with sizes is: the name, the bar, two lines of numbers, Cancel and the gap.
+const TASK_ROW_HEIGHT: f32 = 92.0;
+
 /// One job in the sidebar (or in its "+N more" list): what it is, how far it got, and its Cancel.
 fn task_row(ui: &mut egui::Ui, t: &Task) {
-    ui.add(egui::Label::new(RichText::new(&t.label).size(FS_META).medium_weight()).truncate());
+    enum Line {
+        Text(RichText),
+        Bar(Option<f32>),
+        Cancel,
+        Gap,
+    }
+    let meta = |text: String, color| Line::Text(RichText::new(text).size(FS_META).color(color));
+    let mut lines = vec![Line::Text(RichText::new(&t.label).size(FS_META).medium_weight())];
     if let Some((sizes, files)) = t.progress.summary() {
-        // how much of how much, in per cent, then the files and the speed
-        progress_bar(ui, Some(t.progress.fraction()), 4.0);
-        ui.add(egui::Label::new(RichText::new(sizes).size(FS_META).color(c_muted())).truncate());
-        ui.add(egui::Label::new(RichText::new(files).size(FS_META).color(c_faint())).truncate());
+        // how much of how much, in per cent, then the files and the speed; a moving bar while the size isn't known
+        lines.extend([Line::Bar(t.progress.known_fraction()), meta(sizes, c_muted()), meta(files, c_faint())]);
     } else {
-        progress_bar(ui, None, 4.0);
+        lines.push(Line::Bar(None));
         let stage = t.progress.stage_text();
         if !stage.is_empty() {
-            ui.add(egui::Label::new(RichText::new(stage).size(FS_META).color(c_faint())).truncate());
+            lines.push(meta(stage, c_faint()));
         }
     }
-    // a long download or install can be stopped; the job stops at its next step and says it was cancelled
-    let cancelling = t.progress.cancelled.load(Ordering::Relaxed);
-    let text = if cancelling { "Cancelling\u{2026}" } else { "Cancel" };
-    let button = egui::Button::new(RichText::new(text).size(FS_META).color(c_faint())).frame(false);
-    let resp = ui.add_enabled(!cancelling, button);
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, !cancelling, format!("Cancel {}", t.label)));
-    if resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
-        t.progress.cancelled.store(true, Ordering::Relaxed);
+    lines.extend([Line::Cancel, Line::Gap]);
+    // the sidebar's bottom part is laid out upwards: there the lines go in last first, so they still read downwards
+    if ui.layout().main_dir() == egui::Direction::BottomUp {
+        lines.reverse();
     }
-    ui.add_space(8.0);
+    for line in lines {
+        match line {
+            Line::Text(text) => {
+                ui.add(egui::Label::new(text).truncate());
+            }
+            Line::Bar(fraction) => {
+                progress_bar(ui, fraction, 4.0);
+            }
+            Line::Cancel => {
+                // a long download or install can be stopped; the job stops at its next step and says it was cancelled
+                let cancelling = t.progress.cancelled.load(Ordering::Relaxed);
+                let text = if cancelling { "Cancelling\u{2026}" } else { "Cancel" };
+                let button = egui::Button::new(RichText::new(text).size(FS_META).color(c_faint())).frame(false);
+                let resp = ui.add_enabled(!cancelling, button);
+                resp.widget_info(|| {
+                    egui::WidgetInfo::labeled(egui::Role::Button, !cancelling, format!("Cancel {}", t.label))
+                });
+                if resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                    t.progress.cancelled.store(true, Ordering::Relaxed);
+                }
+            }
+            Line::Gap => ui.add_space(8.0),
+        }
+    }
 }
 
 fn first_sentence(text: &str) -> String {
@@ -1879,26 +1916,25 @@ impl eframe::App for App {
                 top: 24,
                 bottom: 24,
             }))
-            .show(ui, |ui| {
-                self.update_banner(ui);
-                match self.page {
-                    Page::Home => self.home_ui(ui),
-                    Page::Library => self.library_ui(ui),
-                    Page::Instance => self.instance_ui(ui),
-                    Page::Discover => self.discover_ui(ui),
-                    Page::Packs => self.packs_ui(ui),
-                    Page::Ftb => self.ftb_ui(ui),
-                    Page::Create => self.create_ui(ui),
-                    Page::Accounts => self.accounts_ui(ui),
-                    Page::Settings => self.settings_ui(ui),
-                    Page::Tools => self.tools_ui(ui),
-                    Page::Craft => self.craft_ui(ui),
-                    #[cfg(feature = "converter")]
-                    Page::Convert => self.convert_ui(ui),
-                    Page::Servers => self.servers_ui(ui),
-                    Page::About => self.about_ui(ui),
-                }
+            .show(ui, |ui| match self.page {
+                Page::Home => self.home_ui(ui),
+                Page::Library => self.library_ui(ui),
+                Page::Instance => self.instance_ui(ui),
+                Page::Discover => self.discover_ui(ui),
+                Page::Packs => self.packs_ui(ui),
+                Page::Ftb => self.ftb_ui(ui),
+                Page::Create => self.create_ui(ui),
+                Page::Accounts => self.accounts_ui(ui),
+                Page::Settings => self.settings_ui(ui),
+                Page::Tools => self.tools_ui(ui),
+                Page::Craft => self.craft_ui(ui),
+                #[cfg(feature = "converter")]
+                Page::Convert => self.convert_ui(ui),
+                Page::Servers => self.servers_ui(ui),
+                Page::About => self.about_ui(ui),
             });
+        // below the other windows: the first start's questions come first
+        self.update_dialog(&ctx);
         self.import_modal(&ctx);
         self.export_modal(&ctx);
         self.toasts_ui(&ctx);
