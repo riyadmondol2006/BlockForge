@@ -23,6 +23,8 @@ pub enum Icon {
     #[cfg_attr(not(feature = "converter"), allow(dead_code))]
     Convert,
     Kebab,
+    /// An arrow into a tray: a download or an install in progress.
+    Download,
 }
 
 /// Draw `icon` centred on `c`, fitting a square of side `size`.
@@ -145,6 +147,11 @@ pub fn paint(p: &Painter, icon: Icon, c: Pos2, size: f32, color: Color32) {
             for x in [-0.6, 0.0, 0.6] {
                 p.circle_filled(at(x, 0.0), 0.12 * s + 0.6, color);
             }
+        }
+        Icon::Download => {
+            line(&[(0.0, -0.95), (0.0, 0.3)]);
+            line(&[(-0.5, -0.2), (0.0, 0.3), (0.5, -0.2)]);
+            line(&[(-0.9, 0.45), (-0.9, 0.9), (0.9, 0.9), (0.9, 0.45)]);
         }
         Icon::Folder => {
             line(&[

@@ -69,6 +69,148 @@ pub fn heading(ui: &mut Ui, text: &str) {
     ui.label(RichText::new(text).size(FS_TITLE).semibold());
 }
 
+// for the pages to take up: none uses it yet
+#[allow(dead_code)]
+/// The room between a page's title and its actions, and under the whole head.
+pub const HEADER_GAP: f32 = 16.0;
+
+// for the pages to take up: none uses it yet
+#[allow(dead_code)]
+/// Whether a page head's actions have to go under its title: they don't fit beside it in `avail` points.
+pub fn header_wraps(avail: f32, title_w: f32, actions_w: f32) -> bool {
+    actions_w > 0.0 && title_w + HEADER_GAP + actions_w > avail
+}
+
+// for the pages to take up: none uses it yet
+#[allow(dead_code)]
+/// The head of a page, the same on every page: the title (with a count beside it and a short line under it, both
+/// optional) on the left and the page's actions on the right. When the window is too narrow for both on one line,
+/// the actions go on a line of their own under the title instead of running over it.
+///
+/// ```ignore
+/// PageHeader::new("Library").count(instances.len()).show(ui, |ui| {
+///     // right to left: the main action first
+///     primary_icon(ui, Icon::Plus, "New instance");
+///     secondary(ui, "Import");
+/// });
+/// ```
+pub struct PageHeader<'a> {
+    title: &'a str,
+    count: Option<String>,
+    subtitle: Option<&'a str>,
+}
+
+// for the pages to take up: none uses it yet
+#[allow(dead_code)]
+impl<'a> PageHeader<'a> {
+    pub fn new(title: &'a str) -> Self {
+        PageHeader { title, count: None, subtitle: None }
+    }
+
+    /// A number in a small pill after the title (how many instances, servers, results).
+    pub fn count(mut self, n: impl ToString) -> Self {
+        self.count = Some(n.to_string());
+        self
+    }
+
+    /// A short grey line under the title.
+    pub fn subtitle(mut self, text: &'a str) -> Self {
+        self.subtitle = Some(text).filter(|t| !t.is_empty());
+        self
+    }
+
+    /// Lay out the head. `actions` is laid out right to left (the first one added sits at the right edge) when it
+    /// fits beside the title, and left to right on a line of its own under the title when it doesn't.
+    pub fn show(self, ui: &mut Ui, actions: impl FnOnce(&mut Ui)) {
+        let id = ui.scope_id().with(("page-header", self.title));
+        let actions_w = remembered_width(ui, id, 0.0);
+        let title_w = {
+            let font = FontId::proportional(FS_TITLE);
+            let w = ui.painter().layout_no_wrap(self.title.to_string(), font, c_text()).size().x;
+            w + self.count.as_ref().map_or(0.0, |c| count_badge_width(ui, c) + 10.0)
+        };
+        let avail = ui.available_width();
+        let wraps = header_wraps(avail, title_w, actions_w);
+        let title = |ui: &mut Ui| {
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = 2.0;
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 10.0;
+                    heading(ui, self.title);
+                    if let Some(c) = &self.count {
+                        count_badge(ui, c);
+                    }
+                });
+                if let Some(s) = self.subtitle {
+                    ui.add(egui::Label::new(RichText::new(s).color(c_muted())).wrap());
+                }
+            });
+        };
+        if wraps {
+            title(ui);
+            ui.add_space(8.0);
+            let used = ui.horizontal_wrapped(|ui| {
+                actions(ui);
+                ui.min_rect().width()
+            });
+            // only ever wider while wrapped, so the head doesn't flip back and forth at one window width
+            remember_width(ui, id, used.inner.max(actions_w));
+        } else {
+            ui.horizontal(|ui| {
+                ui.vertical(|ui| {
+                    ui.set_max_width((avail - actions_w - HEADER_GAP).max(title_w.min(avail)));
+                    title(ui);
+                });
+                let used = ui
+                    .with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        actions(ui);
+                        ui.min_rect().width()
+                    })
+                    .inner;
+                remember_width(ui, id, used);
+            });
+        }
+        ui.add_space(HEADER_GAP);
+    }
+}
+
+// for the pages to take up: none uses it yet
+#[allow(dead_code)]
+fn count_badge_width(ui: &Ui, text: &str) -> f32 {
+    let galley = ui.painter().layout_no_wrap(text.to_string(), super::fonts::medium(FS_META), c_muted());
+    (galley.size().x + 14.0).max(24.0)
+}
+
+// for the pages to take up: none uses it yet
+#[allow(dead_code)]
+/// A number in a small pill, beside a title (how many instances, servers, results).
+pub fn count_badge(ui: &mut Ui, text: &str) -> Response {
+    let galley = ui.painter().layout_no_wrap(text.to_string(), super::fonts::medium(FS_META), c_muted());
+    let (rect, resp) = ui.allocate_exact_size(vec2(count_badge_width(ui, text), 22.0), Sense::hover());
+    ui.painter().rect(rect, CornerRadius::same(11), c_field(), Stroke::new(1.0, c_border()), egui::StrokeKind::Inside);
+    ui.painter().galley(rect.center() - galley.size() / 2.0, galley, c_muted());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, text));
+    resp
+}
+
+/// Where a column of at most `max` points starts inside `avail` points, and how wide it is: the whole width when
+/// there is no more room than that, centred when there is.
+pub fn centred_column(avail: f32, max: f32) -> (f32, f32) {
+    if avail <= max { (0.0, avail.max(0.0)) } else { (((avail - max) / 2.0).floor(), max) }
+}
+
+/// Lay out `add` in a column of at most `max` points, centred in the room there is: for text and forms, which are
+/// hard to read when they run across a wide screen. Lists and grids should use the whole width instead.
+pub fn readable_column<R>(ui: &mut Ui, max: f32, add: impl FnOnce(&mut Ui) -> R) -> R {
+    let rect = ui.available_rect_before_wrap();
+    let (offset, width) = centred_column(rect.width(), max);
+    if offset <= 0.0 {
+        return add(ui);
+    }
+    let column = egui::Rect::from_min_size(rect.min + vec2(offset, 0.0), vec2(width, rect.height()));
+    ui.scope_builder(egui::UiBuilder::new().max_rect(column).layout(*ui.layout()), add).inner
+}
+
 /// The title of a block on a page.
 pub fn section(ui: &mut Ui, text: &str) {
     ui.add_space(4.0);
@@ -99,6 +241,7 @@ fn styled_button(
     let size = vec2((galley.size().x + icon_w + 28.0).max(min.x), min.y.max(32.0));
     let sense = if enabled { Sense::click() } else { Sense::hover() };
     let (rect, resp) = ui.allocate_exact_size(size, sense);
+    shot_note(text, rect);
     if ui.is_rect_visible(rect) {
         let t = motion::hover(ui, resp.id, enabled && resp.hovered());
         let press = motion::toward(ui.ctx(), resp.id.with("press"), resp.is_pointer_button_down_on(), 0.08);
@@ -134,6 +277,7 @@ fn brand_button(ui: &mut Ui, text: &str, icon: Option<Icon>, min: Vec2, enabled:
     let icon_w = if icon.is_some() { 22.0 } else { 0.0 };
     let size = vec2((galley.size().x + icon_w + 32.0).max(min.x), min.y.max(34.0));
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
+    shot_note(text, rect);
     if ui.is_rect_visible(rect) {
         let t = motion::hover(ui, resp.id, resp.hovered());
         let press = motion::toward(ui.ctx(), resp.id.with("press"), resp.is_pointer_button_down_on(), 0.08);
@@ -881,9 +1025,60 @@ fn ago(secs: i64) -> String {
     }
 }
 
+// The screenshot tour (`BLOCKFORGE_SHOT`) opens some windows the way a player does: it asks where the first button
+// with a given label is drawn, then clicks there with a pointer of its own. Nothing is looked for otherwise, and then
+// a button only reads one flag.
+
+static SHOT_SEEKING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static SHOT_SEEK: std::sync::Mutex<Option<(String, Option<egui::Rect>)>> = std::sync::Mutex::new(None);
+
+/// Start looking for the first button labelled `label` (or stop looking, with `None`).
+pub fn shot_seek(label: Option<&str>) {
+    let mut seek = SHOT_SEEK.lock().unwrap_or_else(|e| e.into_inner());
+    *seek = label.map(|l| (l.to_string(), None));
+    SHOT_SEEKING.store(label.is_some(), std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Where the button looked for with [`shot_seek`] was drawn on the last frame, if it was. Asked once a frame, before
+/// the frame is laid out: the answer is cleared, so a button that moves (a list filling in above it) is found again
+/// where it is now.
+pub fn shot_found() -> Option<egui::Rect> {
+    SHOT_SEEK.lock().unwrap_or_else(|e| e.into_inner()).as_mut().and_then(|s| s.1.take())
+}
+
+fn shot_note(text: &str, rect: egui::Rect) {
+    if !SHOT_SEEKING.load(std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
+    let mut seek = SHOT_SEEK.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((label, found @ None)) = seek.as_mut()
+        && label == text
+    {
+        *found = Some(rect);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_page_head_puts_its_actions_under_the_title_only_when_they_dont_fit() {
+        // 120 of title, 16 of gap, 300 of buttons
+        assert!(!header_wraps(800.0, 120.0, 300.0));
+        assert!(!header_wraps(436.0, 120.0, 300.0));
+        assert!(header_wraps(435.0, 120.0, 300.0));
+        // no actions: nothing to move
+        assert!(!header_wraps(50.0, 120.0, 0.0));
+    }
+
+    #[test]
+    fn a_readable_column_is_centred_once_there_is_more_room_than_it_needs() {
+        assert_eq!(centred_column(800.0, 1000.0), (0.0, 800.0));
+        assert_eq!(centred_column(1000.0, 1000.0), (0.0, 1000.0));
+        assert_eq!(centred_column(1401.0, 1000.0), (200.0, 1000.0));
+        assert_eq!(centred_column(-5.0, 1000.0), (0.0, 0.0));
+    }
 
     #[test]
     fn times_ago_read_naturally() {

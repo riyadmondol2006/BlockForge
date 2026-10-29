@@ -156,6 +156,31 @@ pub const FS_SECTION: f32 = 17.0;
 pub const FS_BODY: f32 = 14.0;
 pub const FS_META: f32 = 12.0;
 
+// The layout of the window: the sidebar and the room around a page.
+
+/// The sidebar open, with the names beside the icons.
+pub const SIDEBAR_W: f32 = 232.0;
+/// The sidebar folded to a rail of icons.
+pub const RAIL_W: f32 = 72.0;
+/// Below this window width (in points, so a large interface size counts) the sidebar folds to its rail, so the
+/// page keeps room for two columns of cards.
+pub const RAIL_BELOW: f32 = 1024.0;
+/// The widest any page's content gets: lists and grids use the whole width up to this, then sit in the middle.
+pub const PAGE_MAX_W: f32 = 1680.0;
+
+/// Whether the sidebar is folded to its rail in a window `window_w` points wide.
+pub fn rail_folded(window_w: f32) -> bool {
+    window_w < RAIL_BELOW
+}
+
+/// The room around a page in a page area `width` points wide: tighter in a small window, roomier on a big screen.
+/// The right side is a little narrower because the scroll bar floats in it.
+pub fn page_margin(width: f32) -> egui::Margin {
+    let t = ((width - 700.0) / 800.0).clamp(0.0, 1.0);
+    let side = (24.0 + 16.0 * t).round() as i8;
+    egui::Margin { left: side, right: side - 8, top: 28, bottom: 20 }
+}
+
 /// The themes the Java edition offers: id, label, and whether it is one of the dark ones.
 pub const THEMES: [(&str, &str, bool); 18] = [
     ("com.blockforge.launcher.themes.Material3Dark", "Material 3 Dark (default)", true),
@@ -255,6 +280,20 @@ pub fn apply(ctx: &egui::Context, reduced_motion: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_sidebar_folds_in_a_narrow_window_and_the_margins_grow_with_the_page() {
+        assert!(rail_folded(900.0));
+        assert!(rail_folded(1023.0));
+        assert!(!rail_folded(1024.0));
+        assert!(!rail_folded(1920.0));
+        let narrow = page_margin(600.0);
+        let wide = page_margin(2400.0);
+        assert_eq!((narrow.left, narrow.right), (24, 16));
+        assert_eq!((wide.left, wide.right), (40, 32));
+        let mid = page_margin(1100.0);
+        assert!(mid.left > narrow.left && mid.left < wide.left);
+    }
 
     /// A button reached with Tab is drawn with the 2px accent ring, so a keyboard user can see where they are; the
     /// same button without the focus has the thin control outline.

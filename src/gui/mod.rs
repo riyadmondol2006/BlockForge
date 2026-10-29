@@ -283,6 +283,10 @@ pub struct App {
     /// How tall the sidebar's bottom part (account, Settings, downloads, games) was last frame, so the list above
     /// stops before it.
     sidebar_bottom: f32,
+    /// How far the sidebar is open this frame: 1 with names, 0 folded to its rail of icons (see `rail_folded`).
+    nav_open: f32,
+    /// Where the page is drawn (inside its margins), for what floats over it, such as the toasts.
+    page_rect: egui::Rect,
     tasks: Vec<Task>,
     next_task: u64,
     games: HashMap<String, Game>,
@@ -452,6 +456,8 @@ impl App {
             library_search: String::new(),
             toasts: Vec::new(),
             sidebar_bottom: 0.0,
+            nav_open: 1.0,
+            page_rect: egui::Rect::NOTHING,
             tasks: Vec::new(),
             next_task: 1,
             games: HashMap::new(),
@@ -1205,12 +1211,14 @@ impl App {
     }
 
     fn sidebar(&mut self, ui: &mut Ui) {
-        // in a short window the group names go, so every destination still fits without scrolling
-        let compact = ui.available_height() < 610.0;
-        ui.horizontal(|ui| {
-            ui.add_space(4.0);
-            let logo =
-                ui.add(egui::Image::from_texture(&self.logo).fit_to_exact_size(vec2(32.0, 32.0)).corner_radius(9));
+        // how far the sidebar is open: 1 with the names beside the icons, 0 folded to a rail of icons (a narrow
+        // window), in between while it eases from one to the other. Folded, every item says its name in a tooltip
+        let open = self.nav_open;
+        let rail = open < 0.5;
+        {
+            let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 34.0), egui::Sense::hover());
+            let x = egui::lerp((rect.width() - 32.0) / 2.0..=4.0, open);
+            let logo = egui::Rect::from_min_size(egui::pos2(rect.left() + x, rect.top() + 1.0), vec2(32.0, 32.0));
             // the logo sits on a little light of the brand colour
             let a = c_accent();
             ui.painter().add(
@@ -1220,14 +1228,27 @@ impl App {
                     spread: 0,
                     color: egui::Color32::from_rgba_unmultiplied(a.r(), a.g(), a.b(), if is_dark() { 60 } else { 40 }),
                 }
-                .as_shape(logo.rect, CornerRadius::same(9)),
+                .as_shape(logo, CornerRadius::same(9)),
             );
-            ui.vertical(|ui| {
-                ui.spacing_mut().item_spacing.y = 0.0;
-                ui.label(RichText::new(crate::NAME).size(15.0).semibold());
-                ui.label(RichText::new(format!("v{}", crate::VERSION)).size(11.0).color(c_faint()));
-            });
-        });
+            egui::Image::from_texture(&self.logo).corner_radius(9).paint_at(ui, logo);
+            if open > 0.0 {
+                let p = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
+                let name = p.layout_no_wrap(crate::NAME.into(), fonts::semibold(15.0), c_text().gamma_multiply(open));
+                let version = p.layout_no_wrap(
+                    format!("v{}", crate::VERSION),
+                    egui::FontId::proportional(11.0),
+                    c_faint().gamma_multiply(open),
+                );
+                let left = logo.right() + 10.0;
+                let top = rect.center().y - (name.size().y + version.size().y) / 2.0;
+                let below = top + name.size().y;
+                p.galley(egui::pos2(left, top), name, c_text());
+                p.galley(egui::pos2(left, below), version, c_faint());
+            }
+            if rail {
+                resp.on_hover_text(format!("{} v{}", crate::NAME, crate::VERSION));
+            }
+        }
         ui.add_space(18.0);
         // Three groups of destinations, then Settings and About pinned to the bottom with the account. Who plays is the
         // account row at the bottom, so Accounts is not repeated in the list.
@@ -1261,13 +1282,22 @@ impl App {
         // the account row and the running downloads need their room at the bottom; the list scrolls if the window is
         // too short for all the items. A download's rows are as tall as last frame measured, or a fair guess when it
         // has just begun
-        let reserve = (52.0
-            + 2.0 * 34.0
-            + 24.0
-            + self.tasks.len().min(2) as f32 * TASK_ROW_HEIGHT
-            + playing.len().min(2) as f32 * 30.0)
-            .max(self.sidebar_bottom + 8.0);
+        let tasks_h = if rail {
+            if self.tasks.is_empty() { 0.0 } else { RAIL_TASK_HEIGHT }
+        } else {
+            self.tasks.len().min(2) as f32 * TASK_ROW_HEIGHT
+        };
+        let reserve =
+            (52.0 + 2.0 * 34.0 + 24.0 + tasks_h + playing.len().min(2) as f32 * 30.0).max(self.sidebar_bottom + 8.0);
+        // in a short window, or one where jobs and games take the room at the bottom, the group names go, so every
+        // destination still fits without scrolling
+        let items = groups.iter().map(|g| g.1.len()).sum::<usize>();
+        let compact = ui.available_height() < 610.0 || ui.available_height() - reserve < nav_list_height(items, 3);
         let mut go = None;
+        // folded, the scroll bar (in a short window) floats over the icons' edge instead of taking room from them
+        if rail {
+            ui.spacing_mut().scroll.floating_allocated_width = 0.0;
+        }
         egui::ScrollArea::vertical()
             .id_salt("nav")
             .max_height((ui.available_height() - reserve).max(120.0))
@@ -1280,16 +1310,37 @@ impl App {
                     }
                     if !compact {
                         ui.add_space(2.0);
-                        ui.horizontal(|ui| {
-                            ui.add_space(12.0);
-                            ui.label(
-                                RichText::new(group.to_uppercase())
-                                    .size(10.5)
-                                    .color(c_faint())
-                                    .extra_letter_spacing(0.8),
+                        // the group's name; folded, a short line in its place keeps the groups apart
+                        let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 14.0), egui::Sense::hover());
+                        if open > 0.0 {
+                            let mut job = egui::text::LayoutJob::default();
+                            job.append(
+                                &group.to_uppercase(),
+                                0.0,
+                                egui::TextFormat {
+                                    font_id: egui::FontId::proportional(10.5),
+                                    color: c_faint().gamma_multiply(open),
+                                    extra_letter_spacing: 0.8,
+                                    ..Default::default()
+                                },
                             );
-                        });
+                            let galley = ui.fonts_mut(|f| f.layout_job(job));
+                            ui.painter().with_clip_rect(rect.intersect(ui.clip_rect())).galley(
+                                egui::pos2(rect.left() + 12.0, rect.center().y - galley.size().y / 2.0),
+                                galley,
+                                c_faint(),
+                            );
+                        }
+                        if open < 1.0 {
+                            let line = Stroke::new(1.0, c_border().gamma_multiply(1.0 - open));
+                            ui.painter().hline(rect.center().x - 10.0..=rect.center().x + 10.0, rect.center().y, line);
+                        }
                         ui.add_space(2.0);
+                    } else if n > 0 && rail {
+                        let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 1.0), egui::Sense::hover());
+                        let line = Stroke::new(1.0, c_border());
+                        ui.painter().hline(rect.center().x - 10.0..=rect.center().x + 10.0, rect.center().y, line);
+                        ui.add_space(4.0);
                     }
                     for (page, label, icon) in items {
                         let active = self.page == page || (page == Page::Library && self.page == Page::Instance);
@@ -1319,31 +1370,46 @@ impl App {
                     if on_accounts { c_card_hover() } else { c_card() },
                 );
             }
+            // folded, the avatar alone, in the middle of the rail
+            let left = egui::lerp(rect.center().x - 15.0..=rect.left() + 8.0, open);
             let mut inner = ui.new_child(
                 egui::UiBuilder::new()
-                    .max_rect(rect.shrink2(vec2(8.0, 0.0)))
+                    .max_rect(egui::Rect::from_min_max(
+                        egui::pos2(left, rect.top()),
+                        egui::pos2((rect.right() - 8.0).max(left + 30.0), rect.bottom()),
+                    ))
                     .layout(Layout::left_to_right(Align::Center)),
             );
-            match &account {
+            inner.shrink_clip_rect(rect);
+            let words = |ui: &mut Ui, title: RichText, line: RichText| {
+                if open > 0.0 {
+                    ui.multiply_opacity(open);
+                    ui.vertical(|ui| {
+                        ui.spacing_mut().item_spacing.y = 0.0;
+                        ui.add(egui::Label::new(title).truncate());
+                        ui.add(egui::Label::new(line).truncate());
+                    });
+                }
+            };
+            let tip = match &account {
                 Some((name, kind, uuid, offline)) => {
                     self.account_avatar(&mut inner, uuid, name, *offline, 30.0);
-                    inner.vertical(|ui| {
-                        ui.spacing_mut().item_spacing.y = 0.0;
-                        ui.add(egui::Label::new(RichText::new(name).semibold()).truncate());
-                        ui.label(RichText::new(*kind).size(12.0).color(c_muted()));
-                    });
+                    words(&mut inner, RichText::new(name).semibold(), RichText::new(*kind).size(12.0).color(c_muted()));
+                    format!("{name}\n{kind}")
                 }
                 None => {
                     avatar(&mut inner, "?", 30.0);
-                    inner.vertical(|ui| {
-                        ui.spacing_mut().item_spacing.y = 0.0;
-                        ui.label(RichText::new("No account").semibold());
-                        ui.label(RichText::new("Choose who plays").size(12.0).color(c_muted()));
-                    });
+                    words(
+                        &mut inner,
+                        RichText::new("No account").semibold(),
+                        RichText::new("Choose who plays").size(12.0).color(c_muted()),
+                    );
+                    "No account: choose who plays".to_string()
                 }
-            }
+            };
             focus_ring(ui, &resp, rect, R_CONTROL);
             resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Accounts"));
+            let resp = if rail { resp.on_hover_text(tip) } else { resp };
             if resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
                 self.page = Page::Accounts;
             }
@@ -1355,11 +1421,14 @@ impl App {
                 }
             }
             ui.add_space(8.0);
-            // downloads in progress, as bare rows
-            for t in self.tasks.iter().take(2) {
+            // downloads in progress, as bare rows; folded, all of them in one place that opens their rows
+            if rail && !self.tasks.is_empty() {
+                rail_jobs(ui, &self.tasks);
+            }
+            for t in self.tasks.iter().take(2).filter(|_| !rail) {
                 task_row(ui, t);
             }
-            if self.tasks.len() > 2 {
+            if self.tasks.len() > 2 && !rail {
                 // the others are a click away, each with its progress and its Cancel
                 let more = egui::Button::new(
                     RichText::new(format!("+{} more", self.tasks.len() - 2)).size(FS_META).color(c_muted()),
@@ -1379,41 +1448,59 @@ impl App {
                 if resp.hovered() {
                     ui.painter().rect_filled(rect, CornerRadius::same(R_CONTROL), c_hover());
                 }
-                ui.painter().circle_filled(rect.left_center() + vec2(14.0, 0.0), 3.5, c_accent());
                 let when = elapsed_short(*t);
-                let when_galley = ui.painter().layout_no_wrap(when, egui::FontId::proportional(FS_META), c_faint());
-                let name_w = rect.width() - 28.0 - when_galley.size().x - 18.0;
-                let mut job = egui::text::LayoutJob::simple_singleline(name.clone(), fonts::medium(FS_META), c_text());
-                job.wrap = egui::text::TextWrapping::truncate_at_width(name_w.max(20.0));
-                let name_galley = ui.fonts_mut(|f| f.layout_job(job));
-                ui.painter().with_clip_rect(rect).galley(
-                    egui::pos2(rect.left() + 28.0, rect.center().y - name_galley.size().y / 2.0),
-                    name_galley,
-                    c_text(),
-                );
-                ui.painter().galley(
-                    egui::pos2(
-                        rect.right() - 10.0 - when_galley.size().x,
-                        rect.center().y - when_galley.size().y / 2.0,
-                    ),
-                    when_galley,
-                    c_faint(),
-                );
+                if rail {
+                    // folded: the green Play mark on a little light, the name and the time in its tooltip
+                    let a = c_accent();
+                    let light =
+                        egui::Color32::from_rgba_unmultiplied(a.r(), a.g(), a.b(), if is_dark() { 90 } else { 60 });
+                    motion::glow(ui.painter(), rect.center(), 14.0, light);
+                    icons::paint(ui.painter(), Icon::Play, rect.center(), 12.0, c_accent());
+                } else {
+                    ui.painter().circle_filled(rect.left_center() + vec2(14.0, 0.0), 3.5, c_accent());
+                    let when_galley =
+                        ui.painter().layout_no_wrap(when.clone(), egui::FontId::proportional(FS_META), c_faint());
+                    let name_w = rect.width() - 28.0 - when_galley.size().x - 18.0;
+                    let mut job =
+                        egui::text::LayoutJob::simple_singleline(name.clone(), fonts::medium(FS_META), c_text());
+                    job.wrap = egui::text::TextWrapping::truncate_at_width(name_w.max(20.0));
+                    let name_galley = ui.fonts_mut(|f| f.layout_job(job));
+                    ui.painter().with_clip_rect(rect).galley(
+                        egui::pos2(rect.left() + 28.0, rect.center().y - name_galley.size().y / 2.0),
+                        name_galley,
+                        c_text(),
+                    );
+                    ui.painter().galley(
+                        egui::pos2(
+                            rect.right() - 10.0 - when_galley.size().x,
+                            rect.center().y - when_galley.size().y / 2.0,
+                        ),
+                        when_galley,
+                        c_faint(),
+                    );
+                }
                 focus_ring(ui, &resp, rect, R_CONTROL);
                 resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, format!("Playing {name}")));
-                if resp.on_hover_text(name.as_str()).on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                let tip = if rail { format!("Playing {name}\n{when}") } else { name.clone() };
+                if resp.on_hover_text(tip).on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
                     let f = folder.clone();
                     self.open_instance(&f);
                 }
             }
             if playing.len() > 2 {
-                ui.label(RichText::new(format!("+{} more playing", playing.len() - 2)).size(FS_META).color(c_faint()));
+                let n = playing.len() - 2;
+                let text = if rail { format!("+{n}") } else { format!("+{n} more playing") };
+                let r = ui.add(egui::Label::new(RichText::new(text).size(FS_META).color(c_faint())));
+                if rail {
+                    r.on_hover_text(format!("{n} more playing"));
+                }
             }
         });
         self.sidebar_bottom = bottom.response.rect.height();
     }
 
     fn nav_button(&self, ui: &mut Ui, icon: Icon, label: &str, active: bool) -> egui::Response {
+        let open = self.nav_open;
         let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 36.0), egui::Sense::click());
         // the open page: a pill that fades in, with a short bar of the brand gradient at its left edge
         let on = motion::toward(ui.ctx(), resp.id.with("nav-on"), active, motion::MEDIUM);
@@ -1429,16 +1516,21 @@ impl App {
         }
         let color = motion::mix(c_muted(), c_text(), on.max(hot));
         let icon_color = motion::mix(color, c_accent(), on);
-        icons::paint(ui.painter(), icon, rect.left_center() + vec2(20.0, 0.0), 16.0, icon_color);
-        ui.painter().text(
-            rect.left_center() + vec2(40.0, 0.0),
-            egui::Align2::LEFT_CENTER,
-            label,
-            if active { fonts::medium(14.0) } else { egui::FontId::proportional(14.0) },
-            color,
-        );
+        // folded to the rail the icon moves to the middle and the name fades out
+        let icon_x = egui::lerp(rect.center().x..=rect.left() + 20.0, open);
+        icons::paint(ui.painter(), icon, egui::pos2(icon_x, rect.center().y), 16.0, icon_color);
+        if open > 0.0 {
+            ui.painter().with_clip_rect(rect.intersect(ui.clip_rect())).text(
+                egui::pos2(icon_x + 20.0, rect.center().y),
+                egui::Align2::LEFT_CENTER,
+                label,
+                if active { fonts::medium(14.0) } else { egui::FontId::proportional(14.0) },
+                color.gamma_multiply(open),
+            );
+        }
         focus_ring(ui, &resp, rect, R_CONTROL);
         resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Tab, true, active, label));
+        let resp = if open < 0.5 { resp.on_hover_text(label) } else { resp };
         resp.on_hover_cursor(egui::CursorIcon::PointingHand)
     }
 
@@ -1463,8 +1555,13 @@ impl App {
             ctx.request_repaint_after(Duration::from_millis(500));
         }
         let mut dismiss: Option<usize> = None;
+        // in the middle of the page rather than of the whole window, and never wider than the page
+        let screen = ctx.content_rect();
+        let page = if self.page_rect.is_positive() { self.page_rect } else { screen };
+        let max_w = (page.width() - 32.0).clamp(200.0, 560.0);
         egui::Area::new(egui::Id::unique("toasts"))
-            .anchor(egui::Align2::CENTER_BOTTOM, vec2(0.0, -24.0))
+            .pivot(egui::Align2::CENTER_BOTTOM)
+            .fixed_pos(egui::pos2(page.center().x, screen.bottom() - 24.0))
             .order(egui::Order::Tooltip)
             .show(ctx, |ui| {
                 let shown = self.toasts.len().saturating_sub(3);
@@ -1482,7 +1579,7 @@ impl App {
                             color: egui::Color32::from_black_alpha(if is_dark() { 110 } else { 30 }),
                         })
                         .show(ui, |ui| {
-                            ui.set_max_width(560.0);
+                            ui.set_max_width(max_w);
                             let text =
                                 if t.count > 1 { format!("{}  \u{00D7}{}", t.text, t.count) } else { t.text.clone() };
                             ui.label(RichText::new(text).color(fg));
@@ -1774,54 +1871,103 @@ fn zoom_that_fits(zoom: f32, monitor: egui::Vec2) -> Option<f32> {
     (zoom > 1.0 && zoom > fits + 0.01).then(|| fits.max(1.0))
 }
 
-/// The first sentence of a longer explanation, for a toast; the whole of it goes to the log.
-/// About how tall a [`task_row`] with sizes is: the name, the bar, two lines of numbers, Cancel and the gap.
-const TASK_ROW_HEIGHT: f32 = 92.0;
+/// The column of the pages of text and forms (Settings, Accounts, About, New instance, the world converter): the
+/// 720 points they are laid out in and the strip their scroll bar floats in.
+const READ_COLUMN: f32 = 734.0;
+/// The column of Tools and Servers: their 1040 points and the scroll bar's strip.
+const WIDE_COLUMN: f32 = 1054.0;
+/// Home: its panel, the row of instances and the news read best at this width at most.
+const HOME_COLUMN: f32 = 1320.0;
 
-/// One job in the sidebar (or in its "+N more" list): what it is, how far it got, and its Cancel.
+/// How wide a page's content gets at most; in a wider window it sits in the middle. Pages of text and forms keep the
+/// column they are laid out for, so on a big screen they are centred instead of hugging the sidebar; lists and grids
+/// (Library, Discover, an instance and its mods, Crafting, the modpack lists) use the whole width up to
+/// [`PAGE_MAX_W`].
+fn page_column(page: Page) -> f32 {
+    match page {
+        Page::Settings | Page::Accounts | Page::About | Page::Create => READ_COLUMN,
+        #[cfg(feature = "converter")]
+        Page::Convert => READ_COLUMN,
+        Page::Tools | Page::Servers => WIDE_COLUMN,
+        Page::Home => HOME_COLUMN,
+        _ => PAGE_MAX_W,
+    }
+}
+
+/// How tall the sidebar's list of `items` destinations in `groups` groups is with the groups' names: the items with
+/// the room between them, and each name with its room.
+fn nav_list_height(items: usize, groups: usize) -> f32 {
+    items as f32 * 38.0 + groups as f32 * 22.0 + groups.saturating_sub(1) as f32 * 12.0
+}
+
+/// About how tall a [`task_row`] is: the name with its Cancel, the bar, a line of numbers and the gap.
+const TASK_ROW_HEIGHT: f32 = 58.0;
+
+/// One job in the sidebar (or in its "+N more" list): what it is with its Cancel beside it, how far it got, and how
+/// much of how much (the files and the speed are in the tooltip of that line).
 fn task_row(ui: &mut egui::Ui, t: &Task) {
     enum Line {
-        Text(RichText),
+        Head,
         Bar(Option<f32>),
-        Cancel,
+        Numbers(String, Option<String>),
         Gap,
     }
-    let meta = |text: String, color| Line::Text(RichText::new(text).size(FS_META).color(color));
-    let mut lines = vec![Line::Text(RichText::new(&t.label).size(FS_META).medium_weight())];
+    let mut lines = vec![Line::Head];
     if let Some((sizes, files)) = t.progress.summary() {
-        // how much of how much, in per cent, then the files and the speed; a moving bar while the size isn't known
-        lines.extend([Line::Bar(t.progress.known_fraction()), meta(sizes, c_muted()), meta(files, c_faint())]);
+        // how much of how much, in per cent; a moving bar while the size isn't known
+        lines.extend([Line::Bar(t.progress.known_fraction()), Line::Numbers(sizes, Some(files))]);
     } else {
         lines.push(Line::Bar(None));
         let stage = t.progress.stage_text();
         if !stage.is_empty() {
-            lines.push(meta(stage, c_faint()));
+            lines.push(Line::Numbers(stage, None));
         }
     }
-    lines.extend([Line::Cancel, Line::Gap]);
+    lines.push(Line::Gap);
     // the sidebar's bottom part is laid out upwards: there the lines go in last first, so they still read downwards
     if ui.layout().main_dir() == egui::Direction::BottomUp {
         lines.reverse();
     }
     for line in lines {
         match line {
-            Line::Text(text) => {
-                ui.add(egui::Label::new(text).truncate());
+            Line::Head => {
+                // one short line: a plain `horizontal` would be as tall as a button
+                let size = vec2(ui.available_width(), 18.0);
+                ui.allocate_ui_with_layout(size, Layout::left_to_right(Align::Center), |ui| {
+                    // a long download or install can be stopped; the job stops at its next step and says it was
+                    // cancelled
+                    let cancelling = t.progress.cancelled.load(Ordering::Relaxed);
+                    let text = if cancelling { "Cancelling\u{2026}" } else { "Cancel" };
+                    let cancel = RichText::new(text).size(FS_META).color(c_faint());
+                    let cancel_w = ui
+                        .painter()
+                        .layout_no_wrap(text.to_string(), egui::FontId::proportional(FS_META), c_faint())
+                        .size()
+                        .x;
+                    ui.scope(|ui| {
+                        ui.set_max_width((ui.available_width() - cancel_w - 16.0).max(40.0));
+                        ui.add(egui::Label::new(RichText::new(&t.label).size(FS_META).medium_weight()).truncate());
+                    });
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        ui.spacing_mut().interact_size.y = 16.0;
+                        ui.spacing_mut().button_padding = vec2(2.0, 0.0);
+                        let resp = ui.add_enabled(!cancelling, egui::Button::new(cancel).frame(false));
+                        resp.widget_info(|| {
+                            egui::WidgetInfo::labeled(egui::Role::Button, !cancelling, format!("Cancel {}", t.label))
+                        });
+                        if resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                            t.progress.cancelled.store(true, Ordering::Relaxed);
+                        }
+                    });
+                });
             }
             Line::Bar(fraction) => {
                 progress_bar(ui, fraction, 4.0);
             }
-            Line::Cancel => {
-                // a long download or install can be stopped; the job stops at its next step and says it was cancelled
-                let cancelling = t.progress.cancelled.load(Ordering::Relaxed);
-                let text = if cancelling { "Cancelling\u{2026}" } else { "Cancel" };
-                let button = egui::Button::new(RichText::new(text).size(FS_META).color(c_faint())).frame(false);
-                let resp = ui.add_enabled(!cancelling, button);
-                resp.widget_info(|| {
-                    egui::WidgetInfo::labeled(egui::Role::Button, !cancelling, format!("Cancel {}", t.label))
-                });
-                if resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
-                    t.progress.cancelled.store(true, Ordering::Relaxed);
+            Line::Numbers(text, more) => {
+                let resp = ui.add(egui::Label::new(RichText::new(text).size(FS_META).color(c_muted())).truncate());
+                if let Some(more) = more {
+                    resp.on_hover_text(more);
                 }
             }
             Line::Gap => ui.add_space(8.0),
@@ -1829,6 +1975,77 @@ fn task_row(ui: &mut egui::Ui, t: &Task) {
     }
 }
 
+/// How tall [`rail_jobs`] is, with the gap under it.
+const RAIL_TASK_HEIGHT: f32 = 44.0;
+
+/// The jobs in progress in the folded sidebar, all in one place: an arrow with a small bar under it showing how far
+/// they got, and how many there are when more than one. Their names and numbers are in the tooltip, and a click opens
+/// their whole rows, each with its Cancel.
+fn rail_jobs(ui: &mut egui::Ui, tasks: &[Task]) {
+    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), RAIL_TASK_HEIGHT - 2.0), egui::Sense::click());
+    let open = egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&resp));
+    let hot = motion::hover(ui, resp.id, resp.hovered() || open);
+    if hot > 0.0 {
+        ui.painter().rect_filled(rect, CornerRadius::same(R_CONTROL), c_hover().gamma_multiply(hot));
+    }
+    let color = motion::mix(c_muted(), c_text(), hot);
+    let mark = rect.center() - vec2(0.0, 5.0);
+    icons::paint(ui.painter(), Icon::Download, mark, 16.0, color);
+    if tasks.len() > 1 {
+        // how many, on a small brand-coloured dot at the arrow's corner
+        let dot = mark + vec2(10.0, -8.0);
+        ui.painter().circle_filled(dot, 7.0, c_accent());
+        ui.painter().text(
+            dot,
+            egui::Align2::CENTER_CENTER,
+            tasks.len().min(99).to_string(),
+            fonts::semibold(9.5),
+            c_on_accent(),
+        );
+    }
+    let bar = egui::Rect::from_center_size(egui::pos2(rect.center().x, rect.bottom() - 9.0), vec2(28.0, 3.0));
+    let mut bar_ui = ui.new_child(egui::UiBuilder::new().max_rect(bar).layout(Layout::left_to_right(Align::Min)));
+    progress_bar(&mut bar_ui, rail_fraction(tasks.iter().map(task_fraction)), 3.0);
+    focus_ring(ui, &resp, rect, R_CONTROL);
+    let tip = tasks
+        .iter()
+        .map(|t| {
+            let numbers = match t.progress.summary() {
+                Some((sizes, _)) => sizes,
+                None => t.progress.stage_text(),
+            };
+            if numbers.is_empty() { t.label.clone() } else { format!("{}: {numbers}", t.label) }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &tip));
+    let resp = resp.on_hover_text(&tip).on_hover_cursor(egui::CursorIcon::PointingHand);
+    egui::Popup::menu(&resp).align(egui::RectAlign::RIGHT_END).show(|ui| {
+        ui.set_width(260.0);
+        for t in tasks {
+            task_row(ui, t);
+        }
+    });
+}
+
+/// How far a job got, when that is known.
+fn task_fraction(t: &Task) -> Option<f32> {
+    t.progress.summary().and_then(|_| t.progress.known_fraction())
+}
+
+/// How far a group of jobs got together, for the one bar of the folded sidebar: the average when every one of them
+/// knows how far it is, otherwise none (the bar then just moves).
+fn rail_fraction(fractions: impl Iterator<Item = Option<f32>>) -> Option<f32> {
+    let mut sum = 0.0;
+    let mut n = 0;
+    for f in fractions {
+        sum += f?;
+        n += 1;
+    }
+    (n > 0).then(|| sum / n as f32)
+}
+
+/// The first sentence of a longer explanation, for a toast; the whole of it goes to the log.
 fn first_sentence(text: &str) -> String {
     let line = text.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("");
     match line.find(". ") {
@@ -1840,6 +2057,38 @@ fn first_sentence(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_folded_sidebar_shows_how_far_its_jobs_got_together() {
+        assert_eq!(rail_fraction([Some(0.2), Some(0.6)].into_iter()), Some(0.4));
+        assert_eq!(rail_fraction([Some(1.0)].into_iter()), Some(1.0));
+        // one job that doesn't know yet: the bar just moves
+        assert_eq!(rail_fraction([Some(0.5), None].into_iter()), None);
+        assert_eq!(rail_fraction(std::iter::empty()), None);
+    }
+
+    #[test]
+    fn the_group_names_go_when_the_list_would_not_fit_with_them() {
+        // ten destinations in three groups
+        let full = nav_list_height(10, 3);
+        assert_eq!(full, 380.0 + 66.0 + 24.0);
+        assert!(nav_list_height(10, 3) > nav_list_height(9, 3));
+        assert_eq!(nav_list_height(0, 0), 0.0);
+    }
+
+    #[test]
+    fn pages_of_text_are_centred_and_lists_use_the_width() {
+        assert_eq!(page_column(Page::Settings), READ_COLUMN);
+        assert_eq!(page_column(Page::Servers), WIDE_COLUMN);
+        for page in [Page::Library, Page::Discover, Page::Instance, Page::Craft, Page::Packs, Page::Ftb] {
+            assert_eq!(page_column(page), PAGE_MAX_W, "{page:?}");
+        }
+        // on a 1920 screen the open sidebar and the margins leave about 1616 points: Settings sits in the middle
+        let (left, width) = centred_column(1616.0, page_column(Page::Settings));
+        assert_eq!(width, READ_COLUMN);
+        assert!(left > 400.0);
+        assert_eq!(centred_column(1616.0, page_column(Page::Library)), (0.0, 1616.0));
+    }
 
     #[test]
     fn zooming_in_stops_where_the_smallest_window_still_fits() {
@@ -1966,8 +2215,13 @@ impl eframe::App for App {
         // the ground with its soft glow, under the glass of the sidebar and the pages
         motion::backdrop(ui.painter(), ctx.content_rect());
         let glass = c_surface();
+        // a narrow window folds the sidebar to a rail of icons; it eases from one width to the other
+        let window_w = ctx.content_rect().width();
+        let target = if rail_folded(window_w) { RAIL_W } else { SIDEBAR_W };
+        let nav_w = motion::glide(&ctx, egui::Id::unique("nav-width"), target, motion::MEDIUM).round();
+        self.nav_open = ((nav_w - RAIL_W) / (SIDEBAR_W - RAIL_W)).clamp(0.0, 1.0);
         let nav = egui::Panel::left("nav")
-            .exact_size(232.0)
+            .exact_size(nav_w)
             .resizable(false)
             .frame(
                 egui::Frame::new()
@@ -1984,16 +2238,24 @@ impl eframe::App for App {
             self.page_since = (self.page, if self.page_since.1.is_finite() { now } else { f64::NEG_INFINITY });
         }
         let arrived = motion::arrival(&ctx, self.page_since.1);
-        egui::CentralPanel::default()
-            .frame(egui::Frame::new().inner_margin(egui::Margin { left: 36, right: 24, top: 28, bottom: 24 }))
-            .show(ui, |ui| {
-                if arrived < 1.0 {
-                    ui.multiply_opacity(arrived);
-                    ui.add_space((1.0 - arrived) * 14.0);
-                }
-                self.page_ui(ui)
-            });
+        // the same room around every page, a little more on a big screen
+        let margin = page_margin(window_w - nav_w);
+        egui::CentralPanel::default().frame(egui::Frame::new().inner_margin(margin)).show(ui, |ui| {
+            self.page_rect = ui.max_rect();
+            if arrived < 1.0 {
+                ui.multiply_opacity(arrived);
+                ui.add_space((1.0 - arrived) * 14.0);
+            }
+            readable_column(ui, page_column(self.page), |ui| self.page_ui(ui))
+        });
         self.windows_ui(&ctx);
+    }
+
+    /// The screenshot tour's pointer (see `shot_pointer`) goes in with the input, as a real one would.
+    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        if let Some(shot) = self.shot.as_mut() {
+            raw_input.events.append(&mut shot.pointer);
+        }
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
@@ -2070,9 +2332,17 @@ struct Shot {
     step: usize,
     frames: u32,
     waiting: Arc<std::sync::atomic::AtomicBool>,
+    /// A button the tour presses like a player would (see [`widgets::shot_seek`]): its label, and the frame the
+    /// pointer was put on it once it was found.
+    press: Option<(&'static str, Option<u32>)>,
+    /// Pointer events for the next frame, handed to egui before it reads the input (see `raw_input_hook`).
+    pointer: Vec<egui::Event>,
 }
 
-const SHOT_PAGES: [&str; 37] = [
+/// The ids of the jobs the tour makes up to show the sidebar busy; no real job gets ids this high.
+const SHOT_TASK: u64 = u64::MAX - 8;
+
+const SHOT_PAGES: [&str; 46] = [
     "home",
     "library",
     "instance",
@@ -2110,6 +2380,17 @@ const SHOT_PAGES: [&str; 37] = [
     "settings-light",
     "home-light",
     "mods-light",
+    // the windows
+    "update",
+    "import",
+    "export",
+    "delete",
+    "quit",
+    "cf-install",
+    "ftb-pack",
+    "packs-pack",
+    // the sidebar with jobs in progress and a game running
+    "tasks",
 ];
 
 impl Shot {
@@ -2134,6 +2415,8 @@ impl Shot {
             step: 0,
             frames: 0,
             waiting: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            press: None,
+            pointer: Vec::new(),
         })
     }
 }
@@ -2161,6 +2444,10 @@ impl App {
         }
         let name = full_name.as_str();
         if shot.frames == 1 {
+            let before = step.checked_sub(1).and_then(|i| shot.pages.get(i)).cloned().unwrap_or_default();
+            shot.press = None;
+            widgets::shot_seek(None);
+            self.shot_close_windows(before.trim_end_matches("-light"));
             let first = self.instances.first().map(|i| i.folder.clone());
             if name != "who" {
                 self.who = None;
@@ -2310,6 +2597,45 @@ impl App {
                     self.page = Page::Accounts;
                     self.acct.confirm_remove = self.accounts.first().map(|a| a.uuid.clone());
                 }
+                "update" => {
+                    self.page = Page::Home;
+                    self.handle_update(updates::UpdateMsg::Checked {
+                        manual: true,
+                        result: Ok(crate::update::Found::Newer(Box::new(shot_release()))),
+                    });
+                }
+                "import" => {
+                    self.page = Page::Library;
+                    self.open_import(None);
+                }
+                "export" => {
+                    self.page = Page::Library;
+                    if let Some(f) = first {
+                        self.open_export(&f);
+                    }
+                }
+                "quit" => {
+                    self.page = Page::Home;
+                    self.shot_busy(false);
+                    self.confirm_quit = true;
+                }
+                "tasks" => {
+                    self.page = Page::Home;
+                    self.shot_busy(true);
+                }
+                "cf-install" => {
+                    self.page = Page::Discover;
+                    // Sodium on CurseForge, for the first instance
+                    self.cf_open_project(ctx, 394468, first, None, false);
+                }
+                "ftb-pack" => {
+                    self.page = Page::Ftb;
+                    self.shot_press("Details");
+                }
+                "packs-pack" => {
+                    self.page = Page::Packs;
+                    self.shot_press("Details");
+                }
                 "library-empty" => {
                     self.page = Page::Library;
                     self.library_search = "no instance is called this".into();
@@ -2348,12 +2674,16 @@ impl App {
             "offline-enter" if frame == 10 => press(egui::Key::Enter),
             _ => {}
         }
+        self.shot_pointer(frame);
         // both sites at once: the slower of the two decides
-        let wait = if matches!(name.trim_end_matches("-light"), "discover-both" | "discover-datapacks" | "github-add") {
+        let wait = if matches!(name.trim_end_matches("-light"), "ftb-pack" | "packs-pack" | "cf-install") {
+            // the list comes, then the window, then what the version or the files need
+            700
+        } else if matches!(name.trim_end_matches("-light"), "discover-both" | "discover-datapacks" | "github-add") {
             400
         } else if matches!(
             name.trim_end_matches("-light"),
-            "discover" | "create-fabric" | "instance-mods" | "mods" | "packs" | "ftb" | "about" | "loader"
+            "discover" | "create-fabric" | "instance-mods" | "mods" | "packs" | "ftb" | "about" | "loader" | "import"
         ) || name.trim_end_matches("-light").starts_with("craft")
         {
             180
@@ -2377,6 +2707,115 @@ impl App {
             shot.step += 1;
             shot.frames = 0;
         }
+    }
+}
+
+impl App {
+    /// Close what the tour's page before opened, so the next picture shows only its own page and window.
+    fn shot_close_windows(&mut self, before: &str) {
+        self.import.open = false;
+        self.export = export::ExportState::default();
+        self.upd = updates::UpdateUi::default();
+        self.gh = Default::default();
+        self.confirm_quit = false;
+        self.confirm_stop = None;
+        self.confirm_play_unsaved = None;
+        // these also hold their page's lists, which take a while to come again: only when their window was opened
+        match before {
+            "cf-install" => self.cf = curseforge::CfState::default(),
+            "ftb-pack" => self.ftb = ftb::FtbState::default(),
+            "packs-pack" => self.packs = packs::PacksState::default(),
+            _ => {}
+        }
+        self.tasks.retain(|t| t.id < SHOT_TASK);
+        self.games.retain(|key, _| !key.starts_with("shot:"));
+    }
+
+    /// Two jobs in progress (one downloading, one still getting ready) and, with `playing`, a game running, so the
+    /// sidebar shows what it shows while the launcher is busy.
+    fn shot_busy(&mut self, playing: bool) {
+        let download = Progress::new();
+        download.files_total.store(187, Ordering::Relaxed);
+        download.files_done.store(120, Ordering::Relaxed);
+        download.bytes_total.store(318_000_000, Ordering::Relaxed);
+        download.bytes_done.store(210_300_000, Ordering::Relaxed);
+        self.tasks.push(Task { id: SHOT_TASK, label: "Installing All the Mods 10".into(), progress: download });
+        let preparing = Progress::new();
+        *preparing.stage.lock().unwrap_or_else(|e| e.into_inner()) = "Reading the pack".into();
+        self.tasks.push(Task { id: SHOT_TASK + 1, label: "Importing Create Above".into(), progress: preparing });
+        if let Some(folder) = playing.then(|| self.instances.first().map(|i| i.folder.clone())).flatten() {
+            self.games.insert(
+                format!("shot:{folder}"),
+                Game {
+                    folder,
+                    player: "Alex".into(),
+                    fast_start: false,
+                    lite: false,
+                    task: 0,
+                    lines: Vec::new(),
+                    phase: Phase::Running,
+                    kill: None,
+                    started: Instant::now() - Duration::from_secs(47 * 60),
+                },
+            );
+        }
+    }
+
+    /// Press the first button labelled `label` once it is on screen.
+    fn shot_press(&mut self, label: &'static str) {
+        if let Some(shot) = self.shot.as_mut() {
+            shot.press = Some((label, None));
+            widgets::shot_seek(Some(label));
+        }
+    }
+
+    /// Move the tour's pointer to the button looked for once it has been drawn (and the page had a moment to fill
+    /// in), then press and release it on the next two frames.
+    fn shot_pointer(&mut self, frame: u32) {
+        let Some(shot) = self.shot.as_mut() else { return };
+        let Some((_, at)) = shot.press.as_mut() else { return };
+        let Some(rect) = widgets::shot_found() else { return };
+        let pos = rect.center();
+        let button = |pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        };
+        match *at {
+            None if frame >= 120 => {
+                *at = Some(frame);
+                shot.pointer.push(egui::Event::PointerMoved(pos));
+            }
+            Some(f) if frame == f + 2 => shot.pointer.push(button(true)),
+            Some(f) if frame == f + 4 => {
+                shot.pointer.push(button(false));
+                shot.press = None;
+                widgets::shot_seek(None);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// A made-up newer release for the tour's picture of the update window.
+fn shot_release() -> crate::update::Release {
+    crate::update::Release {
+        tag_name: "v9.9.0".into(),
+        name: "BlockForge 9.9.0".into(),
+        html_url: "https://github.com/riyadmondol2006/BlockForge/releases".into(),
+        body: "## What's new\n\n- The sidebar folds to a rail of icons in a narrow window\n- Pages of settings and \
+               text sit in the middle of a wide screen\n- Every window can be pictured by the screenshot tour\n\n\
+               ## Fixed\n\n- Toasts stay over the page instead of the sidebar"
+            .into(),
+        prerelease: false,
+        draft: false,
+        assets: vec![crate::update::Asset {
+            name: "BlockForge-9.9.0-x86_64.AppImage".into(),
+            browser_download_url: "https://github.com/riyadmondol2006/BlockForge/releases".into(),
+            size: 48_000_000,
+            digest: None,
+        }],
     }
 }
 
