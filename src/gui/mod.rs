@@ -27,6 +27,7 @@ mod instance_menu;
 mod instance_settings;
 mod library;
 mod mods;
+mod motion;
 mod packs;
 mod performance;
 mod pictures;
@@ -334,6 +335,8 @@ pub struct App {
     tray_quiet: bool,
     upd: updates::UpdateUi,
     gh: github_add::GhState,
+    /// The page shown last frame and when it opened (input clock), for the page's way in.
+    page_since: (Page, f64),
     last_window: Option<(crate::config::Size, crate::config::Pos)>,
     last_window_save: Instant,
     /// When settings changed by [`App::save_settings_soon`] are to be written.
@@ -488,6 +491,7 @@ impl App {
             tray_quiet: true,
             upd: updates::UpdateUi::default(),
             gh: Default::default(),
+            page_since: (Page::Home, f64::NEG_INFINITY),
             last_window: None,
             last_window_save: Instant::now(),
             settings_save_due: None,
@@ -1205,13 +1209,26 @@ impl App {
         let compact = ui.available_height() < 610.0;
         ui.horizontal(|ui| {
             ui.add_space(4.0);
-            ui.add(egui::Image::from_texture(&self.logo).fit_to_exact_size(vec2(28.0, 28.0)).corner_radius(7));
-            ui.label(RichText::new(crate::NAME).size(FS_BODY).semibold());
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                ui.label(RichText::new(format!("v{}", crate::VERSION)).size(FS_META).color(c_faint()));
+            let logo =
+                ui.add(egui::Image::from_texture(&self.logo).fit_to_exact_size(vec2(32.0, 32.0)).corner_radius(9));
+            // the logo sits on a little light of the brand colour
+            let a = c_accent();
+            ui.painter().add(
+                egui::Shadow {
+                    offset: [0, 4],
+                    blur: 16,
+                    spread: 0,
+                    color: egui::Color32::from_rgba_unmultiplied(a.r(), a.g(), a.b(), if is_dark() { 60 } else { 40 }),
+                }
+                .as_shape(logo.rect, CornerRadius::same(9)),
+            );
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = 0.0;
+                ui.label(RichText::new(crate::NAME).size(15.0).semibold());
+                ui.label(RichText::new(format!("v{}", crate::VERSION)).size(11.0).color(c_faint()));
             });
         });
-        ui.add_space(14.0);
+        ui.add_space(18.0);
         // Three groups of destinations, then Settings and About pinned to the bottom with the account. Who plays is the
         // account row at the bottom, so Accounts is not repeated in the list.
         let groups: Vec<(&str, Vec<(Page, &str, Icon)>)> = vec![
@@ -1264,9 +1281,15 @@ impl App {
                     if !compact {
                         ui.add_space(2.0);
                         ui.horizontal(|ui| {
-                            ui.add_space(10.0);
-                            ui.label(RichText::new(group).size(FS_META).color(c_faint()));
+                            ui.add_space(12.0);
+                            ui.label(
+                                RichText::new(group.to_uppercase())
+                                    .size(10.5)
+                                    .color(c_faint())
+                                    .extra_letter_spacing(0.8),
+                            );
                         });
+                        ui.add_space(2.0);
                     }
                     for (page, label, icon) in items {
                         let active = self.page == page || (page == Page::Library && self.page == Page::Instance);
@@ -1391,18 +1414,22 @@ impl App {
     }
 
     fn nav_button(&self, ui: &mut Ui, icon: Icon, label: &str, active: bool) -> egui::Response {
-        let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 32.0), egui::Sense::click());
-        // the open page is a neutral pill and brighter text, not a colour: the green is kept for Play
-        let bg = if active {
-            c_active()
-        } else if resp.hovered() {
-            c_hover()
-        } else {
-            egui::Color32::TRANSPARENT
-        };
-        ui.painter().rect_filled(rect, CornerRadius::same(R_CONTROL), bg);
-        let color = if active || resp.hovered() { c_text() } else { c_muted() };
-        icons::paint(ui.painter(), icon, rect.left_center() + vec2(20.0, 0.0), 16.0, color);
+        let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 36.0), egui::Sense::click());
+        // the open page: a pill that fades in, with a short bar of the brand gradient at its left edge
+        let on = motion::toward(ui.ctx(), resp.id.with("nav-on"), active, motion::MEDIUM);
+        let hot = motion::hover(ui, resp.id, resp.hovered() && !active);
+        if hot > 0.0 {
+            ui.painter().rect_filled(rect, CornerRadius::same(R_CONTROL), c_hover().gamma_multiply(hot));
+        }
+        if on > 0.0 {
+            ui.painter().rect_filled(rect, CornerRadius::same(R_CONTROL), c_active().gamma_multiply(on));
+            let h = 18.0 * on;
+            let bar = egui::Rect::from_center_size(rect.left_center() + vec2(1.5, 0.0), vec2(3.0, h));
+            motion::gradient_rect(ui.painter(), bar, 2, c_accent(), c_accent2());
+        }
+        let color = motion::mix(c_muted(), c_text(), on.max(hot));
+        let icon_color = motion::mix(color, c_accent(), on);
+        icons::paint(ui.painter(), icon, rect.left_center() + vec2(20.0, 0.0), 16.0, icon_color);
         ui.painter().text(
             rect.left_center() + vec2(40.0, 0.0),
             egui::Align2::LEFT_CENTER,
@@ -1936,38 +1963,74 @@ impl eframe::App for App {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        // the ground with its soft glow, under the glass of the sidebar and the pages
+        motion::backdrop(ui.painter(), ctx.content_rect());
+        let glass = c_surface();
         let nav = egui::Panel::left("nav")
-            .exact_size(224.0)
+            .exact_size(232.0)
             .resizable(false)
-            .frame(egui::Frame::new().fill(c_surface()).inner_margin(egui::Margin::symmetric(12, 16)))
+            .frame(
+                egui::Frame::new()
+                    .fill(egui::Color32::from_rgba_unmultiplied(glass.r(), glass.g(), glass.b(), 222))
+                    .inner_margin(egui::Margin::symmetric(14, 18)),
+            )
             .show(ui, |ui| self.sidebar(ui));
         // one line divides the sidebar from the page
         let edge = nav.response.rect.right();
         ui.painter().vline(edge - 0.5, nav.response.rect.y_range(), Stroke::new(1.0, c_border()));
+        // a new page fades in and rises into place
+        let now = ctx.input(|i| i.time);
+        if self.page_since.0 != self.page {
+            self.page_since = (self.page, if self.page_since.1.is_finite() { now } else { f64::NEG_INFINITY });
+        }
+        let arrived = motion::arrival(&ctx, self.page_since.1);
         egui::CentralPanel::default()
-            .frame(egui::Frame::new().fill(c_bg()).inner_margin(egui::Margin {
-                left: 32,
-                right: 22,
-                top: 24,
-                bottom: 24,
-            }))
-            .show(ui, |ui| match self.page {
-                Page::Home => self.home_ui(ui),
-                Page::Library => self.library_ui(ui),
-                Page::Instance => self.instance_ui(ui),
-                Page::Discover => self.discover_ui(ui),
-                Page::Packs => self.packs_ui(ui),
-                Page::Ftb => self.ftb_ui(ui),
-                Page::Create => self.create_ui(ui),
-                Page::Accounts => self.accounts_ui(ui),
-                Page::Settings => self.settings_ui(ui),
-                Page::Tools => self.tools_ui(ui),
-                Page::Craft => self.craft_ui(ui),
-                #[cfg(feature = "converter")]
-                Page::Convert => self.convert_ui(ui),
-                Page::Servers => self.servers_ui(ui),
-                Page::About => self.about_ui(ui),
+            .frame(egui::Frame::new().inner_margin(egui::Margin { left: 36, right: 24, top: 28, bottom: 24 }))
+            .show(ui, |ui| {
+                if arrived < 1.0 {
+                    ui.multiply_opacity(arrived);
+                    ui.add_space((1.0 - arrived) * 14.0);
+                }
+                self.page_ui(ui)
             });
+        self.windows_ui(&ctx);
+    }
+
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        self.craft_flush_now();
+        #[cfg(feature = "converter")]
+        self.convert_on_exit();
+        // a window moved just before closing still has its new place written
+        if self.settings_save_due.is_some() {
+            let _ = self.settings.save(&self.dirs);
+        }
+    }
+}
+
+impl App {
+    fn page_ui(&mut self, ui: &mut Ui) {
+        match self.page {
+            Page::Home => self.home_ui(ui),
+            Page::Library => self.library_ui(ui),
+            Page::Instance => self.instance_ui(ui),
+            Page::Discover => self.discover_ui(ui),
+            Page::Packs => self.packs_ui(ui),
+            Page::Ftb => self.ftb_ui(ui),
+            Page::Create => self.create_ui(ui),
+            Page::Accounts => self.accounts_ui(ui),
+            Page::Settings => self.settings_ui(ui),
+            Page::Tools => self.tools_ui(ui),
+            Page::Craft => self.craft_ui(ui),
+            #[cfg(feature = "converter")]
+            Page::Convert => self.convert_ui(ui),
+            Page::Servers => self.servers_ui(ui),
+            Page::About => self.about_ui(ui),
+        }
+    }
+
+    /// The windows drawn over the page.
+    fn windows_ui(&mut self, ctx: &egui::Context) {
+        let ctx = ctx.clone();
         // below the other windows: the first start's questions come first
         self.update_dialog(&ctx);
         self.gh_dialog(&ctx);
@@ -1988,16 +2051,6 @@ impl eframe::App for App {
             self.who_ui(&ctx);
         }
         self.console_ui(&ctx);
-    }
-
-    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
-        self.craft_flush_now();
-        #[cfg(feature = "converter")]
-        self.convert_on_exit();
-        // a window moved just before closing still has its new place written
-        if self.settings_save_due.is_some() {
-            let _ = self.settings.save(&self.dirs);
-        }
     }
 }
 

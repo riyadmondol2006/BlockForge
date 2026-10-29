@@ -4,24 +4,70 @@ use egui::{Align, Color32, CornerRadius, FontId, Layout, Response, RichText, Sen
 
 pub use super::fonts::TextExt;
 use super::icons::{self, Icon};
+use super::motion;
 use super::theme::*;
 
+/// A panel of glass: the card colour, a hairline, a soft shadow and a faint light along its top edge.
 pub fn card<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
+    let out = card_frame().show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        add(ui)
+    });
+    glass_edge(ui.painter(), out.response.rect, R_CARD);
+    out.inner
+}
+
+/// The frame of a [`card`], for code that needs the frame itself.
+pub fn card_frame() -> egui::Frame {
     egui::Frame::new()
         .fill(c_card())
         .stroke(Stroke::new(1.0, c_border()))
         .corner_radius(CornerRadius::same(R_CARD))
-        .inner_margin(egui::Margin::same(16))
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            add(ui)
-        })
-        .inner
+        .inner_margin(egui::Margin::same(18))
+        .shadow(card_shadow())
 }
 
-/// The title of a page: a noun, 22px, no greeting.
+/// A card that rises a little under the pointer (its shadow grows and its line brightens), for things that open
+/// when clicked. Returns what `add` returned and whether the card is under the pointer.
+#[allow(dead_code)]
+pub fn hover_card<R>(ui: &mut Ui, id: egui::Id, add: impl FnOnce(&mut Ui) -> R) -> (R, bool) {
+    let was_hot = ui.data(|d| d.get_temp::<bool>(id.with("hot"))).unwrap_or(false);
+    let t = motion::hover(ui, id, was_hot);
+    let a = card_shadow();
+    let b = card_shadow_raised();
+    let lerp = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
+    let shadow = egui::Shadow {
+        offset: [0, lerp(a.offset[1] as u8, b.offset[1] as u8) as i8],
+        blur: lerp(a.blur, b.blur),
+        spread: 0,
+        color: motion::mix(a.color, b.color, t),
+    };
+    let out = egui::Frame::new()
+        .fill(motion::mix(c_card(), c_raised(), t))
+        .stroke(Stroke::new(1.0, motion::mix(c_border(), c_control().gamma_multiply(0.7), t)))
+        .corner_radius(CornerRadius::same(R_CARD))
+        .inner_margin(egui::Margin::same(16))
+        .shadow(shadow)
+        .show(ui, |ui| add(ui));
+    let rect = out.response.rect;
+    glass_edge(ui.painter(), rect, R_CARD);
+    let hot = ui.rect_contains_pointer(rect);
+    ui.data_mut(|d| d.insert_temp(id.with("hot"), hot));
+    (out.inner, hot)
+}
+
+/// The faint light along the top edge of a glass surface.
+pub fn glass_edge(painter: &egui::Painter, rect: egui::Rect, radius: u8) {
+    let r = radius as f32;
+    if rect.width() <= 2.0 * r {
+        return;
+    }
+    painter.hline(rect.left() + r..=rect.right() - r, rect.top() + 0.5, Stroke::new(1.0, c_glass_edge()));
+}
+
+/// The title of a page: a noun, large, no greeting.
 pub fn heading(ui: &mut Ui, text: &str) {
-    ui.label(RichText::new(text).size(22.0).semibold());
+    ui.label(RichText::new(text).size(FS_TITLE).semibold());
 }
 
 /// The title of a block on a page.
@@ -55,17 +101,12 @@ fn styled_button(
     let sense = if enabled { Sense::click() } else { Sense::hover() };
     let (rect, resp) = ui.allocate_exact_size(size, sense);
     if ui.is_rect_visible(rect) {
-        let (bg, fg) = if !enabled {
-            (c_field(), c_faint())
-        } else if resp.is_pointer_button_down_on() {
-            (hover, fg)
-        } else if resp.hovered() {
-            (hover, fg)
-        } else {
-            (fill, fg)
-        };
+        let t = motion::hover(ui, resp.id, enabled && resp.hovered());
+        let press = motion::toward(ui.ctx(), resp.id.with("press"), resp.is_pointer_button_down_on(), 0.08);
+        let shape = rect.shrink(press * 1.0);
+        let (bg, fg) = if !enabled { (c_field(), c_faint()) } else { (motion::mix(fill, hover, t), fg) };
         ui.painter().rect(
-            rect,
+            shape,
             CornerRadius::same(R_CONTROL),
             bg,
             if enabled { stroke } else { Stroke::new(1.0, c_border()) },
@@ -84,6 +125,52 @@ fn styled_button(
     if enabled { resp.on_hover_cursor(egui::CursorIcon::PointingHand) } else { resp }
 }
 
+/// A button in the brand gradient: the main action of a screen, and Play. `glow` lights the ground under it.
+fn brand_button(ui: &mut Ui, text: &str, icon: Option<Icon>, min: Vec2, enabled: bool, glow: bool) -> Response {
+    if !enabled {
+        return styled_button(ui, text, icon, c_field(), c_field(), c_faint(), Stroke::NONE, min, false);
+    }
+    let fg = c_on_accent();
+    let galley = ui.painter().layout_no_wrap(text.to_string(), super::fonts::semibold(14.0), fg);
+    let icon_w = if icon.is_some() { 22.0 } else { 0.0 };
+    let size = vec2((galley.size().x + icon_w + 32.0).max(min.x), min.y.max(34.0));
+    let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
+    if ui.is_rect_visible(rect) {
+        let t = motion::hover(ui, resp.id, resp.hovered());
+        let press = motion::toward(ui.ctx(), resp.id.with("press"), resp.is_pointer_button_down_on(), 0.08);
+        let shape = rect.shrink(press * 1.5);
+        if glow {
+            let base = c_accent();
+            let alpha = if is_dark() { 70.0 + 50.0 * t } else { 45.0 + 35.0 * t };
+            let shadow = egui::Shadow {
+                offset: [0, 8],
+                blur: (18.0 + 10.0 * t) as u8,
+                spread: 0,
+                color: Color32::from_rgba_unmultiplied(base.r(), base.g(), base.b(), alpha as u8),
+            };
+            ui.painter().add(shadow.as_shape(shape, CornerRadius::same(R_CONTROL)));
+        }
+        let (a, b) =
+            (motion::mix(c_accent(), c_accent_hover(), t * 0.6), motion::mix(c_accent2(), c_accent_hover(), t * 0.3));
+        motion::gradient_rect(ui.painter(), shape, R_CONTROL, a, b);
+        // a sheen along the top
+        ui.painter().hline(
+            shape.left() + R_CONTROL as f32..=shape.right() - R_CONTROL as f32,
+            shape.top() + 0.5,
+            Stroke::new(1.0, Color32::from_white_alpha(60)),
+        );
+        let content_w = galley.size().x + icon_w;
+        let left = shape.center().x - content_w / 2.0;
+        if let Some(icon) = icon {
+            icons::paint(ui.painter(), icon, egui::pos2(left + 7.0, shape.center().y), 15.0, fg);
+        }
+        ui.painter().galley(egui::pos2(left + icon_w, shape.center().y - galley.size().y / 2.0), galley, fg);
+        focus_ring(ui, &resp, rect, R_CONTROL);
+    }
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, text));
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
 /// The outline a hand-drawn control gets when the keyboard (Tab) has moved to it, so Tab and Enter can be used
 /// without guessing where the focus is.
 pub fn focus_ring(ui: &Ui, resp: &Response, rect: egui::Rect, radius: u8) {
@@ -97,28 +184,29 @@ pub fn focus_ring(ui: &Ui, resp: &Response, rect: egui::Rect, radius: u8) {
     }
 }
 
-// The main action of a screen is ink (white on dark, near-black on light). Green is kept for starting Minecraft.
+// The main action of a screen is the brand gradient.
 pub fn primary(ui: &mut Ui, text: &str) -> Response {
-    styled_button(ui, text, None, c_ink(), c_ink_hover(), c_on_ink(), Stroke::NONE, Vec2::ZERO, true)
+    brand_button(ui, text, None, Vec2::ZERO, true, false)
 }
 
 pub fn primary_icon(ui: &mut Ui, icon: Icon, text: &str) -> Response {
-    styled_button(ui, text, Some(icon), c_ink(), c_ink_hover(), c_on_ink(), Stroke::NONE, Vec2::ZERO, true)
+    brand_button(ui, text, Some(icon), Vec2::ZERO, true, false)
 }
 
 pub fn primary_enabled(ui: &mut Ui, text: &str, enabled: bool) -> Response {
-    styled_button(ui, text, None, c_ink(), c_ink_hover(), c_on_ink(), Stroke::NONE, Vec2::ZERO, enabled)
+    brand_button(ui, text, None, Vec2::ZERO, enabled, false)
 }
 
 #[cfg_attr(not(feature = "converter"), allow(dead_code))]
 pub fn primary_enabled_icon(ui: &mut Ui, icon: Icon, text: &str, enabled: bool) -> Response {
-    styled_button(ui, text, Some(icon), c_ink(), c_ink_hover(), c_on_ink(), Stroke::NONE, Vec2::ZERO, enabled)
+    brand_button(ui, text, Some(icon), Vec2::ZERO, enabled, false)
 }
 
-/// The one green button: anything that starts Minecraft. `big` is the 40px version of Home and an instance's page.
+/// The button that starts Minecraft: the brand gradient with a glow under it. `big` is the 44px version of Home and
+/// an instance's page.
 pub fn play_button(ui: &mut Ui, big: bool) -> Response {
-    let min = if big { vec2(120.0, 40.0) } else { Vec2::ZERO };
-    styled_button(ui, "Play", Some(Icon::Play), c_accent(), c_accent_hover(), c_on_accent(), Stroke::NONE, min, true)
+    let min = if big { vec2(136.0, 44.0) } else { Vec2::ZERO };
+    brand_button(ui, "Play", Some(Icon::Play), min, true, true)
 }
 
 pub fn secondary(ui: &mut Ui, text: &str) -> Response {
@@ -181,28 +269,19 @@ pub fn danger_big(ui: &mut Ui, icon: Icon, text: &str) -> Response {
     )
 }
 
-/// A filter or a choice that can be switched on. Selected is ink on the ground, not colour.
+/// A filter or a choice that can be switched on: a pill, tinted with the brand colour when selected.
 pub fn chip(ui: &mut Ui, text: &str, selected: bool) -> Response {
-    let fg = if selected { c_on_ink() } else { c_text() };
-    let galley = ui.painter().layout_no_wrap(text.to_string(), super::fonts::medium(13.0), fg);
-    let size = vec2(galley.size().x + 24.0, 28.0);
+    let galley = ui.painter().layout_no_wrap(text.to_string(), super::fonts::medium(13.0), Color32::PLACEHOLDER);
+    let size = vec2(galley.size().x + 26.0, 30.0);
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
-    let bg = if selected {
-        c_ink()
-    } else if resp.hovered() {
-        c_field_hover()
-    } else {
-        c_field()
-    };
-    ui.painter().rect(
-        rect,
-        CornerRadius::same(R_CONTROL),
-        bg,
-        if selected { Stroke::NONE } else { Stroke::new(1.0, c_border()) },
-        egui::StrokeKind::Inside,
-    );
+    let t = motion::hover(ui, resp.id, resp.hovered());
+    let s = motion::toward(ui.ctx(), resp.id.with("on"), selected, motion::FAST);
+    let bg = motion::mix(motion::mix(c_field(), c_field_hover(), t), c_accent_soft(), s);
+    let line = motion::mix(c_border(), c_accent().gamma_multiply(0.6), s);
+    let fg = motion::mix(c_text(), if is_dark() { c_accent() } else { c_accent_hover() }, s);
+    ui.painter().rect(rect, CornerRadius::same(15), bg, Stroke::new(1.0, line), egui::StrokeKind::Inside);
     ui.painter().galley(rect.center() - galley.size() / 2.0, galley, fg);
-    focus_ring(ui, &resp, rect, R_CONTROL);
+    focus_ring(ui, &resp, rect, 15);
     resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, text));
     resp.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
@@ -213,12 +292,22 @@ pub fn tab_bar<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
     let width = ui.available_width();
     let left = ui.cursor().min.x;
     let out = ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 22.0;
-        add(ui)
+        ui.spacing_mut().item_spacing.x = 24.0;
+        let key = ui.scope_id().with("tab-selected");
+        ui.data_mut(|d| d.remove::<egui::Rect>(key));
+        (add(ui), key)
     });
+    let (inner, key) = out.inner;
     let y = out.response.rect.bottom();
     ui.painter().hline(left..=left + width, y, Stroke::new(1.0, c_border()));
-    out.inner
+    // the line under the open tab slides to the tab that was chosen
+    if let Some(sel) = ui.data(|d| d.get_temp::<egui::Rect>(key)) {
+        let x = motion::glide(ui.ctx(), key.with("x"), sel.left(), motion::MEDIUM);
+        let w = motion::glide(ui.ctx(), key.with("w"), sel.width(), motion::MEDIUM);
+        let bar = egui::Rect::from_min_size(egui::pos2(x, y - 2.5), vec2(w.max(4.0), 3.0));
+        motion::brand_rect(ui.painter(), bar, 2);
+    }
+    inner
 }
 
 /// One tab of a [`tab_bar`].
@@ -232,23 +321,34 @@ pub fn tab_marked(ui: &mut Ui, text: &str, selected: bool, mark: Option<bool>) -
     const DOT_ROOM: f32 = 10.0;
     let galley = ui.painter().layout_no_wrap(text.to_string(), super::fonts::medium(14.0), egui::Color32::PLACEHOLDER);
     let extra = if mark.is_some() { DOT_ROOM } else { 0.0 };
-    let (rect, resp) = ui.allocate_exact_size(vec2(galley.size().x + extra, 34.0), Sense::click());
-    let color = if selected || resp.hovered() { c_text() } else { c_muted() };
+    let (rect, resp) = ui.allocate_exact_size(vec2(galley.size().x + extra, 38.0), Sense::click());
+    let t = motion::hover(ui, resp.id, selected || resp.hovered());
+    let color = motion::mix(c_muted(), c_text(), t);
     let text_right = rect.left() + galley.size().x;
     ui.painter().galley(egui::pos2(rect.left(), rect.center().y - galley.size().y / 2.0 - 1.0), galley, color);
     if mark == Some(true) {
         ui.painter().circle_filled(egui::pos2(text_right + DOT_ROOM / 2.0 + 1.0, rect.center().y - 5.0), 3.0, c_warn());
     }
     if selected {
-        ui.painter().rect_filled(
-            egui::Rect::from_min_max(egui::pos2(rect.left(), rect.bottom() - 2.0), rect.right_bottom()),
-            1.0,
-            c_ink(),
-        );
+        // the bar itself is drawn by the tab bar, which slides it from tab to tab
+        let key = ui.scope_id().with("tab-selected");
+        ui.data_mut(|d| {
+            d.insert_temp(
+                key,
+                egui::Rect::from_min_max(
+                    egui::pos2(rect.left(), rect.top()),
+                    egui::pos2(rect.left() + galley_w(text, ui), rect.bottom()),
+                ),
+            )
+        });
     }
     focus_ring(ui, &resp, rect.expand2(vec2(4.0, -2.0)), 6);
     resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Tab, true, selected, text));
     resp.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+fn galley_w(text: &str, ui: &Ui) -> f32 {
+    ui.painter().layout_no_wrap(text.to_string(), super::fonts::medium(14.0), Color32::PLACEHOLDER).size().x
 }
 
 /// The three dots of a card or a row: a small square that opens a menu. Returns what the menu's closure returned when
@@ -256,10 +356,11 @@ pub fn tab_marked(ui: &mut Ui, text: &str, selected: bool, mark: Option<bool>) -
 pub fn kebab_menu<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> Option<R> {
     let (rect, resp) = ui.allocate_exact_size(vec2(28.0, 28.0), Sense::click());
     let open = egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&resp));
-    if resp.hovered() || open {
-        ui.painter().rect_filled(rect, CornerRadius::same(R_CONTROL), c_field_hover());
+    let t = motion::hover(ui, resp.id, resp.hovered() || open);
+    if t > 0.0 {
+        ui.painter().rect_filled(rect, CornerRadius::same(R_CONTROL), c_hover().gamma_multiply(t));
     }
-    let color = if resp.hovered() || open { c_text() } else { c_muted() };
+    let color = motion::mix(c_muted(), c_text(), t);
     icons::paint(ui.painter(), Icon::Kebab, rect.center(), 16.0, color);
     focus_ring(ui, &resp, rect, R_CONTROL);
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "More"));
@@ -286,18 +387,30 @@ pub fn tag(ui: &mut Ui, text: &str, color: Color32) {
 /// The quiet Play button of a card: neutral at rest, green while the card is under the pointer, so a screen of
 /// instances is not a screen of green buttons.
 pub fn play_chip(ui: &mut Ui, playing: bool, card_hovered: bool) -> Response {
-    let (rect, resp) = ui.allocate_exact_size(vec2(32.0, 32.0), Sense::click());
+    let (rect, resp) = ui.allocate_exact_size(vec2(34.0, 34.0), Sense::click());
     let hot = resp.hovered() || resp.is_pointer_button_down_on();
-    let (bg, fg, stroke) = match (playing, hot, card_hovered) {
-        (true, true, _) => (c_danger_hover(), c_danger(), Stroke::NONE),
-        (true, false, _) => (c_danger_bg(), c_danger(), Stroke::NONE),
-        (false, true, _) => (c_accent_hover(), c_on_accent(), Stroke::NONE),
-        (false, false, true) => (c_accent(), c_on_accent(), Stroke::NONE),
-        (false, false, false) => (c_field(), c_text(), Stroke::new(1.0, c_control())),
+    let t = motion::hover(ui, resp.id, !playing && (hot || card_hovered));
+    let fg = if playing {
+        let (bg, stroke) = if hot { (c_danger_hover(), Stroke::NONE) } else { (c_danger_bg(), Stroke::NONE) };
+        ui.painter().rect(rect, CornerRadius::same(17), bg, stroke, egui::StrokeKind::Inside);
+        c_danger()
+    } else {
+        // neutral at rest, the brand gradient fading in as the card or the button is pointed at
+        ui.painter().rect(
+            rect,
+            CornerRadius::same(17),
+            c_field(),
+            Stroke::new(1.0, c_control().gamma_multiply(1.0 - t)),
+            egui::StrokeKind::Inside,
+        );
+        if t > 0.0 {
+            let (a, b) = (c_accent().gamma_multiply(t), c_accent2().gamma_multiply(t));
+            motion::gradient_rect(ui.painter(), rect, 17, a, b);
+        }
+        motion::mix(c_text(), c_on_accent(), t)
     };
-    ui.painter().rect(rect, CornerRadius::same(R_CONTROL), bg, stroke, egui::StrokeKind::Inside);
     icons::paint(ui.painter(), if playing { Icon::Stop } else { Icon::Play }, rect.center(), 13.0, fg);
-    focus_ring(ui, &resp, rect, R_CONTROL);
+    focus_ring(ui, &resp, rect, 17);
     let label = if playing { "Stop" } else { "Play" };
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
     resp.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(label)
@@ -371,16 +484,22 @@ pub fn toggle(ui: &mut Ui, on: &mut bool) -> Response {
         *on = !*on;
         resp.mark_changed();
     }
-    let t = ui.ctx().animate_bool_responsive(resp.id, *on);
+    let t = motion::toward(ui.ctx(), resp.id.with("on"), *on, motion::MEDIUM);
     let radius = CornerRadius::same(10);
-    if *on {
-        ui.painter().rect_filled(rect, radius, c_ink());
-    } else {
-        ui.painter().rect_filled(rect, radius, c_active());
-        ui.painter().rect_stroke(rect, radius, Stroke::new(1.0, c_control()), egui::StrokeKind::Inside);
+    ui.painter().rect_filled(rect, radius, c_active());
+    ui.painter().rect_stroke(
+        rect,
+        radius,
+        Stroke::new(1.0, c_control().gamma_multiply(1.0 - t)),
+        egui::StrokeKind::Inside,
+    );
+    if t > 0.0 {
+        motion::gradient_rect(ui.painter(), rect, 10, c_accent().gamma_multiply(t), c_accent2().gamma_multiply(t));
     }
     let cx = rect.left() + 10.0 + t * (size.x - 20.0);
-    ui.painter().circle_filled(egui::pos2(cx, rect.center().y), 7.0, if *on { c_on_ink() } else { c_muted() });
+    let knob = motion::mix(c_muted(), Color32::WHITE, t);
+    ui.painter().circle_filled(egui::pos2(cx, rect.center().y + 1.0), 7.5, Color32::from_black_alpha(40));
+    ui.painter().circle_filled(egui::pos2(cx, rect.center().y), 7.0, knob);
     focus_ring(ui, &resp, rect, 10);
     let state = *on;
     resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Switch, true, state, ""));
@@ -450,30 +569,51 @@ pub fn segmented(ui: &mut Ui, labels: &[&str], selected: usize) -> Option<usize>
         .map(|l| ui.painter().layout_no_wrap(l.to_string(), super::fonts::medium(13.0), c_text()).size().x + 24.0)
         .collect();
     let total: f32 = widths.iter().sum::<f32>() + 6.0;
-    let (outer, _) = ui.allocate_exact_size(vec2(total, 32.0), Sense::hover());
+    let (outer, outer_resp) = ui.allocate_exact_size(vec2(total, 34.0), Sense::hover());
     ui.painter().rect(
         outer,
         CornerRadius::same(R_CONTROL),
         c_field(),
-        Stroke::new(1.0, c_control()),
+        Stroke::new(1.0, c_border()),
         egui::StrokeKind::Inside,
     );
+    // the chosen segment's pill slides to the one that is chosen next
+    let mut sel_x = outer.left() + 3.0;
+    for w in widths.iter().take(selected) {
+        sel_x += w;
+    }
+    if let Some(w) = widths.get(selected) {
+        let id = outer_resp.id.with("pill");
+        let x = motion::glide(ui.ctx(), id.with("x"), sel_x, motion::MEDIUM);
+        let pw = motion::glide(ui.ctx(), id.with("w"), *w, motion::MEDIUM);
+        let pill = egui::Rect::from_min_size(egui::pos2(x, outer.top() + 3.0), vec2(pw, 28.0));
+        ui.painter().add(
+            egui::Shadow {
+                offset: [0, 2],
+                blur: 6,
+                spread: 0,
+                color: Color32::from_black_alpha(if is_dark() { 80 } else { 22 }),
+            }
+            .as_shape(pill, CornerRadius::same(R_CONTROL - 3)),
+        );
+        ui.painter().rect_filled(
+            pill,
+            CornerRadius::same(R_CONTROL - 3),
+            if is_dark() { c_active() } else { c_card() },
+        );
+    }
     let mut pressed = None;
     let mut x = outer.left() + 3.0;
     for (i, w) in widths.into_iter().enumerate() {
-        let rect = egui::Rect::from_min_size(egui::pos2(x, outer.top() + 3.0), vec2(w, 26.0));
+        let rect = egui::Rect::from_min_size(egui::pos2(x, outer.top() + 3.0), vec2(w, 28.0));
         x += w;
         let resp = ui.interact(rect, ui.scope_id().with(("segment", i, labels[i])), Sense::click());
         let on = i == selected;
-        if on {
-            ui.painter().rect_filled(rect, CornerRadius::same(R_CONTROL - 2), c_active());
-        } else if resp.hovered() {
-            ui.painter().rect_filled(rect, CornerRadius::same(R_CONTROL - 2), c_hover());
-        }
-        let fg = if on { c_text() } else { c_muted() };
+        let t = motion::hover(ui, resp.id, on || resp.hovered());
+        let fg = motion::mix(c_muted(), c_text(), t);
         let galley = ui.painter().layout_no_wrap(labels[i].to_string(), super::fonts::medium(13.0), fg);
         ui.painter().galley(rect.center() - galley.size() / 2.0, galley, fg);
-        focus_ring(ui, &resp, rect, R_CONTROL - 2);
+        focus_ring(ui, &resp, rect, R_CONTROL - 3);
         let label = labels[i];
         resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, on, label));
         if resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
@@ -524,15 +664,13 @@ pub fn ghost(ui: &mut Ui, text: &str) -> Response {
     // laid out without a colour of its own, so the one given when it is painted (muted, or full under the pointer)
     // is the one it gets
     let galley = ui.painter().layout_no_wrap(text.to_string(), super::fonts::medium(14.0), egui::Color32::PLACEHOLDER);
-    let (rect, resp) = ui.allocate_exact_size(vec2(galley.size().x + 24.0, 32.0), Sense::click());
-    if resp.hovered() || resp.is_pointer_button_down_on() {
-        ui.painter().rect_filled(
-            rect,
-            CornerRadius::same(R_CONTROL),
-            if resp.is_pointer_button_down_on() { c_active() } else { c_hover() },
-        );
+    let (rect, resp) = ui.allocate_exact_size(vec2(galley.size().x + 24.0, 34.0), Sense::click());
+    let t = motion::hover(ui, resp.id, resp.hovered());
+    if t > 0.0 {
+        let fill = if resp.is_pointer_button_down_on() { c_active() } else { c_hover() };
+        ui.painter().rect_filled(rect, CornerRadius::same(R_CONTROL), fill.gamma_multiply(t));
     }
-    let fg = if resp.hovered() { c_text() } else { c_muted() };
+    let fg = motion::mix(c_muted(), c_text(), t);
     ui.painter().galley(rect.center() - galley.size() / 2.0, galley, fg);
     focus_ring(ui, &resp, rect, R_CONTROL);
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, text));
@@ -541,6 +679,12 @@ pub fn ghost(ui: &mut Ui, text: &str) -> Response {
 
 /// Grey bars in the shape of rows, while the first content is on its way.
 pub fn skeleton_rows(ui: &mut Ui, rows: usize, height: f32) {
+    // the bars breathe gently while the list is on its way
+    let phase = if motion::reduced(ui.ctx()) { 0.5 } else { (ui.input(|i| i.time) * 2.4).sin() as f32 * 0.5 + 0.5 };
+    if !motion::reduced(ui.ctx()) {
+        ui.ctx().request_repaint_after(ANIMATION_FRAME);
+    }
+    let shade = motion::mix(c_field(), c_active(), phase * 0.7);
     for _ in 0..rows {
         let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
         let p = ui.painter();
@@ -549,18 +693,18 @@ pub fn skeleton_rows(ui: &mut Ui, rows: usize, height: f32) {
         p.rect_filled(
             egui::Rect::from_min_size(rect.min + vec2(8.0, 6.0), vec2(icon, icon)),
             CornerRadius::same(R_CONTROL),
-            c_field(),
+            shade,
         );
         let x = rect.left() + icon + 20.0;
         p.rect_filled(
             egui::Rect::from_min_size(egui::pos2(x, rect.top() + 10.0), vec2(rect.width() * 0.25, 10.0)),
             r,
-            c_field(),
+            shade,
         );
         p.rect_filled(
             egui::Rect::from_min_size(egui::pos2(x, rect.top() + 28.0), vec2(rect.width() * 0.45, 8.0)),
             r,
-            c_field(),
+            shade,
         );
     }
 }
@@ -572,12 +716,17 @@ pub fn progress_bar(ui: &mut Ui, fraction: Option<f32>, height: f32) -> Response
     ui.painter().rect_filled(rect, r, c_active());
     match fraction {
         Some(f) => {
-            let w = rect.width() * f.clamp(0.0, 1.0);
+            // the bar eases to each new figure instead of stepping
+            let f = motion::glide(ui.ctx(), resp.id.with("fill"), f.clamp(0.0, 1.0), motion::MEDIUM);
+            let w = rect.width() * f;
             if w >= 1.0 {
-                ui.painter().rect_filled(
-                    egui::Rect::from_min_size(rect.min, vec2(w.max(height), height)),
-                    r,
+                let bar = egui::Rect::from_min_size(rect.min, vec2(w.max(height), height));
+                motion::gradient_rect(
+                    ui.painter(),
+                    bar,
+                    (height / 2.0) as u8,
                     c_accent(),
+                    motion::mix(c_accent(), c_accent2(), f),
                 );
             }
         }
@@ -590,7 +739,7 @@ pub fn progress_bar(ui: &mut Ui, fraction: Option<f32>, height: f32) -> Response
                 egui::pos2((x + seg).min(rect.right()), rect.bottom()),
             );
             if bar.width() > 0.0 {
-                ui.painter().rect_filled(bar, r, c_accent());
+                motion::brand_rect(ui.painter(), bar, (height / 2.0) as u8);
             }
             ui.ctx().request_repaint_after(ANIMATION_FRAME);
         }
@@ -627,7 +776,7 @@ pub fn spinner_sized(ui: &mut Ui, size: f32) -> Response {
                 rect.center() + radius * vec2(cos as f32, sin as f32)
             })
             .collect();
-        ui.painter().add(egui::Shape::line(points, Stroke::new(3.0, ui.visuals().strong_text_color())));
+        ui.painter().add(egui::Shape::line(points, Stroke::new(3.0, c_accent())));
     }
     resp
 }
@@ -651,7 +800,7 @@ pub fn notice(ui: &mut Ui, kind: NoticeKind, text: &str, action: Option<&str>) -
         .fill(bg)
         .stroke(Stroke::new(1.0, line))
         .corner_radius(CornerRadius::same(R_CONTROL))
-        .inner_margin(egui::Margin::symmetric(12, 10))
+        .inner_margin(egui::Margin::symmetric(14, 11))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
@@ -681,7 +830,8 @@ pub fn back_link(ui: &mut Ui, text: &str) -> Response {
     let font = super::fonts::medium(13.0);
     let w = ui.painter().layout_no_wrap(text.to_string(), font.clone(), c_muted()).size().x;
     let (rect, resp) = ui.allocate_exact_size(vec2(w + 12.0 + 14.0, 28.0), Sense::click());
-    let fg = if resp.hovered() { c_text() } else { c_muted() };
+    let t = motion::hover(ui, resp.id, resp.hovered());
+    let fg = motion::mix(c_muted(), c_text(), t);
     if ui.is_rect_visible(rect) {
         icons::paint(ui.painter(), Icon::Back, egui::pos2(rect.left() + 8.0, rect.center().y), 13.0, fg);
         let galley = ui.painter().layout_no_wrap(text.to_string(), font, fg);
@@ -694,7 +844,7 @@ pub fn back_link(ui: &mut Ui, text: &str) -> Response {
 
 pub fn search_field(ui: &mut Ui, text: &mut String, hint: &str, width: f32) -> Response {
     ui.add_sized(
-        [width, 32.0],
+        [width, 34.0],
         egui::TextEdit::singleline(text)
             .hint_text(RichText::new(hint).color(c_faint()))
             .margin(egui::Margin::symmetric(10, 7))

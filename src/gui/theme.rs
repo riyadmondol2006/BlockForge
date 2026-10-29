@@ -1,5 +1,7 @@
-//! Colours and look. The values are the Java edition's palette, which has a dark and a light variant; the theme the
-//! player picks decides which one is in use, and every colour is looked up when it is drawn so a change shows at once.
+//! Colours and look: "glass and depth". Deep, slightly blue grounds, surfaces that sit in layers with soft shadows,
+//! rounded shapes, and one brand gradient (emerald into cyan) for the main actions and for progress. There is a dark
+//! and a light variant; the theme the player picks decides which one is in use, and every colour is looked up when it
+//! is drawn so a change shows at once.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -20,126 +22,148 @@ fn pick(dark: u32, light: u32) -> Color32 {
     Color32::from_rgb((v >> 16) as u8, (v >> 8) as u8, v as u8)
 }
 
-// The palette. Neutral greys with the faintest green in them; the green accent is kept for the one main action on a
-// screen, for progress and for what is switched on. Everything else (selection, tabs, filters) is ink on ground, so
-// colour means something when it shows.
+// The palette. Grounds with a little blue in them, each layer one step lighter than the one under it (ground,
+// sidebar glass, cards, fields, what floats). Colour is the brand gradient and the states (danger, warning); the rest
+// is ink on ground.
 
-/// Window background; the sidebar sits on the same ground.
+/// Window background, under the soft glow drawn behind the pages.
 pub fn c_bg() -> Color32 {
-    pick(0x0E100F, 0xF4F5F4)
+    pick(0x0A0D14, 0xEEF1F6)
 }
-/// The sidebar. The same ground as the window, divided from it by one line.
+/// The sidebar: a pane of glass over the ground.
 pub fn c_surface() -> Color32 {
-    c_bg()
+    pick(0x0E121B, 0xF7F8FB)
 }
 /// Cards and panels.
 pub fn c_card() -> Color32 {
-    pick(0x171A18, 0xFFFFFF)
+    pick(0x131824, 0xFFFFFF)
 }
 /// Inputs and tonal buttons.
 pub fn c_field() -> Color32 {
-    pick(0x1D201E, 0xFFFFFF)
+    pick(0x182031, 0xFFFFFF)
 }
 /// The fill of a row, a nav item or a ghost button under the pointer.
 pub fn c_hover() -> Color32 {
-    pick(0x222624, 0xEAEDEB)
+    pick(0x1D2638, 0xECEFF5)
 }
 /// The open nav item, a pressed button, a selected segment, an empty cell of the play strip.
 pub fn c_active() -> Color32 {
-    pick(0x2A2E2C, 0xDEE2DF)
+    pick(0x253047, 0xE0E6EF)
 }
 /// Old names for the hover fill, kept so older code reads the same.
 pub fn c_card_hover() -> Color32 {
     c_hover()
 }
 pub fn c_field_hover() -> Color32 {
-    c_hover()
+    pick(0x1F2840, 0xF2F5F9)
 }
 /// Menus, dialogs and tooltips: what floats sits one step above the cards.
 pub fn c_raised() -> Color32 {
-    pick(0x1F2321, 0xFFFFFF)
+    pick(0x18202F, 0xFFFFFF)
 }
 /// The line around cards and panels: barely there.
 pub fn c_border() -> Color32 {
-    pick(0x272B29, 0xE2E5E3)
+    pick(0x222B3D, 0xE1E5EC)
 }
 /// The line between rows inside one card or list.
 pub fn c_rule() -> Color32 {
-    pick(0x202422, 0xEDEFEE)
+    pick(0x1A2232, 0xECEFF4)
 }
 /// The line around things you can press: one step stronger than a card's, and at least 3:1 against the card, the
 /// field and the page behind it (WCAG 1.4.11), since in the light look a field is white on a white card and the line
 /// is all that shows where it is.
 pub fn c_control() -> Color32 {
-    pick(0x666C68, 0x8A908C)
+    pick(0x66728C, 0x8A93A3)
 }
 pub fn c_text() -> Color32 {
-    pick(0xECEEED, 0x121413)
+    pick(0xE9EDF5, 0x0F1420)
 }
 pub fn c_muted() -> Color32 {
-    pick(0xA7ADA9, 0x565D59)
+    pick(0xA6AFC2, 0x515A6B)
 }
 /// Meta text, placeholders and the like (4.5:1 on the cards). Never on `c_active` or `c_selection`: use `c_muted` there.
 pub fn c_faint() -> Color32 {
-    pick(0x8C928E, 0x616864)
+    pick(0x8A94A9, 0x5E6778)
 }
-/// The ink fill: the main action of a screen, a selected filter, the tab indicator, a switch that is on.
+/// The ink fill: strong neutral emphasis (a selected chip's text, the knob of a switch).
 pub fn c_ink() -> Color32 {
-    pick(0xECEEED, 0x1B1E1C)
+    pick(0xE9EDF5, 0x111827)
 }
 pub fn c_ink_hover() -> Color32 {
-    pick(0xFFFFFF, 0x2E322F)
+    pick(0xFFFFFF, 0x273043)
 }
 pub fn c_on_ink() -> Color32 {
-    pick(0x0E100F, 0xFFFFFF)
+    pick(0x0A0D14, 0xFFFFFF)
 }
 /// A selected list row or combo item, and selected text.
 pub fn c_selection() -> Color32 {
-    pick(0x303633, 0xDCE1DE)
+    pick(0x2A3550, 0xDCE3EE)
 }
-/// Green means Play: the Play button, a running game and the progress of getting one started.
+/// The brand colour, where the gradient starts: Play, the main action, progress, what is switched on.
 pub fn c_accent() -> Color32 {
-    pick(0x5FD97A, 0x167A36)
+    pick(0x34D399, 0x047857)
+}
+/// Where the brand gradient ends.
+pub fn c_accent2() -> Color32 {
+    pick(0x22D3EE, 0x0E7490)
 }
 pub fn c_accent_hover() -> Color32 {
-    pick(0x7BE892, 0x12692E)
+    pick(0x6EE7B7, 0x065F46)
 }
 pub fn c_on_accent() -> Color32 {
-    pick(0x04210C, 0xFFFFFF)
+    pick(0x03251A, 0xFFFFFF)
 }
-/// The tint behind a highlighted banner or a file dropped on the window.
+/// The tint behind a highlighted banner, a selected chip or a file dropped on the window.
 pub fn c_accent_soft() -> Color32 {
-    pick(0x173020, 0xDCEFE1)
+    pick(0x0F2E26, 0xD7F5EA)
 }
 pub fn c_danger() -> Color32 {
-    pick(0xFF8A80, 0xC02626)
+    pick(0xFF8A8A, 0xC02626)
 }
 pub fn c_danger_bg() -> Color32 {
-    pick(0x2B1816, 0xFCE8E6)
+    pick(0x2A1519, 0xFCE8E8)
 }
 pub fn c_danger_hover() -> Color32 {
-    pick(0x3A201D, 0xF8D5D1)
+    pick(0x3A1D22, 0xF8D5D5)
 }
 pub fn c_danger_line() -> Color32 {
-    pick(0x4F2A27, 0xEBB1AB)
+    pick(0x52262D, 0xEBB1B1)
 }
 pub fn c_warn() -> Color32 {
     pick(0xF5C451, 0x8F6200)
 }
 pub fn c_warn_bg() -> Color32 {
-    pick(0x2A2410, 0xFFF6DB)
+    pick(0x2A2312, 0xFFF6DB)
+}
+
+/// The soft shadow under a card: depth without a hard edge.
+pub fn card_shadow() -> egui::Shadow {
+    let a = if is_dark() { 90 } else { 18 };
+    egui::Shadow { offset: [0, 6], blur: 22, spread: 0, color: Color32::from_black_alpha(a) }
+}
+
+/// The shadow of a card under the pointer: it rises a little.
+#[allow(dead_code)]
+pub fn card_shadow_raised() -> egui::Shadow {
+    let a = if is_dark() { 130 } else { 30 };
+    egui::Shadow { offset: [0, 12], blur: 32, spread: 0, color: Color32::from_black_alpha(a) }
+}
+
+/// The faint light along the top edge of a glass surface.
+pub fn c_glass_edge() -> Color32 {
+    if is_dark() { Color32::from_white_alpha(14) } else { Color32::from_white_alpha(200) }
 }
 
 /// Corner radii, used everywhere so the shapes agree: cards and panels, things you press, small tags, dialogs.
-pub const R_CARD: u8 = 8;
-pub const R_CONTROL: u8 = 6;
-pub const R_TAG: u8 = 4;
-pub const R_DIALOG: u8 = 12;
+pub const R_CARD: u8 = 14;
+pub const R_CONTROL: u8 = 10;
+pub const R_TAG: u8 = 6;
+pub const R_DIALOG: u8 = 18;
 
 /// The type scale: nothing else is used.
-pub const FS_TITLE: f32 = 22.0;
+pub const FS_TITLE: f32 = 26.0;
 pub const FS_FIGURE: f32 = 20.0;
-pub const FS_SECTION: f32 = 16.0;
+pub const FS_SECTION: f32 = 17.0;
 pub const FS_BODY: f32 = 14.0;
 pub const FS_META: f32 = 12.0;
 
@@ -180,7 +204,7 @@ pub fn apply(ctx: &egui::Context, reduced_motion: bool) {
     v.window_fill = c_raised();
     v.extreme_bg_color = c_field();
     v.faint_bg_color = c_card();
-    v.window_stroke = Stroke::new(1.0, c_control());
+    v.window_stroke = Stroke::new(1.0, c_border());
     v.window_corner_radius = CornerRadius::same(R_DIALOG);
     v.menu_corner_radius = CornerRadius::same(R_CARD);
     v.override_text_color = Some(c_text());
@@ -188,9 +212,9 @@ pub fn apply(ctx: &egui::Context, reduced_motion: bool) {
     v.selection.bg_fill = c_selection();
     v.selection.stroke = Stroke::new(1.0, c_text());
     // shadows only on what floats (menus, dialogs, tooltips)
-    let shadow = Color32::from_black_alpha(if is_dark() { 140 } else { 36 });
-    v.window_shadow = egui::Shadow { offset: [0, 10], blur: 28, spread: 0, color: shadow };
-    v.popup_shadow = egui::Shadow { offset: [0, 6], blur: 18, spread: 0, color: shadow };
+    let shadow = Color32::from_black_alpha(if is_dark() { 170 } else { 40 });
+    v.window_shadow = egui::Shadow { offset: [0, 18], blur: 48, spread: 0, color: shadow };
+    v.popup_shadow = egui::Shadow { offset: [0, 10], blur: 28, spread: 0, color: shadow };
 
     let r = CornerRadius::same(R_CONTROL);
     v.widgets.noninteractive.bg_fill = c_card();
@@ -221,14 +245,15 @@ pub fn apply(ctx: &egui::Context, reduced_motion: bool) {
 
     ctx.global_style_mut(|s| {
         s.spacing.item_spacing = egui::vec2(8.0, 8.0);
-        s.spacing.button_padding = egui::vec2(12.0, 6.0);
-        s.spacing.interact_size.y = 32.0;
+        s.spacing.button_padding = egui::vec2(14.0, 7.0);
+        s.spacing.interact_size.y = 34.0;
+        s.spacing.menu_margin = egui::Margin::same(8);
         s.spacing.scroll.bar_width = 8.0;
         // the floating scroll bar gets its own strip so it never sits on the edge of a card
         s.spacing.scroll.floating_allocated_width = 10.0;
-        s.animation_time = if reduced_motion { 0.0 } else { 1.0 / 10.0 };
+        s.animation_time = if reduced_motion { 0.0 } else { 0.16 };
         s.text_styles = [
-            (TextStyle::Heading, FontId::new(22.0, FontFamily::Proportional)),
+            (TextStyle::Heading, FontId::new(FS_TITLE, FontFamily::Proportional)),
             (TextStyle::Body, FontId::new(14.0, FontFamily::Proportional)),
             (TextStyle::Button, FontId::new(14.0, FontFamily::Proportional)),
             (TextStyle::Small, FontId::new(12.0, FontFamily::Proportional)),
