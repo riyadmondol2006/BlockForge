@@ -2323,7 +2323,7 @@ struct Shot {
 /// The ids of the jobs the tour makes up to show the sidebar busy; no real job gets ids this high.
 const SHOT_TASK: u64 = u64::MAX - 8;
 
-const SHOT_PAGES: [&str; 61] = [
+const SHOT_PAGES: [&str; 65] = [
     "home",
     "library",
     "instance",
