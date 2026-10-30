@@ -1828,7 +1828,9 @@ const HOME_COLUMN: f32 = 1320.0;
 /// [`PAGE_MAX_W`].
 fn page_column(page: Page) -> f32 {
     match page {
-        Page::Settings | Page::Accounts | Page::About | Page::Create => READ_COLUMN,
+        Page::Settings | Page::Accounts | Page::About => READ_COLUMN,
+        // the steps of a new instance with the summary panel beside them
+        Page::Create => WIDE_COLUMN,
         #[cfg(feature = "converter")]
         Page::Convert => READ_COLUMN,
         Page::Tools | Page::Servers => WIDE_COLUMN,
@@ -2271,7 +2273,7 @@ struct Shot {
 /// The ids of the jobs the tour makes up to show the sidebar busy; no real job gets ids this high.
 const SHOT_TASK: u64 = u64::MAX - 8;
 
-const SHOT_PAGES: [&str; 48] = [
+const SHOT_PAGES: [&str; 50] = [
     "home",
     "library",
     "instance",
@@ -2283,11 +2285,13 @@ const SHOT_PAGES: [&str; 48] = [
     "discover",
     "discover-both",
     "discover-datapacks",
+    "discover-modpacks",
     "github-add",
     "create",
     "accounts",
     "settings",
     "create-fabric",
+    "create-configure",
     "tools",
     "servers",
     "craft",
@@ -2448,6 +2452,14 @@ impl App {
                     self.discover.query = "sodium".into();
                     self.discover_search(true);
                 }
+                "discover-modpacks" => {
+                    self.page = Page::Discover;
+                    self.cf.active = false;
+                    self.discover.both = false;
+                    self.discover.kind = crate::modrinth::Kind::Modpack;
+                    self.discover.query.clear();
+                    self.discover_search(true);
+                }
                 "discover-both" => {
                     self.page = Page::Discover;
                     self.cf.active = false;
@@ -2471,13 +2483,9 @@ impl App {
                     self.gh.input = "https://github.com/IrisShaders/Iris".into();
                     self.gh_find();
                 }
-                "create" => self.page = Page::Create,
-                "create-fabric" => {
-                    self.page = Page::Create;
-                    self.create.name = "My Fabric world".into();
-                    self.create.loader = Loader::Fabric;
-                    self.request_loader_versions();
-                }
+                "create" => self.shot_create(create::Step::Version),
+                "create-fabric" => self.shot_create(create::Step::Loader),
+                "create-configure" => self.shot_create(create::Step::Configure),
                 "accounts" => self.page = Page::Accounts,
                 "settings" => self.page = Page::Settings,
                 "who" => {
@@ -2565,11 +2573,11 @@ impl App {
                 }
                 "ftb-pack" => {
                     self.page = Page::Ftb;
-                    self.shot_press("Details");
+                    self.shot_press("Install");
                 }
                 "packs-pack" => {
                     self.page = Page::Packs;
-                    self.shot_press("Details");
+                    self.shot_press("Install");
                 }
                 "library-empty" => {
                     self.page = Page::Library;
@@ -2618,7 +2626,18 @@ impl App {
             400
         } else if matches!(
             name.trim_end_matches("-light"),
-            "discover" | "create-fabric" | "instance-mods" | "mods" | "packs" | "ftb" | "about" | "loader" | "import"
+            "discover"
+                | "discover-modpacks"
+                | "create"
+                | "create-fabric"
+                | "create-configure"
+                | "instance-mods"
+                | "mods"
+                | "packs"
+                | "ftb"
+                | "about"
+                | "loader"
+                | "import"
         ) || name.trim_end_matches("-light").starts_with("craft")
         {
             180

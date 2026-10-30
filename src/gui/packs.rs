@@ -457,6 +457,16 @@ impl App {
         self.page = Page::Library;
     }
 
+    /// Open the page on ATLauncher's packs, or with `technic` on Technic's (searched the first time).
+    pub(super) fn packs_show(&mut self, technic: bool) {
+        self.packs.tab = if technic { PackTab::Technic } else { PackTab::Atl };
+        self.packs.detail = None;
+        if technic && !self.packs.tech_started {
+            self.packs_search_technic();
+        }
+        self.go(Page::Packs);
+    }
+
     pub(super) fn packs_ui(&mut self, ui: &mut Ui) {
         if self.packs.atl.is_none() && !self.packs.atl_loading && self.packs.atl_error.is_none() {
             self.packs_load_atl();
@@ -465,31 +475,16 @@ impl App {
             self.packs_detail_ui(ui);
             return;
         }
-        ui.horizontal(|ui| {
-            heading(ui, "ATLauncher & Technic");
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                // a pack code opens a pack that is not listed for everyone
-                kebab_menu(ui, |ui| {
-                    if ui.button("Add a private pack code\u{2026}").clicked() {
-                        self.packs.code_open = true;
-                        self.packs.tab = PackTab::Atl;
-                        ui.close();
-                    }
-                });
-                let shown = usize::from(self.packs.tab == PackTab::Technic);
-                if let Some(i) = segmented(ui, &["ATLauncher", "Technic"], shown) {
-                    if i == 0 {
-                        self.packs.tab = PackTab::Atl;
-                    } else {
-                        self.packs.tab = PackTab::Technic;
-                        if !self.packs.tech_started {
-                            self.packs_search_technic();
-                        }
-                    }
-                }
-            });
-        });
-        ui.add_space(12.0);
+        // the platforms have modpacks only; another kind opens the site mods were last looked for on
+        let labels: Vec<&str> = crate::modrinth::Kind::ALL.iter().map(|k| k.label()).collect();
+        let modpacks = crate::modrinth::Kind::ALL.iter().position(|k| *k == crate::modrinth::Kind::Modpack);
+        if let Some(i) = self.explore_header(ui, &labels, modpacks.unwrap_or(0)) {
+            self.explore_kind_elsewhere(crate::modrinth::Kind::ALL[i]);
+            return;
+        }
+        if self.page != Page::Packs {
+            return;
+        }
         match self.packs.tab {
             PackTab::Atl => self.packs_atl_ui(ui),
             PackTab::Technic => self.packs_technic_ui(ui),
@@ -625,8 +620,21 @@ impl App {
         }
         let (cards, mut flip) = (self.results_as_cards(), None);
         let count = results_text(packs.len() as u64, "pack", "packs");
-        context_line_with(ui, Some(count), false, |_| {}, |ui| flip = view_switch(ui, cards, page_w));
+        let mut add_code = false;
+        context_line_with(
+            ui,
+            Some(count),
+            true,
+            |ui| {
+                // a pack code opens a pack that is not listed for everyone
+                add_code = ghost_icon(ui, super::icons::Icon::Plus, "Add a private pack code").clicked();
+            },
+            |ui| flip = view_switch(ui, cards, page_w),
+        );
         self.set_results_view(flip);
+        if add_code {
+            self.packs.code_open = true;
+        }
         ui.add_space(4.0);
         let mut open: Option<Pack> = None;
         let mut card = |this: &mut App, ui: &mut Ui, (pack, description): &(Pack, String), width: Option<f32>| {
@@ -637,25 +645,28 @@ impl App {
             } else if pack.is_semi_public() {
                 pills.push(("Code".to_string(), c_warn()));
             }
-            let mut parts = Vec::new();
+            // the Minecraft version and the pack's own version of its newest release, and how many there are
+            let mut compat = Vec::new();
             if let Some(v) = pack.latest_version() {
-                parts.push((v.version.to_string(), c_faint()));
-                parts.push((format!("Minecraft {}", v.minecraft), c_faint()));
+                compat.push((v.minecraft.to_string(), c_muted()));
+                compat.push((pack_version(&v.version), c_muted()));
             }
-            parts.push((results_text(pack.versions.len() as u64, "version", "versions"), c_faint()));
+            compat.push((results_text(pack.versions.len() as u64, "version", "versions"), c_faint()));
             let view = ResultView {
                 key: format!("atl:{}", pack.name),
                 title: &pack.name,
                 by: None,
                 summary: description,
                 pills,
-                parts,
+                compat,
+                tags: Vec::new(),
                 figure: None,
             };
             result_item(ui, width, &view, |ui, slot| match slot {
                 Slot::Icon(size) => this.result_icon(ui, Some(&pack.image_url()), &pack.name, size),
                 Slot::Actions => {
-                    if secondary(ui, "Details").clicked() {
+                    // the version, the loader and the optional mods are chosen on the pack's page
+                    if install_button(ui, "Install").on_hover_text("Choose the version, then install").clicked() {
                         open = Some(pack.clone());
                     }
                 }
@@ -772,13 +783,14 @@ impl App {
                     by: None,
                     summary: "",
                     pills: Vec::new(),
-                    parts: vec![(m.slug.clone(), c_faint())],
+                    compat: vec![(m.slug.clone(), c_muted())],
+                    tags: Vec::new(),
                     figure: None,
                 };
                 result_item(ui, width, &view, |ui, slot| match slot {
                     Slot::Icon(size) => self.result_icon(ui, m.icon_url.as_deref(), &m.name, size),
                     Slot::Actions => {
-                        if secondary(ui, "Details").clicked() {
+                        if install_button(ui, "Install").on_hover_text("Choose the version, then install").clicked() {
                             open = Some(m.clone());
                         }
                     }
@@ -811,12 +823,12 @@ impl App {
             }
             website = d.website.clone();
             if let Some(p) = &d.prepared {
-                facts.push((format!("Minecraft {}", p.json.minecraft), c_muted()));
+                facts.push((p.json.minecraft.to_string(), c_muted()));
                 if let Some(k) = d.loader_kind {
                     facts.push((k.type_name().to_string(), loader_color(k.type_name())));
                 }
                 if p.json.memory > 0 {
-                    facts.push((format!("{} MB memory", p.json.memory), c_muted()));
+                    facts.push((format!("{} MB", p.json.memory), c_muted()));
                 }
                 if let Some(j) = &p.json.java {
                     facts.push((j.describe(), c_muted()));
@@ -825,7 +837,12 @@ impl App {
         }
         let java_major = self.java_list.iter().filter_map(|j| j.major).max();
         let mut open_website = false;
-        if back_link(ui, "ATLauncher & Technic").clicked() {
+        let back_to = if matches!(self.packs.detail.as_ref().map(|d| &d.source), Some(Source::Technic(_))) {
+            "Technic"
+        } else {
+            "ATLauncher"
+        };
+        if back_link(ui, back_to).clicked() {
             back = true;
         }
         ui.add_space(4.0);
@@ -837,12 +854,16 @@ impl App {
             ui.vertical(|ui| {
                 ui.spacing_mut().item_spacing.y = 4.0;
                 heading(ui, &title);
-                // what the version needs, on small pills: the loader in its own colour, the rest quiet
+                // what the version needs, on the monospace tags of the result rows: the loader in its own colour
                 if !facts.is_empty() {
                     ui.horizontal_wrapped(|ui| {
                         ui.spacing_mut().item_spacing = egui::vec2(5.0, 5.0);
                         for (text, color) in &facts {
-                            pill(ui, text, *color);
+                            mono_tag(ui, text, *color).on_hover_text(match text {
+                                t if t.ends_with(" MB") => "The memory the pack asks for",
+                                t if t == &facts[0].0 => "Minecraft version",
+                                _ => "",
+                            });
                         }
                     });
                 }
@@ -1059,6 +1080,12 @@ fn choices_ui(ui: &mut Ui, choices: &mut ModChoices, prepared: &Prepared) {
     }
     let required = choices.choices.iter().filter(|c| !c.optional && c.visible).count();
     small_muted(ui, format!("{required} required mods are always installed"));
+}
+
+/// A pack's own version as its tag shows it: "v1.2.0" for a number, a name as it is.
+pub(super) fn pack_version(version: &str) -> String {
+    let v = version.trim();
+    if v.starts_with(|c: char| c.is_ascii_digit()) { format!("v{v}") } else { v.to_string() }
 }
 
 /// The widest the text of a pack's page gets.

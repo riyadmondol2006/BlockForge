@@ -158,7 +158,7 @@ pub fn merge(mr: &[Hit], cf: &[Project], sm: &[Pack], by_downloads: bool) -> Vec
 }
 
 /// CurseForge's section for a Modrinth kind.
-fn section_for(kind: Kind) -> Section {
+pub(super) fn section_for(kind: Kind) -> Section {
     match kind {
         Kind::Mod => Section::Mods,
         Kind::Modpack => Section::Modpacks,
@@ -166,6 +166,11 @@ fn section_for(kind: Kind) -> Section {
         Kind::Shader => Section::ShaderPacks,
         Kind::DataPack => Section::DataPacks,
     }
+}
+
+/// Modrinth's kind for a CurseForge section; Modrinth has no worlds (and no plugins).
+pub(super) fn kind_for(section: Section) -> Option<Kind> {
+    Kind::ALL.into_iter().find(|k| section_for(*k) == section)
 }
 
 /// CurseForge's order for Modrinth's.
@@ -177,11 +182,11 @@ fn cf_sort(sort: Sort) -> CfSort {
     }
 }
 
-fn modrinth_color() -> Color32 {
+pub(super) fn modrinth_color() -> Color32 {
     if is_dark() { Color32::from_rgb(0x1b, 0xd9, 0x6a) } else { Color32::from_rgb(0x0e, 0x7a, 0x3c) }
 }
 
-fn curseforge_color() -> Color32 {
+pub(super) fn curseforge_color() -> Color32 {
     if is_dark() { Color32::from_rgb(0xf1, 0x64, 0x36) } else { Color32::from_rgb(0xb8, 0x42, 0x1a) }
 }
 
@@ -296,19 +301,19 @@ enum Act {
 
 /// A row's Install button: into the chosen instance, or a menu of instances when none is chosen; a modpack makes an
 /// instance of its own. Gives the instance folder (none for a modpack) when pressed.
-fn install_button(
+fn install_choice(
     ui: &mut Ui,
     modpack: bool,
     target: &Option<String>,
     choices: &[(String, String)],
 ) -> Option<Option<String>> {
     if modpack {
-        return secondary(ui, "Install").clicked().then_some(None);
+        return super::discover::install_button(ui, "Install").clicked().then_some(None);
     }
     if let Some(t) = target {
-        return secondary(ui, "Install").clicked().then(|| Some(t.clone()));
+        return super::discover::install_button(ui, "Install").clicked().then(|| Some(t.clone()));
     }
-    let r = secondary(ui, "Install");
+    let r = super::discover::install_button(ui, "Install");
     let mut chosen = None;
     egui::Popup::menu(&r).show(|ui| {
         ui.set_min_width(180.0);
@@ -544,6 +549,7 @@ impl App {
         let mut act: Option<Act> = None;
         let mut more = false;
         let cards = self.results_as_cards();
+        let matched = self.discover.target.as_ref().and_then(|f| self.instance(f)).filter(|_| !modpack).cloned();
         ScrollArea::vertical().id_salt(("discover-both", self.discover.list_gen)).auto_shrink(false).show(ui, |ui| {
             result_list(ui, cards, &merged, |ui, entry, width| {
                 let hit = entry.mr.and_then(|j| hits.get(j));
@@ -590,11 +596,16 @@ impl App {
                 if pack.is_some() {
                     pills.push(("Smithed".to_string(), smithed_color()));
                 }
-                let parts = match (hit, project, pack) {
-                    (Some(h), _, _) if data_pack => data_pack_tags(h.categories.iter().map(String::as_str), 2),
-                    (Some(h), _, _) => tag_parts(h.categories.iter().map(String::as_str), 2),
-                    (None, Some(p), _) => tag_parts(p.categories.iter().map(|c| c.name.as_str()), 2),
-                    (None, None, Some(p)) => tag_parts(p.categories.iter().map(String::as_str), 2),
+                let tags = match (hit, project, pack) {
+                    (Some(h), _, _) => hit_tags(h, kind, 2),
+                    (None, Some(p), _) => p.categories.iter().take(2).map(|c| c.name.clone()).collect(),
+                    (None, None, Some(p)) => split_tags(p.categories.iter().map(String::as_str), 2).1,
+                    _ => Vec::new(),
+                };
+                // what it works with: the instance's version and loader, or what the Modrinth project says
+                let compat = match (&matched, hit) {
+                    (Some(inst), _) => instance_compat(inst, kind == Kind::Mod),
+                    (None, Some(h)) => hit_compat(h, None, kind),
                     _ => Vec::new(),
                 };
                 if hit.is_none() && pack.is_none() && project.is_some_and(|p| p.allow_mod_distribution == Some(false)) {
@@ -606,7 +617,8 @@ impl App {
                     by: author.as_deref(),
                     summary: summary.unwrap_or_default(),
                     pills,
-                    parts,
+                    compat,
+                    tags,
                     figure: Some((human_count(downloads), "downloads")),
                 };
                 result_item(ui, width, &view, |ui, slot| {
@@ -615,7 +627,7 @@ impl App {
                         return;
                     }
                     if busy {
-                        spinner(ui).on_hover_text("Installing");
+                        installing_mark(ui);
                         return;
                     }
                     if data_pack && (hit.is_some() || pack.is_some()) {
@@ -635,7 +647,7 @@ impl App {
                         }
                     } else if is_installed {
                         installed_mark(ui);
-                    } else if let Some(folder) = install_button(ui, modpack, &target, &choices) {
+                    } else if let Some(folder) = install_choice(ui, modpack, &target, &choices) {
                         // a project on both sites comes from Modrinth: no key, no files to fetch by hand
                         act = match (hit, project) {
                             (Some(h), _) => Some(Act::Modrinth(h.clone(), folder)),

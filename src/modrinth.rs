@@ -87,6 +87,9 @@ pub struct Hit {
     pub project_type: String,
     #[serde(default)]
     pub categories: Vec<String>,
+    /// The Minecraft versions it has files for.
+    #[serde(default)]
+    pub versions: Vec<String>,
 }
 
 #[derive(Deserialize, Debug)]

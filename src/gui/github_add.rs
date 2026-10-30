@@ -349,12 +349,12 @@ fn asset_row(ui: &mut Ui, name: &str, size: &str, selected: bool) -> egui::Respo
         if on > 0.0 {
             p.circle_filled(c, 3.8 * on, c_accent());
         }
-        let size_galley = p.layout_no_wrap(size.to_string(), egui::FontId::proportional(FS_META), c_faint());
+        let size_galley = p.layout_no_wrap(size.to_string(), super::fonts::mono(11.5), c_faint());
         let size_at =
             egui::pos2(rect.right() - 12.0 - size_galley.size().x, rect.center().y - size_galley.size().y / 2.0);
         let mut job = egui::text::LayoutJob::single_section(
             name.to_string(),
-            egui::TextFormat { font_id: super::fonts::medium(FS_BODY), color: c_text(), ..Default::default() },
+            egui::TextFormat { font_id: super::fonts::mono(13.0), color: c_text(), ..Default::default() },
         );
         job.wrap = egui::text::TextWrapping::truncate_at_width((size_at.x - c.x - 30.0).max(40.0));
         let name_galley = p.layout_job(job);

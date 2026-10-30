@@ -111,6 +111,12 @@ impl Section {
             _ => Vec::new(),
         }
     }
+
+    /// Whether the pages of the place carry the switch between them in their own heads instead of the tabs above
+    /// them: Explore's pages are one marketplace, and its sources sit beside the title with the kinds under it.
+    pub fn tabs_in_page(self) -> bool {
+        self == Section::Explore
+    }
 }
 
 /// The theme an instance's cover is drawn in: the one picked in its settings (`coverTheme` in its file), else Auto.
@@ -195,23 +201,24 @@ impl App {
             .paint_at(ui, rect);
     }
 
-    /// The tabs between the pages of the open place (Explore: the sources; Workshop: the calculator and the
-    /// converter; Utilities: tools and servers), above the page. Nothing for a place with one page.
+    /// The tabs between the pages of the open place (Workshop: the calculator and the converter; Utilities: tools
+    /// and servers), as a row of pills above the page. Nothing for a place with one page, or one whose pages carry
+    /// the switch in their own heads (Explore, see [`Section::tabs_in_page`]).
     pub(super) fn section_tabs(&mut self, ui: &mut Ui) {
         let section = Section::of(self.page);
         let tabs = section.tabs();
-        if tabs.len() < 2 {
+        if tabs.len() < 2 || section.tabs_in_page() {
             return;
         }
-        let labels: Vec<&str> = tabs.iter().map(|t| t.1).collect();
+        let items: Vec<(&str, Option<egui::Color32>)> = tabs.iter().map(|t| (t.1, None)).collect();
         let current = tabs.iter().position(|t| t.0 == self.page).unwrap_or(0);
         let mut go = None;
-        ui.horizontal(|ui| {
-            if let Some(i) = segmented(ui, &labels, current) {
+        ui.horizontal_wrapped(|ui| {
+            if let Some(i) = pill_tabs(ui, &items, current) {
                 go = Some(tabs[i].0);
             }
         });
-        ui.add_space(14.0);
+        ui.add_space(16.0);
         if let Some(page) = go {
             self.go(page);
         }
@@ -253,6 +260,9 @@ mod tests {
         assert_eq!(Section::of(Page::Instance), Section::Library);
         assert_eq!(Section::of(Page::Ftb), Section::Explore);
         assert_eq!(Section::of(Page::Settings), Section::Account);
+        // Explore's pages draw their sources themselves; the other places with pages get the tabs above them
+        assert!(Section::Explore.tabs_in_page());
+        assert!(!Section::Workshop.tabs_in_page() && !Section::Utilities.tabs_in_page());
     }
 
     #[test]

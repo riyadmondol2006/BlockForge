@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::Instant;
 
-use egui::{Align, Id, Layout, RichText, ScrollArea, Ui};
+use egui::{Id, RichText, ScrollArea, Ui};
 
 use super::App;
 use super::theme::*;
@@ -19,7 +19,7 @@ use crate::curseforge::api::{self, SearchPage, SearchQuery, Section, Sort};
 use crate::curseforge::browser::{BrowserHub, ItemState};
 use crate::curseforge::filter::{self, Target};
 use crate::curseforge::install::{self, Dependency, ModUpdate};
-use crate::curseforge::model::{CategoryForGame, File, Project};
+use crate::curseforge::model::{CategoryForGame, File, GameVersionLatestFiles, Project};
 use crate::curseforge::pack::{self, PackSource, PackUpdate};
 use crate::curseforge::{self, CfSettings};
 
@@ -124,7 +124,7 @@ pub struct CfState {
     browsers: Vec<Arc<BrowserHub>>,
     confirm_skip: bool,
     /// Whether the launcher's configuration allows CurseForge, read once rather than on every frame.
-    enabled: Option<bool>,
+    pub(super) enabled: Option<bool>,
     target_info: Option<TargetInfo>,
     notice_shown: bool,
     updates: Option<UpdateWin>,
@@ -178,6 +178,8 @@ impl Default for CfState {
 enum CardAct {
     Install(Project, Option<String>),
     Reinstall(Project, Option<String>),
+    /// Put a newer file of an installed project into the instance.
+    Update(Project, String),
     Remove(Project, String),
     View(Project),
 }
@@ -188,7 +190,7 @@ impl App {
     }
 
     /// Done once: pick the platform from the `defaultModPlatform` setting and hand the API key to the client.
-    fn cf_init(&mut self) {
+    pub(super) fn cf_init(&mut self) {
         if self.cf.inited {
             return;
         }
@@ -202,35 +204,16 @@ impl App {
         *self.cf.enabled.get_or_insert_with(|| curseforge::platform_enabled(&self.dirs, "modsEnabled"))
     }
 
-    /// The "Modrinth | CurseForge | All" switch at the right end of Discover's title, with "Add from GitHub" before
-    /// it. "All" searches the sites together on Modrinth's page (see `discover_both`). Returns `true` when it was
-    /// changed.
-    pub(super) fn cf_platform_switch(&mut self, ui: &mut Ui) -> bool {
-        self.cf_init();
-        let current = if self.discover.both { 2 } else { usize::from(self.cf.active) };
-        let picked = segmented(ui, &["Modrinth", "CurseForge", "All"], current);
-        if ghost(ui, "Add from GitHub")
-            .on_hover_text("For a mod that is only on GitHub: paste the link to its page")
-            .clicked()
-        {
-            self.gh_open();
-        }
-        match picked {
-            Some(i) if i != current => {
-                self.cf.active = i == 1;
-                self.discover.both = i == 2;
-                if i != 0 {
-                    // the launcher's configuration may have changed since it was last read
-                    self.cf.enabled = None;
-                }
-                if self.discover.both {
-                    // a fresh search on every site; Modrinth's rows stay until the new ones arrive
-                    self.discover.searched = false;
-                    self.discover.remerge();
-                }
-                true
-            }
-            _ => false,
+    /// The section the CurseForge page shows.
+    pub(super) fn cf_section(&self) -> Section {
+        self.cf.section
+    }
+
+    /// Show `section` on the CurseForge page, searched afresh the next time the page is drawn.
+    pub(super) fn cf_show_section(&mut self, section: Section) {
+        if self.cf.section != section {
+            self.cf.section = section;
+            self.cf.searched = false;
         }
     }
 
@@ -331,13 +314,13 @@ impl App {
         }
         let ctx = ui.ctx().clone();
         let enabled = *self.cf.enabled.get_or_insert_with(|| curseforge::platform_enabled(&self.dirs, "modsEnabled"));
-        ui.horizontal(|ui| {
-            heading(ui, "Discover");
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                self.cf_platform_switch(ui);
-            });
-        });
-        ui.add_space(8.0);
+        let labels: Vec<&str> = Section::ALL.iter().map(|s| s.label()).collect();
+        let open = Section::ALL.iter().position(|s| *s == self.cf.section).unwrap_or(0);
+        let picked = self.explore_header(ui, &labels, open);
+        if !self.cf.active || self.page != super::Page::Discover {
+            // another source was picked in the head: it is drawn from the next frame
+            return true;
+        }
         if !enabled {
             notice(
                 ui,
@@ -347,18 +330,12 @@ impl App {
             );
             return true;
         }
-        self.cf_load_categories(&ctx);
         let mut search = !self.cf.searched;
-        tab_bar(ui, |ui| {
-            for s in Section::ALL {
-                if tab(ui, s.label(), self.cf.section == s).clicked() && self.cf.section != s {
-                    self.cf.section = s;
-                    search = true;
-                    self.cf_load_categories(&ctx);
-                }
-            }
-        });
-        ui.add_space(14.0);
+        if let Some(i) = picked {
+            self.cf.section = Section::ALL[i];
+            search = true;
+        }
+        self.cf_load_categories(&ctx);
         let page_w = ui.available_width();
         let hint = format!("Search {}", self.cf.section.label().to_lowercase());
         let mut st = (&mut *self, &mut search);
@@ -379,9 +356,11 @@ impl App {
                 if this.cf.section != Section::Modpacks {
                     this.target_dropdown(ui, search);
                 }
+            },
+            |ui, (this, search)| {
+                this.cf_filter_controls(ui, search);
                 this.cf_sort_dropdown(ui, search);
             },
-            |ui, (this, search)| this.cf_filter_controls(ui, search),
         );
         if self.cf_chip_row(ui) {
             search = true;
@@ -431,6 +410,15 @@ impl App {
         }
 
         let installed: HashMap<i64, i64> = self.cf_target_info().map(|t| t.installed.clone()).unwrap_or_default();
+        // what the instance runs: its version and loader on every row, and what a newer file has to fit
+        let fits = self.cf_target_info().map(|t| (t.target.mc_version.clone(), t.target.search_loaders()));
+        let target_compat = self
+            .discover
+            .target
+            .as_ref()
+            .and_then(|f| self.instance(f))
+            .filter(|_| self.cf.section != Section::Modpacks)
+            .map(|i| super::discover::instance_compat(i, self.cf.section.uses_loader()));
         let projects = std::mem::take(&mut self.cf.projects);
         let section = self.cf.section;
         let target = self.discover.target.clone();
@@ -444,6 +432,11 @@ impl App {
         ScrollArea::vertical().id_salt(("cf-list", self.cf.list_gen)).auto_shrink(false).show(ui, |ui| {
             result_list(ui, cards, &projects, |ui, p, width| {
                 let is_installed = installed.contains_key(&p.id) && section != Section::Modpacks;
+                // a newer release than the one installed that fits the instance
+                let newer = is_installed
+                    .then_some(fits.as_ref())
+                    .flatten()
+                    .and_then(|(mc, loaders)| newer_file(&p.latest_files_indexes, mc, loaders, installed[&p.id]));
                 let busy = installing.contains(&p.name);
                 let mut pills = Vec::new();
                 if p.allow_mod_distribution == Some(false) {
@@ -456,7 +449,8 @@ impl App {
                     by: Some(&authors),
                     summary: &p.summary,
                     pills,
-                    parts: tag_parts(p.categories.iter().map(|c| c.name.as_str()), 3),
+                    compat: target_compat.clone().unwrap_or_else(|| project_compat(p, section)),
+                    tags: p.categories.iter().take(3).map(|c| c.name.clone()).collect(),
                     figure: Some((human_count(p.download_count.max(0.0) as u64), "downloads")),
                 };
                 result_item(ui, width, &view, |ui, slot| {
@@ -466,19 +460,23 @@ impl App {
                     }
                     if busy {
                         // a second click would open the file chooser again (for a modpack, a second instance)
-                        spinner(ui).on_hover_text("Installing");
+                        installing_mark(ui);
+                    } else if let (Some(_), Some(t)) = (newer, &target) {
+                        if update_button(ui).on_hover_text("A newer version fits this instance").clicked() {
+                            act = Some(CardAct::Update(p.clone(), t.clone()));
+                        }
                     } else if is_installed {
                         installed_mark(ui);
                     } else if section == Section::Modpacks {
-                        if secondary(ui, "Install").clicked() {
+                        if install_button(ui, "Install").clicked() {
                             act = Some(CardAct::Install(p.clone(), None));
                         }
                     } else if let Some(t) = &target {
-                        if secondary(ui, "Install").clicked() {
+                        if install_button(ui, "Install").clicked() {
                             act = Some(CardAct::Install(p.clone(), Some(t.clone())));
                         }
                     } else {
-                        let r = secondary(ui, "Install");
+                        let r = install_button(ui, "Install");
                         egui::Popup::menu(&r).show(|ui| {
                             ui.set_min_width(180.0);
                             if instance_choices.is_empty() {
@@ -549,13 +547,13 @@ impl App {
         match act {
             Some(CardAct::Install(p, folder)) => self.cf_open_dialog(&ctx, p, folder, None, false),
             Some(CardAct::Reinstall(p, folder)) => {
-                let installed_file = folder.as_ref().and_then(|f| self.instance(f)).and_then(|i| {
-                    i.mod_records()
-                        .iter()
-                        .find(|r| r.curse_forge_project_id == Some(p.id))
-                        .and_then(|r| r.curse_forge_file_id)
-                });
+                let installed_file = installed_file_of(folder.as_ref().and_then(|f| self.instance(f)), p.id);
                 self.cf_open_dialog(&ctx, p, folder, installed_file, true);
+            }
+            Some(CardAct::Update(p, folder)) => {
+                // the newest file is chosen in the window; the one installed is named there
+                let installed_file = installed_file_of(self.instance(&folder), p.id);
+                self.cf_open_dialog(&ctx, p, Some(folder), installed_file, false);
             }
             Some(CardAct::Remove(p, folder)) => self.cf.confirm_remove = Some((p, folder)),
             Some(CardAct::View(p)) => {
@@ -1326,12 +1324,16 @@ impl App {
                                 Some(3) => super::discover::pill(ui, "Alpha", c_danger()),
                                 _ => super::discover::pill(ui, "Release", c_accent()),
                             };
+                            // what the file is for on the monospace tags of the result rows, then its size and date
+                            for v in f.game_versions.iter().take(6) {
+                                let color = if super::discover::LOADERS.iter().any(|(_, l)| l == v) { loader_color(v) } else { c_muted() };
+                                super::discover::mono_tag(ui, v, color);
+                            }
                             let mut facts: Vec<String> = Vec::new();
-                            facts.push(f.game_versions.iter().take(8).cloned().collect::<Vec<_>>().join(", "));
                             facts.push(human_size(f.file_length.max(0) as u64));
                             facts.push(f.file_date.chars().take(10).collect::<String>());
                             facts.retain(|t| !t.is_empty());
-                            small_muted(ui, facts.join("  \u{00B7}  "));
+                            ui.label(RichText::new(facts.join("  \u{00B7}  ")).font(super::fonts::mono(11.5)).color(c_muted()));
                         });
                     }
                     });
@@ -1798,6 +1800,47 @@ impl App {
 }
 
 /// CurseForge's descriptions and changelogs are HTML; turn them into readable text.
+/// The file of a CurseForge project an instance has, if it has one.
+fn installed_file_of(inst: Option<&crate::instances::Instance>, project: i64) -> Option<i64> {
+    inst?.mod_records().iter().find(|r| r.curse_forge_project_id == Some(project)).and_then(|r| r.curse_forge_file_id)
+}
+
+/// The newest full release among a project's newest files that is made for Minecraft `mc` and one of `loaders` (any
+/// loader, when none is asked for), when it is newer than the file `installed`. CurseForge numbers files in the order
+/// they were uploaded, so a higher number is a newer file.
+fn newer_file(indexes: &[GameVersionLatestFiles], mc: &str, loaders: &[i64], installed: i64) -> Option<i64> {
+    indexes
+        .iter()
+        .filter(|f| f.game_version == mc && f.release_type == 1)
+        .filter(|f| loaders.is_empty() || loaders.contains(&f.mod_loader))
+        .map(|f| f.file_id)
+        .max()
+        .filter(|id| *id > installed && installed > 0)
+}
+
+/// What a project works with, for its row while no instance is chosen: the newest release it has a file for and
+/// the loaders of its files.
+fn project_compat(p: &Project, section: Section) -> Vec<(String, egui::Color32)> {
+    use crate::curseforge::{MODLOADER_FABRIC, MODLOADER_FORGE, MODLOADER_NEOFORGE, MODLOADER_QUILT};
+    let mut out = Vec::new();
+    if let Some(v) = super::discover::newest_release(p.latest_files_indexes.iter().map(|f| f.game_version.as_str())) {
+        out.push((v, c_muted()));
+    }
+    if section.uses_loader() {
+        for (id, name) in [
+            (MODLOADER_FABRIC, "Fabric"),
+            (MODLOADER_QUILT, "Quilt"),
+            (MODLOADER_FORGE, "Forge"),
+            (MODLOADER_NEOFORGE, "NeoForge"),
+        ] {
+            if p.latest_files_indexes.iter().any(|f| f.mod_loader == id) {
+                out.push((name.to_string(), loader_color(name)));
+            }
+        }
+    }
+    out
+}
+
 pub fn html_to_text(html: &str) -> String {
     let mut out = String::with_capacity(html.len());
     let mut chars = html.chars().peekable();
@@ -1875,7 +1918,7 @@ pub fn html_to_text(html: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{html_to_text, modal_size};
+    use super::{GameVersionLatestFiles, html_to_text, modal_size, newer_file};
 
     #[test]
     fn changelog_html_becomes_text() {
@@ -1885,6 +1928,26 @@ mod tests {
         assert!(t.ends_with("done"));
         assert!(!t.contains('<') || t.contains("<3"));
         assert_eq!(html_to_text("it&#39;s &#x27;fine&#X27; &#xZZ; &bogus"), "it's 'fine'  &bogus");
+    }
+
+    #[test]
+    fn an_update_is_a_newer_release_for_the_instance() {
+        let f = |mc: &str, loader: i64, id: i64, release_type: i64| GameVersionLatestFiles {
+            game_version: mc.into(),
+            mod_loader: loader,
+            file_id: id,
+            release_type,
+            ..Default::default()
+        };
+        let files = [f("1.21.1", 4, 900, 1), f("1.21.1", 4, 950, 2), f("1.21.1", 6, 990, 1), f("1.20.1", 4, 999, 1)];
+        // the newest Fabric release for 1.21.1 is 900: the beta, NeoForge's file and 1.20.1's don't count
+        assert_eq!(newer_file(&files, "1.21.1", &[4], 800), Some(900));
+        assert_eq!(newer_file(&files, "1.21.1", &[4], 900), None);
+        // no loader asked for: any loader's release
+        assert_eq!(newer_file(&files, "1.21.1", &[], 900), Some(990));
+        // a file the launcher doesn't know is never "older"
+        assert_eq!(newer_file(&files, "1.21.1", &[4], 0), None);
+        assert_eq!(newer_file(&files, "1.19.2", &[4], 1), None);
     }
 
     #[test]

@@ -148,7 +148,7 @@ pub(super) fn data_pack_button(
     target: Option<&str>,
     have: &dyn Fn(&crate::instances::Instance) -> HashSet<String>,
 ) -> Option<(String, Vec<String>)> {
-    let r = secondary(ui, "Install");
+    let r = install_button(ui, "Install");
     let mut chosen = None;
     egui::Popup::menu(&r).show(|ui| {
         ui.set_min_width(180.0);
@@ -230,11 +230,18 @@ const PAGE: u32 = 20;
 /// How long the search field waits after the last key before it searches.
 const LIVE_DELAY: Duration = Duration::from_millis(300);
 
-/// The width of the column at the right end of a result that holds its button.
-const ACTION_W: f32 = 120.0;
+/// The width of the column at the right end of a result that holds its button and its three dots.
+const ACTION_W: f32 = 138.0;
 
-/// The height a result takes (the picture and the room around it), for the grey rows shown while a list loads.
-pub(super) const ROW_H: f32 = 80.0;
+/// The room between two results of a list: each is a card of its own.
+const ROW_GAP: f32 = 8.0;
+
+/// The height a result takes (its card, with the picture and the room around it, and the gap under it), for the grey
+/// rows shown while a list loads.
+pub(super) const ROW_H: f32 = ICON + 24.0 + ROW_GAP;
+
+/// The size of a result's main button (Install, Installed, Update), so the buttons of a list line up.
+pub(super) const ACTION_BUTTON: egui::Vec2 = egui::Vec2::new(96.0, 34.0);
 
 /// A number with thousands separators: 1,284.
 pub(super) fn thousands(n: u64) -> String {
@@ -329,30 +336,8 @@ pub(super) fn pill(ui: &mut Ui, text: &str, color: Color32) -> Response {
     resp
 }
 
-/// The last line of a result with pills in front: the pills (where it comes from, a warning), then the plain parts.
-pub(super) fn pill_meta_line(ui: &mut Ui, pills: &[(String, Color32)], parts: &[(String, Color32)]) {
-    if pills.is_empty() {
-        meta_line(ui, parts);
-        return;
-    }
-    ui.scope(|ui| {
-        // a line of text with pills is as tall as a pill, not as a button
-        ui.spacing_mut().interact_size.y = 18.0;
-        ui.spacing_mut().item_spacing.x = 5.0;
-        ui.horizontal(|ui| {
-            for (text, color) in pills {
-                pill(ui, text, *color);
-            }
-            if !parts.is_empty() {
-                ui.add_space(3.0);
-                meta_line(ui, parts);
-            }
-        });
-    });
-}
-
 /// The side of a result's picture.
-pub(super) const ICON: f32 = 48.0;
+pub(super) const ICON: f32 = 56.0;
 
 impl App {
     /// A result's picture (the project's icon, or its first letter while there is none) set on a small tile with a
@@ -387,6 +372,65 @@ impl App {
     }
 }
 
+/// Where Explore looks: the sites with mods of every kind (Modrinth, CurseForge, or both of them as one list), and the
+/// platforms with modpacks only. One row of pills at the top of every Explore page switches between them.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum Source {
+    Modrinth,
+    CurseForge,
+    /// Modrinth and CurseForge together (and Smithed, for data packs).
+    Everywhere,
+    Atl,
+    Technic,
+    Ftb,
+}
+
+impl Source {
+    pub const ALL: [Source; 6] =
+        [Source::Modrinth, Source::CurseForge, Source::Everywhere, Source::Atl, Source::Technic, Source::Ftb];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Source::Modrinth => "Modrinth",
+            Source::CurseForge => "CurseForge",
+            Source::Everywhere => "Both",
+            Source::Atl => "ATLauncher",
+            Source::Technic => "Technic",
+            Source::Ftb => "FTB",
+        }
+    }
+
+    /// The colour of the source's dot: the sites keep the colours they have on the rows of a search on both.
+    pub fn color(self) -> Color32 {
+        let (dark, light) = match self {
+            Source::Modrinth => return super::discover_both::modrinth_color(),
+            Source::CurseForge => return super::discover_both::curseforge_color(),
+            Source::Everywhere => return c_accent2(),
+            Source::Atl => ((0x7F, 0xB8, 0xE6), (0x1F, 0x63, 0x9E)),
+            Source::Technic => ((0xE8, 0x8E, 0x6B), (0xA8, 0x45, 0x22)),
+            Source::Ftb => ((0xB9, 0x9B, 0xEA), (0x6B, 0x46, 0xB0)),
+        };
+        let (r, g, b) = if is_dark() { dark } else { light };
+        Color32::from_rgb(r, g, b)
+    }
+}
+
+/// A low-weight action with an icon in front: [`ghost`] with a picture.
+pub(super) fn ghost_icon(ui: &mut Ui, icon: Icon, text: &str) -> Response {
+    let galley = ui.painter().layout_no_wrap(text.to_string(), super::fonts::medium(13.0), Color32::PLACEHOLDER);
+    let (rect, resp) = ui.allocate_exact_size(vec2(galley.size().x + 40.0, 32.0), Sense::click());
+    let t = motion::hover(ui, resp.id, resp.hovered());
+    if t > 0.0 {
+        ui.painter().rect_filled(rect, CornerRadius::same(R_CONTROL), c_hover().gamma_multiply(t));
+    }
+    let fg = motion::mix(c_muted(), c_text(), t);
+    icons::paint(ui.painter(), icon, egui::pos2(rect.left() + 17.0, rect.center().y), 11.0, fg);
+    ui.painter().galley(egui::pos2(rect.left() + 28.0, rect.center().y - galley.size().y / 2.0), galley, fg);
+    focus_ring(ui, &resp, rect, R_CONTROL);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, text));
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
 /// What a list says when it has nothing to show: a quiet round mark, one sentence and, if there is one, the action.
 pub(super) fn empty_state(ui: &mut Ui, text: &str, action: Option<&str>) -> Option<Response> {
     ui.add_space(36.0);
@@ -406,8 +450,8 @@ pub(super) fn empty_state(ui: &mut Ui, text: &str, action: Option<&str>) -> Opti
     .inner
 }
 
-/// Rows in the shape of results (picture, name, summary, the button at the right) while the first ones are on their
-/// way; the rows further down are fainter, and they all breathe gently.
+/// Cards in the shape of results (picture, name, summary, badges, the button at the right) while the first ones are
+/// on their way; the cards further down are fainter, and they all breathe gently.
 pub(super) fn result_skeleton(ui: &mut Ui, rows: usize) {
     let reduced = motion::reduced(ui.ctx());
     let phase = if reduced { 0.5 } else { (ui.input(|i| i.time) * 2.4).sin() as f32 * 0.5 + 0.5 };
@@ -416,14 +460,22 @@ pub(super) fn result_skeleton(ui: &mut Ui, rows: usize) {
     }
     let shade = motion::mix(c_field(), c_active(), phase * 0.7);
     for n in 0..rows {
-        let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_H), Sense::hover());
-        if !ui.is_rect_visible(rect) {
+        let (slot, _) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_H), Sense::hover());
+        if !ui.is_rect_visible(slot) {
             continue;
         }
+        let rect = egui::Rect::from_min_size(slot.min, vec2(slot.width(), ROW_H - ROW_GAP));
         let fade = 1.0 - n as f32 / (rows as f32 + 1.0);
         let c = shade.gamma_multiply(fade);
         let p = ui.painter();
-        let icon = egui::Rect::from_min_size(rect.min + vec2(14.0, (ROW_H - ICON) / 2.0), vec2(ICON, ICON));
+        p.rect(
+            rect,
+            CornerRadius::same(R_CARD),
+            c_card().gamma_multiply(fade),
+            Stroke::new(1.0, c_border().gamma_multiply(fade)),
+            egui::StrokeKind::Inside,
+        );
+        let icon = egui::Rect::from_min_size(rect.min + vec2(14.0, (rect.height() - ICON) / 2.0), vec2(ICON, ICON));
         p.rect_filled(icon, CornerRadius::same((ICON * 0.22) as u8), c);
         let x = icon.right() + 14.0;
         let bar = |y: f32, w: f32, h: f32| {
@@ -433,18 +485,22 @@ pub(super) fn result_skeleton(ui: &mut Ui, rows: usize) {
                 c,
             )
         };
-        bar(16.0, (rect.width() * 0.22).min(220.0), 11.0);
-        bar(35.0, (rect.width() * 0.46).min(460.0), 9.0);
-        bar(52.0, (rect.width() * 0.16).min(150.0), 8.0);
-        if rect.width() > 420.0 {
+        bar(15.0, (rect.width() * 0.22).min(220.0), 12.0);
+        bar(36.0, (rect.width() * 0.42).min(440.0), 9.0);
+        for (i, w) in [44.0, 52.0, 60.0].into_iter().enumerate() {
+            let left = x + i as f32 * (w + 6.0) + if i == 2 { 6.0 } else { 0.0 };
+            p.rect_filled(
+                egui::Rect::from_min_size(egui::pos2(left, rect.top() + 52.0), vec2(w, 14.0)),
+                CornerRadius::same(R_TAG),
+                c,
+            );
+        }
+        if rect.width() > 460.0 {
             let button = egui::Rect::from_min_size(
-                egui::pos2(rect.right() - 14.0 - 86.0, rect.center().y - 16.0),
-                vec2(86.0, 32.0),
+                egui::pos2(rect.right() - 14.0 - 28.0 - 8.0 - ACTION_BUTTON.x, rect.center().y - ACTION_BUTTON.y / 2.0),
+                ACTION_BUTTON,
             );
             p.rect_filled(button, CornerRadius::same(R_CONTROL), c);
-        }
-        if n + 1 < rows {
-            p.hline(rect.x_range().shrink(14.0), rect.bottom() - 0.5, Stroke::new(1.0, c_rule()));
         }
     }
 }
@@ -517,20 +573,74 @@ fn is_loader(name: &str) -> bool {
     matches!(name.to_ascii_lowercase().as_str(), "fabric" | "quilt" | "forge" | "neoforge")
 }
 
-/// The words for the last line of a result: every loader in its own colour first, then at most `max` categories in
-/// plain grey.
-pub(super) fn tag_parts<'a>(names: impl Iterator<Item = &'a str>, max: usize) -> Vec<(String, Color32)> {
-    let mut v: Vec<&str> = names.collect();
-    v.sort_by_key(|n| !is_loader(n));
-    let loaders = v.iter().filter(|n| is_loader(n)).count();
-    v.truncate(loaders + max);
-    v.into_iter().map(|n| (loader_display(n), tag_color(n))).collect()
+/// A result's words split in two: the loaders it runs on (for monospace tags, each in its colour) and at most `max`
+/// categories (for soft chips), written as words rather than as the sites' ids ("game-mechanics" is "Game mechanics").
+pub(super) fn split_tags<'a>(
+    names: impl Iterator<Item = &'a str>,
+    max: usize,
+) -> (Vec<(String, Color32)>, Vec<String>) {
+    let (loaders, rest): (Vec<&str>, Vec<&str>) = names.partition(|n| is_loader(n));
+    let compat = loaders.into_iter().map(|n| (loader_display(n), tag_color(n))).collect();
+    let tags = rest.into_iter().filter(|n| !n.is_empty()).take(max).map(category_words).collect();
+    (compat, tags)
 }
 
-/// The tags of a data pack: no loaders (a project that is a mod as well lists them, but the data pack needs none),
-/// and not "datapack" itself.
-pub(super) fn data_pack_tags<'a>(names: impl Iterator<Item = &'a str>, max: usize) -> Vec<(String, Color32)> {
-    tag_parts(names.filter(|n| !is_loader(n) && !n.eq_ignore_ascii_case("datapack")), max)
+/// The categories of a data pack: not "datapack" itself, and no loaders (a project that is a mod as well lists them,
+/// but the data pack needs none).
+pub(super) fn data_pack_tags<'a>(names: impl Iterator<Item = &'a str>, max: usize) -> Vec<String> {
+    split_tags(names.filter(|n| !n.eq_ignore_ascii_case("datapack")), max).1
+}
+
+/// A category id as words: "game-mechanics" is "Game mechanics"; a name that is written already stays as it is.
+fn category_words(name: &str) -> String {
+    let words = name.replace(['-', '_'], " ");
+    let mut chars = words.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => String::new(),
+    }
+}
+
+/// What an instance runs, as the tags of a result matched to it: its Minecraft version and (with `loader`, for the
+/// kinds that need one) its mod loader in its colour.
+pub(super) fn instance_compat(inst: &crate::instances::Instance, loader: bool) -> Vec<(String, Color32)> {
+    let mut out = vec![(inst.mc_version().to_string(), c_muted())];
+    if let Some((kind, _)) = inst.loader().filter(|_| loader) {
+        out.push((kind.to_string(), loader_color(kind)));
+    }
+    out
+}
+
+/// What a Modrinth project works with: the instance's version and loader when the list is matched to one, else the
+/// newest release it has files for and the loaders among its categories.
+pub(super) fn hit_compat(hit: &Hit, inst: Option<&crate::instances::Instance>, kind: Kind) -> Vec<(String, Color32)> {
+    let loader = kind == Kind::Mod || kind == Kind::Modpack;
+    if let Some(inst) = inst {
+        return instance_compat(inst, loader && kind != Kind::Modpack);
+    }
+    let mut out: Vec<(String, Color32)> =
+        newest_release(hit.versions.iter().map(String::as_str)).map(|v| vec![(v, c_muted())]).unwrap_or_default();
+    if loader {
+        out.extend(split_tags(hit.categories.iter().map(String::as_str), 0).0);
+    }
+    out
+}
+
+/// The categories of a Modrinth project for its chips (a data pack's without "datapack").
+pub(super) fn hit_tags(hit: &Hit, kind: Kind, max: usize) -> Vec<String> {
+    let names = hit.categories.iter().map(String::as_str);
+    if kind == Kind::DataPack { data_pack_tags(names, max) } else { split_tags(names, max).1 }
+}
+
+/// The newest release among Minecraft versions ("1.21.4" before "1.9"), leaving out snapshots and the like: the
+/// version a result's tag shows when no instance is chosen.
+pub(super) fn newest_release<'a>(versions: impl Iterator<Item = &'a str>) -> Option<String> {
+    let parts = |v: &str| -> Option<Vec<u32>> { v.split('.').map(|p| p.parse().ok()).collect() };
+    versions
+        .filter_map(|v| Some((parts(v)?, v)))
+        .filter(|(p, _)| p.len() >= 2)
+        .max_by(|a, b| a.0.cmp(&b.0))
+        .map(|(_, v)| v.to_string())
 }
 
 /// A loader's name as it is written everywhere else ("neoforge" is "NeoForge"); other words stay as they are.
@@ -560,7 +670,7 @@ pub(super) fn name_line_with(ui: &mut Ui, name: &str, note: Option<(String, Colo
     job.append(
         name,
         0.0,
-        TextFormat { font_id: super::fonts::semibold(FS_BODY), color: c_text(), ..Default::default() },
+        TextFormat { font_id: super::fonts::semibold(FS_BODY + 1.0), color: c_text(), ..Default::default() },
     );
     if let Some((text, color)) = note {
         job.append(&text, 8.0, run(color, FS_META));
@@ -573,23 +683,8 @@ pub(super) fn summary_line(ui: &mut Ui, text: &str) {
     ui.add(egui::Label::new(RichText::new(text).size(FS_BODY).color(c_muted())).truncate());
 }
 
-/// The last line of a result, plain text divided by dots: figures, loader names in their own colours, categories.
-pub(super) fn meta_line(ui: &mut Ui, parts: &[(String, Color32)]) {
-    if parts.is_empty() {
-        return;
-    }
-    let mut job = LayoutJob::default();
-    for (i, (text, color)) in parts.iter().enumerate() {
-        if i > 0 {
-            job.append(" \u{00B7} ", 0.0, run(c_faint(), FS_META));
-        }
-        job.append(text, 0.0, run(*color, FS_META));
-    }
-    ui.add(egui::Label::new(job).truncate());
-}
-
-/// One result in a list: no box at rest and a hairline between rows; under the pointer the row rises into a pane of
-/// glass (its fill, line and soft shadow fade in) and the hairline fades out.
+/// One result in a list: a card of its own with the gap to the next under it. Under the pointer the card rises a
+/// little (its fill lightens, its line strengthens and its shadow grows).
 pub(super) fn row_frame<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
     ui.spacing_mut().item_spacing.y = 0.0;
     let id = ui.next_auto_id().with("result-row");
@@ -599,35 +694,238 @@ pub(super) fn row_frame<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
         add(ui)
     });
     let rect = out.response.rect;
-    // the row's lower edge belongs to the next row, so two rows never light up at once
-    let hot = egui::Rect::from_min_max(rect.min, egui::pos2(rect.max.x, rect.max.y - 1.0));
-    let t = motion::hover(ui, id, ui.rect_contains_pointer(hot));
-    if t > 0.0 {
-        let radius = CornerRadius::same(R_CARD);
-        let s = card_shadow();
-        let shadow = egui::Shadow { color: s.color.gamma_multiply(t), ..s };
-        let pane = egui::Shape::rect_filled(rect, radius, c_card().gamma_multiply(t));
-        let line = egui::Shape::rect_stroke(
+    let t = motion::hover(ui, id, ui.rect_contains_pointer(rect));
+    let radius = CornerRadius::same(R_CARD);
+    let (a, b) = (card_shadow(), card_shadow_raised());
+    let shadow = egui::Shadow {
+        offset: [0, (a.offset[1] as f32 + (b.offset[1] - a.offset[1]) as f32 * t * 0.5) as i8],
+        blur: (a.blur as f32 + (b.blur as f32 - a.blur as f32) * t * 0.5) as u8,
+        spread: 0,
+        // at rest only a breath of shadow: a list of cards should not look like a stack of slabs
+        color: motion::mix(a.color.gamma_multiply(0.45), b.color, t),
+    };
+    let pane = egui::Shape::rect_filled(rect, radius, motion::mix(c_card(), c_raised(), t));
+    let line = egui::Shape::rect_stroke(
+        rect,
+        radius,
+        Stroke::new(1.0, motion::mix(c_border(), c_control().gamma_multiply(0.6), t)),
+        egui::StrokeKind::Inside,
+    );
+    ui.painter().set(bg, egui::Shape::Vec(vec![shadow.as_shape(rect, radius).into(), pane, line]));
+    glass_edge(ui.painter(), rect, R_CARD);
+    ui.add_space(ROW_GAP);
+    out.inner
+}
+
+/// A version or a mod loader on a small monospace tag: what a result works with. A loader is in its own colour.
+pub(super) fn mono_tag(ui: &mut Ui, text: &str, color: Color32) -> Response {
+    let galley = ui.painter().layout_no_wrap(text.to_string(), super::fonts::mono(11.5), color);
+    let (rect, resp) = ui.allocate_exact_size(vec2(mono_tag_width(ui, text), 20.0), Sense::hover());
+    if ui.is_rect_visible(rect) {
+        let neutral = color == c_muted();
+        let (fill, line) = if neutral {
+            (c_field(), c_border())
+        } else {
+            (color.gamma_multiply(if is_dark() { 0.13 } else { 0.10 }), color.gamma_multiply(0.22))
+        };
+        ui.painter().rect(rect, CornerRadius::same(R_TAG), fill, Stroke::new(1.0, line), egui::StrokeKind::Inside);
+        ui.painter().galley(rect.center() - galley.size() / 2.0, galley, color);
+    }
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, text));
+    resp
+}
+
+fn mono_tag_width(ui: &Ui, text: &str) -> f32 {
+    ui.painter().layout_no_wrap(text.to_string(), super::fonts::mono(11.5), Color32::PLACEHOLDER).size().x + 14.0
+}
+
+/// A category on a soft round chip in a quiet colour of its own.
+pub(super) fn soft_chip(ui: &mut Ui, text: &str, hue: Color32) -> Response {
+    let galley = ui.painter().layout_no_wrap(text.to_string(), super::fonts::medium(11.5), hue);
+    let (rect, resp) = ui.allocate_exact_size(vec2(soft_chip_width(ui, text), 20.0), Sense::hover());
+    if ui.is_rect_visible(rect) {
+        let fill = hue.gamma_multiply(if is_dark() { 0.14 } else { 0.11 });
+        ui.painter().rect_filled(rect, CornerRadius::same(10), fill);
+        ui.painter().galley(rect.center() - galley.size() / 2.0, galley, hue);
+    }
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, text));
+    resp
+}
+
+fn soft_chip_width(ui: &Ui, text: &str) -> f32 {
+    ui.painter().layout_no_wrap(text.to_string(), super::fonts::medium(11.5), Color32::PLACEHOLDER).size().x + 18.0
+}
+
+/// The quiet colour of a category's chip: one of a few soft hues, always the same for the same word, so a list reads
+/// as tidy rather than as a rainbow.
+pub(super) fn chip_hue(name: &str) -> Color32 {
+    const DARK: [(u8, u8, u8); 5] =
+        [(0xF3, 0xB5, 0x6B), (0xB9, 0x9B, 0xEA), (0x7F, 0xB8, 0xE6), (0xE8, 0x93, 0xB0), (0x78, 0xCF, 0xB8)];
+    const LIGHT: [(u8, u8, u8); 5] =
+        [(0x9A, 0x5A, 0x06), (0x6B, 0x46, 0xB0), (0x1F, 0x63, 0x9E), (0xA8, 0x36, 0x62), (0x0F, 0x76, 0x62)];
+    let h = name.to_ascii_lowercase().bytes().fold(5u32, |a, b| a.wrapping_mul(33) ^ b as u32);
+    let (r, g, b) = if is_dark() { DARK } else { LIGHT }[(h % 5) as usize];
+    Color32::from_rgb(r, g, b)
+}
+
+/// One mark on the badge line of a result.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) enum Badge {
+    /// Where it comes from, or a warning: a tinted pill.
+    Pill(String, Color32),
+    /// A version or a loader it works with: a monospace tag.
+    Compat(String, Color32),
+    /// A category: a soft chip.
+    Chip(String),
+    /// Its figure (downloads), in a narrow row where it has no room at the right.
+    Figure(String),
+}
+
+impl Badge {
+    fn width(&self, ui: &Ui) -> f32 {
+        match self {
+            Badge::Pill(t, _) => {
+                ui.painter().layout_no_wrap(t.clone(), super::fonts::medium(FS_META), Color32::PLACEHOLDER).size().x
+                    + 14.0
+            }
+            Badge::Compat(t, _) | Badge::Figure(t) => mono_tag_width(ui, t) + if self.is_figure() { 12.0 } else { 0.0 },
+            Badge::Chip(t) => soft_chip_width(ui, t),
+        }
+    }
+
+    fn is_figure(&self) -> bool {
+        matches!(self, Badge::Figure(_))
+    }
+}
+
+/// How many of `widths` fit one after another in `room` with `gap` between them: the badges of a line are shown only
+/// while they fit whole, never cut.
+pub(super) fn badges_that_fit(widths: &[f32], room: f32, gap: f32) -> usize {
+    let mut used = 0.0;
+    for (i, w) in widths.iter().enumerate() {
+        let need = if i == 0 { *w } else { used + gap + w };
+        if need > room {
+            return i;
+        }
+        used = need;
+    }
+    widths.len()
+}
+
+/// The badge line of a result: pills, the versions and loaders it works with, its categories, as many as fit in
+/// `room` points.
+pub(super) fn badge_line(ui: &mut Ui, badges: &[Badge], room: f32) {
+    if badges.is_empty() {
+        return;
+    }
+    let widths: Vec<f32> = badges.iter().map(|b| b.width(ui)).collect();
+    let n = badges_that_fit(&widths, room, 5.0);
+    ui.scope(|ui| {
+        ui.spacing_mut().interact_size.y = 20.0;
+        ui.spacing_mut().item_spacing.x = 5.0;
+        ui.horizontal(|ui| {
+            for b in &badges[..n] {
+                match b {
+                    Badge::Pill(t, c) => {
+                        pill(ui, t, *c);
+                    }
+                    Badge::Compat(t, c) => {
+                        mono_tag(ui, t, *c);
+                    }
+                    Badge::Chip(t) => {
+                        soft_chip(ui, t, chip_hue(t));
+                    }
+                    Badge::Figure(t) => {
+                        let (rect, _) =
+                            ui.allocate_exact_size(vec2(mono_tag_width(ui, t) + 12.0, 20.0), Sense::hover());
+                        icons::paint(
+                            ui.painter(),
+                            Icon::Download,
+                            rect.left_center() + vec2(6.0, 0.0),
+                            11.0,
+                            c_faint(),
+                        );
+                        let g = ui.painter().layout_no_wrap(t.clone(), super::fonts::mono(11.5), c_muted());
+                        ui.painter().galley(
+                            egui::pos2(rect.left() + 17.0, rect.center().y - g.size().y / 2.0),
+                            g,
+                            c_muted(),
+                        );
+                    }
+                }
+            }
+        });
+    });
+}
+
+/// How wide a figure's box is: room for "999.9M".
+const FIGURE_W: f32 = 92.0;
+
+/// A result's figure (its downloads) on a small outlined box with the download arrow, in the monospace face.
+pub(super) fn figure_box(ui: &mut Ui, figure: &str, unit: &str) -> Response {
+    let galley = ui.painter().layout_no_wrap(figure.to_string(), super::fonts::mono(12.5), c_text());
+    // one width for the boxes of a list (wider only for a figure that needs it), so they line up in a column
+    let (rect, resp) = ui.allocate_exact_size(vec2((galley.size().x + 40.0).max(FIGURE_W), 30.0), Sense::hover());
+    if ui.is_rect_visible(rect) {
+        let p = ui.painter();
+        p.rect(rect, CornerRadius::same(R_CONTROL), c_field(), Stroke::new(1.0, c_border()), egui::StrokeKind::Inside);
+        icons::paint(p, Icon::Download, egui::pos2(rect.left() + 15.0, rect.center().y), 12.0, c_faint());
+        let at = egui::pos2(rect.right() - 12.0 - galley.size().x, rect.center().y - galley.size().y / 2.0);
+        p.galley(at, galley, c_text());
+    }
+    let text = format!("{figure} {unit}");
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, &text));
+    resp.on_hover_text(text)
+}
+
+/// The main button of a result: the brand gradient, the same size on every row.
+pub(super) fn install_button(ui: &mut Ui, text: &str) -> Response {
+    primary_sized(ui, text, ACTION_BUTTON, true)
+}
+
+/// "Update" on a result that is installed in an older version: the warm secondary colour, the size of Install.
+pub(super) fn update_button(ui: &mut Ui) -> Response {
+    let text = "Update";
+    let (rect, resp) = ui.allocate_exact_size(ACTION_BUTTON, Sense::click());
+    if ui.is_rect_visible(rect) {
+        let t = motion::hover(ui, resp.id, resp.hovered());
+        let ink = c_secondary();
+        let fill = motion::mix(c_secondary_soft(), ink.gamma_multiply(0.28), t);
+        ui.painter().rect(
             rect,
-            radius,
-            Stroke::new(1.0, c_border().gamma_multiply(t)),
+            CornerRadius::same(R_CONTROL),
+            fill,
+            Stroke::new(1.0, ink.gamma_multiply(0.45 + 0.3 * t)),
             egui::StrokeKind::Inside,
         );
-        let edge = egui::Shape::hline(
-            rect.left() + R_CARD as f32..=rect.right() - R_CARD as f32,
-            rect.top() + 0.5,
-            Stroke::new(1.0, c_glass_edge().gamma_multiply(t)),
-        );
-        ui.painter().set(bg, egui::Shape::Vec(vec![shadow.as_shape(rect, radius).into(), pane, line, edge]));
+        let galley = ui.painter().layout_no_wrap(text.into(), super::fonts::semibold(FS_BODY), ink);
+        ui.painter().galley(rect.center() - galley.size() / 2.0, galley, ink);
     }
-    if t < 1.0 {
-        ui.painter().hline(
-            rect.x_range().shrink(14.0),
-            rect.bottom(),
-            Stroke::new(1.0, c_rule().gamma_multiply(1.0 - t)),
+    focus_ring(ui, &resp, rect, R_CONTROL);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, text));
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+/// "Installing" with a small spinner, the size of Install, while a result's install runs.
+pub(super) fn installing_mark(ui: &mut Ui) -> Response {
+    let text = "Installing";
+    let (rect, resp) = ui.allocate_exact_size(ACTION_BUTTON, Sense::hover());
+    if ui.is_rect_visible(rect) {
+        ui.painter().rect(
+            rect,
+            CornerRadius::same(R_CONTROL),
+            c_field(),
+            Stroke::new(1.0, c_border()),
+            egui::StrokeKind::Inside,
         );
+        let galley = ui.painter().layout_no_wrap(text.into(), super::fonts::medium(FS_META), c_muted());
+        let left = rect.center().x - (galley.size().x + 20.0) / 2.0;
+        let spin = egui::Rect::from_center_size(egui::pos2(left + 7.0, rect.center().y), vec2(16.0, 16.0));
+        ui.scope_builder(egui::UiBuilder::new().max_rect(spin), |ui| spinner_sized(ui, 16.0));
+        ui.painter().galley(egui::pos2(left + 20.0, rect.center().y - galley.size().y / 2.0), galley, c_muted());
     }
-    out.inner
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, text));
+    resp
 }
 
 /// How wide the text of a row may be: what is left of the row after the icon and the actions (as wide as they were
@@ -653,31 +951,9 @@ pub(super) fn row_actions(ui: &mut Ui, key: &str, add: impl FnOnce(&mut Ui)) {
 /// a list line up whatever they say. `key` tells the rows apart.
 pub(super) fn action_cell(ui: &mut Ui, key: &str, add: impl FnOnce(&mut Ui)) {
     let id = ui.scope_id().with(("action-cell", key));
-    ui.allocate_ui_with_layout(vec2(ACTION_W, 32.0), Layout::left_to_right(Align::Center), |ui| {
+    ui.allocate_ui_with_layout(vec2(ACTION_W, ACTION_BUTTON.y), Layout::left_to_right(Align::Center), |ui| {
         end_aligned(ui, id, add);
     });
-}
-
-/// A figure with its unit under it, right-aligned in a fixed column so a list of them lines up.
-/// The figure has a small arrow in front of it (down, into the computer) in the faint ink of the unit.
-pub(super) fn stat_column(ui: &mut Ui, figure: &str, unit: &str) {
-    let (rect, resp) = ui.allocate_exact_size(vec2(78.0, 36.0), Sense::hover());
-    if ui.is_rect_visible(rect) {
-        let p = ui.painter();
-        let fig = p.layout_no_wrap(figure.to_string(), super::fonts::semibold(FS_BODY), c_text());
-        let sub = p.layout_no_wrap(unit.to_string(), FontId::proportional(FS_META), c_faint());
-        let fig_at = egui::pos2(rect.right() - fig.size().x, rect.top() + 1.0);
-        // the arrow: a stem, a head and the tray it falls into
-        let (cx, cy) = (fig_at.x - 9.0, fig_at.y + fig.size().y / 2.0);
-        let stroke = Stroke::new(1.4, c_faint());
-        p.line_segment([egui::pos2(cx, cy - 5.0), egui::pos2(cx, cy + 2.0)], stroke);
-        p.line_segment([egui::pos2(cx - 3.0, cy - 1.0), egui::pos2(cx, cy + 2.0)], stroke);
-        p.line_segment([egui::pos2(cx + 3.0, cy - 1.0), egui::pos2(cx, cy + 2.0)], stroke);
-        p.line_segment([egui::pos2(cx - 4.0, cy + 5.0), egui::pos2(cx + 4.0, cy + 5.0)], stroke);
-        p.galley(fig_at, fig.clone(), c_text());
-        p.galley(egui::pos2(rect.right() - sub.size().x, fig_at.y + fig.size().y + 1.0), sub, c_faint());
-    }
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, format!("{figure} {unit}")));
 }
 
 /// A check mark drawn with two lines, centred on `c`.
@@ -699,22 +975,23 @@ pub(super) fn check_label(ui: &mut Ui, text: &str) {
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, text));
 }
 
-/// "Installed" with a check in front, on a pill in the brand's soft tint: a state, not an action.
+/// "Installed" with a check in front, in the brand's soft tint and the size of Install: a state, not an action.
 pub(super) fn installed_mark(ui: &mut Ui) {
     let text = "Installed";
-    let fg = c_accent();
-    let galley = ui.painter().layout_no_wrap(text.into(), super::fonts::medium(FS_META), fg);
-    let (rect, resp) = ui.allocate_exact_size(vec2(32.0 + galley.size().x, 26.0), Sense::hover());
+    let fg = if is_dark() { c_accent() } else { c_accent_hover() };
+    let galley = ui.painter().layout_no_wrap(text.into(), super::fonts::medium(FS_META + 1.0), fg);
+    let (rect, resp) = ui.allocate_exact_size(ACTION_BUTTON, Sense::hover());
     if ui.is_rect_visible(rect) {
         ui.painter().rect(
             rect,
-            CornerRadius::same(13),
+            CornerRadius::same(R_CONTROL),
             c_accent_soft(),
-            Stroke::new(1.0, fg.gamma_multiply(0.25)),
+            Stroke::new(1.0, fg.gamma_multiply(0.3)),
             egui::StrokeKind::Inside,
         );
-        paint_check(ui.painter(), egui::pos2(rect.left() + 13.0, rect.center().y), 11.0, fg);
-        ui.painter().galley(egui::pos2(rect.left() + 22.0, rect.center().y - galley.size().y / 2.0), galley, fg);
+        let left = rect.center().x - (galley.size().x + 17.0) / 2.0;
+        paint_check(ui.painter(), egui::pos2(left + 6.0, rect.center().y), 11.0, fg);
+        ui.painter().galley(egui::pos2(left + 17.0, rect.center().y - galley.size().y / 2.0), galley, fg);
     }
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, text));
 }
@@ -1107,7 +1384,7 @@ const SEARCH_MIN: f32 = 220.0;
 /// The widest a search field gets with every control on its line; wider only spreads a few words over an empty field.
 const SEARCH_MAX: f32 = 640.0;
 
-/// The bar above a list. The search field (`search` is given its width) comes first with `lead` (the instance and
+/// The row of controls above a list. The search field (`search` is given its width) comes first with `lead` (the instance and
 /// the order) beside it, then `rest` (the filters). On a wide window all of it shares one line; when the rest
 /// doesn't fit, it goes on the lines under the field; and when not even `lead` fits beside a field of a useful
 /// width, the field goes across the bar with everything else wrapping under it. What the closures share (`state`)
@@ -1122,54 +1399,48 @@ pub(super) fn search_bar<S>(
 ) {
     let id = egui::Id::unique(("search-bar", key));
     let (lead_id, rest_id) = (id.with("lead"), id.with("rest"));
-    let out = egui::Frame::new()
-        .fill(c_card())
-        .stroke(Stroke::new(1.0, c_border()))
-        .corner_radius(CornerRadius::same(R_CARD))
-        .inner_margin(egui::Margin::same(8))
-        .shadow(card_shadow())
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            let avail = ui.available_width();
-            let gap = ui.spacing().item_spacing.x;
-            let lead_w = remembered_width(ui, lead_id, 0.0);
-            let rest_w = remembered_width(ui, rest_id, 0.0);
-            let one_line = avail - lead_w - rest_w - 2.0 * gap;
-            let beside = avail - lead_w - gap;
-            if one_line >= SEARCH_MIN {
-                ui.horizontal(|ui| {
-                    search(ui, state, one_line.min(SEARCH_MAX));
-                    let w = ui.horizontal(|ui| lead(ui, state)).response.rect.width();
-                    remember_width(ui, lead_id, w);
-                    let w = ui.horizontal(|ui| rest(ui, state)).response.rect.width();
-                    remember_width(ui, rest_id, w);
-                });
-            } else if beside >= SEARCH_MIN {
-                ui.horizontal(|ui| {
-                    search(ui, state, beside);
-                    let w = ui.horizontal(|ui| lead(ui, state)).response.rect.width();
-                    remember_width(ui, lead_id, w);
-                });
-                ui.add_space(2.0);
-                // what the rest takes on its own line, or all of it once it wraps, so it stays there until the
-                // window is wide enough for it beside the field
-                let w = ui
-                    .horizontal_wrapped(|ui| {
-                        rest(ui, state);
-                        ui.min_rect().width()
-                    })
-                    .inner;
+    // the controls sit straight on the page, under the kinds: the results below are the cards
+    egui::Frame::new().show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        let avail = ui.available_width();
+        let gap = ui.spacing().item_spacing.x;
+        let lead_w = remembered_width(ui, lead_id, 0.0);
+        let rest_w = remembered_width(ui, rest_id, 0.0);
+        let one_line = avail - lead_w - rest_w - 2.0 * gap;
+        let beside = avail - lead_w - gap;
+        if one_line >= SEARCH_MIN {
+            ui.horizontal(|ui| {
+                search(ui, state, one_line.min(SEARCH_MAX));
+                let w = ui.horizontal(|ui| lead(ui, state)).response.rect.width();
+                remember_width(ui, lead_id, w);
+                let w = ui.horizontal(|ui| rest(ui, state)).response.rect.width();
                 remember_width(ui, rest_id, w);
-            } else {
-                search(ui, state, avail);
-                ui.add_space(2.0);
-                ui.horizontal_wrapped(|ui| {
-                    lead(ui, state);
+            });
+        } else if beside >= SEARCH_MIN {
+            ui.horizontal(|ui| {
+                search(ui, state, beside);
+                let w = ui.horizontal(|ui| lead(ui, state)).response.rect.width();
+                remember_width(ui, lead_id, w);
+            });
+            ui.add_space(2.0);
+            // what the rest takes on its own line, or all of it once it wraps, so it stays there until the
+            // window is wide enough for it beside the field
+            let w = ui
+                .horizontal_wrapped(|ui| {
                     rest(ui, state);
-                });
-            }
-        });
-    glass_edge(ui.painter(), out.response.rect, R_CARD);
+                    ui.min_rect().width()
+                })
+                .inner;
+            remember_width(ui, rest_id, w);
+        } else {
+            search(ui, state, avail);
+            ui.add_space(2.0);
+            ui.horizontal_wrapped(|ui| {
+                lead(ui, state);
+                rest(ui, state);
+            });
+        }
+    });
 }
 
 /// The two small pictures at the end of a list's count line that switch between rows and cards, the one in use
@@ -1224,7 +1495,7 @@ pub(super) const CARD_MIN_W: f32 = 300.0;
 pub(super) const CARD_GAP: f32 = 12.0;
 
 /// How tall a card of results is: all the cards of a line are the same, so the line reads as one.
-pub(super) const CARD_H: f32 = 178.0;
+pub(super) const CARD_H: f32 = 196.0;
 
 /// Whether a list `width` wide has room for cards side by side.
 pub(super) fn cards_fit(width: f32) -> bool {
@@ -1238,13 +1509,29 @@ pub(super) struct ResultView<'a> {
     pub title: &'a str,
     pub by: Option<&'a str>,
     pub summary: &'a str,
-    /// Where it comes from or something to know about it, on pills in front of the last line.
+    /// Where it comes from or something to know about it, on pills at the front of the badge line.
     pub pills: Vec<(String, Color32)>,
-    /// The rest of the last line: loaders, categories, figures.
-    pub parts: Vec<(String, Color32)>,
-    /// The figure that tells results apart (its number and its unit): at the right end of a wide row, at the foot of
-    /// a card, on the last line of a narrow row.
+    /// What it works with (Minecraft versions, loaders), on monospace tags after the pills.
+    pub compat: Vec<(String, Color32)>,
+    /// Its categories, on soft chips at the end of the badge line.
+    pub tags: Vec<String>,
+    /// The figure that tells results apart (its number and its unit): in a box at the right end of a wide row, at the
+    /// foot of a card, on the badge line of a narrow row.
     pub figure: Option<(String, &'static str)>,
+}
+
+impl ResultView<'_> {
+    /// The badge line: pills, then what it works with, then its categories; with `figure`, the figure first.
+    fn badges(&self, figure: bool) -> Vec<Badge> {
+        let mut out = Vec::new();
+        if let Some((f, _)) = self.figure.as_ref().filter(|_| figure) {
+            out.push(Badge::Figure(f.clone()));
+        }
+        out.extend(self.pills.iter().map(|(t, c)| Badge::Pill(t.clone(), *c)));
+        out.extend(self.compat.iter().map(|(t, c)| Badge::Compat(t.clone(), *c)));
+        out.extend(self.tags.iter().map(|t| Badge::Chip(t.clone())));
+        out
+    }
 }
 
 /// The parts of a result its page draws itself.
@@ -1263,40 +1550,36 @@ pub(super) fn result_item(ui: &mut Ui, width: Option<f32>, view: &ResultView, mu
     }
 }
 
+/// A result as a row of the list: the picture, the name with who made it, a line about it and the badge line, and at
+/// the right the figure in its box and the button. A narrow row puts the figure on the badge line instead.
 fn result_row(ui: &mut Ui, view: &ResultView, fill: &mut dyn FnMut(&mut Ui, Slot)) {
     let key = view.key.as_str();
     row_frame(ui, |ui| {
-        let wide = ui.available_width() >= 560.0;
+        let wide = ui.available_width() >= 600.0;
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 14.0;
             fill(ui, Slot::Icon(ICON));
             let text_w = row_text_width(ui, key);
             ui.vertical(|ui| {
                 ui.set_max_width(text_w);
-                ui.spacing_mut().item_spacing.y = 2.0;
+                ui.spacing_mut().item_spacing.y = 4.0;
                 name_line(ui, view.title, view.by);
                 if !view.summary.is_empty() {
                     summary_line(ui, view.summary);
                 }
-                let mut parts = Vec::new();
-                if let Some((figure, unit)) = view.figure.as_ref().filter(|_| !wide) {
-                    parts.push((format!("{figure} {unit}"), c_faint()));
-                }
-                parts.extend(view.parts.iter().cloned());
-                pill_meta_line(ui, &view.pills, &parts);
+                badge_line(ui, &view.badges(!wide), text_w);
             });
             row_actions(ui, key, |ui| {
                 action_cell(ui, key, |ui| fill(ui, Slot::Actions));
                 if let Some((figure, unit)) = view.figure.as_ref().filter(|_| wide) {
-                    ui.add_space(8.0);
-                    stat_column(ui, figure, unit);
+                    figure_box(ui, figure, unit);
                 }
             });
         });
     });
 }
 
-/// A result as a card: the picture and the name with who made it, two lines about it, the tags, and at the foot the
+/// A result as a card: the picture and the name with who made it, two lines about it, the badges, and at the foot the
 /// figure with the actions at the right. It rises a little under the pointer.
 fn result_card(ui: &mut Ui, width: f32, view: &ResultView, fill: &mut dyn FnMut(&mut Ui, Slot)) {
     let id = egui::Id::unique(("result-card", view.key.as_str()));
@@ -1309,10 +1592,10 @@ fn result_card(ui: &mut Ui, width: f32, view: &ResultView, fill: &mut dyn FnMut(
             ui.spacing_mut().item_spacing.y = 2.0;
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 12.0;
-                fill(ui, Slot::Icon(40.0));
+                fill(ui, Slot::Icon(48.0));
                 ui.vertical(|ui| {
                     ui.spacing_mut().item_spacing.y = 2.0;
-                    let name = RichText::new(view.title).font(super::fonts::semibold(FS_BODY)).color(c_text());
+                    let name = RichText::new(view.title).font(super::fonts::semibold(FS_BODY + 1.0)).color(c_text());
                     ui.add(egui::Label::new(name).truncate());
                     if let Some(by) = view.by.filter(|b| !b.is_empty()) {
                         let by = RichText::new(format!("by {by}")).size(FS_META).color(c_muted());
@@ -1320,7 +1603,7 @@ fn result_card(ui: &mut Ui, width: f32, view: &ResultView, fill: &mut dyn FnMut(
                     }
                 });
             });
-            ui.add_space(6.0);
+            ui.add_space(8.0);
             if !view.summary.is_empty() {
                 // two lines at most, ended with an ellipsis when there is more
                 let mut job = LayoutJob::single_section(view.summary.to_string(), run(c_muted(), FS_BODY - 1.0));
@@ -1333,28 +1616,18 @@ fn result_card(ui: &mut Ui, width: f32, view: &ResultView, fill: &mut dyn FnMut(
                 let galley = ui.painter().layout_job(job);
                 ui.add(egui::Label::new(galley));
             }
-            // the foot first, from the bottom up: the figure and the actions, then the tags over them
+            // the foot first, from the bottom up: the figure and the actions, then the badges over them
             ui.with_layout(Layout::bottom_up(Align::Min), |ui| {
                 ui.horizontal(|ui| {
                     if let Some((figure, unit)) = &view.figure {
-                        let mut job = LayoutJob::default();
-                        job.append(
-                            figure,
-                            0.0,
-                            TextFormat {
-                                font_id: super::fonts::semibold(FS_BODY),
-                                color: c_text(),
-                                ..Default::default()
-                            },
-                        );
-                        job.append(unit, 5.0, run(c_faint(), FS_META));
-                        ui.add(egui::Label::new(job));
+                        figure_box(ui, figure, unit);
                     }
                     end_aligned(ui, id.with("actions"), |ui| fill(ui, Slot::Actions));
                 });
-                ui.add_space(6.0);
+                ui.add_space(8.0);
+                let room = ui.available_width();
                 ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                    pill_meta_line(ui, &view.pills, &view.parts);
+                    badge_line(ui, &view.badges(false), room);
                 });
             });
         });
@@ -1847,18 +2120,162 @@ impl App {
         self.mods_cache = None;
     }
 
-    /// Discover lists Modrinth's and CurseForge's modpacks; the other sources have pages of their own.
+    /// Discover lists Modrinth's and CurseForge's modpacks; the other sources are a pill away, and named here too.
     pub(super) fn other_modpack_sources(&mut self, ui: &mut Ui) {
         ui.horizontal_wrapped(|ui| {
             small_muted(ui, "More modpacks:");
-            if text_link(ui, "ATLauncher and Technic", FS_META).clicked() {
-                self.page = Page::Packs;
+            if text_link(ui, "ATLauncher", FS_META).clicked() {
+                self.open_source(Source::Atl);
             }
-            small_muted(ui, "and");
+            small_muted(ui, "\u{00B7}");
+            if text_link(ui, "Technic", FS_META).clicked() {
+                self.open_source(Source::Technic);
+            }
+            small_muted(ui, "\u{00B7}");
             if text_link(ui, "Feed The Beast", FS_META).clicked() {
-                self.page = Page::Ftb;
+                self.open_source(Source::Ftb);
             }
         });
+    }
+
+    /// The source the open Explore page shows.
+    pub(super) fn explore_source(&mut self) -> Source {
+        self.cf_init();
+        match self.page {
+            Page::Packs if self.packs.tab == super::packs::PackTab::Technic => Source::Technic,
+            Page::Packs => Source::Atl,
+            Page::Ftb => Source::Ftb,
+            _ => self.mod_site(),
+        }
+    }
+
+    /// The site mods are looked for on (the last of Modrinth, CurseForge and both that was open).
+    fn mod_site(&self) -> Source {
+        if self.discover.both {
+            Source::Everywhere
+        } else if self.cf.active {
+            Source::CurseForge
+        } else {
+            Source::Modrinth
+        }
+    }
+
+    /// Open a source of Explore. Between Modrinth and CurseForge the kind shown stays the same where both have it.
+    pub(super) fn open_source(&mut self, source: Source) {
+        self.cf_init();
+        let from = self.explore_source();
+        match source {
+            Source::Modrinth | Source::CurseForge | Source::Everywhere => {
+                let was_cf = from == Source::CurseForge && self.page == Page::Discover;
+                // the kind follows from one site's tabs to the other's
+                if was_cf && source != Source::CurseForge {
+                    if let Some(kind) = super::discover_both::kind_for(self.cf_section()) {
+                        if kind != self.discover.kind {
+                            self.discover.kind = kind;
+                            self.discover.kind_changed();
+                            self.discover.searched = false;
+                        }
+                    }
+                } else if source == Source::CurseForge && !was_cf {
+                    self.cf_show_section(super::discover_both::section_for(self.discover.kind));
+                }
+                self.cf.active = source == Source::CurseForge;
+                let both = source == Source::Everywhere;
+                if both && !self.discover.both {
+                    // a fresh search on every site; Modrinth's rows stay until the new ones arrive
+                    self.discover.searched = false;
+                }
+                self.discover.both = both;
+                if both {
+                    self.discover.remerge();
+                }
+                if source != Source::Modrinth {
+                    // the launcher's configuration may have changed since it was last read
+                    self.cf.enabled = None;
+                }
+                self.go(Page::Discover);
+            }
+            Source::Atl | Source::Technic => self.packs_show(source == Source::Technic),
+            Source::Ftb => self.go(Page::Ftb),
+        }
+    }
+
+    /// The head of every Explore page: the title with the sources beside it (they go under it in a narrow window),
+    /// and under them the kinds the source has as tabs, with "Add from GitHub" at the right end. `kinds` are the tabs'
+    /// names and `kind` the open one. Returns the kind that was picked, when another was.
+    pub(super) fn explore_header(&mut self, ui: &mut Ui, kinds: &[&str], kind: usize) -> Option<usize> {
+        let current = self.explore_source();
+        let mut picked: Option<Source> = None;
+        let sources = |ui: &mut Ui, picked: &mut Option<Source>| {
+            // the sites with mods of every kind, then the modpack platforms, as one control with a gap between
+            for (i, group) in [&Source::ALL[..3], &Source::ALL[3..]].into_iter().enumerate() {
+                if i > 0 {
+                    let (r, _) = ui.allocate_exact_size(vec2(9.0, 32.0), Sense::hover());
+                    ui.painter().vline(r.center().x, r.y_range().shrink(8.0), Stroke::new(1.0, c_border()));
+                }
+                let items: Vec<(&str, Option<Color32>)> = group.iter().map(|s| (s.label(), Some(s.color()))).collect();
+                let on = group.iter().position(|s| *s == current).unwrap_or(usize::MAX);
+                if let Some(n) = pill_tabs(ui, &items, on) {
+                    *picked = Some(group[n]);
+                }
+            }
+        };
+        let all: Vec<(&str, Option<Color32>)> = Source::ALL.iter().map(|s| (s.label(), Some(s.color()))).collect();
+        let sources_w = pill_tabs_width(ui, &all) + 9.0 + 2.0 * ui.spacing().item_spacing.x;
+        let title_w =
+            ui.painter().layout_no_wrap("Discover".into(), super::fonts::semibold(FS_TITLE), c_text()).size().x;
+        if title_w + HEADER_GAP + sources_w <= ui.available_width() {
+            ui.horizontal(|ui| {
+                heading(ui, "Discover");
+                end_aligned(ui, egui::Id::unique("explore-sources"), |ui| sources(ui, &mut picked));
+            });
+        } else {
+            heading(ui, "Discover");
+            ui.add_space(6.0);
+            ui.horizontal_wrapped(|ui| sources(ui, &mut picked));
+        }
+        if picked.is_some() {
+            // the rest of this frame would still draw the source that was open
+            ui.ctx().request_discard("another source of Explore");
+        }
+        ui.add_space(12.0);
+        let mut chosen = None;
+        let mut github = false;
+        tab_bar(ui, |ui| {
+            for (i, k) in kinds.iter().enumerate() {
+                let r = tab(ui, k, i == kind);
+                if r.clicked() && i != kind {
+                    chosen = Some(i);
+                }
+            }
+            // a mod that is only on GitHub is added from the link to its page
+            let label = if ui.available_width() >= 170.0 { "Add from GitHub" } else { "GitHub" };
+            end_aligned(ui, egui::Id::unique("explore-github"), |ui| {
+                github = ghost_icon(ui, Icon::Plus, label)
+                    .on_hover_text("For a mod that is only on GitHub: paste the link to its page")
+                    .clicked();
+            });
+        });
+        ui.add_space(16.0);
+        if let Some(s) = picked {
+            self.open_source(s);
+        }
+        if github {
+            self.gh_open();
+        }
+        chosen
+    }
+
+    /// A kind picked on a page of modpacks only (ATLauncher, Technic, FTB): the site mods were last looked for on,
+    /// open on that kind.
+    pub(super) fn explore_kind_elsewhere(&mut self, kind: Kind) {
+        if kind != self.discover.kind {
+            self.discover.kind = kind;
+            self.discover.kind_changed();
+        }
+        self.discover.searched = false;
+        self.cf_show_section(super::discover_both::section_for(kind));
+        self.open_source(self.mod_site());
     }
 
     /// Keeps the list of Modrinth projects in the target instance current, reading it again only when the
@@ -1886,25 +2303,20 @@ impl App {
         if self.cf_discover_ui(ui) {
             return;
         }
+        let labels: Vec<&str> = Kind::ALL.iter().map(|k| k.label()).collect();
+        let open = Kind::ALL.iter().position(|k| *k == self.discover.kind).unwrap_or(0);
+        let picked = self.explore_header(ui, &labels, open);
+        if self.page != Page::Discover || self.cf.active {
+            // another source was picked in the head: it is drawn from the next frame
+            return;
+        }
         // the first visit shows the most downloaded right away
         let mut search = !self.discover.searched;
-        ui.horizontal(|ui| {
-            heading(ui, "Discover");
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                self.cf_platform_switch(ui);
-            });
-        });
-        ui.add_space(8.0);
-        tab_bar(ui, |ui| {
-            for k in Kind::ALL {
-                if tab(ui, k.label(), self.discover.kind == k).clicked() && self.discover.kind != k {
-                    self.discover.kind = k;
-                    self.discover.kind_changed();
-                    search = true;
-                }
-            }
-        });
-        ui.add_space(14.0);
+        if let Some(i) = picked {
+            self.discover.kind = Kind::ALL[i];
+            self.discover.kind_changed();
+            search = true;
+        }
         let page_w = ui.available_width();
         let hint = format!("Search {}", self.discover.kind.label().to_lowercase());
         let mut st = (&mut *self, &mut search);
@@ -1925,9 +2337,11 @@ impl App {
                 if this.discover.kind != Kind::Modpack {
                     this.target_dropdown(ui, search);
                 }
+            },
+            |ui, (this, search)| {
+                this.discover_filter_controls(ui, search);
                 this.discover_sort_dropdown(ui, search);
             },
-            |ui, (this, search)| this.discover_filter_controls(ui, search),
         );
         if self.discover_chip_row(ui) {
             search = true;
@@ -2009,6 +2423,7 @@ impl App {
         let mut install: Option<(Hit, Option<String>)> = None;
         let mut install_data: Option<(Hit, String, Vec<String>)> = None;
         let mut more = false;
+        let matched = self.discover_instance().cloned();
         ScrollArea::vertical().id_salt(("discover-list", self.discover.list_gen)).auto_shrink(false).show(ui, |ui| {
             result_list(ui, cards, &hits, |ui, hit, width| {
                 let is_installed = kind != Kind::Modpack
@@ -2016,14 +2431,14 @@ impl App {
                     && installed.as_ref().is_some_and(|(_, _, ids)| ids.contains(&hit.project_id));
                 let busy = self.discover.installing.contains(&hit.project_id)
                     && self.tasks.iter().any(|t| t.label == format!("Installing {}", hit.title));
-                let tags = hit.categories.iter().map(String::as_str);
                 let view = ResultView {
                     key: format!("mr:{}", hit.project_id),
                     title: &hit.title,
                     by: Some(&hit.author),
                     summary: &hit.description,
                     pills: Vec::new(),
-                    parts: if kind == Kind::DataPack { data_pack_tags(tags, 3) } else { tag_parts(tags, 3) },
+                    compat: hit_compat(hit, matched.as_ref(), kind),
+                    tags: hit_tags(hit, kind, 3),
                     figure: Some((human_count(hit.downloads), "downloads")),
                 };
                 result_item(ui, width, &view, |ui, slot| {
@@ -2032,7 +2447,7 @@ impl App {
                         return;
                     }
                     if busy {
-                        spinner(ui);
+                        installing_mark(ui);
                         return;
                     }
                     if kind == Kind::DataPack {
@@ -2044,15 +2459,15 @@ impl App {
                     } else if is_installed {
                         installed_mark(ui);
                     } else if kind == Kind::Modpack {
-                        if secondary(ui, "Install").clicked() {
+                        if install_button(ui, "Install").clicked() {
                             install = Some((hit.clone(), None));
                         }
                     } else if let Some(t) = &target {
-                        if secondary(ui, "Install").clicked() {
+                        if install_button(ui, "Install").clicked() {
                             install = Some((hit.clone(), Some(t.clone())));
                         }
                     } else {
-                        let r = secondary(ui, "Install");
+                        let r = install_button(ui, "Install");
                         egui::Popup::menu(&r).show(|ui| {
                             ui.set_min_width(180.0);
                             if self.instances.is_empty() {
@@ -2182,15 +2597,75 @@ mod tests {
     }
 
     #[test]
-    fn loaders_come_first_in_their_own_colours() {
-        let names = ["optimization", "quilt", "utility", "fabric", "decoration", "library"];
-        let parts = tag_parts(names.into_iter(), 2);
-        let words: Vec<&str> = parts.iter().map(|(w, _)| w.as_str()).collect();
-        // both loaders, then two categories in the order given
-        assert_eq!(words, ["Quilt", "Fabric", "optimization", "utility"]);
-        assert_eq!(parts[0].1, loader_color("Quilt"));
-        assert_eq!(parts[1].1, loader_color("Fabric"));
-        assert_eq!(parts[2].1, c_faint());
+    fn loaders_become_tags_and_the_rest_chips() {
+        let names = ["optimization", "quilt", "game-mechanics", "fabric", "decoration", "library"];
+        let (compat, tags) = split_tags(names.into_iter(), 2);
+        let loaders: Vec<&str> = compat.iter().map(|(w, _)| w.as_str()).collect();
+        // both loaders in their colours, then two categories as words, in the order given
+        assert_eq!(loaders, ["Quilt", "Fabric"]);
+        assert_eq!(compat[0].1, loader_color("Quilt"));
+        assert_eq!(tags, ["Optimization", "Game mechanics"]);
+        // a data pack has no loaders and is not tagged "datapack"
+        assert_eq!(data_pack_tags(["datapack", "fabric", "worldgen"].into_iter(), 3), ["Worldgen"]);
+        assert_eq!(category_words("Kitchen Sink"), "Kitchen Sink");
+    }
+
+    #[test]
+    fn the_newest_release_is_found_among_snapshots_and_old_versions() {
+        let v = ["1.9", "1.21.4", "1.21.10", "24w33a", "1.21-pre1", "b1.7.3", "1.20.1"];
+        assert_eq!(newest_release(v.into_iter()).as_deref(), Some("1.21.10"));
+        assert_eq!(newest_release(["26.1", "1.21.11"].into_iter()).as_deref(), Some("26.1"));
+        assert_eq!(newest_release(["24w33a"].into_iter()), None);
+        assert_eq!(newest_release(std::iter::empty()), None);
+    }
+
+    #[test]
+    fn badges_show_only_while_they_fit_whole() {
+        assert_eq!(badges_that_fit(&[40.0, 50.0, 60.0], 200.0, 5.0), 3);
+        // 40 + 5 + 50 = 95 fits; another 5 + 60 does not
+        assert_eq!(badges_that_fit(&[40.0, 50.0, 60.0], 150.0, 5.0), 2);
+        assert_eq!(badges_that_fit(&[40.0, 50.0], 95.0, 5.0), 2);
+        assert_eq!(badges_that_fit(&[120.0], 100.0, 5.0), 0);
+        assert_eq!(badges_that_fit(&[], 100.0, 5.0), 0);
+    }
+
+    #[test]
+    fn a_rows_badges_go_in_order_with_the_figure_first_when_it_is_on_the_line() {
+        let view = ResultView {
+            key: "x".into(),
+            title: "Sodium",
+            by: None,
+            summary: "",
+            pills: vec![("Modrinth".into(), Color32::GREEN)],
+            compat: vec![("1.21.1".into(), Color32::GRAY)],
+            tags: vec!["Optimization".into()],
+            figure: Some(("2.1M".into(), "downloads")),
+        };
+        assert_eq!(
+            view.badges(true),
+            [
+                Badge::Figure("2.1M".into()),
+                Badge::Pill("Modrinth".into(), Color32::GREEN),
+                Badge::Compat("1.21.1".into(), Color32::GRAY),
+                Badge::Chip("Optimization".into()),
+            ]
+        );
+        assert_eq!(view.badges(false).len(), 3);
+    }
+
+    #[test]
+    fn a_kind_keeps_its_place_between_the_two_sites() {
+        for kind in Kind::ALL {
+            assert_eq!(
+                super::super::discover_both::kind_for(super::super::discover_both::section_for(kind)),
+                Some(kind)
+            );
+        }
+        // Modrinth has no worlds: the kind shown stays as it was
+        assert_eq!(super::super::discover_both::kind_for(crate::curseforge::api::Section::Worlds), None);
+        // the sources are one row: the sites first, then the modpack platforms
+        assert_eq!(Source::ALL.len(), 6);
+        assert_eq!(Source::ALL[2], Source::Everywhere);
     }
 
     #[test]

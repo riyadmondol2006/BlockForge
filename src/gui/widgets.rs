@@ -1088,6 +1088,69 @@ pub fn danger_sized(ui: &mut Ui, icon: Icon, text: &str, min: Vec2) -> Response 
     )
 }
 
+/// [`primary_enabled`] at least `min` big: the Install of a result, which lines up with the ones above and below it,
+/// or the button across a panel.
+pub fn primary_sized(ui: &mut Ui, text: &str, min: Vec2, enabled: bool) -> Response {
+    brand_button(ui, text, None, min, enabled, false)
+}
+
+/// How wide one of [`pill_tabs`]'s pills is.
+fn pill_tab_width(ui: &Ui, text: &str, dot: bool) -> f32 {
+    let w = ui.painter().layout_no_wrap(text.to_string(), super::fonts::medium(13.0), Color32::PLACEHOLDER).size().x;
+    w + 28.0 + if dot { 14.0 } else { 0.0 }
+}
+
+/// How wide a row of [`pill_tabs`] is, gaps included, so a head can tell whether it fits beside its title.
+pub fn pill_tabs_width(ui: &Ui, items: &[(&str, Option<Color32>)]) -> f32 {
+    let gaps = items.len().saturating_sub(1) as f32 * PILL_TAB_GAP;
+    items.iter().map(|(t, dot)| pill_tab_width(ui, t, dot.is_some())).sum::<f32>() + gaps
+}
+
+/// The room between two of [`pill_tabs`]'s pills.
+pub const PILL_TAB_GAP: f32 = 6.0;
+
+/// A row of pills that switch between the pages of a place (or the sources of Explore): each a rounded outline with,
+/// if it has one, a small dot of its own colour; the open one in the brand's soft tint with a brand outline and ink.
+/// Laid out in the row the caller gives (wrap it in `horizontal_wrapped` to let it wrap). Returns the one pressed.
+pub fn pill_tabs(ui: &mut Ui, items: &[(&str, Option<Color32>)], selected: usize) -> Option<usize> {
+    let mut pressed = None;
+    ui.scope(|ui| {
+        ui.spacing_mut().item_spacing.x = PILL_TAB_GAP;
+        for (i, (text, dot)) in items.iter().enumerate() {
+            let (rect, resp) =
+                ui.allocate_exact_size(vec2(pill_tab_width(ui, text, dot.is_some()), 32.0), Sense::click());
+            let on = i == selected;
+            if ui.is_rect_visible(rect) {
+                let t = motion::hover(ui, resp.id, resp.hovered());
+                let s = motion::toward(ui.ctx(), resp.id.with("on"), on, motion::FAST);
+                let ink = if is_dark() { c_accent() } else { c_accent_hover() };
+                let bg = motion::mix(motion::mix(c_field(), c_field_hover(), t), c_accent_soft(), s);
+                let line = motion::mix(
+                    motion::mix(c_border(), c_control().gamma_multiply(0.8), t),
+                    ink.gamma_multiply(0.7),
+                    s,
+                );
+                let p = ui.painter();
+                p.rect(rect, CornerRadius::same(R_CONTROL), bg, Stroke::new(1.0, line), egui::StrokeKind::Inside);
+                let fg = motion::mix(motion::mix(c_muted(), c_text(), t), ink, s);
+                let galley = p.layout_no_wrap(text.to_string(), super::fonts::medium(13.0), fg);
+                let mut x = rect.left() + 14.0;
+                if let Some(c) = dot {
+                    p.circle_filled(egui::pos2(x + 3.5, rect.center().y), 3.5, *c);
+                    x += 14.0;
+                }
+                p.galley(egui::pos2(x, rect.center().y - galley.size().y / 2.0), galley, fg);
+            }
+            focus_ring(ui, &resp, rect, R_CONTROL);
+            resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Tab, true, on, *text));
+            if resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() && !on {
+                pressed = Some(i);
+            }
+        }
+    });
+    pressed
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

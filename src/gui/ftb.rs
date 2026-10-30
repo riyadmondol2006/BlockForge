@@ -315,8 +315,16 @@ impl App {
             self.ftb_check_updates();
         }
         let mut search = false;
-        heading(ui, "FTB");
-        ui.add_space(14.0);
+        // FTB has modpacks only; another kind opens the site mods were last looked for on
+        let labels: Vec<&str> = crate::modrinth::Kind::ALL.iter().map(|k| k.label()).collect();
+        let modpacks = crate::modrinth::Kind::ALL.iter().position(|k| *k == crate::modrinth::Kind::Modpack);
+        if let Some(i) = self.explore_header(ui, &labels, modpacks.unwrap_or(0)) {
+            self.explore_kind_elsewhere(crate::modrinth::Kind::ALL[i]);
+            return;
+        }
+        if self.page != super::Page::Ftb {
+            return;
+        }
         let page_w = ui.available_width();
         search_bar(
             ui,
@@ -420,7 +428,12 @@ impl App {
                     by: None,
                     summary: pack.synopsis.as_deref().unwrap_or_default(),
                     pills: Vec::new(),
-                    parts: pack.tags.iter().take(4).map(|t| (t.name.clone(), c_faint())).collect(),
+                    compat: pack
+                        .versions_newest_first()
+                        .first()
+                        .map(|v| vec![(super::packs::pack_version(&v.label()), c_muted())])
+                        .unwrap_or_default(),
+                    tags: pack.tags.iter().take(4).map(|t| t.name.clone()).collect(),
                     figure: Some((human_count(pack.installs.max(0) as u64), "installs")),
                 };
                 result_item(ui, width, &view, |ui, slot| match slot {
@@ -428,7 +441,8 @@ impl App {
                         self.result_icon(ui, pack.square_art().map(|a| a.url.as_str()), &pack.name, size);
                     }
                     Slot::Actions => {
-                        if secondary(ui, "Details").clicked() {
+                        // the version and the name are chosen in the pack's window
+                        if install_button(ui, "Install").on_hover_text("Choose the version, then install").clicked() {
                             open = Some(pack.clone());
                         }
                     }
@@ -583,12 +597,16 @@ impl App {
                         ui.add(egui::Label::new(RichText::new(s.clone()).color(c_muted())).wrap());
                         ui.add_space(4.0);
                     }
-                    // the tags as small quiet pills
-                    if !sel.pack.tags.is_empty() {
+                    // the newest version and the tags, as on the pack's row
+                    if !sel.pack.tags.is_empty() || !sel.pack.versions.is_empty() {
                         ui.horizontal_wrapped(|ui| {
                             ui.spacing_mut().item_spacing = egui::vec2(5.0, 5.0);
+                            if let Some(v) = sel.pack.versions_newest_first().first() {
+                                mono_tag(ui, &super::packs::pack_version(&v.label()), c_muted())
+                                    .on_hover_text("The newest version");
+                            }
                             for t in sel.pack.tags.iter().take(8) {
-                                pill(ui, &t.name, c_muted());
+                                soft_chip(ui, &t.name, chip_hue(&t.name));
                             }
                         });
                         ui.add_space(10.0);

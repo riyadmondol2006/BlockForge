@@ -5,7 +5,8 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 
 use egui::{Color32, CornerRadius, RichText, ScrollArea, Stroke, Ui, vec2};
 
-use super::discover::filter_label;
+use super::covers::{CoverSpec, CoverTheme};
+use super::icons::Icon;
 use super::motion;
 use super::theme::*;
 use super::widgets::*;
@@ -16,6 +17,8 @@ use crate::loaders::{self, Loader};
 use crate::mods::performance;
 
 pub struct CreateState {
+    /// The step of the form that is open: the version, the loader, or the rest.
+    pub step: Step,
     pub name: String,
     pub mc: String,
     /// Which kinds of Minecraft version the grid shows.
@@ -46,14 +49,73 @@ pub struct CreateState {
     picked_rx: Receiver<Option<(PathBuf, Option<egui::ColorImage>)>>,
 }
 
-/// The widest the form gets.
-const FORM_W: f32 = 720.0;
-/// The panel beside the form on a wide window: what is about to be made, and the button that makes it.
-const SIDE_W: f32 = 300.0;
-/// The room between the form and that panel.
-const SIDE_GAP: f32 = 20.0;
-/// The narrowest the form gets with the panel beside it; on a narrower page the panel becomes a bar under the form.
-const FORM_MIN_BESIDE: f32 = 640.0;
+/// The panel beside the steps on a wide page: the instance as it will be, and the button that goes on.
+const SIDE_W: f32 = 296.0;
+/// The room between the steps and that panel.
+const SIDE_GAP: f32 = 22.0;
+/// The narrowest the steps get with the panel beside them; on a narrower page the panel becomes a bar under them.
+const STEPS_MIN_BESIDE: f32 = 440.0;
+/// The smallest a version's tile gets before the grid has one column fewer.
+const TILE_MIN_W: f32 = 104.0;
+/// How tall a version's tile is.
+const TILE_H: f32 = 58.0;
+/// About how tall the summary panel is without its cover: the cover is as tall as what is left of the page.
+const PANEL_BESIDES_COVER: f32 = 330.0;
+
+/// The three steps of making an instance. They can be gone back to at any time, and forward to once a version is
+/// picked.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Step {
+    Version,
+    Loader,
+    Configure,
+}
+
+impl Step {
+    pub const ALL: [Step; 3] = [Step::Version, Step::Loader, Step::Configure];
+
+    fn label(self) -> &'static str {
+        match self {
+            Step::Version => "Choose version",
+            Step::Loader => "Choose loader",
+            Step::Configure => "Configure",
+        }
+    }
+
+    fn index(self) -> usize {
+        match self {
+            Step::Version => 0,
+            Step::Loader => 1,
+            Step::Configure => 2,
+        }
+    }
+
+    /// The step after this one, if there is one.
+    fn next(self) -> Option<Step> {
+        Step::ALL.get(self.index() + 1).copied()
+    }
+
+    /// The step before this one, if there is one.
+    fn back(self) -> Option<Step> {
+        self.index().checked_sub(1).map(|i| Step::ALL[i])
+    }
+
+    /// Whether the step can be opened: the first always, the others once a Minecraft version is picked (the loaders
+    /// and their versions depend on it).
+    fn reachable(self, mc: &str) -> bool {
+        self == Step::Version || !mc.is_empty()
+    }
+}
+
+/// The folder a new instance called `name` gets: its name as a folder name, with a number after it when an instance
+/// already has that folder (as the instance is made, see `paths::claim_unique_folder`).
+fn preview_folder(name: &str, taken: &[&str]) -> String {
+    let base = crate::paths::folder_name(name);
+    (1u32..)
+        .map(|n| if n == 1 { base.clone() } else { format!("{base}{n}") })
+        .find(|f| !taken.iter().any(|t| t == f))
+        .unwrap_or(base)
+}
 
 /// The kinds of Minecraft version the manifest lists, as the version picker sorts them.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -188,12 +250,14 @@ struct Extras {
     memory_mb: u32,
     /// A picture file, made into the instance's `instance.png`.
     picture: Option<PathBuf>,
+    /// The kind of landscape on the instance's cover.
+    cover: CoverTheme,
 }
 
 impl Extras {
     /// Whether anything has to be written into the instance's file.
     fn changes_file(&self) -> bool {
-        !self.description.trim().is_empty() || self.memory != Memory::Follow
+        !self.description.trim().is_empty() || self.memory != Memory::Follow || self.cover != CoverTheme::Auto
     }
 
     /// Write the description and the memory into an instance's launcher block, as its settings page would.
@@ -213,23 +277,6 @@ impl Extras {
                 l.maximum_memory = Some(self.memory_mb);
             }
         }
-    }
-
-    /// The options that were changed, in a few words for the head of "More options" ("6 GB memory, picture").
-    fn brief(&self) -> String {
-        let mut parts = Vec::new();
-        match self.memory {
-            Memory::Follow => {}
-            Memory::Automatic => parts.push("automatic memory".to_string()),
-            Memory::Custom => parts.push(format!("{} memory", super::settings::memory_text(self.memory_mb))),
-        }
-        if self.picture.is_some() {
-            parts.push("picture".into());
-        }
-        if !self.description.trim().is_empty() {
-            parts.push("description".into());
-        }
-        parts.join(", ")
     }
 }
 
@@ -258,23 +305,34 @@ fn version_tooltip(v: &ManifestVersion, latest_release: bool, latest_snapshot: b
     text
 }
 
-/// One version in the grid of versions: plain until pointed at (the fill fades in), the chosen one in the brand tint
-/// with a brand outline. The latest release (and snapshot) has a small dot of the brand colour in its corner.
-fn version_cell(ui: &mut Ui, text: &str, selected: bool, latest: bool, width: f32) -> egui::Response {
-    let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, 28.0), egui::Sense::click());
-    let t = motion::hover(ui, resp.id, resp.hovered());
-    let s = motion::toward(ui.ctx(), resp.id.with("on"), selected, motion::FAST);
-    let bg = motion::mix(c_hover().gamma_multiply(t), c_accent_soft(), s);
-    let line = c_accent().gamma_multiply(0.7 * s);
-    ui.painter().rect(rect, CornerRadius::same(R_TAG + 2), bg, Stroke::new(1.0, line), egui::StrokeKind::Inside);
-    let font = if selected { super::fonts::semibold(FS_BODY) } else { egui::FontId::proportional(FS_BODY) };
-    let fg = motion::mix(c_text(), accent_ink(), s);
-    ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, text, font, fg);
-    if latest {
-        ui.painter().circle_filled(rect.right_top() + vec2(-7.0, 7.0), 3.0, accent_ink());
+/// One version in the grid: a tile with the version in the monospace face, plain until pointed at (the fill fades
+/// in); the chosen one in the brand tint with a brand outline and a check in its corner. The latest release (or
+/// snapshot) says so under the version.
+fn version_tile(ui: &mut Ui, text: &str, selected: bool, note: Option<&str>, width: f32) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, TILE_H), egui::Sense::click());
+    if ui.is_rect_visible(rect) {
+        let t = motion::hover(ui, resp.id, resp.hovered());
+        let s = motion::toward(ui.ctx(), resp.id.with("on"), selected, motion::FAST);
+        let p = ui.painter();
+        let bg = motion::mix(motion::mix(c_field(), c_field_hover(), t), c_accent_soft(), s);
+        let line = motion::mix(motion::mix(c_border(), c_control().gamma_multiply(0.7), t), c_accent(), s);
+        p.rect(rect, CornerRadius::same(R_CONTROL + 2), bg, Stroke::new(1.0 + 0.5 * s, line), egui::StrokeKind::Inside);
+        let fg = motion::mix(c_text(), accent_ink(), s);
+        let galley = p.layout_no_wrap(text.to_string(), super::fonts::mono(15.0), fg);
+        let y = if note.is_some() { rect.center().y - 8.0 } else { rect.center().y };
+        p.galley(egui::pos2(rect.center().x - galley.size().x / 2.0, y - galley.size().y / 2.0), galley, fg);
+        if let Some(note) = note {
+            let g = p.layout_no_wrap(note.to_string(), egui::FontId::proportional(FS_META - 1.0), accent_ink());
+            p.galley(egui::pos2(rect.center().x - g.size().x / 2.0, rect.center().y + 6.0), g, accent_ink());
+        }
+        if s > 0.0 {
+            let dot = egui::Rect::from_center_size(rect.left_top() + vec2(13.0, 13.0), vec2(14.0, 14.0));
+            motion::gradient_rect(p, dot, 7, c_accent().gamma_multiply(s), c_accent2().gamma_multiply(s));
+            super::discover::paint_check(p, dot.center(), 8.0, c_on_accent().gamma_multiply(s));
+        }
     }
-    focus_ring(ui, &resp, rect, R_TAG + 2);
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, text));
+    focus_ring(ui, &resp, rect, R_CONTROL + 2);
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::RadioButton, true, selected, text));
     resp.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
@@ -297,100 +355,190 @@ fn soft_tag(ui: &mut Ui, text: &str) {
     ui.painter().galley(rect.center() - galley.size() / 2.0, galley, accent_ink());
 }
 
-/// The head of a step of the form: its number in a small badge of the brand gradient, the title, and what was picked
-/// so far after it.
-fn step_head(ui: &mut Ui, n: usize, title: &str, picked: Option<&str>) {
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 10.0;
-        step_title(ui, n, title);
-        if let Some(p) = picked.filter(|p| !p.is_empty()) {
-            ui.label(RichText::new(p).color(c_muted()));
+/// The steps at the top of the page: a numbered circle and the name of each, joined by lines. The open step is in
+/// the brand gradient, the ones before it have a check; a step that can be opened is pressed to go to it. Returns the
+/// step pressed.
+fn stepper(ui: &mut Ui, open: Step, mc: &str) -> Option<Step> {
+    let mut picked = None;
+    let width = ui.available_width();
+    let (row, _) = ui.allocate_exact_size(vec2(width, 32.0), egui::Sense::hover());
+    let labels: Vec<std::sync::Arc<egui::Galley>> = Step::ALL
+        .iter()
+        .map(|s| ui.painter().layout_no_wrap(s.label().to_string(), super::fonts::medium(FS_BODY), c_text()))
+        .collect();
+    // the names are left out when they don't fit, the numbers stay
+    let named = labels.iter().map(|g| g.size().x + 40.0).sum::<f32>() + 2.0 * 40.0 <= width;
+    let items_w: f32 = labels.iter().map(|g| 28.0 + if named { g.size().x + 10.0 } else { 0.0 }).sum();
+    let line_w = ((width - items_w) / 2.0 - 24.0).max(12.0);
+    let mut x = row.left();
+    for (i, step) in Step::ALL.into_iter().enumerate() {
+        let item_w = 28.0 + if named { labels[i].size().x + 10.0 } else { 0.0 };
+        let rect = egui::Rect::from_min_size(egui::pos2(x, row.top()), vec2(item_w, 32.0));
+        let reachable = step.reachable(mc);
+        let resp = ui.interact(rect, ui.scope_id().with(("create-step", i)), egui::Sense::click());
+        let done = step.index() < open.index();
+        let on = step == open;
+        let t = motion::hover(ui, resp.id, reachable && !on && resp.hovered());
+        let p = ui.painter();
+        let circle = egui::Rect::from_center_size(egui::pos2(x + 14.0, row.center().y), vec2(28.0, 28.0));
+        if on {
+            motion::brand_rect(p, circle, 14);
+            p.text(
+                circle.center(),
+                egui::Align2::CENTER_CENTER,
+                (i + 1).to_string(),
+                super::fonts::semibold(FS_BODY),
+                c_on_accent(),
+            );
+        } else if done {
+            p.rect(
+                circle,
+                CornerRadius::same(14),
+                c_accent_soft(),
+                Stroke::new(1.0, accent_ink().gamma_multiply(0.5 + 0.5 * t)),
+                egui::StrokeKind::Inside,
+            );
+            super::discover::paint_check(p, circle.center(), 12.0, accent_ink());
+        } else {
+            p.rect(
+                circle,
+                CornerRadius::same(14),
+                c_field(),
+                Stroke::new(1.0, motion::mix(c_border(), c_control(), t)),
+                egui::StrokeKind::Inside,
+            );
+            let ink = if reachable { c_muted() } else { c_faint() };
+            p.text(
+                circle.center(),
+                egui::Align2::CENTER_CENTER,
+                (i + 1).to_string(),
+                super::fonts::medium(FS_BODY),
+                ink,
+            );
         }
-    });
-    ui.add_space(4.0);
+        if named {
+            let ink = if on {
+                c_text()
+            } else if reachable {
+                motion::mix(c_muted(), c_text(), t)
+            } else {
+                c_faint()
+            };
+            let g = ui.painter().layout_no_wrap(step.label().to_string(), super::fonts::medium(FS_BODY), ink);
+            ui.painter().galley(egui::pos2(circle.right() + 10.0, row.center().y - g.size().y / 2.0), g, ink);
+        }
+        x += item_w;
+        if i + 1 < Step::ALL.len() {
+            // the line to the next step is in the brand colour once this step is behind
+            let color = if done { accent_ink().gamma_multiply(0.6) } else { c_border() };
+            ui.painter().hline(x + 12.0..=x + 12.0 + line_w, row.center().y, Stroke::new(1.5, color));
+            x += line_w + 24.0;
+        }
+        focus_ring(ui, &resp, rect.expand(2.0), 16);
+        let label = format!("Step {}: {}", i + 1, step.label());
+        resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Tab, reachable, on, &label));
+        if reachable && !on {
+            let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+            if resp.clicked() {
+                picked = Some(step);
+            }
+        }
+    }
+    picked
 }
 
-/// The badge and the title of a step, in a row that is already there.
-fn step_title(ui: &mut Ui, n: usize, title: &str) {
-    let (badge, _) = ui.allocate_exact_size(vec2(24.0, 24.0), egui::Sense::hover());
-    motion::brand_rect(ui.painter(), badge, 12);
-    ui.painter().text(
-        badge.center(),
-        egui::Align2::CENTER_CENTER,
-        n.to_string(),
-        super::fonts::semibold(FS_META),
-        c_on_accent(),
-    );
-    ui.label(RichText::new(title).size(FS_SECTION).semibold());
-}
+/// The loaders in the order the list shows them: none first, then the ones most mods are made for.
+const LOADER_ORDER: [Loader; 5] = [Loader::Vanilla, Loader::Fabric, Loader::Forge, Loader::NeoForge, Loader::Quilt];
 
-/// A few words under a loader's name on its card.
+/// A line under a loader's name in the list.
 fn loader_blurb(l: Loader) -> &'static str {
     match l {
-        Loader::Vanilla => "No mods",
-        Loader::Fabric => "Light, fast",
-        Loader::Quilt => "Fabric-like",
-        Loader::Forge => "The classic",
-        Loader::NeoForge => "Newer Forge",
+        Loader::Vanilla => "No mods: the game as it comes",
+        Loader::Fabric => "Lightweight and fast",
+        Loader::Quilt => "Alternative mod loader, runs most Fabric mods",
+        Loader::Forge => "Wide mod support",
+        Loader::NeoForge => "Modern fork of Forge",
     }
 }
 
-/// The narrowest a loader card gets before the row wraps.
-const LOADER_CARD_W: f32 = 118.0;
-/// One mod loader to choose, as a card: its letter in a tile of its colour, the name and a few words. It lifts a
-/// little under the pointer; the chosen one takes the brand tint and outline and a check in the corner.
-fn loader_card(ui: &mut Ui, l: Loader, selected: bool, width: f32) -> egui::Response {
-    let (rect, resp) = ui.allocate_exact_size(vec2(width, 60.0), egui::Sense::click());
+/// One mod loader in the list, chosen the way a radio button is: a ring that fills with a check in the brand
+/// gradient, the loader's letter on a tile of its colour, its name and a line about it. The chosen one sits on the
+/// brand's soft tint.
+fn loader_row(ui: &mut Ui, l: Loader, selected: bool) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 56.0), egui::Sense::click());
     if ui.is_rect_visible(rect) {
         let t = motion::hover(ui, resp.id, resp.hovered());
         let s = motion::toward(ui.ctx(), resp.id.with("on"), selected, motion::MEDIUM);
-        let card = rect.translate(vec2(0.0, -1.5 * t));
         let p = ui.painter();
-        if t > 0.0 {
-            let shadow = egui::Shadow {
-                offset: [0, 6],
-                blur: 18,
-                spread: 0,
-                color: Color32::from_black_alpha(((if is_dark() { 110.0 } else { 26.0 }) * t) as u8),
-            };
-            p.add(shadow.as_shape(card, CornerRadius::same(R_CARD)));
-        }
-        let fill = motion::mix(motion::mix(c_field(), c_field_hover(), t), c_accent_soft(), s);
-        let line = motion::mix(motion::mix(c_border(), c_control().gamma_multiply(0.8), t), c_accent(), s);
-        p.rect(card, CornerRadius::same(R_CARD), fill, Stroke::new(1.0 + 0.5 * s, line), egui::StrokeKind::Inside);
-        glass_edge(p, card, R_CARD);
-        // the loader's letter on a pale tint of its colour, like the loader tags elsewhere; on the chosen one the tile
-        // turns into a check in the brand gradient
-        let hue = loader_color(l.label());
-        let tile = egui::Rect::from_min_size(egui::pos2(card.left() + 12.0, card.center().y - 12.0), vec2(24.0, 24.0));
-        let r = CornerRadius::same(R_TAG + 1);
-        p.rect_filled(tile, r, hue.gamma_multiply(0.18 * (1.0 - s)));
-        let letter = l.label().chars().next().unwrap_or('?').to_string();
-        p.text(
-            tile.center(),
-            egui::Align2::CENTER_CENTER,
-            letter,
-            super::fonts::semibold(FS_BODY),
-            hue.gamma_multiply(1.0 - s),
+        let fill = motion::mix(motion::mix(c_card(), c_hover(), t), c_accent_soft(), s);
+        let line =
+            motion::mix(motion::mix(c_border(), c_control().gamma_multiply(0.7), t), c_accent().gamma_multiply(0.8), s);
+        p.rect(rect, CornerRadius::same(R_CARD), fill, Stroke::new(1.0, line), egui::StrokeKind::Inside);
+        // the ring at the left, a check in the brand gradient when chosen
+        let ring = egui::Rect::from_center_size(egui::pos2(rect.left() + 26.0, rect.center().y), vec2(20.0, 20.0));
+        p.rect_stroke(
+            ring,
+            CornerRadius::same(10),
+            Stroke::new(1.5, c_control().gamma_multiply(1.0 - s)),
+            egui::StrokeKind::Inside,
         );
         if s > 0.0 {
-            motion::gradient_rect(p, tile, R_TAG + 1, c_accent().gamma_multiply(s), c_accent2().gamma_multiply(s));
-            super::discover::paint_check(p, tile.center(), 12.0, c_on_accent().gamma_multiply(s));
+            motion::gradient_rect(p, ring, 10, c_accent().gamma_multiply(s), c_accent2().gamma_multiply(s));
+            super::discover::paint_check(p, ring.center(), 10.0, c_on_accent().gamma_multiply(s));
         }
-        // the name and the few words beside the tile
-        let left = tile.right() + 8.0;
-        let room = card.right() - left - 8.0;
-        let name = p.layout(l.label().to_string(), super::fonts::semibold(FS_BODY), c_text(), room);
-        p.galley(egui::pos2(left, card.center().y - 17.0), name, c_text());
+        let hue = loader_color(l.label());
+        let tile = egui::Rect::from_center_size(egui::pos2(ring.right() + 28.0, rect.center().y), vec2(30.0, 30.0));
+        p.rect_filled(tile, CornerRadius::same(R_CONTROL), hue.gamma_multiply(0.18));
+        let letter = l.label().chars().next().unwrap_or('?').to_string();
+        p.text(tile.center(), egui::Align2::CENTER_CENTER, letter, super::fonts::semibold(FS_BODY + 1.0), hue);
+        let left = tile.right() + 12.0;
+        let room = (rect.right() - left - 12.0).max(40.0);
+        let name = p.layout_no_wrap(l.label().to_string(), super::fonts::semibold(FS_BODY), c_text());
+        p.galley(egui::pos2(left, rect.center().y - 17.0), name, c_text());
         let mut job = egui::text::LayoutJob::single_section(
             loader_blurb(l).to_string(),
             egui::TextFormat::simple(egui::FontId::proportional(FS_META), c_muted()),
         );
         job.wrap = egui::text::TextWrapping::truncate_at_width(room);
-        p.galley(egui::pos2(left, card.center().y + 2.0), p.layout_job(job), c_muted());
+        p.galley(egui::pos2(left, rect.center().y + 2.0), p.layout_job(job), c_muted());
     }
     focus_ring(ui, &resp, rect, R_CARD);
     resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::RadioButton, true, selected, l.label()));
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+/// A cover theme to pick: a small picture of the landscape it draws, its name under it, the chosen one outlined in
+/// the brand colour.
+fn theme_tile(ui: &mut Ui, tex: &egui::TextureHandle, label: &str, selected: bool, width: f32) -> egui::Response {
+    let pic_h = (width * 0.5).round();
+    let (rect, resp) = ui.allocate_exact_size(vec2(width, pic_h + 22.0), egui::Sense::click());
+    if ui.is_rect_visible(rect) {
+        let t = motion::hover(ui, resp.id, resp.hovered());
+        let s = motion::toward(ui.ctx(), resp.id.with("on"), selected, motion::FAST);
+        let pic = egui::Rect::from_min_size(rect.min, vec2(width, pic_h));
+        let size = tex.size();
+        egui::Image::from_texture((tex.id(), vec2(size[0] as f32, size[1] as f32)))
+            .uv(super::workbench::cover_uv((size[0], size[1]), pic.size()))
+            .corner_radius(R_CONTROL)
+            .paint_at(ui, pic);
+        let line = motion::mix(motion::mix(c_border(), c_control(), t), c_accent(), s);
+        ui.painter().rect_stroke(
+            pic,
+            CornerRadius::same(R_CONTROL),
+            Stroke::new(1.0 + s, line),
+            egui::StrokeKind::Inside,
+        );
+        let ink = motion::mix(motion::mix(c_muted(), c_text(), t), accent_ink(), s);
+        let mut job = egui::text::LayoutJob::single_section(
+            label.to_string(),
+            egui::TextFormat::simple(super::fonts::medium(FS_META), ink),
+        );
+        job.wrap = egui::text::TextWrapping::truncate_at_width(width);
+        let g = ui.painter().layout_job(job);
+        ui.painter().galley(egui::pos2(rect.center().x - g.size().x / 2.0, pic.bottom() + 5.0), g, ink);
+    }
+    focus_ring(ui, &resp, rect, R_CONTROL);
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::RadioButton, true, selected, label));
     resp.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
@@ -450,6 +598,7 @@ impl Default for CreateState {
     fn default() -> Self {
         let (picked_tx, picked_rx) = channel();
         CreateState {
+            step: Step::Version,
             name: String::new(),
             mc: String::new(),
             kinds: KindFilter::default(),
@@ -558,54 +707,72 @@ impl App {
     pub(super) fn create_ui(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
         self.poll_create_picture(&ctx);
-        heading(ui, "New instance");
-        muted(ui, "Pick a Minecraft version and a mod loader, then BlockForge downloads it all.");
-        ui.add_space(14.0);
+        let mut import = false;
+        PageHeader::new("New instance")
+            .subtitle("Pick a Minecraft version and a mod loader, then BlockForge downloads it all.")
+            .show(ui, |ui| {
+                // a modpack file or another launcher's instance is made into an instance from the import window
+                import = super::discover::ghost_icon(ui, Icon::Download, "Import a modpack or instance")
+                    .on_hover_text("A modpack file (.mrpack, .zip) or an instance from another launcher")
+                    .clicked();
+            });
+        if import {
+            self.open_import(None);
+        }
+        if let Some(step) = stepper(ui, self.create.step, &self.create.mc) {
+            self.create.step = step;
+        }
+        ui.add_space(18.0);
         let mut changed_version = false;
-        let mut create = false;
+        let mut act = None;
         let mut enter = false;
         let area = ui.available_rect_before_wrap();
-        // a wide page has the summary and the button in a panel beside the form; a narrower one has them in a bar
-        // under it. Either way the button stays in view: only the form scrolls
-        let beside = area.width() >= FORM_MIN_BESIDE + SIDE_GAP + SIDE_W;
+        // a wide page has the summary and the button in a panel beside the steps; a narrower one has them in a bar
+        // under them. Either way the button stays in view: only the step scrolls
+        let beside = area.width() >= STEPS_MIN_BESIDE + SIDE_GAP + SIDE_W;
         if beside {
-            // a form reads best in a column of its own, not stretched across a wide window. Its scroll bar sits in
-            // the gap before the panel
-            let form_w = (area.width() - SIDE_W - SIDE_GAP).min(FORM_W);
-            let form_rect = egui::Rect::from_min_size(area.min, vec2(form_w + 14.0, area.height()));
-            let side_rect = egui::Rect::from_min_size(
-                egui::pos2(area.left() + form_w + SIDE_GAP, area.top()),
-                vec2(SIDE_W, area.height()),
-            );
-            ui.scope_builder(egui::UiBuilder::new().max_rect(form_rect), |ui| {
-                ScrollArea::vertical().id_salt("create-form").auto_shrink([false, false]).show(ui, |ui| {
-                    ui.set_max_width(form_w);
-                    self.create_form(ui, area.height(), &mut changed_version, &mut enter);
-                });
+            let steps_w = area.width() - SIDE_W - SIDE_GAP;
+            let steps_rect = egui::Rect::from_min_size(area.min, vec2(steps_w, area.height()));
+            let side_rect =
+                egui::Rect::from_min_size(egui::pos2(area.right() - SIDE_W, area.top()), vec2(SIDE_W, area.height()));
+            ui.scope_builder(egui::UiBuilder::new().max_rect(steps_rect), |ui| {
+                // nothing of the step may reach under the panel
+                ui.shrink_clip_rect(steps_rect);
+                self.create_step(ui, steps_rect.width(), &mut changed_version, &mut enter);
             });
             ui.scope_builder(egui::UiBuilder::new().max_rect(side_rect), |ui| {
-                create = self.create_side_panel(ui);
+                act = self.create_side_panel(ui, side_rect.height());
             });
             ui.advance_cursor_after_rect(area);
         } else {
-            let form_h = (ui.available_height() - 84.0).max(160.0);
-            ScrollArea::vertical().id_salt("create-form").auto_shrink([false, true]).max_height(form_h).show(
-                ui,
-                |ui| {
-                    ui.set_max_width((ui.available_width() - 14.0).min(FORM_W));
-                    self.create_form(ui, form_h, &mut changed_version, &mut enter);
-                },
-            );
-            create = self.create_bottom_bar(ui);
+            let steps_h = (area.height() - 92.0).max(160.0);
+            let steps_rect = egui::Rect::from_min_size(area.min, vec2(area.width(), steps_h));
+            ui.scope_builder(egui::UiBuilder::new().max_rect(steps_rect), |ui| {
+                self.create_step(ui, steps_rect.width(), &mut changed_version, &mut enter);
+            });
+            ui.advance_cursor_after_rect(steps_rect);
+            ui.add_space(10.0);
+            act = self.create_bottom_bar(ui);
         }
         if changed_version {
             self.request_loader_versions();
         }
         if enter && self.create_blocker().is_none() {
-            create = true;
+            act = Some(Go::Create);
         }
-        if create {
-            self.start_create();
+        match act {
+            Some(Go::Next) => {
+                if let Some(next) = self.create.step.next() {
+                    self.create.step = next;
+                }
+            }
+            Some(Go::Back) => {
+                if let Some(back) = self.create.step.back() {
+                    self.create.step = back;
+                }
+            }
+            Some(Go::Create) => self.start_create(),
+            None => {}
         }
     }
 
@@ -630,85 +797,68 @@ impl App {
         }
     }
 
-    /// The steps of the form, one card each. `room` is the height the form has, so the grid of versions can show more
-    /// of them on a tall window.
-    fn create_form(&mut self, ui: &mut Ui, room: f32, changed_version: &mut bool, enter: &mut bool) {
-        ui.spacing_mut().item_spacing.y = 8.0;
-
-        // name
-        card(ui, |ui| {
-            // the name is one line: its field sits beside the step's title
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 10.0;
-                step_title(ui, 1, "Name");
-                ui.add_space(14.0);
-                let c = &mut self.create;
-                // the hint is the name the instance gets when the field is left empty
-                let hint = if c.mc.is_empty() { "My instance".to_string() } else { default_name(&c.mc, c.loader) };
-                let name_field = ui.add_sized(
-                    [ui.available_width().min(420.0), 32.0],
-                    egui::TextEdit::singleline(&mut c.name)
-                        .hint_text(RichText::new(hint).color(c_faint()))
-                        .margin(egui::Margin::symmetric(10, 7))
-                        .background_color(c_field()),
-                );
-                // Enter in the name makes the instance, like the Create button
-                *enter = name_field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-            });
-        });
-
-        // Minecraft version
-        ui.add_space(6.0);
-        card(ui, |ui| self.version_step(ui, room, changed_version));
-
-        // loader
-        ui.add_space(6.0);
-        card(ui, |ui| self.loader_step(ui, changed_version));
-
-        // the options that can be left as they are
-        ui.add_space(6.0);
-        self.more_options(ui);
-        ui.add_space(8.0);
+    /// What keeps the open step's Continue greyed out, said beside it; `None` when it can be pressed. The last step's
+    /// button makes the instance, so it waits for everything ([`App::create_blocker`]).
+    fn step_blocker(&self) -> Option<String> {
+        let c = &self.create;
+        match c.step {
+            Step::Version if c.mc.is_empty() => Some("Pick a Minecraft version first".to_string()),
+            Step::Version => None,
+            Step::Loader => self.create_blocker().filter(|_| !self.create_running()),
+            Step::Configure => self.create_blocker(),
+        }
     }
 
-    /// Step 2: the Minecraft version, from a grid that can be searched and narrowed to the kinds wanted.
-    fn version_step(&mut self, ui: &mut Ui, room: f32, changed_version: &mut bool) {
+    /// The open step, in the room given (`width` points wide).
+    fn create_step(&mut self, ui: &mut Ui, width: f32, changed_version: &mut bool, enter: &mut bool) {
+        match self.create.step {
+            // the grid of versions scrolls by itself, under its title and filters
+            Step::Version => self.version_step(ui, width, changed_version),
+            Step::Loader => {
+                ScrollArea::vertical().id_salt("create-loader").auto_shrink([false, false]).show(ui, |ui| {
+                    ui.set_max_width(ui.available_width() - 14.0);
+                    self.loader_step(ui, changed_version);
+                    ui.add_space(8.0);
+                });
+            }
+            Step::Configure => {
+                ScrollArea::vertical().id_salt("create-configure").auto_shrink([false, false]).show(ui, |ui| {
+                    ui.set_max_width(ui.available_width() - 14.0);
+                    self.configure_step(ui, enter);
+                    ui.add_space(8.0);
+                });
+            }
+        }
+    }
+
+    /// Step 1: the Minecraft version, from a grid of tiles that can be searched and narrowed to the kinds wanted.
+    fn version_step(&mut self, ui: &mut Ui, width: f32, changed_version: &mut bool) {
         let manifest = self.manifest.clone();
         let latest_release = manifest.as_ref().and_then(|m| m.latest.get("release").cloned()).unwrap_or_default();
         let latest_snapshot = manifest.as_ref().and_then(|m| m.latest.get("snapshot").cloned()).unwrap_or_default();
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 10.0;
-            step_title(ui, 2, "Minecraft version");
-            let picked = self.create.mc.clone();
-            if !picked.is_empty() {
-                ui.label(RichText::new(&picked).color(c_muted()));
-            }
-            // the newest release is marked, and one click away when another version is picked
-            if !latest_release.is_empty() {
-                if picked == latest_release {
-                    soft_tag(ui, "Latest release");
-                } else if ghost(ui, &format!("Use the latest release ({latest_release})")).clicked() {
-                    self.create.mc = latest_release.clone();
-                    self.create.kinds.release = true;
-                    *changed_version = true;
-                }
-            }
-        });
-        ui.add_space(4.0);
+        step_title(ui, "Choose a Minecraft version", "Pick the version you want to play.");
         match (&manifest, &self.manifest_error) {
             (Some(m), _) => {
                 let counts = kind_counts(&m.versions, &self.create.filter);
-                // the search and the kinds to show, each kind with how many versions it has (that match the search)
+                // the kinds to show, each with how many versions it has (that match the search), and the search at
+                // the right end of their row, or on a row of its own when they don't fit beside each other
+                let search_w = 200.0;
+                let texts: Vec<String> =
+                    VersionKind::ALL.iter().map(|k| format!("{}  {}", k.label(), counts[k.index()])).collect();
+                let chips_w: f32 = texts
+                    .iter()
+                    .map(|t| {
+                        ui.painter().layout_no_wrap(t.clone(), super::fonts::medium(13.0), c_text()).size().x + 26.0
+                    })
+                    .sum::<f32>()
+                    + 12.0;
+                let beside = chips_w + 16.0 + search_w <= width;
+                let mut f = std::mem::take(&mut self.create.filter);
                 ui.horizontal_wrapped(|ui| {
                     ui.spacing_mut().item_spacing.x = 6.0;
-                    let mut f = std::mem::take(&mut self.create.filter);
-                    search_field(ui, &mut f, "Search versions", 190.0);
-                    self.create.filter = f;
-                    ui.add_space(6.0);
-                    for kind in VersionKind::ALL {
+                    for (kind, text) in VersionKind::ALL.into_iter().zip(&texts) {
                         let on = self.create.kinds.shows(kind);
-                        let text = format!("{}  {}", kind.label(), counts[kind.index()]);
-                        let resp = chip(ui, &text, on);
+                        let resp = chip(ui, text, on);
                         let resp = if kind == VersionKind::Old {
                             resp.on_hover_text("The betas and alphas from before Minecraft 1.0")
                         } else {
@@ -718,65 +868,87 @@ impl App {
                             self.create.kinds.toggle(kind);
                         }
                     }
+                    if beside {
+                        super::discover::end_aligned(ui, ui.scope_id().with("version-search"), |ui| {
+                            super::discover::search_input(ui, &mut f, "Search versions", search_w);
+                        });
+                    }
                 });
+                if !beside {
+                    ui.add_space(2.0);
+                    super::discover::search_input(ui, &mut f, "Search versions", width.min(320.0));
+                }
+                self.create.filter = f;
+                // the newest release is one click away when another version is picked
+                if !latest_release.is_empty() && self.create.mc != latest_release {
+                    ui.add_space(2.0);
+                    if super::discover::text_link(ui, &format!("Use the latest release, {latest_release}"), FS_META)
+                        .clicked()
+                    {
+                        self.create.mc = latest_release.clone();
+                        self.create.kinds.release = true;
+                        *changed_version = true;
+                    }
+                }
+                ui.add_space(10.0);
                 let versions = shown_versions(&m.versions, self.create.kinds, &self.create.filter);
-                // the grid sits a step into the card: a darker well on the dark look, a tinted one on the light
-                ui.add_space(2.0);
-                egui::Frame::new()
-                    .fill(if is_dark() { c_bg() } else { c_surface() })
-                    .stroke(Stroke::new(1.0, c_border()))
-                    .corner_radius(CornerRadius::same(R_CONTROL))
-                    .inner_margin(egui::Margin::same(6))
-                    .show(ui, |ui| {
-                        ui.set_width(ui.available_width());
-                        if versions.is_empty() {
-                            ui.add_space(4.0);
-                            let hidden: usize = VersionKind::ALL
-                                .iter()
-                                .filter(|k| !self.create.kinds.shows(**k))
-                                .map(|k| counts[k.index()])
-                                .sum();
-                            let text = if self.create.kinds.none() {
-                                "Switch on releases, snapshots or old versions above to see them.".to_string()
-                            } else if hidden > 0 {
-                                format!(
-                                    "Nothing shown matches \u{201C}{}\u{201D}; {hidden} versions of the other kinds do. Switch them on above.",
-                                    self.create.filter.trim()
-                                )
-                            } else {
-                                format!("No version matches \u{201C}{}\u{201D}.", self.create.filter.trim())
-                            };
-                            small_muted(ui, text);
-                            ui.add_space(4.0);
-                            return;
-                        }
-                        ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
-                        // the versions fill the width in a grid, a few columns of short names; a tall window shows
-                        // more rows of them
-                        let (cols, cell) = grid_columns(ui.available_width() - 12.0, 84.0, 4.0);
-                        let rows = ((room - 430.0) / 32.0).floor().clamp(4.5, 8.5);
-                        ScrollArea::vertical()
-                            .id_salt("versions")
-                            .max_height(rows * 32.0)
-                            .auto_shrink([false, true])
-                            .show_rows(ui, 28.0, versions.len().div_ceil(cols), |ui, range| {
-                                for r in range {
-                                    ui.horizontal(|ui| {
-                                        for v in versions.iter().skip(r * cols).take(cols) {
-                                            let selected = self.create.mc == v.id;
-                                            let is_release = v.id == latest_release;
-                                            let is_snapshot = v.id == latest_snapshot && !is_release;
-                                            let resp = version_cell(ui, &v.id, selected, is_release || is_snapshot, cell)
-                                                .on_hover_text(version_tooltip(v, is_release, is_snapshot));
-                                            if resp.clicked() && !selected {
-                                                self.create.mc = v.id.clone();
-                                                *changed_version = true;
-                                            }
-                                        }
-                                    });
+                if versions.is_empty() {
+                    let hidden: usize = VersionKind::ALL
+                        .iter()
+                        .filter(|k| !self.create.kinds.shows(**k))
+                        .map(|k| counts[k.index()])
+                        .sum();
+                    let text = if self.create.kinds.none() {
+                        "Switch on releases, snapshots or old versions above to see them.".to_string()
+                    } else if hidden > 0 {
+                        format!(
+                            "Nothing shown matches \u{201C}{}\u{201D}; {hidden} versions of the other kinds do. Switch them on above.",
+                            self.create.filter.trim()
+                        )
+                    } else {
+                        format!("No version matches \u{201C}{}\u{201D}.", self.create.filter.trim())
+                    };
+                    notice(ui, NoticeKind::Info, &text, None);
+                    return;
+                }
+                // the tiles fill the width, and the rest of the height scrolls
+                let gap = 8.0;
+                let (cols, tile_w) = grid_columns(width - 14.0, TILE_MIN_W, gap);
+                ScrollArea::vertical().id_salt("versions").auto_shrink([false, false]).show_rows(
+                    ui,
+                    TILE_H + gap,
+                    versions.len().div_ceil(cols),
+                    |ui, range| {
+                        for r in range {
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing.x = gap;
+                                for v in versions.iter().skip(r * cols).take(cols) {
+                                    let selected = self.create.mc == v.id;
+                                    let is_release = v.id == latest_release;
+                                    let is_snapshot = v.id == latest_snapshot && !is_release;
+                                    let note = if is_release {
+                                        Some("Latest release")
+                                    } else if is_snapshot {
+                                        Some("Latest snapshot")
+                                    } else {
+                                        None
+                                    };
+                                    let resp = version_tile(ui, &v.id, selected, note, tile_w)
+                                        .on_hover_text(version_tooltip(v, is_release, is_snapshot));
+                                    if resp.clicked() && !selected {
+                                        self.create.mc = v.id.clone();
+                                        *changed_version = true;
+                                    }
+                                    // a double click picks it and goes on
+                                    if resp.double_clicked() {
+                                        self.create.step = Step::Loader;
+                                    }
                                 }
                             });
-                    });
+                            ui.add_space(gap);
+                        }
+                    },
+                );
             }
             (None, Some(e)) => {
                 let text = format!("Couldn't load the version list: {e}");
@@ -791,191 +963,188 @@ impl App {
         }
     }
 
-    /// Step 3: the mod loader, its version, and the performance mods it can come with.
+    /// Step 2: the mod loader as a list to pick one from, and the version of it.
     fn loader_step(&mut self, ui: &mut Ui, changed_version: &mut bool) {
-        step_head(ui, 3, "Mod loader", None);
-        // the loaders as cards in a row that ends flush with the card's edge, wrapping in a narrow window
-        let gap = 10.0;
-        let (cols, w) = grid_columns(ui.available_width(), LOADER_CARD_W, gap);
-        for row in Loader::ALL.chunks(cols) {
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = gap;
-                for l in row {
-                    let on = *l == self.create.loader;
-                    if loader_card(ui, *l, on, w).clicked() && !on {
-                        self.create.loader = *l;
-                        *changed_version = true;
-                    }
-                }
-            });
+        let mc = self.create.mc.clone();
+        step_title(ui, "Choose a mod loader", &format!("Mods need one. Vanilla plays Minecraft {mc} without mods."));
+        ui.spacing_mut().item_spacing.y = 8.0;
+        for l in LOADER_ORDER {
+            let on = l == self.create.loader;
+            if loader_row(ui, l, on).clicked() && !on {
+                self.create.loader = l;
+                *changed_version = true;
+            }
         }
         if self.create.loader == Loader::Vanilla {
             return;
         }
-        // the loader's version, once there is a list to pick from (or while it is looked up)
-        let has_list = self.create.loading || !self.create.loader_versions.is_empty();
-        if has_list {
-            ui.add_space(8.0);
-        }
-        ui.horizontal_wrapped(|ui| {
-            if !has_list {
-                return;
-            }
-            filter_label(ui, &format!("{} version", self.create.loader.label()));
-            if self.create.loading {
-                spinner_sized(ui, 20.0);
-                small_muted(ui, "Looking up the versions");
-                return;
-            }
-            let Some(recommended) = recommended_loader(&self.create.loader_versions).map(str::to_string) else {
-                return;
-            };
-            let newest = self.create.loader_versions[0].clone();
-            let chosen = chosen_loader_version(&self.create).unwrap_or(&recommended).to_string();
-            // what each version is: the one used unless another is picked, the newest, a test build
-            let describe = |v: &str| {
-                if v == recommended {
-                    format!("{v}  (recommended)")
-                } else if v == newest {
-                    format!("{v}  (newest)")
-                } else if is_test_build(v) {
-                    format!("{v}  (test build)")
-                } else {
-                    v.to_string()
+        ui.add_space(10.0);
+        card(ui, |ui| {
+            ui.spacing_mut().item_spacing.y = 8.0;
+            let loader = self.create.loader.label();
+            ui.label(RichText::new(format!("{loader} version")).semibold());
+            ui.horizontal_wrapped(|ui| {
+                if self.create.loading {
+                    spinner_sized(ui, 20.0);
+                    small_muted(ui, "Looking up the versions");
+                    return;
                 }
-            };
-            egui::ComboBox::from_id_salt("loader-version").selected_text(describe(&chosen)).width(240.0).show_ui(
-                ui,
-                |ui| {
-                    for v in &self.create.loader_versions {
-                        if ui.selectable_label(chosen == *v, describe(v)).clicked() {
-                            // the recommended one is kept as "no choice", so it follows the list
-                            self.create.loader_version = if *v == recommended { String::new() } else { v.clone() };
-                        }
+                let Some(recommended) = recommended_loader(&self.create.loader_versions).map(str::to_string) else {
+                    return;
+                };
+                let newest = self.create.loader_versions[0].clone();
+                let chosen = chosen_loader_version(&self.create).unwrap_or(&recommended).to_string();
+                // what each version is: the one used unless another is picked, the newest, a test build
+                let describe = |v: &str| {
+                    if v == recommended {
+                        format!("{v}  (recommended)")
+                    } else if v == newest {
+                        format!("{v}  (newest)")
+                    } else if is_test_build(v) {
+                        format!("{v}  (test build)")
+                    } else {
+                        v.to_string()
                     }
-                },
-            );
-            if chosen == recommended {
-                soft_tag(ui, "Recommended");
-            } else if ghost(ui, "Use the recommended one").clicked() {
-                self.create.loader_version.clear();
-            }
-            let n = self.create.loader_versions.len();
-            small_muted(ui, if n == 1 { "1 version".to_string() } else { format!("{n} versions") });
-        });
-        if !self.create.loading {
-            if let Some(e) = self.create.error.clone() {
-                let text = format!("Couldn't get the versions: {e}");
-                if notice(ui, NoticeKind::Error, &text, Some("Try again")).is_some_and(|r| r.clicked()) {
-                    // forget the failed request so it is made again
-                    self.create.requested = None;
-                    self.create.error = None;
-                    *changed_version = true;
+                };
+                egui::ComboBox::from_id_salt("loader-version")
+                    .selected_text(RichText::new(describe(&chosen)).font(super::fonts::mono(12.5)))
+                    .width(260.0)
+                    .show_ui(ui, |ui| {
+                        for v in &self.create.loader_versions {
+                            let text = RichText::new(describe(v)).font(super::fonts::mono(12.5));
+                            if ui.selectable_label(chosen == *v, text).clicked() {
+                                // the recommended one is kept as "no choice", so it follows the list
+                                self.create.loader_version = if *v == recommended { String::new() } else { v.clone() };
+                            }
+                        }
+                    });
+                if chosen == recommended {
+                    soft_tag(ui, "Recommended");
+                } else if ghost(ui, "Use the recommended one").clicked() {
+                    self.create.loader_version.clear();
                 }
-            } else if self.create.loader_versions.is_empty() && !self.create.mc.is_empty() {
-                let text = format!("{} isn't available for Minecraft {}.", self.create.loader.label(), self.create.mc);
-                notice(ui, NoticeKind::Warn, &text, None);
+                let n = self.create.loader_versions.len();
+                small_muted(ui, if n == 1 { "1 version".to_string() } else { format!("{n} versions") });
+            });
+            if !self.create.loading {
+                if let Some(e) = self.create.error.clone() {
+                    let text = format!("Couldn't get the versions: {e}");
+                    if notice(ui, NoticeKind::Error, &text, Some("Try again")).is_some_and(|r| r.clicked()) {
+                        // forget the failed request so it is made again
+                        self.create.requested = None;
+                        self.create.error = None;
+                        *changed_version = true;
+                    }
+                } else if self.create.loader_versions.is_empty() && !mc.is_empty() {
+                    let text = format!("{loader} isn't available for Minecraft {mc}.");
+                    notice(ui, NoticeKind::Warn, &text, None);
+                }
             }
-        }
-        if matches!(self.create.loader, Loader::Forge | Loader::NeoForge) {
-            small_muted(
-                ui,
-                "Forge and NeoForge run their own installer, so this takes a little longer the first time.",
+            if matches!(self.create.loader, Loader::Forge | Loader::NeoForge) {
+                small_muted(
+                    ui,
+                    "Forge and NeoForge run their own installer, so this takes a little longer the first time.",
+                );
+            }
+        });
+    }
+
+    /// Step 3: the name, the cover and picture, the memory, the performance mods and a description.
+    fn configure_step(&mut self, ui: &mut Ui, enter: &mut bool) {
+        step_title(ui, "Configure", "Everything here can be changed later in the instance's settings.");
+        ui.spacing_mut().item_spacing.y = 8.0;
+        card(ui, |ui| {
+            ui.label(RichText::new("Name").semibold());
+            let c = &mut self.create;
+            // the hint is the name the instance gets when the field is left empty
+            let hint = if c.mc.is_empty() { "My instance".to_string() } else { default_name(&c.mc, c.loader) };
+            let name_field = ui.add_sized(
+                [ui.available_width().min(460.0), 34.0],
+                egui::TextEdit::singleline(&mut c.name)
+                    .hint_text(RichText::new(hint).color(c_faint()))
+                    .margin(egui::Margin::symmetric(10, 8))
+                    .background_color(c_field()),
             );
-        }
+            // Enter in the name makes the instance, like the Create button
+            *enter = name_field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        });
+        card(ui, |ui| self.cover_row(ui));
+        card(ui, |ui| {
+            self.picture_row(ui);
+        });
+        card(ui, |ui| self.memory_row(ui));
         let key = self.create.loader.modrinth_name();
         if performance::offered_for(key) {
-            ui.add_space(8.0);
-            let hint = format!(
-                "{} from Modrinth, for a smoother game. Anything not made for this Minecraft version yet is left out.",
-                performance::describe(key)
-            );
-            setting_row(ui, "Add performance mods", &hint, |ui| {
-                toggle(ui, &mut self.create.performance);
+            card(ui, |ui| {
+                let hint = format!(
+                    "{} from Modrinth, for a smoother game. Anything not made for this Minecraft version yet is left out.",
+                    performance::describe(key)
+                );
+                setting_row(ui, "Add performance mods", &hint, |ui| {
+                    toggle(ui, &mut self.create.performance);
+                });
             });
+        }
+        card(ui, |ui| {
+            ui.label(RichText::new("Description").semibold());
+            small_muted(ui, "A few words about this instance, shown on its page.");
+            ui.add_space(2.0);
+            ui.add(
+                egui::TextEdit::multiline(&mut self.create.extras.description)
+                    .hint_text(RichText::new("What is this instance for?").color(c_faint()))
+                    .desired_rows(2)
+                    .desired_width(f32::INFINITY)
+                    .margin(egui::Margin::symmetric(10, 7))
+                    .background_color(c_field()),
+            );
+        });
+    }
+
+    /// The cover's landscape: a small picture of each theme to pick from, drawn for the instance as it will be.
+    fn cover_row(&mut self, ui: &mut Ui) {
+        ui.label(RichText::new("Cover").semibold());
+        small_muted(ui, "The picture behind the instance on Home and in the Library. Automatic picks one for it.");
+        ui.add_space(6.0);
+        let (name, mc, loader) = self.create_identity();
+        let gap = 8.0;
+        let (cols, w) = grid_columns(ui.available_width(), 92.0, gap);
+        let mut picked = None;
+        for row in CoverTheme::ALL.chunks(cols) {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = gap;
+                for theme in row {
+                    let spec = CoverSpec::new(&name, &mc, loader, *theme);
+                    let tex = self.covers.texture(&self.ctx, &spec, 160, 90);
+                    if theme_tile(ui, &tex, theme.label(), self.create.extras.cover == *theme, w).clicked() {
+                        picked = Some(*theme);
+                    }
+                }
+            });
+            ui.add_space(4.0);
+        }
+        if let Some(t) = picked {
+            self.create.extras.cover = t;
         }
     }
 
-    /// Step 4, folded until opened: a picture, the memory and a description, put into the instance right after it is
-    /// made. The head says what was changed, so it is seen without opening it.
-    fn more_options(&mut self, ui: &mut Ui) {
-        let id = egui::Id::unique("create-more-options");
-        let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, false);
-        card(ui, |ui| {
-            let head = ui
-                .scope(|ui| {
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 10.0;
-                        step_title(ui, 4, "More options");
-                        let brief = self.create.extras.brief();
-                        let text = if brief.is_empty() { "Picture, memory, description".to_string() } else { brief };
-                        // cut with an ellipsis where the chevron's room at the right starts
-                        let mut job = egui::text::LayoutJob::single_section(
-                            text,
-                            egui::TextFormat::simple(egui::FontId::proportional(FS_BODY), c_muted()),
-                        );
-                        job.wrap = egui::text::TextWrapping::truncate_at_width((ui.available_width() - 34.0).max(40.0));
-                        let galley = ui.painter().layout_job(job);
-                        let (rect, _) = ui.allocate_exact_size(galley.size(), egui::Sense::hover());
-                        ui.painter().galley(rect.min, galley, c_muted());
-                    });
-                })
-                .response
-                .rect;
-            // the head reaches across the card so the chevron sits at its right edge
-            let head = egui::Rect::from_min_max(head.min, egui::pos2(ui.max_rect().right(), head.max.y)).expand(6.0);
-            let resp = ui.interact(head, id.with("head"), egui::Sense::click());
-            if resp.clicked() {
-                state.toggle(ui);
-            }
-            let t = motion::hover(ui, resp.id, resp.hovered());
-            if t > 0.0 {
-                ui.painter().rect_stroke(
-                    head,
-                    CornerRadius::same(R_CONTROL),
-                    Stroke::new(1.0, c_border().gamma_multiply(t)),
-                    egui::StrokeKind::Inside,
-                );
-            }
-            // the chevron points right when folded and down when open
-            let c = egui::pos2(head.right() - 18.0, head.center().y);
-            let a = state.openness(ui.ctx()) * std::f32::consts::FRAC_PI_2;
-            let rot = |x: f32, y: f32| c + vec2(x * a.cos() - y * a.sin(), x * a.sin() + y * a.cos());
-            ui.painter().add(egui::Shape::line(
-                vec![rot(-2.5, -5.0), rot(2.5, 0.0), rot(-2.5, 5.0)],
-                Stroke::new(1.6, motion::mix(c_muted(), c_text(), t)),
-            ));
-            focus_ring(ui, &resp, head, R_CONTROL);
-            let is_open = state.is_open();
-            resp.widget_info(|| {
-                egui::WidgetInfo::selected(egui::Role::DisclosureTriangle, true, is_open, "More options")
-            });
-            resp.on_hover_cursor(egui::CursorIcon::PointingHand);
-            state.show_body_unindented(ui, |ui| {
-                ui.add_space(12.0);
-                rule(ui);
-                ui.add_space(12.0);
-                self.picture_row(ui);
-                ui.add_space(10.0);
-                rule(ui);
-                ui.add_space(10.0);
-                self.memory_row(ui);
-                ui.add_space(10.0);
-                rule(ui);
-                ui.add_space(10.0);
-                ui.label(RichText::new("Description").semibold());
-                small_muted(ui, "A few words about this instance, shown on its page. It can be changed later.");
-                ui.add_space(2.0);
-                ui.add(
-                    egui::TextEdit::multiline(&mut self.create.extras.description)
-                        .hint_text(RichText::new("What is this instance for?").color(c_faint()))
-                        .desired_rows(2)
-                        .desired_width(f32::INFINITY)
-                        .margin(egui::Margin::symmetric(10, 7))
-                        .background_color(c_field()),
-                );
-            });
-        });
+    /// What the new instance's cover is drawn from: its name (the one it gets when the field is left empty), its
+    /// Minecraft version and its loader.
+    fn create_identity(&self) -> (String, String, Option<&'static str>) {
+        let c = &self.create;
+        let loader = (c.loader != Loader::Vanilla).then(|| c.loader.label());
+        (self.create_name(), c.mc.clone(), loader)
+    }
+
+    /// The name the instance will get.
+    fn create_name(&self) -> String {
+        let c = &self.create;
+        if !c.name.trim().is_empty() {
+            c.name.trim().to_string()
+        } else if c.mc.is_empty() {
+            "My instance".to_string()
+        } else {
+            default_name(&c.mc, c.loader)
+        }
     }
 
     /// The picture of the new instance: the one chosen, or the cube it gets otherwise, with the buttons to change it.
@@ -1107,56 +1276,81 @@ impl App {
         }
     }
 
-    /// The panel beside the form on a wide window: the instance as it will be (picture, name, version, loader,
-    /// memory) and the button that makes it.
-    fn create_side_panel(&mut self, ui: &mut Ui) -> bool {
-        let mut create = false;
-        let blocker = self.create_blocker();
+    /// The panel beside the steps on a wide page: "Selected", the instance as it will be (its cover, name, version,
+    /// loader and folder), and the button that goes on to the next step or makes it.
+    fn create_side_panel(&mut self, ui: &mut Ui, room: f32) -> Option<Go> {
+        let mut act = None;
+        let blocker = self.step_blocker();
         let creating = self.create_running();
+        let (name, mc, loader) = self.create_identity();
+        let theme = self.create.extras.cover;
         card(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 6.0;
-            ui.label(RichText::new("What will be made").size(FS_SECTION).semibold());
-            ui.add_space(6.0);
+            ui.label(RichText::new("Selected").size(FS_META).color(c_muted()).semibold());
+            ui.add_space(2.0);
+            // the cover it will have, with its picture in the corner
+            // the cover gives way on a short page, so the button stays in the panel
+            let w = ui.available_width();
+            let cover_h = (room - PANEL_BESIDES_COVER).clamp(64.0, (w * 0.42).round());
+            let (rect, _) = ui.allocate_exact_size(vec2(w, cover_h), egui::Sense::hover());
+            let spec = CoverSpec::new(&name, &mc, loader, theme).with_fade_left(true);
+            let (tw, th) = super::workbench::cover_size(rect.size());
+            let tex = self.covers.texture(&self.ctx, &spec, tw, th);
+            egui::Image::from_texture((tex.id(), vec2(tw as f32, th as f32)))
+                .uv(super::workbench::cover_uv((tw, th), rect.size()))
+                .corner_radius(R_CONTROL)
+                .paint_at(ui, rect);
+            let pic = egui::Rect::from_min_size(rect.left_bottom() + vec2(10.0, -46.0), vec2(36.0, 36.0));
+            ui.painter().rect_filled(
+                pic.expand(2.0),
+                CornerRadius::same(R_CONTROL),
+                egui::Color32::from_black_alpha(90),
+            );
+            self.paint_create_picture(ui, pic);
+            ui.add_space(4.0);
+            ui.add(egui::Label::new(RichText::new(&name).font(super::fonts::semibold(FS_BODY + 1.0))).wrap());
             let c = &self.create;
-            let name = if !c.name.trim().is_empty() {
-                c.name.trim().to_string()
-            } else if c.mc.is_empty() {
-                "My instance".to_string()
-            } else {
-                default_name(&c.mc, c.loader)
+            let latest = self.manifest.as_ref().and_then(|m| m.latest.get("release")).is_some_and(|l| *l == c.mc);
+            let line = match (c.mc.is_empty(), latest) {
+                (true, _) => "No version picked yet".to_string(),
+                (false, true) => format!("Minecraft {} \u{00B7} Latest release", c.mc),
+                (false, false) => format!("Minecraft {}", c.mc),
             };
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 12.0;
-                let (rect, _) = ui.allocate_exact_size(vec2(52.0, 52.0), egui::Sense::hover());
-                self.paint_create_picture(ui, rect);
-                ui.vertical(|ui| {
-                    ui.spacing_mut().item_spacing.y = 2.0;
-                    ui.add(egui::Label::new(RichText::new(&name).semibold()).wrap());
-                    let line = if c.mc.is_empty() { "No version picked yet".to_string() } else { summary(c) };
-                    ui.add(egui::Label::new(RichText::new(line).size(FS_META).color(c_muted())).wrap());
-                });
-            });
-            ui.add_space(6.0);
+            small_muted(ui, line);
+            ui.add_space(4.0);
             rule(ui);
             ui.add_space(2.0);
-            let loader = match (c.loader, chosen_loader_version(c)) {
+            let loader_text = match (c.loader, chosen_loader_version(c)) {
                 (Loader::Vanilla, _) => "None".to_string(),
                 (l, Some(v)) => format!("{} {v}", l.label()),
                 (l, None) => l.label().to_string(),
             };
-            let mut rows: Vec<(&str, String)> = vec![
-                ("Minecraft", if c.mc.is_empty() { "\u{2014}".to_string() } else { c.mc.clone() }),
-                ("Mod loader", loader),
-                ("Memory", memory_summary(&c.extras)),
+            let taken: Vec<&str> = self.instances.iter().map(|i| i.folder.as_str()).collect();
+            let mut rows: Vec<(&str, String, bool)> = vec![
+                ("Minecraft", if c.mc.is_empty() { "\u{2014}".to_string() } else { c.mc.clone() }, true),
+                ("Loader", loader_text, true),
+                ("Folder", preview_folder(&name, &taken), true),
+                ("Memory", memory_summary(&c.extras), false),
             ];
             if performance::offered_for(c.loader.modrinth_name()) {
-                rows.push(("Performance mods", if c.performance { "Added" } else { "None" }.to_string()));
+                rows.push(("Performance mods", if c.performance { "Added" } else { "None" }.to_string(), false));
             }
-            rows.push(("Picture", if c.extras.picture.is_some() { "Chosen" } else { "Default" }.to_string()));
-            for (key, value) in rows {
-                summary_row(ui, key, &value);
+            for (key, value, mono) in rows {
+                summary_row(ui, key, &value, mono);
             }
             ui.add_space(8.0);
+            act = self.create_buttons(ui, blocker.as_deref(), creating, true);
+        });
+        act
+    }
+
+    /// The button that goes on (Continue, or Create instance on the last step) and Back, with what keeps it greyed
+    /// out. `stacked` puts them one under the other, the main one across the panel.
+    fn create_buttons(&self, ui: &mut Ui, blocker: Option<&str>, creating: bool, stacked: bool) -> Option<Go> {
+        let mut act = None;
+        let last = self.create.step == Step::Configure;
+        let text = if last { "Create instance" } else { "Continue \u{2192}" };
+        if stacked {
             if creating {
                 ui.horizontal(|ui| {
                     spinner_sized(ui, 18.0);
@@ -1170,57 +1364,91 @@ impl App {
                     );
                 });
             }
-            let resp = primary_enabled(ui, "Create instance", blocker.is_none());
-            if let Some(why) = &blocker {
-                if !creating {
-                    ui.add(egui::Label::new(RichText::new(why).size(FS_META).color(c_muted())).wrap());
+            ui.horizontal(|ui| {
+                if self.create.step != Step::Version && ghost(ui, "\u{2190} Back").clicked() {
+                    act = Some(Go::Back);
                 }
+                let w = ui.available_width();
+                if primary_sized(ui, text, vec2(w, 40.0), blocker.is_none()).clicked() {
+                    act = Some(if last { Go::Create } else { Go::Next });
+                }
+            });
+            if let Some(why) = blocker.filter(|_| !creating) {
+                ui.add(egui::Label::new(RichText::new(why).size(FS_META).color(c_muted())).wrap());
             }
+        } else {
+            if self.create.step != Step::Version && ghost(ui, "\u{2190} Back").clicked() {
+                act = Some(Go::Back);
+            }
+            let resp = primary_enabled(ui, text, blocker.is_none());
+            let resp = match blocker {
+                Some(why) => resp.on_disabled_hover_text(why),
+                None => resp,
+            };
             if resp.clicked() {
-                create = true;
+                act = Some(if last { Go::Create } else { Go::Next });
             }
-        });
-        create
+        }
+        act
     }
 
-    /// The bar under the form on a narrower window: what is about to be made, and the button that makes it.
-    fn create_bottom_bar(&mut self, ui: &mut Ui) -> bool {
-        let mut create = false;
-        let blocker = self.create_blocker();
+    /// The bar under the steps on a narrower page: what is about to be made, and the buttons that go on and back.
+    fn create_bottom_bar(&mut self, ui: &mut Ui) -> Option<Go> {
+        let mut act = None;
+        let blocker = self.step_blocker();
         let creating = self.create_running();
         let summary = summary(&self.create);
-        ui.scope(|ui| {
-            // the button sits under the form, not at the far edge of a wide window
-            ui.set_max_width((ui.available_width() - 14.0).min(FORM_W));
-            ui.add_space(4.0);
-            // a bar of glass under the form: what is about to be made, and the button that makes it
-            card_frame().inner_margin(egui::Margin::symmetric(18, 12)).show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                super::discover::dialog_footer(
-                    ui,
-                    "create",
-                    |ui| {
+        let (name, mc, loader) = self.create_identity();
+        let spec = CoverSpec::new(&name, &mc, loader, self.create.extras.cover);
+        let tex = self.covers.texture(&self.ctx, &spec, 128, 128);
+        card_frame().inner_margin(egui::Margin::symmetric(14, 10)).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            super::discover::dialog_footer(
+                ui,
+                "create",
+                |ui| {
+                    let (rect, _) = ui.allocate_exact_size(vec2(40.0, 40.0), egui::Sense::hover());
+                    egui::Image::from_texture((tex.id(), vec2(128.0, 128.0)))
+                        .corner_radius(R_CONTROL)
+                        .paint_at(ui, rect);
+                    ui.vertical(|ui| {
+                        ui.spacing_mut().item_spacing.y = 0.0;
+                        ui.label(RichText::new(&name).semibold());
                         if creating {
-                            spinner(ui);
-                            muted(ui, "Working on it, you can follow along in the sidebar");
+                            small_muted(ui, "Working on it, you can follow along in the sidebar");
                         } else {
-                            small_muted(ui, summary);
+                            ui.label(
+                                RichText::new(if summary.is_empty() {
+                                    "No version picked yet".into()
+                                } else {
+                                    summary.clone()
+                                })
+                                .font(super::fonts::mono(11.5))
+                                .color(c_muted()),
+                            );
                         }
-                    },
-                    |ui| {
-                        let resp = primary_enabled(ui, "Create instance", blocker.is_none());
-                        let resp = match &blocker {
-                            Some(why) => resp.on_disabled_hover_text(why),
-                            None => resp,
-                        };
-                        if resp.clicked() {
-                            create = true;
-                        }
-                    },
-                );
-            });
+                    });
+                },
+                |ui| {
+                    act = self.create_buttons(ui, blocker.as_deref(), creating, false);
+                },
+            );
         });
-        create
+        act
+    }
+
+    /// The screenshot tour's New instance on `step`: Fabric picked for the steps after the first, and a name and a
+    /// cover on the last.
+    pub(super) fn shot_create(&mut self, step: Step) {
+        self.page = Page::Create;
+        let c = &mut self.create;
+        c.step = step;
+        c.loader = if step == Step::Version { Loader::Vanilla } else { Loader::Fabric };
+        if step == Step::Configure {
+            c.name = "My Fabric world".into();
+            c.extras.cover = CoverTheme::Cherry;
+        }
+        self.request_loader_versions();
     }
 
     /// Make the instance as the form says, in a sidebar task, and go to the library where it shows up.
@@ -1244,8 +1472,9 @@ impl App {
             // in the message rather than undoing it all
             if extras.changes_file() {
                 extras.apply(&mut inst.file.launcher);
+                super::workbench::set_cover_theme(&mut inst, extras.cover);
                 if let Err(e) = inst.save() {
-                    ready.push_str(&format!(". Its memory and description weren't saved: {e:#}"));
+                    ready.push_str(&format!(". Its memory, cover and description weren't saved: {e:#}"));
                 }
             }
             if let Some(path) = extras.picture.clone() {
@@ -1276,6 +1505,7 @@ impl App {
         // the next instance starts from a clean form; the version, loader and kinds shown stay as they were
         let c = &mut self.create;
         c.name.clear();
+        c.step = Step::Version;
         c.extras = Extras::default();
         c.picture_preview = None;
         c.picture_error = None;
@@ -1283,14 +1513,38 @@ impl App {
     }
 }
 
-/// One line of the summary panel: what, in grey, and its value at the right.
-fn summary_row(ui: &mut Ui, key: &str, value: &str) {
-    ui.horizontal(|ui| {
-        ui.label(RichText::new(key).color(c_muted()));
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.add(egui::Label::new(RichText::new(value).font(super::fonts::medium(FS_BODY))).truncate());
-        });
+/// One line of the summary panel: what, in grey, and its value at the right (in the monospace face with `mono`, for
+/// versions and the folder).
+fn summary_row(ui: &mut Ui, key: &str, value: &str, mono: bool) {
+    ui.scope(|ui| {
+        // rows of text, not of buttons
+        ui.spacing_mut().interact_size.y = 24.0;
+        ui.horizontal(|ui| summary_cells(ui, key, value, mono));
     });
+}
+
+fn summary_cells(ui: &mut Ui, key: &str, value: &str, mono: bool) {
+    ui.label(RichText::new(key).color(c_muted()));
+    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        let font = if mono { super::fonts::mono(12.5) } else { super::fonts::medium(FS_BODY) };
+        ui.add(egui::Label::new(RichText::new(value).font(font)).truncate()).on_hover_text(value);
+    });
+}
+
+/// What a button of the panel asked for.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Go {
+    Next,
+    Back,
+    Create,
+}
+
+/// The title of a step and a line under it.
+fn step_title(ui: &mut Ui, title: &str, line: &str) {
+    ui.label(RichText::new(title).size(FS_FIGURE).semibold());
+    ui.add_space(2.0);
+    muted(ui, line);
+    ui.add_space(12.0);
 }
 
 /// `wanted`, or with " (2)", " (3)" ... after it when an instance of that name (in any case) is there already.
@@ -1416,7 +1670,6 @@ mod tests {
     fn more_options_go_into_the_instance_file() {
         let mut e = Extras::default();
         assert!(!e.changes_file());
-        assert_eq!(e.brief(), "");
         let mut l = LauncherBlock { maximum_memory: Some(4096), ..Default::default() };
         e.apply(&mut l);
         // left as they are, nothing is touched
@@ -1426,7 +1679,6 @@ mod tests {
         e.memory_mb = 6144;
         e.picture = Some(PathBuf::from("/pictures/castle.png"));
         assert!(e.changes_file());
-        assert_eq!(e.brief(), "6 GB memory, picture, description");
         e.apply(&mut l);
         assert_eq!((l.maximum_memory, l.automatic_memory, l.description.as_str()), (Some(6144), None, "With friends"));
         e.memory = Memory::Automatic;
@@ -1436,6 +1688,30 @@ mod tests {
         // a picture alone needs no change to the file: it becomes instance.png
         let only_picture = Extras { picture: Some(PathBuf::from("a.png")), ..Default::default() };
         assert!(!only_picture.changes_file());
+        // a cover theme is kept in the instance's file
+        let cover = Extras { cover: CoverTheme::Snow, ..Default::default() };
+        assert!(cover.changes_file());
+    }
+
+    #[test]
+    fn the_steps_go_on_and_back_and_wait_for_a_version() {
+        assert_eq!(Step::Version.next(), Some(Step::Loader));
+        assert_eq!(Step::Configure.next(), None);
+        assert_eq!(Step::Loader.back(), Some(Step::Version));
+        assert_eq!(Step::Version.back(), None);
+        // without a version only the first step can be opened; with one, any step can, in any order
+        assert!(Step::Version.reachable(""));
+        assert!(!Step::Loader.reachable("") && !Step::Configure.reachable(""));
+        assert!(Step::ALL.iter().all(|s| s.reachable("1.21.1")));
+    }
+
+    #[test]
+    fn the_folder_shown_is_the_one_the_instance_gets() {
+        assert_eq!(preview_folder("Minecraft 1.21.1 with Fabric", &[]), "Minecraft1211withFabric");
+        // taken folders get the next number, as when the folder is claimed
+        let taken = ["Minecraft1211withFabric", "Minecraft1211withFabric2"];
+        assert_eq!(preview_folder("Minecraft 1.21.1 with Fabric", &taken), "Minecraft1211withFabric3");
+        assert_eq!(preview_folder("!!!", &[]), "Instance");
     }
 
     #[test]
