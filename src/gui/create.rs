@@ -1308,8 +1308,12 @@ impl App {
             });
             rule(ui);
             if self.create.edition == Edition::Horizon {
-                // Horizon isn't Java: there is no memory to give it, and no performance mods for it
-                small_muted(ui, "Horizon runs without Java, so there is no memory to set and no mods to add here.");
+                // Horizon isn't Java: no performance mods, and its memory budget is set in its settings later
+                small_muted(
+                    ui,
+                    "Horizon runs without Java and takes no mods from here. Its memory and graphics card are in the \
+                     instance's settings once it is made.",
+                );
                 return;
             }
             self.memory_row(ui);
@@ -1893,7 +1897,7 @@ const HORIZON_PLAYS: [&str; 4] =
     ["Singleplayer and servers", "Worlds in Minecraft's own format", "Resource packs", "Horizon's own mods"];
 const HORIZON_DOESNT: [&str; 2] = [
     "Java mods and mod loaders (Fabric, Forge, NeoForge, Quilt)",
-    "Shader packs, and what is Java's: memory, the Java used, fast start",
+    "Shader packs, and what is Java's: the Java used, its arguments, fast start",
 ];
 
 /// How tall a card of the choice of game is, and from what width it has room for the long words.

@@ -94,10 +94,23 @@ pub async fn create_instance(_dirs: &Dirs, _name: &str, _progress: &Arc<Progress
     anyhow::bail!("Horizon isn't ready yet")
 }
 
+/// The memory Horizon may plan for, in MB, and whether BlockForge chose it (automatic): the instance's fixed amount,
+/// or BlockForge's automatic choice. Horizon is a native game with no Java memory limit; the budget sizes the Java of
+/// its preparation and, on the instance's first start, the render distance and worker threads it begins with.
+pub fn memory_budget_mb(settings: &Settings, inst: &Instance) -> (u32, bool) {
+    let l = &inst.file.launcher;
+    match l.maximum_memory.filter(|_| l.automatic_memory != Some(true)) {
+        Some(mb) => (mb, false),
+        None => (settings.maximum_memory, true),
+    }
+}
+
 /// A Horizon game ready to start.
 pub struct Start {
     /// What was decided on the way, for the log.
     pub notes: Vec<String>,
+    /// What the player should know before playing (little free memory), shown as notes in the window.
+    pub warnings: Vec<String>,
 }
 
 impl Start {

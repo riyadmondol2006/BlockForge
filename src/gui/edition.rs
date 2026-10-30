@@ -28,6 +28,15 @@ impl Start {
         }
     }
 
+    /// What the player should know before playing, said in notes: Horizon's (little free memory, say). Java's worries
+    /// are prompts of their own and stay in the log.
+    pub(super) fn warnings(&self) -> &[String] {
+        match self {
+            Start::Java(_) => &[],
+            Start::Horizon(s) => &s.warnings,
+        }
+    }
+
     /// The command line with the account's token left out, safe to show.
     pub(super) fn display(&self) -> String {
         match self {

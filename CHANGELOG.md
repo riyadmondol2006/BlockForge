@@ -15,9 +15,11 @@ The section for a version is used as the text of its release on GitHub. Older re
   Your normal Minecraft and its instances are left as they are. It needs a Microsoft account that owns Minecraft: Java
   Edition. Experimental.
 - **A Horizon instance is an instance like the others:** Play, Stop, the log, play time, worlds, resource packs,
-  screenshots, backups, rename, cover and delete work as usual. What is Java's (mods, the loader, memory, Java and its
-  arguments, commands, fast start and the other helpers, shader packs, modpack export) is left out of its page, its
-  menus and Explore's "install to" lists. Its card and banner say "Horizon" where the loader would be, and its page has
+  screenshots, backups, rename, cover and delete work as usual, and so do the graphics-card choice and the memory
+  setting: Horizon draws with the card chosen, and BlockForge sizes its preparation and its first-start render
+  distance to the memory budget (automatic by default), with a note when little memory is free. What is Java's (mods,
+  the loader, Java and its arguments, commands, fast start and the other helpers, shader packs, modpack export) is
+  left out of its page, its menus and Explore's "install to" lists. Its card and banner say "Horizon" where the loader would be, and its page has
   an About Horizon card with the build it plays.
 - **Credit where it is due:** Horizon is made by the Horizon project and its contributors and shared under the MIT
   licence; it is an unofficial fan project, not affiliated with Mojang or Microsoft. New instance, the instance page

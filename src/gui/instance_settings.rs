@@ -52,6 +52,8 @@ pub struct InstDraft {
     pre: String,
     post: String,
     wrapper: String,
+    /// The graphics card, over the launcher's (`gpu`; `None` follows the launcher). Horizon's settings show it.
+    gpu: Option<String>,
     pub error: Option<String>,
     /// When Save last worked: "Saved" shows for a moment after it (not for ever, while more is changed).
     saved: Option<std::time::Instant>,
@@ -123,6 +125,7 @@ impl InstDraft {
             pre: ex_str(l, "preLaunchCommand").unwrap_or_default(),
             post: ex_str(l, "postExitCommand").unwrap_or_default(),
             wrapper: l.wrapper_command.clone().unwrap_or_default(),
+            gpu: ex_str(l, "gpu"),
             error: None,
             saved: None,
             worlds: world_names(&inst.root.join("saves")),
@@ -169,7 +172,8 @@ impl InstDraft {
             enable_commands,
             pre,
             post,
-            wrapper
+            wrapper,
+            gpu
         );
         fresh.tab = self.tab;
         fresh.saved = self.saved;
@@ -202,6 +206,7 @@ impl InstDraft {
             && self.pre == o.pre
             && self.post == o.post
             && self.wrapper == o.wrapper
+            && self.gpu == o.gpu
     }
 
     /// The checks Java makes before saving; returns the message to show when something is wrong. `global_args` are
@@ -289,6 +294,7 @@ impl InstDraft {
         set_ex(l, "preLaunchCommand", some(&self.pre).map(Value::String));
         set_ex(l, "postExitCommand", some(&self.post).map(Value::String));
         l.wrapper_command = some(&self.wrapper);
+        set_ex(l, "gpu", self.gpu.clone().map(Value::String));
     }
 }
 
@@ -335,6 +341,130 @@ fn row(
 ) -> bool {
     rows.gap(ui);
     option_row(ui, title, hint, width, reset, control)
+}
+
+/// The maximum memory of an instance: following the launcher, automatic, or a fixed amount on a slider, with a warning
+/// when that leaves too little for the rest of the computer. `hint` says what the memory is for.
+fn memory_rows(
+    ui: &mut Ui,
+    r: &mut Rows,
+    d: &mut InstDraft,
+    title: &str,
+    hint: &str,
+    total_mb: u64,
+    launcher_auto: bool,
+    launcher_mem: u32,
+) {
+    let follow_label = if launcher_auto {
+        "Automatic (recommended)".to_string()
+    } else {
+        format!("Launcher setting ({})", super::settings::memory_text(launcher_mem))
+    };
+    let reset = (d.mem != MemChoice::Follow).then_some(follow_label.as_str());
+    if row(ui, r, title, hint, CONTROL_W, reset, |ui| {
+        let current = match d.mem {
+            MemChoice::Follow => follow_label.clone(),
+            MemChoice::Automatic => "Automatic (recommended)".to_string(),
+            MemChoice::Custom => "Custom".to_string(),
+        };
+        egui::ComboBox::from_id_salt("mem-choice").selected_text(current).width(COMBO_W).show_ui(ui, |ui| {
+            ui.selectable_value(&mut d.mem, MemChoice::Follow, follow_label.clone());
+            if !launcher_auto {
+                ui.selectable_value(&mut d.mem, MemChoice::Automatic, "Automatic (recommended)");
+            }
+            ui.selectable_value(&mut d.mem, MemChoice::Custom, "Custom");
+        });
+    }) {
+        d.mem = MemChoice::Follow;
+    }
+    if d.mem == MemChoice::Custom {
+        ui.add_space(10.0);
+        let max = if total_mb == 0 { 16384 } else { total_mb as u32 }.max(1024);
+        ui.horizontal(|ui| {
+            // the slider reaches as far as the drop-downs of the rows end, the amount after it
+            ui.spacing_mut().slider_width = (ui.available_width() - 120.0).clamp(160.0, 520.0);
+            // the part of the rail up to the handle in the brand colour: how much is given
+            ui.visuals_mut().selection.bg_fill = c_accent();
+            // only moving it changes the value: an amount of another computer (or not on the 256
+            // steps) shown here isn't rounded into an unsaved change
+            ui.add(
+                egui::Slider::new(&mut d.mem_custom, 512..=max)
+                    .step_by(256.0)
+                    .show_value(false)
+                    .trailing_fill(true)
+                    .clamping(egui::SliderClamping::Edits),
+            );
+            // in GB, as the rest of the launcher says it
+            ui.add_space(6.0);
+            ui.label(RichText::new(super::settings::memory_text(d.mem_custom)).font(super::fonts::medium(FS_FIGURE)));
+        });
+        small_muted(ui, format!("0.5 GB to {}, in steps of 256 MB", gigabytes(u64::from(max))));
+        if too_much_memory(d.mem_custom, total_mb) {
+            ui.add_space(8.0);
+            warning(
+                ui,
+                &format!(
+                    "That leaves too little for the rest of this computer ({} in all). The game may fail to start, or freeze the computer.",
+                    gigabytes(total_mb)
+                ),
+            );
+        }
+    }
+}
+
+/// The graphics card of one instance: the launcher's (the default, `None`), or a choice of its own. `gpus` is `None`
+/// while the cards are being looked for; `launcher` is the launcher-wide setting.
+fn gpu_row(ui: &mut Ui, r: &mut Rows, value: &mut Option<String>, gpus: Option<&[crate::gpu::Gpu]>, launcher: &str) {
+    use crate::gpu::{self, Choice};
+    let list = gpus.unwrap_or(&[]);
+    let short = |c: &Choice| match c {
+        Choice::Auto => "Automatic".to_string(),
+        Choice::Integrated => "Power saving".to_string(),
+        Choice::Dedicated => "High performance".to_string(),
+        Choice::Specific(id) => match list.iter().find(|g| &g.id == id) {
+            Some(g) => g.name.clone(),
+            None => "A card that isn't here".to_string(),
+        },
+    };
+    let long = |c: &Choice| match (c, gpu::resolve(c, list)) {
+        (Choice::Integrated | Choice::Dedicated, Some(g)) => format!("{} ({})", short(c), g.name),
+        _ => short(c),
+    };
+    let follow = format!("Launcher setting ({})", short(&Choice::parse(launcher)));
+    let chosen = value.as_deref().map(Choice::parse);
+    let used = chosen.clone().unwrap_or_else(|| Choice::parse(launcher));
+    let hint = match (gpus, list.len()) {
+        (None, _) => "Looking for graphics cards\u{2026}".to_string(),
+        (Some(_), 0) => "Couldn't find out which graphics cards this computer has".to_string(),
+        (Some(_), 1) => format!("Only one graphics card was found ({}), so Horizon draws with it", list[0].name),
+        _ => match gpu::resolve(&used, list) {
+            Some(g) => format!("The card Horizon draws with: {}. Applies the next time it starts", g.name),
+            None => "The card Horizon draws with. Automatic leaves it to the system".to_string(),
+        },
+    };
+    let reset = value.is_some().then_some("Launcher setting");
+    let pressed = row(ui, r, "Graphics card", &hint, CONTROL_W, reset, |ui| {
+        ui.add_enabled_ui(list.len() >= 2, |ui| {
+            let shown = chosen.as_ref().map(short).unwrap_or_else(|| follow.clone());
+            egui::ComboBox::from_id_salt("instance-gpu").selected_text(shown).width(COMBO_W).show_ui(ui, |ui| {
+                if ui.selectable_label(value.is_none(), follow.as_str()).clicked() {
+                    *value = None;
+                }
+                let mut options = vec![Choice::Auto, Choice::Integrated, Choice::Dedicated];
+                if gpu::can_pick_by_name() {
+                    options.extend(list.iter().map(|g| Choice::Specific(g.id.clone())));
+                }
+                for o in options {
+                    if ui.selectable_label(chosen.as_ref() == Some(&o), long(&o)).clicked() {
+                        *value = Some(o.as_setting());
+                    }
+                }
+            });
+        });
+    });
+    if pressed {
+        *value = None;
+    }
 }
 
 /// The room the "Launcher default / Yes / No" choice takes at the right of a row.
@@ -516,6 +646,10 @@ impl App {
             d.tab = 0;
         }
         let total_mb = total_memory_mb();
+        // what Horizon's Performance group shows: the cards, the launcher's choice of card, and the memory it plans with
+        let gpus = self.gpus.clone();
+        let launcher_gpu = self.settings.gpu.clone();
+        let budget = horizon.then(|| crate::horizon::memory_budget_mb(&self.settings, inst));
         let launcher_auto = self.settings.automatic_memory != Some(false);
         let launcher_mem = self.settings.maximum_memory;
         let metaspace = self.settings.metaspace;
@@ -540,7 +674,7 @@ impl App {
             let mut bar = SplitRow::new(ui, egui::Id::unique("instance-settings-bar"), 32.0);
             bar.left(ui, |ui| {
                 if horizon {
-                    small_muted(ui, "Horizon runs without Java: there is no memory, Java or command to set");
+                    small_muted(ui, "Horizon runs without Java: there is no Java, argument or command to set");
                 } else if let Some(i) = segmented(ui, &["General", "Java and Minecraft", "Commands"], d.tab as usize) {
                     d.tab = i as u8;
                 }
@@ -637,6 +771,19 @@ impl App {
                             QuickKind::Disabled => {}
                         }
                     });
+                    if let Some((budget_mb, automatic)) = budget {
+                        group(ui, Icon::Sliders, "Performance", "How Horizon runs on this computer", |ui, r| {
+                            if crate::gpu::supported() {
+                                gpu_row(ui, r, &mut d.gpu, gpus.as_deref(), &launcher_gpu);
+                            }
+                            let hint = "Horizon is a native game with no Java memory limit. BlockForge plans with this amount: it sizes Horizon's preparation and, on the first start, the render distance and worker threads it begins with";
+                            memory_rows(ui, r, &mut d, "Memory", hint, total_mb, launcher_auto, launcher_mem);
+                            ui.add_space(6.0);
+                            let how = if automatic { "chosen automatically" } else { "set for this instance" };
+                            let after = if d.dirty() { ". Save to use what is chosen above" } else { "" };
+                            small_muted(ui, format!("Budget now: {}, {how}{after}", super::settings::memory_text(budget_mb)));
+                        });
+                    }
                     save_note(ui, "Changes above apply with Save");
                     if !horizon {
                         group(ui, Icon::Sliders, "Performance", "These apply right away, from the next start of the game", |ui, r| {
@@ -670,45 +817,7 @@ impl App {
                         } else {
                             format!("The most memory Minecraft may use. This computer has {}", gigabytes(total_mb))
                         };
-                        let follow_label = if launcher_auto { "Automatic (recommended)".to_string() } else { format!("Launcher setting ({})", super::settings::memory_text(launcher_mem)) };
-                        let reset = (d.mem != MemChoice::Follow).then_some(follow_label.as_str());
-                        if row(ui, r, "Maximum memory", &hint, CONTROL_W, reset, |ui| {
-                            let current = match d.mem {
-                                MemChoice::Follow => follow_label.clone(),
-                                MemChoice::Automatic => "Automatic (recommended)".to_string(),
-                                MemChoice::Custom => "Custom".to_string(),
-                            };
-                            egui::ComboBox::from_id_salt("mem-choice").selected_text(current).width(COMBO_W).show_ui(ui, |ui| {
-                                ui.selectable_value(&mut d.mem, MemChoice::Follow, follow_label.clone());
-                                if !launcher_auto {
-                                    ui.selectable_value(&mut d.mem, MemChoice::Automatic, "Automatic (recommended)");
-                                }
-                                ui.selectable_value(&mut d.mem, MemChoice::Custom, "Custom");
-                            });
-                        }) {
-                            d.mem = MemChoice::Follow;
-                        }
-                        if d.mem == MemChoice::Custom {
-                            ui.add_space(10.0);
-                            let max = if total_mb == 0 { 16384 } else { total_mb as u32 }.max(1024);
-                            ui.horizontal(|ui| {
-                                // the slider reaches as far as the drop-downs of the rows end, the amount after it
-                                ui.spacing_mut().slider_width = (ui.available_width() - 120.0).clamp(160.0, 520.0);
-                                // the part of the rail up to the handle in the brand colour: how much is given
-                                ui.visuals_mut().selection.bg_fill = c_accent();
-                                // only moving it changes the value: an amount of another computer (or not on the 256
-                                // steps) shown here isn't rounded into an unsaved change
-                                ui.add(egui::Slider::new(&mut d.mem_custom, 512..=max).step_by(256.0).show_value(false).trailing_fill(true).clamping(egui::SliderClamping::Edits));
-                                // in GB, as the rest of the launcher says it
-                                ui.add_space(6.0);
-                                ui.label(RichText::new(super::settings::memory_text(d.mem_custom)).font(super::fonts::medium(FS_FIGURE)));
-                            });
-                            small_muted(ui, format!("0.5 GB to {}, in steps of 256 MB", gigabytes(u64::from(max))));
-                            if too_much_memory(d.mem_custom, total_mb) {
-                                ui.add_space(8.0);
-                                warning(ui, &format!("That leaves too little for the rest of this computer ({} in all). The game may fail to start, or freeze the computer.", gigabytes(total_mb)));
-                            }
-                        }
+                        memory_rows(ui, r, &mut d, "Maximum memory", &hint, total_mb, launcher_auto, launcher_mem);
                         let reset = format!("{metaspace} MB");
                         let reset = (d.perm_gen != metaspace).then_some(reset.as_str());
                         let top = total_mb.max(256) as u32;
@@ -982,6 +1091,26 @@ mod validation_tests {
         assert!(d.dirty());
         let d = d.with_base();
         assert!(!d.dirty(), "saved");
+    }
+
+    #[test]
+    fn an_instance_graphics_card_is_its_own_or_the_launchers() {
+        let settings = crate::config::Settings::default();
+        let mut d = InstDraft::from(&instance(None), &settings);
+        assert_eq!(d.gpu, None, "follows the launcher at first");
+        d.gpu = Some("dedicated".into());
+        assert!(d.dirty());
+        let mut l = LauncherBlock::default();
+        d.write_to(&mut l, &settings, true, true);
+        assert_eq!(l.extras.get("gpu").and_then(Value::as_str), Some("dedicated"));
+        // read back, and back to the launcher's choice, which leaves nothing in the file
+        let mut inst = instance(None);
+        inst.file.launcher = l.clone();
+        let mut d = InstDraft::from(&inst, &settings);
+        assert_eq!(d.gpu.as_deref(), Some("dedicated"));
+        d.gpu = None;
+        d.write_to(&mut l, &settings, true, true);
+        assert!(!l.extras.contains_key("gpu"));
     }
 
     #[test]

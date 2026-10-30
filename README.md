@@ -81,8 +81,11 @@ project. In New instance, choose **Horizon** instead of Minecraft: Java Edition.
 pick: each Horizon build plays the Minecraft version it is made for (26.3 now).
 
 - It plays singleplayer and servers, worlds in Minecraft's own format, resource packs and Horizon's own mods. Java
-  mods, mod loaders, shader packs and the Java settings (memory, Java, fast start) are not for it, so its instance page
-  leaves them out.
+  mods, mod loaders, shader packs and the Java settings (the Java used, its arguments, fast start) are not for it, so
+  its instance page leaves them out.
+- BlockForge's graphics-card choice and its memory setting apply to it: Horizon draws with the card chosen (for the
+  instance, or in Settings), and as a native game it has no Java memory limit, so BlockForge uses the memory amount
+  (automatic by default) to size Horizon's preparation and, on the first start, the render distance it begins with.
 - It needs a Microsoft account that owns Minecraft: Java Edition.
 - BlockForge downloads Horizon's signed release, checks it, and prepares it from BlockForge's own copy of Minecraft
   (about 1.5 GB the first time). What Horizon needs is kept in the `horizon` folder of BlockForge's data folder and in

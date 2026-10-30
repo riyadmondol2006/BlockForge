@@ -884,6 +884,14 @@ impl App {
                         LogLine { text: format!("[BlockForge] {note}"), level: Level::Info },
                     ));
                 }
+                // Horizon's warnings (little free memory for what it is set up for) are said out loud too
+                for warning in prepared.warnings() {
+                    n.send(Msg::GameLog(
+                        folder_s.clone(),
+                        LogLine { text: format!("[BlockForge] {warning}"), level: Level::Warn },
+                    ));
+                    n.send(Msg::Toast(warning.clone(), false));
+                }
                 // settings changed in the player's own file are worth saying out loud, not only in the log
                 if prepared.is_java() && prepared.notes().iter().any(|n| n.starts_with(launch::lowend::LOWERED_NOTE)) {
                     n.send(Msg::Toast(
