@@ -1032,6 +1032,50 @@ pub fn spawn(prepared: &Prepared) -> Result<Running> {
     Ok(Running { child, lines: rx, _workers: workers })
 }
 
+/// Start a game that isn't run by Java (Horizon) the way [`spawn`] starts Minecraft, so the same game loop follows
+/// it: its output comes line by line with `token` hidden, and it gets a process group of its own for Stop. `stdin`
+/// is written to the game's standard input, which is then closed (how Horizon is handed the account); without it
+/// the game gets none.
+pub fn spawn_process(
+    program: &Path,
+    args: &[String],
+    cwd: &Path,
+    env: &[(String, String)],
+    stdin: Option<Vec<u8>>,
+    token: Option<&str>,
+) -> Result<Running> {
+    let mut cmd = crate::platform::tokio_command(program);
+    cmd.args(args)
+        .current_dir(cwd)
+        .stdin(if stdin.is_some() { std::process::Stdio::piped() } else { std::process::Stdio::null() })
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(false);
+    #[cfg(unix)]
+    cmd.process_group(0);
+    for (k, v) in env {
+        cmd.env(k, v);
+    }
+    let mut child = cmd.spawn().with_context(|| format!("starting {}", program.display()))?;
+    if let (Some(bytes), Some(mut input)) = (stdin, child.stdin.take()) {
+        tokio::spawn(async move {
+            use tokio::io::AsyncWriteExt;
+            // a game that quits at once closes its end first; its exit code says what went wrong
+            let _ = input.write_all(&bytes).await;
+            let _ = input.shutdown().await;
+        });
+    }
+    let censor = gamelog::LineCensor::new(&[], "", token, false);
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    if let Some(out) = child.stdout.take() {
+        tokio::spawn(forward_lines(out, tx.clone(), censor.clone()));
+    }
+    if let Some(err) = child.stderr.take() {
+        tokio::spawn(forward_lines(err, tx, censor));
+    }
+    Ok(Running { child, lines: rx, _workers: None })
+}
+
 /// Sweep natives folders that an earlier run left behind (a crash, a killed launcher).
 pub fn clean_stale_temp(dirs: &Dirs) {
     if let Ok(rd) = std::fs::read_dir(&dirs.temp) {
@@ -1316,5 +1360,29 @@ mod exit_code_tests {
         // ordinary exits keep their own code
         assert_eq!(exit_code(&std::process::ExitStatus::from_raw(0)), Some(0));
         assert_eq!(exit_code(&std::process::ExitStatus::from_raw(1 << 8)), Some(1));
+    }
+}
+
+#[cfg(all(test, unix))]
+mod spawn_process_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn a_game_started_with_stdin_reads_it_and_its_output_hides_the_token() {
+        let token = "eyJhbGciOiJIUzI1NiJ9.secret-token.value";
+        let args = vec!["-c".to_string(), "read line; echo \"got $line\"; echo \"$HELLO\" >&2".to_string()];
+        let env = vec![("HELLO".to_string(), "from the environment".to_string())];
+        let session = format!("{{\"access_token\":\"{token}\"}}\n").into_bytes();
+        let mut running =
+            spawn_process(Path::new("/bin/sh"), &args, &std::env::temp_dir(), &env, Some(session), Some(token))
+                .unwrap();
+        assert!(running.child.wait().await.unwrap().success());
+        let mut lines = Vec::new();
+        while let Some(l) = running.lines.recv().await {
+            lines.push(l);
+        }
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert!(lines.iter().any(|l| l == "from the environment"));
+        assert!(lines.iter().any(|l| l.starts_with("got ") && !l.contains("secret-token")), "{lines:?}");
     }
 }

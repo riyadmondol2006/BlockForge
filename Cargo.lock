@@ -349,6 +349,7 @@ dependencies = [
  "regex",
  "reqwest",
  "rfd",
+ "ring",
  "rustls-pki-types",
  "rusty-leveldb",
  "serde",
