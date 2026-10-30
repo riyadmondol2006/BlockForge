@@ -2252,7 +2252,9 @@ mod tests {
     }
 
     fn entry(name: &str, file: &str, kind: &str) -> ModEntry {
-        let record = crate::modrecord::ModRecord::new(name, file, kind);
+        // added by the player, not part of a modpack
+        let record =
+            crate::modrecord::ModRecord { user_added: true, ..crate::modrecord::ModRecord::new(name, file, kind) };
         ModEntry { record, path: None, exists: true, size: 2_400_000 }
     }
 

@@ -2290,13 +2290,14 @@ struct Shot {
 /// The ids of the jobs the tour makes up to show the sidebar busy; no real job gets ids this high.
 const SHOT_TASK: u64 = u64::MAX - 8;
 
-const SHOT_PAGES: [&str; 52] = [
+const SHOT_PAGES: [&str; 53] = [
     "home",
     "library",
     "instance",
     "instance-mods",
     "instance-resourcepacks",
     "instance-backups",
+    "instance-running",
     "instance-logs",
     "instance-settings",
     "instance-settings-java",
@@ -2427,6 +2428,7 @@ impl App {
                 }
                 "instance"
                 | "instance-backups"
+                | "instance-running"
                 | "instance-mods"
                 | "instance-resourcepacks"
                 | "instance-logs"
@@ -2453,6 +2455,9 @@ impl App {
                         }
                         if name == "instance-backups" {
                             self.manage_backups(&f);
+                        }
+                        if name == "instance-running" {
+                            self.shot_busy(true);
                         }
                         if name == "instance-logs" {
                             self.games.insert(
