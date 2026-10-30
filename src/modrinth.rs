@@ -336,6 +336,8 @@ pub async fn install_into(
     let mut replaced = Vec::new();
 
     while let Some((id, k)) = queue.pop() {
+        crate::horizon::policy::allows(instance, crate::horizon::policy::Action::Add(k.into()))
+            .map_err(anyhow::Error::msg)?;
         if !done.insert(id.clone()) || installed.files.contains_key(&id) && id != project {
             continue;
         }

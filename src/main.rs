@@ -12,10 +12,19 @@ use clap::{Parser, Subcommand};
 
 use blockforge::accounts::{self, Account};
 use blockforge::config::Settings;
+use blockforge::horizon::{
+    self,
+    policy::{self, Action, Engine},
+};
 use blockforge::install::{self, Progress};
 use blockforge::loaders::{self, Loader};
 use blockforge::paths::Dirs;
 use blockforge::{instances, java, launch, modrinth, msauth};
+
+#[cfg(test)]
+use blockforge::http;
+#[cfg(test)]
+pub mod testutil;
 
 #[derive(Parser)]
 #[command(name = "blockforge", version, about = "BlockForge - a fast Minecraft launcher")]
@@ -407,6 +416,45 @@ async fn run(cmd: Cmd, dirs: Dirs) -> Result<()> {
                 None => launch::account_for(&dirs, &settings, &inst)
                     .context("no account yet: run `blockforge account offline <name>` or `blockforge account login`")?,
             };
+            let route_extras =
+                launch::LaunchExtras { realm: realm.clone(), offline_name: offline_name.clone(), screen_size: None };
+            let engine = policy::launch_engine(&inst, &acc, &route_extras, yes).map_err(anyhow::Error::msg)?;
+            if engine == Engine::Horizon {
+                let acc = launch::fresh_account(&dirs, &acc).await?;
+                if let Some(reason) = horizon::account_problem(&acc) {
+                    bail!("{reason}");
+                }
+                let progress = Progress::new();
+                let printer = show_progress(progress.clone());
+                let options = launch::LaunchOptions { server, world };
+                let prepared = horizon::prepare(&dirs, &settings, &inst, &acc, &progress, &options, false).await;
+                printer.abort();
+                print_notes(&progress);
+                let start = prepared?;
+                for note in &start.notes {
+                    eprintln!("  {note}");
+                }
+                if dry_run {
+                    println!("{}", start.display());
+                    start.cleanup();
+                    return Ok(());
+                }
+                // Keep cleanup paired with every outcome after preparation, including spawn/wait errors.
+                let result: Result<_> = async {
+                    let mut running = start.spawn()?;
+                    let marked = inst.mark_played();
+                    while let Some(line) = running.lines.recv().await {
+                        println!("{line}");
+                    }
+                    let status = running.child.wait().await?;
+                    marked?;
+                    Ok(status)
+                }
+                .await;
+                start.cleanup();
+                let status = result?;
+                std::process::exit(launch::exit_code(&status).unwrap_or(1));
+            }
             // the checks the Java edition makes before it starts anything
             let ls = launch::settings::LaunchSettings::resolve(&settings, &inst);
             let pick = launch::javapick::pick(&dirs, &ls, &inst.file.version);
@@ -543,6 +591,7 @@ async fn run(cmd: Cmd, dirs: Dirs) -> Result<()> {
         }
         Cmd::Add { instance, project, kind } => {
             let inst = find_instance(&dirs, &instance)?;
+            policy::allows(&inst, Action::Add(modrinth::Kind::from_api(&kind).into())).map_err(anyhow::Error::msg)?;
             let progress = Progress::new();
             let printer = show_progress(progress.clone());
             let added = modrinth::install_into(&inst, &project, modrinth::Kind::from_api(&kind), &progress).await;
@@ -574,6 +623,7 @@ async fn run(cmd: Cmd, dirs: Dirs) -> Result<()> {
         }
         Cmd::Repair { instance } => {
             let inst = find_instance(&dirs, &instance)?;
+            policy::allows(&inst, Action::RepairJava).map_err(anyhow::Error::msg)?;
             let progress = Progress::new();
             let printer = show_progress(progress.clone());
             let repaired = instances::repair(&dirs, &inst, &progress).await;
@@ -594,7 +644,88 @@ async fn run(cmd: Cmd, dirs: Dirs) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::decode_percent;
+    use super::*;
+
+    #[tokio::test]
+    async fn horizon_add_and_repair_refuse_before_any_work() {
+        let root = crate::testutil::scratch("horizon-main-cli");
+        let dirs = Dirs::at(&root);
+        dirs.ensure().unwrap();
+        let mut inst = instances::Instance {
+            folder: "Horizon".into(),
+            root: dirs.instances.join("Horizon"),
+            mod_count: 0,
+            file: Default::default(),
+        };
+        horizon::mark(&mut inst);
+        std::fs::create_dir_all(&inst.root).unwrap();
+        inst.save().unwrap();
+        let before = std::fs::read(inst.instance_file()).unwrap();
+        for kind in ["mod", "shader", "datapack", "modpack", "plugin"] {
+            let err = run(
+                Cmd::Add { instance: inst.folder.clone(), project: "unused".into(), kind: kind.into() },
+                dirs.clone(),
+            )
+            .await
+            .unwrap_err();
+            assert!(err.to_string().starts_with("Horizon plays Minecraft rewritten in Rust;"));
+        }
+        let err = run(Cmd::Repair { instance: inst.folder.clone() }, dirs).await.unwrap_err();
+        assert!(err.to_string().contains("Java game-file repair"));
+        assert_eq!(std::fs::read(inst.instance_file()).unwrap(), before);
+        assert!(!inst.root.join("mods").exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cli_launch_routes_before_java_checks_even_for_dry_run() {
+        let mut inst = instances::Instance {
+            folder: "route".into(),
+            root: Default::default(),
+            mod_count: 0,
+            file: Default::default(),
+        };
+        let online = Account { access_token: Some("token".into()), ..Default::default() };
+        for horizon in [false, true] {
+            if horizon {
+                horizon::mark(&mut inst);
+            }
+            for dry_run in [false, true] {
+                for option in [None, Some("--offline-name"), Some("--realm"), Some("--yes")] {
+                    let mut args = vec!["blockforge", "launch", "route"];
+                    if dry_run {
+                        args.push("--dry-run");
+                    }
+                    if let Some(option) = option {
+                        args.push(option);
+                        if option != "--yes" {
+                            args.push("Player");
+                        }
+                    }
+                    let cli = Cli::try_parse_from(args).unwrap();
+                    let Some(Cmd::Launch { dry_run: parsed_dry_run, realm, offline_name, yes, .. }) = cli.command
+                    else {
+                        panic!("expected launch");
+                    };
+                    assert_eq!(parsed_dry_run, dry_run);
+                    let extras = launch::LaunchExtras { realm, offline_name, screen_size: None };
+                    for account in [&online, &Account::offline("Player")] {
+                        let route = policy::launch_engine(&inst, account, &extras, yes);
+                        if !horizon {
+                            assert_eq!(route, Ok(Engine::Java));
+                        } else if option.is_some() || account.offline {
+                            assert!(route.is_err());
+                        } else {
+                            assert_eq!(route, Ok(Engine::Horizon));
+                        }
+                    }
+                }
+            }
+        }
+        for flag in ["--java", "--java-args", "--memory", "--min-memory", "--max-memory"] {
+            assert!(Cli::try_parse_from(["blockforge", "launch", "route", flag, "1"]).is_err());
+        }
+    }
 
     #[test]
     fn file_addresses_are_decoded() {

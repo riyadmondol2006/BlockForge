@@ -13,6 +13,7 @@ use crate::cf_seam::MinimalCurseForge;
 use crate::config::Settings;
 use crate::export::{self, ExportFormat};
 use crate::ftb;
+use crate::horizon::policy::{self, Action};
 use crate::imports::{self, ImportContext, detect};
 use crate::install::Progress;
 use crate::instances;
@@ -201,6 +202,7 @@ pub async fn run(cmd: PacksCmd, dirs: Dirs) -> Result<()> {
         }
         PacksCmd::FtbUpdate { instance } => {
             let inst = find_instance(&dirs, &instance)?;
+            policy::allows(&inst, Action::UpdateModpack).map_err(anyhow::Error::msg)?;
             let latest = ftb::check_update(&dirs, &inst).await?;
             let Some(latest) = latest else {
                 println!("{} is up to date", inst.name());
@@ -260,6 +262,7 @@ pub async fn run(cmd: PacksCmd, dirs: Dirs) -> Result<()> {
         }
         PacksCmd::Export { instance, format, out, name, version, author, include } => {
             let mut inst = find_instance(&dirs, &instance)?;
+            policy::allows(&inst, Action::ExportModpack).map_err(anyhow::Error::msg)?;
             let accounts = crate::accounts::load(&dirs);
             let account = settings
                 .last_account
@@ -310,4 +313,44 @@ pub async fn run(cmd: PacksCmd, dirs: Dirs) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn horizon_export_and_pack_update_refuse_before_any_work() {
+        let root = crate::testutil::scratch("horizon-packs-cli");
+        let dirs = Dirs::at(&root);
+        dirs.ensure().unwrap();
+        let mut inst = instances::Instance {
+            folder: "Horizon".into(),
+            root: dirs.instances.join("Horizon"),
+            mod_count: 0,
+            file: Default::default(),
+        };
+        crate::horizon::mark(&mut inst);
+        std::fs::create_dir_all(&inst.root).unwrap();
+        inst.save().unwrap();
+        let before = std::fs::read(inst.root.join("instance.json")).unwrap();
+        for format in ["modrinth", "curseforge", "both", "multimc", "other"] {
+            let cmd = PacksCmd::Export {
+                instance: inst.folder.clone(),
+                format: format.into(),
+                out: root.join("exports"),
+                name: None,
+                version: None,
+                author: None,
+                include: Vec::new(),
+            };
+            let err = run(cmd, dirs.clone()).await.unwrap_err();
+            assert!(err.to_string().contains("exporting it as a Java modpack"));
+            assert!(!root.join("exports").exists());
+        }
+        let err = run(PacksCmd::FtbUpdate { instance: inst.folder.clone() }, dirs).await.unwrap_err();
+        assert!(err.to_string().contains("Java modpacks"));
+        assert_eq!(std::fs::read(inst.root.join("instance.json")).unwrap(), before);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }

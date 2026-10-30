@@ -7,6 +7,8 @@
 //! shared Minecraft files are only read, and nothing of the official launcher (`~/.minecraft`) or of the Horizon
 //! launcher (`~/.local/share/horizon`) is touched.
 
+pub mod policy;
+
 use std::sync::Arc;
 
 use anyhow::Result;
