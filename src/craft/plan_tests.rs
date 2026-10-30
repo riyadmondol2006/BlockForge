@@ -26,6 +26,7 @@ fn rec(id: &str, kind: Kind, out: &str, count: u32, ingredients: Vec<Ingredient>
         manual: None,
         ticks: None,
         small_grid: false,
+        shape: Vec::new(),
     }
 }
 

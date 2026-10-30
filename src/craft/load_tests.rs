@@ -167,6 +167,8 @@ fn shaped_ingredients_count_symbols_in_first_appearance_order() {
     let r = ds.recipe("lever_like").unwrap();
     let keys: Vec<_> = r.ingredients.iter().map(|i| (i.key.as_str(), i.count)).collect();
     assert_eq!(keys, [("C", 4), ("S", 1), ("I", 1)]);
+    // the pattern is kept as the game lays it out, for the grid on the page
+    assert_eq!(r.shape, ["C C", " S ", "CIC"]);
     assert!(!r.small_grid);
     assert!(ds.recipe("block").unwrap().small_grid);
     assert!(!ds.recipe("wide").unwrap().small_grid);

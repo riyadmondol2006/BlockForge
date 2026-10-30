@@ -493,12 +493,13 @@ impl Ctx<'_> {
         let mut manual = None;
         let mut ticks = None;
         let mut small_grid = false;
+        let mut shape = Vec::new();
         let kind;
         let ingredients;
         match ty {
             "crafting_shaped" => {
                 kind = Kind::Shaped;
-                (ingredients, small_grid) = self.shaped(doc)?;
+                (ingredients, small_grid, shape) = self.shaped(doc)?;
             }
             "crafting_shapeless" => {
                 kind = Kind::Shapeless;
@@ -540,12 +541,12 @@ impl Ctx<'_> {
                 ingredients = vec![input, material];
             }
         }
-        let recipe = Recipe { id: id.to_string(), kind, output, count, ingredients, manual, ticks, small_grid };
+        let recipe = Recipe { id: id.to_string(), kind, output, count, ingredients, manual, ticks, small_grid, shape };
         Ok((recipe, category))
     }
 
-    /// One ingredient per key symbol, counted over the pattern, in order of first appearance.
-    fn shaped(&mut self, doc: &Value) -> Result<(Vec<Ingredient>, bool), String> {
+    /// One ingredient per key symbol, counted over the pattern, in order of first appearance; and the pattern's rows.
+    fn shaped(&mut self, doc: &Value) -> Result<(Vec<Ingredient>, bool, Vec<String>), String> {
         let rows: Vec<&str> = doc
             .get("pattern")
             .and_then(Value::as_array)
@@ -573,7 +574,7 @@ impl Ctx<'_> {
             ingredients.push(Ingredient { key: symbol, count: counts[&c], alternatives: self.alternatives(v)? });
         }
         let small = rows.len() <= 2 && rows.iter().all(|r| r.chars().count() <= 2);
-        Ok((ingredients, small))
+        Ok((ingredients, small, rows.iter().map(|r| r.to_string()).collect()))
     }
 
     /// Entries with the same alternatives become one ingredient with a count.

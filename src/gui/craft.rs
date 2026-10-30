@@ -25,7 +25,7 @@ use crate::craft::{Category, Dataset, ItemId, Node, Plan, Request, Storage, plan
 use crate::install::{Manifest, ManifestVersion};
 
 /// The width of the left column when the page has room for two columns.
-pub(super) const LEFT_W: f32 = 352.0;
+pub(super) const LEFT_W: f32 = 284.0;
 /// The window content width from which the page uses two columns.
 pub(super) const TWO_COLUMNS: f32 = 900.0;
 /// How many new pictures one frame may ask for.
@@ -235,6 +235,8 @@ pub struct CraftState {
     pub(super) picking: bool,
     pub(super) tree_epoch: u32,
     pub(super) tree_all: bool,
+    /// The item list scrolls to the picked item on the next frame (a plan was opened, not clicked in the list).
+    pub(super) reveal: bool,
 }
 
 impl CraftState {
@@ -284,6 +286,7 @@ impl CraftState {
             picking: false,
             tree_epoch: 0,
             tree_all: false,
+            reveal: false,
         }
     }
 
@@ -477,6 +480,7 @@ impl CraftState {
         }
         self.stock_bufs.clear();
         self.tab = spec.tab;
+        self.reveal = true;
         self.dialog = match spec.dialog {
             Some("get") => Some(Dialog::GetVersion),
             Some("saved") => Some(Dialog::Saved),
@@ -684,6 +688,7 @@ impl CraftState {
         self.active_sig = Some(Self::sig_of(r));
         self.unsaved = false;
         self.dirty = true;
+        self.reveal = true;
     }
 
     /// Keep the plan on show as a saved plan: a new one, or the open one brought up to date.
@@ -795,7 +800,6 @@ impl CraftState {
             self.recalc();
         }
         self.header(ui, env, &mut acts);
-        ui.add_space(8.0);
         match (&self.versions, &self.load) {
             (None, _) => {
                 ui.horizontal(|ui| {
@@ -846,7 +850,6 @@ impl CraftState {
     }
 
     fn header(&mut self, ui: &mut Ui, env: &Env, acts: &mut Vec<Act>) {
-        let narrow = ui.available_width() < 760.0;
         let status = self.book.as_ref().map(|b| {
             format!(
                 "{} items \u{00B7} {} recipes",
@@ -859,25 +862,20 @@ impl CraftState {
         let page_w = (ui.available_width() - 12.0).min(LEFT_W + 16.0 + super::craft_view::PLAN_WIDTH);
         ui.scope(|ui| {
             ui.set_max_width(page_w);
-            ui.horizontal(|ui| {
-                heading(ui, "Crafting calculator");
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            PageHeader::new("Crafting calculator")
+                .subtitle("Plan what you want to make. BlockForge works out what to gather, craft and smelt.")
+                .show(ui, |ui| {
                     self.version_combo(ui, acts);
                     // the plans saved earlier, also when no plan is open (after a restart, or a version that failed)
                     let n = self.store.plans.len();
                     if n > 0 && self.target.is_none() && ghost(ui, &format!("Saved plans ({n})")).clicked() {
                         self.dialog = Some(Dialog::Saved);
                     }
-                    if let (false, Some(s)) = (narrow, &status) {
-                        small_muted(ui, s.clone());
+                    if let Some(s) = &status {
+                        ui.label(RichText::new(s).font(super::fonts::mono(FS_META)).color(c_faint()));
                     }
                 });
-            });
         });
-        muted(ui, "Pick what you want to build. BlockForge works out what to gather, craft and smelt.");
-        if let (true, Some(s)) = (narrow, status) {
-            small_muted(ui, s);
-        }
         let _ = env;
     }
 

@@ -113,6 +113,9 @@ pub struct Recipe {
     pub ticks: Option<u32>,
     /// A shaped recipe that fits the 2x2 grid of the inventory (or a shapeless one with up to four slots).
     pub small_grid: bool,
+    /// The rows of a shaped recipe's pattern as its key symbols, a space for an empty slot (`["###", " | ", " | "]`),
+    /// so the page can draw the grid as the game lays it out. Empty for every other kind.
+    pub shape: Vec<String>,
 }
 
 /// The recipe book of one game version.
@@ -419,6 +422,7 @@ mod tests {
             manual: None,
             ticks: None,
             small_grid: false,
+            shape: Vec::new(),
         }
     }
 

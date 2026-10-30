@@ -10,7 +10,11 @@ use super::theme::*;
 use super::widgets::*;
 use crate::craft::{Category, ItemId};
 
-const ROW_H: f32 = 40.0;
+/// The height of a row of the item list, and the room between two rows.
+const ROW_H: f32 = 46.0;
+const ROW_GAP: f32 = 2.0;
+/// The amounts offered as chips beside "How many?".
+pub(super) const QUICK_AMOUNTS: [u64; 4] = [1, 4, 16, 64];
 
 /// The entries matching `query` (and the category), best first; at most `limit`. An empty query matches all.
 pub(super) fn search_entries(book: &Book, query: &str, cat: Option<Category>, limit: usize) -> Vec<u32> {
@@ -45,38 +49,15 @@ pub(super) fn search_entries(book: &Book, query: &str, cat: Option<Category>, li
 }
 
 impl CraftState {
-    /// The cards that pick the item and the amount: the amount of what was picked on top, the search under it.
+    /// The card that picks the item: the search, the category and the list of items, which takes the height it is
+    /// given (`list_h`).
     pub(super) fn left_pick(&mut self, ui: &mut Ui, book: &Arc<Book>, list_h: f32) {
-        if self.target.is_some() {
-            panel(ui, |ui| self.quantity_block(ui, book, false));
-        }
         panel(ui, |ui| {
-            card_title(ui, "What do you want to make?");
-            ui.add_space(2.0);
-            let field = ui.add_sized(
-                [ui.available_width(), 32.0],
-                egui::TextEdit::singleline(&mut self.search)
-                    .id(egui::Id::unique("craft-search"))
-                    .hint_text(RichText::new("Search items").color(c_faint()))
-                    .margin(egui::Margin::symmetric(10, 7))
-                    .background_color(c_field()),
-            );
+            let field = search_line(ui, &mut self.search);
             if self.target.is_none() {
                 // nothing is picked yet: typing can start at once
                 focus_when_shown(ui, &field);
             }
-            small_faint(ui, "Press / to search");
-            ui.horizontal_wrapped(|ui| {
-                ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
-                if chip(ui, "All", self.category.is_none()).clicked() {
-                    self.category = None;
-                }
-                for c in Category::ALL {
-                    if chip(ui, c.label(), self.category == Some(c)).clicked() {
-                        self.category = Some(c);
-                    }
-                }
-            });
             let fresh = self
                 .filtered_for
                 .as_ref()
@@ -86,16 +67,36 @@ impl CraftState {
                 self.filtered_for = Some((self.search.clone(), self.category, self.rev));
             }
             let n = self.filtered.len();
-            small_muted(
-                ui,
-                if self.search.trim().is_empty() && self.category.is_none() {
-                    format!("{} items", thousands(n as u64))
-                } else if n == 1 {
-                    "1 match".to_string()
-                } else {
-                    format!("{} matches", thousands(n as u64))
-                },
-            );
+            // how many there are, and the category, on one quiet line under the search
+            ui.horizontal(|ui| {
+                ui.set_min_height(28.0);
+                small_muted(
+                    ui,
+                    if self.search.trim().is_empty() && self.category.is_none() {
+                        format!("{} items", thousands(n as u64))
+                    } else if n == 1 {
+                        "1 match".to_string()
+                    } else {
+                        format!("{} matches", thousands(n as u64))
+                    },
+                );
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    let shown = self.category.map_or("All categories", |c| c.label());
+                    egui::ComboBox::from_id_salt("craft-category").selected_text(shown).width(132.0).show_ui(
+                        ui,
+                        |ui| {
+                            if ui.selectable_label(self.category.is_none(), "All categories").clicked() {
+                                self.category = None;
+                            }
+                            for c in Category::ALL {
+                                if ui.selectable_label(self.category == Some(c), c.label()).clicked() {
+                                    self.category = Some(c);
+                                }
+                            }
+                        },
+                    );
+                });
+            });
             let mut pick: Option<ItemId> = None;
             if n == 0 {
                 ui.add_space(16.0);
@@ -114,19 +115,27 @@ impl CraftState {
                 ui.add_space(16.0);
             } else {
                 ui.spacing_mut().item_spacing.y = 0.0;
-                egui::ScrollArea::vertical()
-                    .id_salt("craft-items")
-                    .max_height(list_h)
-                    .auto_shrink([false, false])
-                    .show_rows(ui, ROW_H, n, |ui, range| {
-                        for k in range {
-                            let e = &book.entries[self.filtered[k] as usize];
-                            let selected = self.target.as_deref() == Some(e.id.as_str());
-                            if self.item_row(ui, e, selected) {
-                                pick = Some(e.id.clone());
-                            }
+                let mut list = egui::ScrollArea::vertical().id_salt("craft-items");
+                // a plan opened from elsewhere: its item is brought into view, a third of the way down
+                if std::mem::take(&mut self.reveal) {
+                    let at = self
+                        .target
+                        .as_deref()
+                        .and_then(|t| self.filtered.iter().position(|&k| book.entries[k as usize].id == t));
+                    if let Some(k) = at {
+                        list = list.vertical_scroll_offset((k as f32 * (ROW_H + ROW_GAP) - list_h / 3.0).max(0.0));
+                    }
+                }
+                list.max_height(list_h).auto_shrink([false, false]).show_rows(ui, ROW_H + ROW_GAP, n, |ui, range| {
+                    for k in range {
+                        let e = &book.entries[self.filtered[k] as usize];
+                        let selected = self.target.as_deref() == Some(e.id.as_str());
+                        if self.item_row(ui, e, selected) {
+                            pick = Some(e.id.clone());
                         }
-                    });
+                        ui.add_space(ROW_GAP);
+                    }
+                });
             }
             if let Some(id) = pick {
                 self.set_target(&id);
@@ -134,56 +143,68 @@ impl CraftState {
         });
     }
 
-    /// One row of the item list: picture, name, and a small line under it. True when clicked.
+    /// One row of the item list: picture, name, and how it stacks under it. True when clicked.
     fn item_row(&mut self, ui: &mut Ui, e: &Entry, selected: bool) -> bool {
         let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_H), Sense::click());
         if !ui.is_rect_visible(rect) {
             return false;
         }
-        // the hover fill fades in; the chosen row has the selection fill and a short bar of the brand gradient
-        let t = super::motion::hover(ui, resp.id, resp.hovered() || selected);
+        // the hover fill fades in; the chosen row is tinted with the brand colour and outlined in it
+        let t = super::motion::hover(ui, resp.id, resp.hovered() && !selected);
+        let s = super::motion::toward(ui.ctx(), resp.id.with("on"), selected, super::motion::FAST);
+        let shape = CornerRadius::same(R_CONTROL);
         if t > 0.0 {
-            let fill = if selected { c_selection() } else { c_hover() };
-            ui.painter().rect_filled(rect, CornerRadius::same(R_CONTROL), fill.gamma_multiply(t));
+            ui.painter().rect_filled(rect, shape, c_hover().gamma_multiply(t));
         }
-        if selected {
-            let bar = egui::Rect::from_min_size(rect.left_top() + vec2(0.0, 10.0), vec2(3.0, ROW_H - 20.0));
-            super::motion::gradient_rect(ui.painter(), bar, 1, c_accent(), c_accent2());
+        if s > 0.0 {
+            ui.painter().rect(
+                rect,
+                shape,
+                c_accent_soft().gamma_multiply(s),
+                Stroke::new(1.0, c_accent().gamma_multiply(0.55 * s)),
+                egui::StrokeKind::Inside,
+            );
         }
-        let icon = egui::Rect::from_min_size(rect.left_top() + vec2(8.0, (ROW_H - 32.0) / 2.0), vec2(32.0, 32.0));
+        let icon = egui::Rect::from_min_size(rect.left_top() + vec2(6.0, (ROW_H - 34.0) / 2.0), vec2(34.0, 34.0));
         self.paint_slot(ui, icon, &e.id, &e.name);
-        let short = e.id.rsplit(':').next().unwrap_or(&e.id);
-        let sub = if e.stack > 1 { format!("{short}  \u{00B7}  stacks of {}", e.stack) } else { short.to_string() };
-        let clip = rect.shrink2(vec2(2.0, 0.0));
+        let sub = if e.stack > 1 { format!("Stacks of {}", e.stack) } else { "Does not stack".to_string() };
+        let clip = rect.shrink2(vec2(4.0, 0.0));
         let p = ui.painter().with_clip_rect(clip);
-        let font = if selected { super::fonts::semibold(FS_BODY) } else { FontId::proportional(FS_BODY) };
-        p.text(rect.left_top() + vec2(50.0, 4.0), egui::Align2::LEFT_TOP, &e.name, font, c_text());
-        // faint text never sits on the selection fill
+        let font = if selected { super::fonts::semibold(FS_BODY) } else { super::fonts::medium(FS_BODY) };
+        p.text(rect.left_top() + vec2(50.0, 6.0), egui::Align2::LEFT_TOP, &e.name, font, c_text());
+        // faint text never sits on a tinted fill
         let sub_color = if selected { c_muted() } else { c_faint() };
         p.text(
-            rect.left_top() + vec2(50.0, 22.0),
+            rect.left_top() + vec2(50.0, 25.0),
             egui::Align2::LEFT_TOP,
             sub,
             FontId::proportional(FS_META),
             sub_color,
         );
+        // the id is there for whoever looks for it, not in every row
+        let short = e.id.rsplit(':').next().unwrap_or(&e.id).to_string();
         focus_ring(ui, &resp, rect, R_CONTROL);
         resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, &e.name));
-        resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked()
+        resp.on_hover_text(short).on_hover_cursor(egui::CursorIcon::PointingHand).clicked()
     }
 
-    /// What was picked and how many of it.
+    /// What was picked and how many of it: the item's slot, name and how it stacks, then "How many?" with the quick
+    /// amounts, the field and, for what stacks, whole stacks and chests. `change` offers to pick another item (the
+    /// one-column page folds the list away once something is picked).
     pub(super) fn quantity_block(&mut self, ui: &mut Ui, book: &Arc<Book>, change: bool) {
         let Some(target) = self.target.clone() else { return };
         let item = book.ds.item(&target);
         let name = item.map_or_else(|| book.ds.name(&target), |i| i.name.clone());
         let stack = item.map_or(64, |i| i.stack);
         ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 12.0;
-            self.slot_icon(ui, &target, &name, 44.0);
+            ui.spacing_mut().item_spacing.x = 14.0;
+            self.slot_icon(ui, &target, &name, 60.0);
             ui.vertical(|ui| {
-                ui.spacing_mut().item_spacing.y = 2.0;
-                ui.label(RichText::new(&name).size(FS_SECTION).semibold());
+                ui.spacing_mut().item_spacing.y = 3.0;
+                ui.add_space(4.0);
+                // the game's id is there for whoever looks for it, under the pointer
+                ui.add(egui::Label::new(RichText::new(&name).size(FS_FIGURE).semibold()).truncate())
+                    .on_hover_text(RichText::new(&target).font(super::fonts::mono(FS_META)));
                 small_muted(ui, if stack > 1 { format!("Stacks of {stack}") } else { "Does not stack".to_string() });
             });
             if change {
@@ -195,50 +216,54 @@ impl CraftState {
             }
         });
         ui.add_space(4.0);
-        ui.label(RichText::new("How many?").semibold());
         let parsed = parse_qty(&self.qty_text);
-        ui.horizontal(|ui| {
+        let current = parsed.as_ref().ok().copied();
+        ui.label(RichText::new("How many?").font(super::fonts::medium(FS_BODY)));
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = vec2(6.0, 8.0);
+            for v in QUICK_AMOUNTS {
+                if amount_chip(ui, &v.to_string(), current == Some(v)).clicked() {
+                    self.qty_text = thousands(v);
+                    self.touch_plan();
+                }
+            }
+            ui.add_space(4.0);
             let mut edit = egui::TextEdit::singleline(&mut self.qty_text)
                 .id(egui::Id::unique("craft-qty"))
+                .font(super::fonts::mono(FS_BODY))
                 .margin(egui::Margin::symmetric(10, 7))
                 .background_color(c_field());
             if parsed.is_err() {
                 edit = edit.text_color(c_danger());
             }
-            let r = ui.add_sized([140.0, 32.0], edit);
+            let r = ui.add_sized([96.0, 32.0], edit).on_hover_text("Any whole number, such as 250 or 3,000");
             if r.changed() {
                 self.touch_plan();
-            }
-            if let Ok(q) = &parsed {
-                small_muted(ui, format!("= {}", thousands(*q)));
             }
         });
         if let Err(e) = &parsed {
             ui.label(RichText::new(e).color(c_danger()).size(FS_META));
         }
-        let current = parsed.as_ref().ok().copied();
-        let st = u64::from(stack);
-        let options: Vec<(String, u64)> = if stack > 1 {
-            vec![
-                ("1".to_string(), 1),
-                (format!("1 stack = {}", thousands(st)), st),
-                (format!("27 stacks = {}", thousands(27 * st)), 27 * st),
-                (format!("54 stacks = {}", thousands(54 * st)), 54 * st),
-            ]
-        } else {
-            vec![("1".to_string(), 1), ("9".to_string(), 9), ("27".to_string(), 27), ("54".to_string(), 54)]
-        };
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
-            for (label, v) in options {
-                if chip(ui, &label, current == Some(v)).clicked() {
-                    self.qty_text = thousands(v);
-                    self.touch_plan();
-                }
-            }
-        });
         if stack > 1 {
-            small_muted(ui, "27 stacks fill a chest, 54 a double chest.");
+            // whole stacks and chests, for building in bulk
+            let st = u64::from(stack);
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
+                for (label, v, tip) in [
+                    ("1 stack", st, "One stack"),
+                    ("27 stacks", 27 * st, "Fills a chest"),
+                    ("54 stacks", 54 * st, "Fills a double chest"),
+                ] {
+                    let r = amount_chip(ui, label, current == Some(v));
+                    if r.on_hover_text(format!("{tip}: {}", thousands(v))).clicked() {
+                        self.qty_text = thousands(v);
+                        self.touch_plan();
+                    }
+                }
+                if let Some(q) = current.filter(|q| *q >= st) {
+                    small_faint(ui, stack_note(q, stack));
+                }
+            });
         }
     }
 
@@ -455,4 +480,44 @@ impl CraftState {
             }
         });
     }
+}
+
+/// The search over the item list: a magnifier at its left, and the "/" that reaches it named in its hint.
+fn search_line(ui: &mut Ui, text: &mut String) -> egui::Response {
+    let r = ui.add_sized(
+        [ui.available_width(), 36.0],
+        egui::TextEdit::singleline(text)
+            .id(egui::Id::unique("craft-search"))
+            .hint_text(RichText::new("Search items   /").color(c_faint()))
+            .margin(egui::Margin { left: 34, right: 10, top: 8, bottom: 8 })
+            .background_color(c_field()),
+    );
+    let fg = if r.has_focus() { c_text() } else { c_muted() };
+    super::icons::paint(
+        ui.painter(),
+        super::icons::Icon::Search,
+        egui::pos2(r.rect.left() + 18.0, r.rect.center().y),
+        15.0,
+        fg,
+    );
+    r
+}
+
+/// A quick amount beside "How many?": a small square-cornered chip with the number in the monospace face, tinted
+/// with the brand colour when it is the amount asked for.
+fn amount_chip(ui: &mut Ui, text: &str, selected: bool) -> egui::Response {
+    let font = super::fonts::mono(FS_BODY - 1.0);
+    let galley = ui.painter().layout_no_wrap(text.to_string(), font, egui::Color32::PLACEHOLDER);
+    let (rect, resp) = ui.allocate_exact_size(vec2((galley.size().x + 22.0).max(40.0), 32.0), Sense::click());
+    let t = super::motion::hover(ui, resp.id, resp.hovered());
+    let s = super::motion::toward(ui.ctx(), resp.id.with("on"), selected, super::motion::FAST);
+    let bg = super::motion::mix(super::motion::mix(c_field(), c_field_hover(), t), c_accent_soft(), s);
+    let line = super::motion::mix(c_border(), c_accent().gamma_multiply(0.7), s);
+    let ink = if is_dark() { c_accent() } else { c_accent_hover() };
+    let fg = super::motion::mix(c_text(), ink, s);
+    ui.painter().rect(rect, CornerRadius::same(R_CONTROL), bg, Stroke::new(1.0, line), egui::StrokeKind::Inside);
+    ui.painter().galley(rect.center() - galley.size() / 2.0, galley, fg);
+    focus_ring(ui, &resp, rect, R_CONTROL);
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, text));
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
