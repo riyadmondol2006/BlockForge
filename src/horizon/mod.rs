@@ -285,6 +285,8 @@ pub async fn prepare(
             env.push((k, v));
         }
     }
+    // the taskbar shows Horizon's logo for its window (a hidden menu entry for its app id, on Linux)
+    crate::game_icons::ensure_horizon(settings);
     // the graphics card chosen in Settings, for computers with two
     let program = release::program(&build, "horizon-client");
     let gpu_choice = crate::gpu::Choice::parse(&ls.gpu);

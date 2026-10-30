@@ -3,7 +3,7 @@
 The section for a version is used as the text of its release on GitHub. Older releases (the Java versions, up to
 3.4.42.x) are on the [releases page](https://github.com/riyadmondol2006/BlockForge/releases).
 
-## Unreleased
+## 5.1.0
 
 ### What is new
 
@@ -22,6 +22,13 @@ The section for a version is used as the text of its release on GitHub. Older re
   the loader, Java and its arguments, commands, fast start and the other helpers, shader packs, modpack export) is
   left out of its page, its menus and Explore's "install to" lists. Its card and banner say "Horizon" where the loader would be, and its page has
   an About Horizon card with the build it plays.
+- **The command line knows Horizon too:** `blockforge launch` starts a Horizon instance as Horizon, and `add`,
+  `repair` and `export` refuse what is Java's for it, with the reason.
+- **Games show their logo in the taskbar on Linux.** GNOME on Wayland only shows a window's icon when a menu entry
+  claims it, and none did for Minecraft (newer versions) or Horizon, so their windows had a blank icon. BlockForge now
+  adds a hidden entry for each, with Minecraft's icon from your own copy of the game and Horizon's logo, unless another
+  program already has one (the Horizon launcher's is left alone). `"desktopIntegration": false` in the settings
+  file switches it off.
 - **Credit where it is due:** Horizon is made by the Horizon project and its contributors and shared under the MIT
   licence; it is an unofficial fan project, not affiliated with Mojang or Microsoft. New instance, the instance page
   and About credit it and link to [playhorizon.dev](https://playhorizon.dev) and
