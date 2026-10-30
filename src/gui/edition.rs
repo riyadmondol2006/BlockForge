@@ -74,45 +74,9 @@ pub enum Edition {
     Horizon,
 }
 
-/// What Explore (or a dropped file, or Add from GitHub) can put into an instance.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(super) enum Content {
-    Mods,
-    Modpacks,
-    ResourcePacks,
-    Shaders,
-    DataPacks,
-    Worlds,
-    Plugins,
-}
-
-impl From<crate::modrinth::Kind> for Content {
-    fn from(kind: crate::modrinth::Kind) -> Content {
-        use crate::modrinth::Kind;
-        match kind {
-            Kind::Mod => Content::Mods,
-            Kind::Modpack => Content::Modpacks,
-            Kind::ResourcePack => Content::ResourcePacks,
-            Kind::Shader => Content::Shaders,
-            Kind::DataPack => Content::DataPacks,
-        }
-    }
-}
-
-impl From<crate::curseforge::api::Section> for Content {
-    fn from(section: crate::curseforge::api::Section) -> Content {
-        use crate::curseforge::api::Section;
-        match section {
-            Section::Mods => Content::Mods,
-            Section::Modpacks => Content::Modpacks,
-            Section::ResourcePacks => Content::ResourcePacks,
-            Section::Worlds => Content::Worlds,
-            Section::ShaderPacks => Content::Shaders,
-            Section::DataPacks => Content::DataPacks,
-            Section::Plugins => Content::Plugins,
-        }
-    }
-}
+/// What Explore (or a dropped file, or Add from GitHub) can put into an instance: the same kinds the command line
+/// asks [`horizon::policy`] about, so both refuse the same things.
+pub(super) use crate::horizon::policy::Content;
 
 /// What Explore shows: the CurseForge `section` when CurseForge is the side shown (`cf_active`), else Modrinth's
 /// `kind`. The two are kept apart: CurseForge's Worlds has no Modrinth kind, which stays at the one open before.
@@ -128,7 +92,7 @@ pub(super) fn active_content(
 /// Horizon runs no Java mods and no loader, so only what it reads as the game does goes into one of its instances:
 /// resource packs and worlds.
 pub(super) fn takes(inst: &Instance, content: Content) -> bool {
-    !horizon::is_horizon(inst) || matches!(content, Content::ResourcePacks | Content::Worlds)
+    horizon::policy::allows(inst, horizon::policy::Action::Add(content)).is_ok()
 }
 
 /// Whether the instance menu's `act` means something for a Horizon instance. Its mods, its loader, the helpers that
