@@ -39,6 +39,10 @@
 - **Native and fast.** The launcher is a single small Rust program: no Java to start up first, so the window is there in
   a fifth of a second. Minecraft itself still runs on Java, and BlockForge downloads the right Java for each game for
   you.
+- **Built around playing.** Home opens on the instance you played last, with one big Play button. Every instance gets
+  its own pixel-art landscape as its cover, drawn from its version, loader and a theme you can pick, so your
+  instances look like games, not rows in a table. Everything else sits in five places: Home, Library, Explore,
+  Workshop and Utilities.
 - **Play offline, no account needed.** Type any name and play, pick a saved player, or sign in with Microsoft. Signing in
   is optional.
 - **Every modpack source in one place.** ATLauncher, CurseForge, Modrinth, FTB and Technic packs, or any Minecraft version
@@ -56,11 +60,11 @@
   Forge and NeoForge. **Low-end mode** lowers the graphics settings of games on a slow computer (on by itself when the
   computer looks slow) and puts your own settings back when you switch it off. Each can be switched off in
   Settings > Game and for each instance on its own.
-- **A crafting calculator.** Pick an item and an amount and the Crafting page lists what to gather, what to craft or
+- **A crafting calculator.** Pick an item and an amount and the calculator in the Workshop lists what to gather, what to craft or
   smelt in order, the fuel, and how many chests it takes, using the recipes of your own Minecraft files, so every
   version from 1.13 on works.
-- **World conversion.** Bedrock Edition worlds to Java Edition, and only that way. The Tools page has a Convert a
-  Bedrock world screen (a world folder, or a `.mcworld` or `.zip`, to a Java world from 1.13 to the newest version), and
+- **World conversion.** Bedrock Edition worlds to Java Edition, and only that way. The Workshop has a world converter
+  that walks you through it step by step (a world folder, or a `.mcworld` or `.zip`, to a Java world from 1.13 to the newest version), and
   an instance has an Add a Bedrock world button that converts the world straight into its saves folder, so it shows
   up in Singleplayer. World conversion is powered by a Rust port of [Chunker](https://github.com/HiveGamesOSS/Chunker) by Hive Games (MIT). The original
   world is never changed. See [Credits and license](#credits-and-license).
@@ -74,15 +78,15 @@
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/screenshots/home.png" alt="Home" width="100%"><br><sub>Home: continue where you left off, with a strip of the days you played</sub></td>
-    <td width="50%"><img src="docs/screenshots/library.png" alt="Library" width="100%"><br><sub>Library of your instances</sub></td>
+    <td width="50%"><img src="docs/screenshots/home.png" alt="Home" width="100%"><br><sub>Home: continue where you left off, on the instance's own cover</sub></td>
+    <td width="50%"><img src="docs/screenshots/library.png" alt="Library" width="100%"><br><sub>Library: covers, favourites and a filter for each loader</sub></td>
   </tr>
   <tr>
-    <td width="50%"><img src="docs/screenshots/mods.png" alt="Mods" width="100%"><br><sub>Mods with icons, updates and one-click switches</sub></td>
-    <td width="50%"><img src="docs/screenshots/discover.png" alt="Discover" width="100%"><br><sub>Find mods on Modrinth or CurseForge</sub></td>
+    <td width="50%"><img src="docs/screenshots/mods.png" alt="Mods" width="100%"><br><sub>Mods with icons, waiting updates and one-click switches</sub></td>
+    <td width="50%"><img src="docs/screenshots/discover.png" alt="Discover" width="100%"><br><sub>Explore Modrinth, CurseForge, ATLauncher, Technic and FTB in one place</sub></td>
   </tr>
   <tr>
-    <td width="50%"><img src="docs/screenshots/convert.png" alt="World converter" width="100%"><br><sub>World converter: Bedrock to Java</sub></td>
+    <td width="50%"><img src="docs/screenshots/convert.png" alt="World converter" width="100%"><br><sub>World converter: Bedrock to Java, step by step</sub></td>
     <td width="50%"><img src="docs/screenshots/crafting.png" alt="Crafting calculator" width="100%"><br><sub>Crafting calculator: what to gather and craft</sub></td>
   </tr>
 </table>
@@ -92,20 +96,20 @@
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/screenshots/instance.png" alt="Instance" width="100%"><br><sub>One instance: facts, play history and backups</sub></td>
+    <td width="50%"><img src="docs/screenshots/instance.png" alt="Instance" width="100%"><br><sub>One instance: play time, play history and backups</sub></td>
     <td width="50%"><img src="docs/screenshots/logs.png" alt="Game log" width="100%"><br><sub>The game's log, live, with filter and copy</sub></td>
   </tr>
   <tr>
     <td width="50%"><img src="docs/screenshots/packs.png" alt="Modpacks" width="100%"><br><sub>ATLauncher and Technic modpacks</sub></td>
-    <td width="50%"><img src="docs/screenshots/create.png" alt="New instance" width="100%"><br><sub>New instance with any version and mod loader</sub></td>
+    <td width="50%"><img src="docs/screenshots/create.png" alt="New instance" width="100%"><br><sub>New instance in three steps: version, loader, the rest</sub></td>
   </tr>
   <tr>
     <td width="50%"><img src="docs/screenshots/who-is-playing.png" alt="Who's playing" width="100%"><br><sub>Who's playing: an offline name or Microsoft</sub></td>
-    <td width="50%"><img src="docs/screenshots/instance-settings.png" alt="Instance settings" width="100%"><br><sub>Settings of one instance: memory, Java, commands</sub></td>
+    <td width="50%"><img src="docs/screenshots/instance-settings.png" alt="Instance settings" width="100%"><br><sub>Settings of one instance: its cover, memory, Java, commands</sub></td>
   </tr>
   <tr>
     <td width="50%"><img src="docs/screenshots/accounts.png" alt="Accounts" width="100%"><br><sub>Accounts</sub></td>
-    <td width="50%"><img src="docs/screenshots/settings.png" alt="Settings" width="100%"><br><sub>Settings</sub></td>
+    <td width="50%"><img src="docs/screenshots/settings.png" alt="Settings" width="100%"><br><sub>Settings with a search across all of them</sub></td>
   </tr>
   <tr>
     <td width="50%"><img src="docs/screenshots/tools.png" alt="Tools" width="100%"><br><sub>Tools: network checker, support bundle, clean-up</sub></td>
@@ -216,13 +220,13 @@ import screen, which is what double-clicking a `.mrpack` does.
 
 ## What changed from ATLauncher
 
-- **Rewritten in Rust** with a new window written from scratch: sidebar navigation, Material-style dark and light looks,
-  18 themes, and vector icons.
+- **Rewritten in Rust** with a new window written from scratch: five places in the sidebar, a generated cover for every
+  instance, dark and light looks (or following the system), 18 themes, and vector icons.
 - **Offline players** are built in, and any account can be picked for a game with the Play as button next to Play, and several games can run at once.
 - **Performance helpers**: Fast start, the smoothness helper and Low-end mode (Settings > Game > Performance, and a
   switch on every instance), for every mod loader. If a game closes early with a helper on, BlockForge offers to turn
   them off, and switches the smoothness helper off by itself after two early closes in a row.
-- **Crafting calculator** (the Crafting page): materials, steps, tree and storage for any item, with your own stock,
+- **Crafting calculator** (in the Workshop): materials, steps, tree and storage for any item, with your own stock,
   saved plans and a shopping list to copy.
 - **Graphics card choice** for laptops with two cards (Settings > Game > Graphics card): power saving, high
   performance, or a card by name on Linux.

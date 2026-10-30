@@ -991,6 +991,8 @@ impl ConvertState {
                 Some(Dest { folder: "Survival".into(), name: "Survival".into(), saves, mc_version: "1.21.4".into() });
             self.via_instance = true;
         }
+        // the made-up folders aren't on this computer, and nothing is written for a picture: the place is fine
+        self.out_check = Some((self.output.clone(), self.source.clone(), OutputCheck::Ok));
         let job = ConvertJob {
             input: source,
             output: PathBuf::from(&self.output),
