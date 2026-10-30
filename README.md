@@ -74,6 +74,25 @@
 - **Updates itself, in one click.** BlockForge checks its GitHub releases and installs the new version in the way that
   fits how you installed it.
 
+## Horizon (Rust rewrite)
+
+BlockForge can also play [Horizon](https://playhorizon.dev), Minecraft: Java Edition rewritten in Rust by the Horizon
+project. In New instance, choose **Horizon** instead of Minecraft: Java Edition. There is no version or mod loader to
+pick: each Horizon build plays the Minecraft version it is made for (26.3 now).
+
+- It plays singleplayer and servers, worlds in Minecraft's own format, resource packs and Horizon's own mods. Java
+  mods, mod loaders, shader packs and the Java settings (memory, Java, fast start) are not for it, so its instance page
+  leaves them out.
+- It needs a Microsoft account that owns Minecraft: Java Edition.
+- BlockForge downloads Horizon's signed release, checks it, and prepares it from BlockForge's own copy of Minecraft
+  (about 1.5 GB the first time). What Horizon needs is kept in the `horizon` folder of BlockForge's data folder and in
+  the instance's own folder; your normal Minecraft, its instances and other launchers are left as they are.
+- It is experimental: Horizon is young, and so is BlockForge's support for it.
+
+Horizon is made by the Horizon project and its contributors and shared under the MIT licence
+([source on GitHub](https://github.com/horizon-rust/horizon)). It is an unofficial fan project, not affiliated with
+Mojang or Microsoft. BlockForge only downloads and starts it.
+
 ## Screenshots
 
 <table>
@@ -272,3 +291,8 @@ World conversion is a Rust port of [Chunker](https://github.com/HiveGamesOSS/Chu
 distributed under the MIT License (Copyright (c) 2024 Hive Games). The license text is in [NOTICE.md](NOTICE.md), the
 files derived from Chunker say so in their header, and the Convert screen and the About page credit it. BlockForge is
 not affiliated with or endorsed by Hive Games.
+
+[Horizon](https://github.com/horizon-rust/horizon), which BlockForge can download and start, is made by the Horizon
+project and its contributors and shared under the MIT licence. BlockForge doesn't include it; it downloads Horizon's own
+signed releases. Horizon is an unofficial fan project, not affiliated with Mojang or Microsoft, and BlockForge is not
+affiliated with the Horizon project.

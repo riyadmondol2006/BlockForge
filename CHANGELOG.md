@@ -3,6 +3,27 @@
 The section for a version is used as the text of its release on GitHub. Older releases (the Java versions, up to
 3.4.42.x) are on the [releases page](https://github.com/riyadmondol2006/BlockForge/releases).
 
+## Unreleased
+
+### What is new
+
+- **Play Horizon, Minecraft: Java Edition rewritten in Rust.** New instance now starts with a choice of game:
+  Minecraft: Java Edition, or Horizon. Horizon plays the Minecraft version its builds are made for (26.3 now), so there
+  is no version or mod loader to pick: the card says what plays (singleplayer, servers, worlds in Minecraft's own
+  format, resource packs, Horizon's own mods) and what doesn't (Java mods and mod loaders). BlockForge downloads
+  Horizon's signed release, checks it, and prepares it from its own copy of Minecraft, about 1.5 GB the first time.
+  Your normal Minecraft and its instances are left as they are. It needs a Microsoft account that owns Minecraft: Java
+  Edition. Experimental.
+- **A Horizon instance is an instance like the others:** Play, Stop, the log, play time, worlds, resource packs,
+  screenshots, backups, rename, cover and delete work as usual. What is Java's (mods, the loader, memory, Java and its
+  arguments, commands, fast start and the other helpers, shader packs, modpack export) is left out of its page, its
+  menus and Explore's "install to" lists. Its card and banner say "Horizon" where the loader would be, and its page has
+  an About Horizon card with the build it plays.
+- **Credit where it is due:** Horizon is made by the Horizon project and its contributors and shared under the MIT
+  licence; it is an unofficial fan project, not affiliated with Mojang or Microsoft. New instance, the instance page
+  and About credit it and link to [playhorizon.dev](https://playhorizon.dev) and
+  [its source](https://github.com/horizon-rust/horizon).
+
 ## 5.0.2
 
 A round of polish after an independent review of every page, which went from 6.5 to 8.7 out of 10.
