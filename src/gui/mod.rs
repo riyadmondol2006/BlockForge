@@ -1758,15 +1758,8 @@ impl App {
             for line in &lines {
                 muted(ui, line);
             }
-            ui.add_space(12.0);
-            ui.horizontal(|ui| {
-                if danger(ui, "Quit anyway").clicked() {
-                    answer = Some(true);
-                }
-                if secondary(ui, "Keep it open").clicked() {
-                    answer = Some(false);
-                }
-            });
+            ui.add_space(20.0);
+            answer = services::confirm_buttons(ui, "confirm-quit", "Keep it open", "Quit anyway", true, true);
         });
         if modal.should_close() && answer.is_none() {
             answer = Some(false);
@@ -1792,7 +1785,7 @@ impl App {
         let mut close = false;
         let mut delete = false;
         let modal = egui::Modal::new(egui::Id::unique("confirm-delete")).frame(modal_frame(ctx)).show(ctx, |ui| {
-            ui.set_width(380.0);
+            ui.set_width(services::modal_width(ctx, 420.0));
             ui.label(RichText::new(format!("Delete \"{name}\"?")).size(FS_SECTION).semibold());
             ui.add_space(4.0);
             if playing {
@@ -1803,15 +1796,12 @@ impl App {
             } else {
                 muted(ui, "Its worlds, mods and settings will be removed from this computer. This can't be undone.");
             }
-            ui.add_space(12.0);
-            ui.horizontal(|ui| {
-                if danger_enabled(ui, "Delete", !playing).clicked() {
-                    delete = true;
-                }
-                if secondary(ui, "Cancel").clicked() {
-                    close = true;
-                }
-            });
+            ui.add_space(20.0);
+            match services::confirm_buttons(ui, "confirm-delete", "Cancel", "Delete", true, !playing) {
+                Some(true) => delete = true,
+                Some(false) => close = true,
+                None => {}
+            }
         });
         if modal.should_close() {
             close = true;
@@ -2242,6 +2232,9 @@ impl eframe::App for App {
     fn raw_input_hook(&mut self, _ctx: &egui::Context, raw_input: &mut egui::RawInput) {
         if let Some(shot) = self.shot.as_mut() {
             raw_input.events.append(&mut shot.pointer);
+            // the tour's window has no window manager to give it the focus, and egui draws no keyboard focus in an
+            // unfocused window: pictured as the focused window a player sees
+            raw_input.focused = true;
         }
     }
 
@@ -2394,6 +2387,13 @@ const SHOT_PAGES: [&str; 61] = [
     "packs-pack",
     // the sidebar with jobs in progress and a game running
     "tasks",
+    // a network check's report, and the question before it is shared
+    "tools-net",
+    "tools-share",
+    // the Reinstall window of a server that needs attention
+    "servers-repair",
+    // Who's playing on the first start, with no account saved
+    "who-new",
 ];
 
 impl Shot {
@@ -2452,7 +2452,7 @@ impl App {
             widgets::shot_seek(None);
             self.shot_close_windows(before.trim_end_matches("-light"));
             let first = self.instances.first().map(|i| i.folder.clone());
-            if name != "who" {
+            if name != "who" && name != "who-new" {
                 self.who = None;
             }
             self.confirm_delete = None;
@@ -2581,6 +2581,13 @@ impl App {
                     self.who = Some(whoplays::WhoState::default());
                 }
                 "tools" => self.page = Page::Tools,
+                "tools-net" => self.shot_net_report(false),
+                "tools-share" => self.shot_net_report(true),
+                "servers-repair" => self.shot_server_repair(),
+                "who-new" => {
+                    self.page = Page::Home;
+                    self.who = Some(whoplays::WhoState::first_run());
+                }
                 "servers" => self.page = Page::Servers,
                 v if v.starts_with("craft") => self.shot_craft(v.trim_end_matches("-light")),
                 #[cfg(feature = "converter")]
@@ -2767,6 +2774,8 @@ impl App {
         self.close_manage_backups();
         self.confirm_stop = None;
         self.confirm_play_unsaved = None;
+        self.svc.net_report = None;
+        self.svc.server_repair = None;
         // these also hold their page's lists, which take a while to come again: only when their window was opened
         match before {
             "cf-install" => self.cf = curseforge::CfState::default(),

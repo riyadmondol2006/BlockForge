@@ -17,6 +17,11 @@ const ADD_W: f32 = 380.0;
 const ADD_GAP: f32 = 28.0;
 /// The narrowest the list gets with the column beside it; on a narrower page the column goes under the list.
 const LIST_MIN_BESIDE: f32 = 520.0;
+/// Under the list, the two ways to add an account sit side by side in cards at least this wide (one above the other
+/// in a narrower window).
+const ADD_PAIR_MIN: f32 = 300.0;
+/// The room between those two cards.
+const ADD_PAIR_GAP: f32 = 12.0;
 
 #[derive(Default)]
 pub struct AcctState {
@@ -36,7 +41,6 @@ impl App {
     pub(super) fn accounts_ui(&mut self, ui: &mut Ui) {
         self.account_corner(
             ui,
-            super::Page::Accounts,
             "Accounts",
             "Choose who plays. Microsoft accounts can join online servers; offline players can't.",
             COLUMN,
@@ -69,7 +73,9 @@ impl App {
                 ScrollArea::vertical().id_salt("accounts-add").auto_shrink(false).show(ui, |ui| {
                     ui.set_max_width(ADD_W);
                     column_head(ui, Icon::Plus, "Add an account", "Microsoft, or a name for offline games");
-                    self.add_account_cards(ui);
+                    self.microsoft_card(ui);
+                    ui.add_space(10.0);
+                    self.offline_card(ui);
                     ui.add_space(24.0);
                 });
             });
@@ -86,7 +92,7 @@ impl App {
                     "Add an account",
                     "Sign in with Microsoft, or add a player for offline games",
                 );
-                self.add_account_cards(ui);
+                self.add_account_pair(ui);
                 ui.add_space(24.0);
             });
         }
@@ -183,7 +189,7 @@ impl App {
                                     tag(ui, "Sign in again", c_danger());
                                 }
                             });
-                            account_meta(ui, acc.offline, &acc.uuid);
+                            account_meta(ui, acc.offline, acc.must_login, &acc.uuid);
                         });
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             // removing asks once more: a Microsoft account has to be signed in again afterwards
@@ -237,143 +243,170 @@ impl App {
         }
     }
 
-    /// The ways to add an account, a card each: signing in with Microsoft (with the code to type once it is asked
-    /// for), and an offline player's name.
-    fn add_account_cards(&mut self, ui: &mut Ui) {
-        card(ui, |ui| {
-            method_row(
-                ui,
-                Icon::User,
-                "Microsoft",
-                "Your browser opens a Microsoft page; enter the code shown here to sign in.",
-                220.0,
-                |ui| {
-                    if self.acct.device.is_none()
-                        && !self.acct.signing_in
-                        && primary(ui, "Sign in with Microsoft").clicked()
-                    {
-                        self.start_sign_in();
-                    }
-                },
-            );
-            // what follows the sign-in lines up with the text of its row, not with the icon (and leaves no room
-            // when there is nothing to show)
-            let more = self.acct.last_error.is_some() || self.acct.device.is_some() || self.acct.signing_in;
-            if more {
-                under_head(ui, |ui| {
-                    if let Some(e) = self.acct.last_error.clone() {
-                        ui.add_space(8.0);
-                        if notice(ui, NoticeKind::Error, &e, Some("Try again")).is_some_and(|r| r.clicked()) {
-                            self.start_sign_in();
-                        }
-                    }
-                    match self.acct.device.clone() {
-                        Some(code) => {
-                            ui.add_space(10.0);
-                            ui.horizontal_wrapped(|ui| {
-                                ui.spacing_mut().item_spacing.x = 12.0;
-                                // the code, large and in figures of equal width, so it can be read out and typed
-                                // on the brand tint with a brand outline: the one thing on the page to look at now
-                                egui::Frame::new()
-                                    .fill(c_accent_soft())
-                                    .stroke(Stroke::new(1.0, c_accent().gamma_multiply(0.6)))
-                                    .corner_radius(CornerRadius::same(R_CONTROL))
-                                    .inner_margin(egui::Margin::symmetric(18, 8))
-                                    .show(ui, |ui| {
-                                        ui.label(RichText::new(&code.user_code).size(FS_TITLE).semibold().monospace());
-                                    });
-                                ui.vertical(|ui| {
-                                    ui.spacing_mut().item_spacing.y = 6.0;
-                                    ui.add_space(6.0);
-                                    ui.horizontal(|ui| {
-                                        if secondary(ui, "Copy code").clicked() {
-                                            ui.ctx().copy_text(code.user_code.clone());
-                                            self.toast("Copied the code");
-                                        }
-                                        if secondary(ui, "Open the page again").clicked() {
-                                            self.open_link(&code.verification_uri);
-                                        }
-                                        if secondary(ui, "Cancel").clicked() {
-                                            self.acct.device = None;
-                                            self.acct.signing_in = false;
-                                        }
-                                    });
-                                });
-                            });
-                            ui.add_space(6.0);
-                            ui.horizontal(|ui| {
-                                spinner_sized(ui, 18.0);
-                                let text = format!(
-                                    "The code is on your clipboard. Paste it at {} and finish there.",
-                                    code.verification_uri
-                                );
-                                ui.add(egui::Label::new(RichText::new(text).color(c_muted())).wrap());
-                            });
-                        }
-                        None if self.acct.signing_in => {
-                            ui.add_space(4.0);
-                            ui.horizontal(|ui| {
-                                spinner(ui);
-                                muted(ui, "Asking Microsoft for a code");
-                                if secondary(ui, "Cancel").clicked() {
-                                    self.acct.signing_in = false;
-                                }
-                            });
-                        }
-                        None => {}
+    /// The ways to add an account under the list: the two cards side by side when there is room for both (so the
+    /// offline name and its Add are in sight in a small window too), otherwise one above the other.
+    fn add_account_pair(&mut self, ui: &mut Ui) {
+        let Some(w) = pair_width(ui.available_width()) else {
+            self.microsoft_card(ui);
+            ui.add_space(10.0);
+            self.offline_card(ui);
+            return;
+        };
+        ui.horizontal_top(|ui| {
+            ui.spacing_mut().item_spacing.x = ADD_PAIR_GAP;
+            for microsoft in [true, false] {
+                ui.allocate_ui_with_layout(egui::vec2(w, 0.0), Layout::top_down(Align::Min), |ui| {
+                    ui.set_width(w);
+                    if microsoft {
+                        self.microsoft_card(ui);
+                    } else {
+                        self.offline_card(ui);
                     }
                 });
             }
         });
-        ui.add_space(10.0);
-        card(ui, |ui| {
-            method_row(
-                ui,
-                Icon::Play,
-                "Offline player",
-                "Just a name. Works for single player and offline-mode servers. 3\u{2013}16 letters, numbers or underscores.",
-                330.0,
-                |ui| {
-                    let mut name = std::mem::take(&mut self.acct.offline_name);
-                    // the row lays out from the right, so the field and button go in the order that reads right
-                    let reversed = ui.layout().prefer_right_to_left();
-                    let mut r = None;
-                    let mut add_clicked = false;
-                    let valid = super::whoplays::valid_player_name(name.trim());
-                    for step in if reversed { [1, 0] } else { [0, 1] } {
-                        if step == 0 {
-                            // the field gives up some width in a narrow column, so Add stays beside it
-                            let width = (ui.available_width() - 72.0).clamp(150.0, 240.0);
-                            r = Some(search_field(ui, &mut name, "Player name", width));
-                        } else {
-                            add_clicked = secondary_enabled(ui, "Add", valid).clicked();
-                        }
+    }
+
+    /// Signing in with Microsoft, in a card (with the code to type once it is asked for).
+    fn microsoft_card(&mut self, ui: &mut Ui) {
+        card(ui, |ui| self.microsoft_rows(ui));
+    }
+
+    /// An offline player's name, in a card.
+    fn offline_card(&mut self, ui: &mut Ui) {
+        card(ui, |ui| self.offline_rows(ui));
+    }
+
+    fn microsoft_rows(&mut self, ui: &mut Ui) {
+        method_row(
+            ui,
+            Icon::User,
+            "Microsoft",
+            "Your browser opens a Microsoft page; enter the code shown here to sign in.",
+            220.0,
+            |ui| {
+                if self.acct.device.is_none()
+                    && !self.acct.signing_in
+                    && primary(ui, "Sign in with Microsoft").clicked()
+                {
+                    self.start_sign_in();
+                }
+            },
+        );
+        // what follows the sign-in lines up with the text of its row, not with the icon (and leaves no room
+        // when there is nothing to show)
+        let more = self.acct.last_error.is_some() || self.acct.device.is_some() || self.acct.signing_in;
+        if more {
+            under_head(ui, |ui| {
+                if let Some(e) = self.acct.last_error.clone() {
+                    ui.add_space(8.0);
+                    if notice(ui, NoticeKind::Error, &e, Some("Try again")).is_some_and(|r| r.clicked()) {
+                        self.start_sign_in();
                     }
-                    // the same rule as everywhere else a name is typed (Minecraft's own: 3 to 16 characters)
-                    let valid = super::whoplays::valid_player_name(name.trim());
-                    if let Some(problem) =
-                        super::whoplays::name_problem(name.trim()).filter(|_| !name.trim().is_empty())
-                    {
-                        ui.label(RichText::new(problem).size(FS_META).color(c_danger()));
+                }
+                match self.acct.device.clone() {
+                    Some(code) => {
+                        ui.add_space(10.0);
+                        ui.horizontal_wrapped(|ui| {
+                            ui.spacing_mut().item_spacing.x = 12.0;
+                            // the code, large and in figures of equal width, so it can be read out and typed
+                            // on the brand tint with a brand outline: the one thing on the page to look at now
+                            egui::Frame::new()
+                                .fill(c_accent_soft())
+                                .stroke(Stroke::new(1.0, c_accent().gamma_multiply(0.6)))
+                                .corner_radius(CornerRadius::same(R_CONTROL))
+                                .inner_margin(egui::Margin::symmetric(18, 8))
+                                .show(ui, |ui| {
+                                    ui.label(RichText::new(&code.user_code).size(FS_TITLE).semibold().monospace());
+                                });
+                            ui.vertical(|ui| {
+                                ui.spacing_mut().item_spacing.y = 6.0;
+                                ui.add_space(6.0);
+                                // the buttons wrap in a narrow column rather than run out of the card
+                                ui.horizontal_wrapped(|ui| {
+                                    if secondary(ui, "Copy code").clicked() {
+                                        ui.ctx().copy_text(code.user_code.clone());
+                                        self.toast("Copied the code");
+                                    }
+                                    if secondary(ui, "Open the page again").clicked() {
+                                        self.open_link(&code.verification_uri);
+                                    }
+                                    if secondary(ui, "Cancel").clicked() {
+                                        self.acct.device = None;
+                                        self.acct.signing_in = false;
+                                    }
+                                });
+                            });
+                        });
+                        ui.add_space(6.0);
+                        ui.horizontal_top(|ui| {
+                            spinner_sized(ui, 18.0);
+                            let text = format!(
+                                "The code is on your clipboard. Paste it at {} and finish there.",
+                                code.verification_uri
+                            );
+                            ui.add(egui::Label::new(RichText::new(text).color(c_muted())).wrap());
+                        });
                     }
-                    let add = add_clicked
-                        || (valid
-                            && r.is_some_and(|r| r.lost_focus())
-                            && ui.input(|i| i.key_pressed(egui::Key::Enter)));
-                    if add && valid {
-                        let acc = crate::accounts::Account::offline(name.trim());
-                        self.accounts.retain(|a| !(a.offline && a.name() == acc.name()));
-                        self.settings.last_account = Some(acc.uuid.clone());
-                        self.toast(format!("Added {}", acc.name()));
-                        self.accounts.push(acc);
-                        self.save_accounts();
-                        self.save_settings();
-                        name.clear();
+                    None if self.acct.signing_in => {
+                        ui.add_space(4.0);
+                        ui.horizontal_wrapped(|ui| {
+                            spinner(ui);
+                            muted(ui, "Asking Microsoft for a code");
+                            if secondary(ui, "Cancel").clicked() {
+                                self.acct.signing_in = false;
+                            }
+                        });
                     }
-                    self.acct.offline_name = name;
-                },
-            );
-        });
+                    None => {}
+                }
+            });
+        }
+    }
+
+    fn offline_rows(&mut self, ui: &mut Ui) {
+        method_row(
+            ui,
+            Icon::Play,
+            "Offline player",
+            "Just a name. Works for single player and offline-mode servers. 3\u{2013}16 letters, numbers or underscores.",
+            330.0,
+            |ui| {
+                let mut name = std::mem::take(&mut self.acct.offline_name);
+                // the row lays out from the right, so the field and button go in the order that reads right
+                let reversed = ui.layout().prefer_right_to_left();
+                let mut r = None;
+                let mut add_clicked = false;
+                let valid = super::whoplays::valid_player_name(name.trim());
+                for step in if reversed { [1, 0] } else { [0, 1] } {
+                    if step == 0 {
+                        // the field gives up some width in a narrow column, so Add stays beside it
+                        let width = (ui.available_width() - 72.0).clamp(150.0, 240.0);
+                        r = Some(search_field(ui, &mut name, "Player name", width));
+                    } else {
+                        add_clicked = secondary_enabled(ui, "Add", valid).clicked();
+                    }
+                }
+                // the same rule as everywhere else a name is typed (Minecraft's own: 3 to 16 characters)
+                let valid = super::whoplays::valid_player_name(name.trim());
+                if let Some(problem) = super::whoplays::name_problem(name.trim()).filter(|_| !name.trim().is_empty()) {
+                    ui.label(RichText::new(problem).size(FS_META).color(c_danger()));
+                }
+                let add = add_clicked
+                    || (valid && r.is_some_and(|r| r.lost_focus()) && ui.input(|i| i.key_pressed(egui::Key::Enter)));
+                if add && valid {
+                    let acc = crate::accounts::Account::offline(name.trim());
+                    self.accounts.retain(|a| !(a.offline && a.name() == acc.name()));
+                    self.settings.last_account = Some(acc.uuid.clone());
+                    self.toast(format!("Added {}", acc.name()));
+                    self.accounts.push(acc);
+                    self.save_accounts();
+                    self.save_settings();
+                    name.clear();
+                }
+                self.acct.offline_name = name;
+            },
+        );
     }
 }
 
@@ -401,20 +434,27 @@ fn column_head(ui: &mut Ui, icon: Icon, title: &str, hint: &str) {
     ui.add_space(10.0);
 }
 
-/// The second line of an account row: what kind of account it is and its UUID, as one muted line. The UUID is set in
-/// the monospace style (figures of equal width) and cut with an ellipsis when the row is narrow; the tooltip has it all.
-fn account_meta(ui: &mut Ui, offline: bool, uuid: &str) {
-    let format = |font_id: egui::FontId| egui::TextFormat {
-        font_id,
-        color: c_muted(),
-        valign: Align::Center,
-        ..Default::default()
-    };
-    let kind = if offline { "Offline player" } else { "Microsoft account" };
-    let mut job = egui::text::LayoutJob::default();
-    job.append(&format!("{kind} \u{00B7} "), 0.0, format(egui::FontId::proportional(FS_META)));
-    job.append(uuid, 0.0, format(egui::TextStyle::Monospace.resolve(ui.style())));
-    ui.add(egui::Label::new(job).truncate()).on_hover_text(uuid);
+/// The second line of an account row: what kind of account it is and how it stands, as one muted line. The UUID is
+/// a detail for support, not for choosing who plays: it is in the line's tooltip, and the row's menu has Copy UUID.
+fn account_meta(ui: &mut Ui, offline: bool, must_login: bool, uuid: &str) {
+    let text = account_status(offline, must_login);
+    let color = if must_login && !offline { c_danger() } else { c_muted() };
+    ui.add(egui::Label::new(RichText::new(text).size(FS_META).color(color)).truncate())
+        .on_hover_text(format!("UUID {uuid}"));
+}
+
+/// What the second line of an account row says.
+fn account_status(offline: bool, must_login: bool) -> &'static str {
+    match (offline, must_login) {
+        (true, _) => "Offline player \u{00B7} single player and offline-mode servers",
+        (false, true) => "Microsoft account \u{00B7} signed out, sign in again to play online",
+        (false, false) => "Microsoft account \u{00B7} can join online servers",
+    }
+}
+
+/// The width of each of the two add-account cards side by side in `room`, or `None` when they don't both fit.
+fn pair_width(room: f32) -> Option<f32> {
+    (room >= 2.0 * ADD_PAIR_MIN + ADD_PAIR_GAP).then(|| ((room - ADD_PAIR_GAP) / 2.0).floor())
 }
 
 /// A small label in the brand gradient: what is true of this one row (the account that is playing).
@@ -483,4 +523,23 @@ fn method_row(ui: &mut Ui, icon: Icon, title: &str, hint: &str, control_width: f
             super::settings::wide_row(ui, title, hint, control_width, control);
         });
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_two_ways_to_add_an_account_sit_side_by_side_when_both_fit() {
+        assert_eq!(pair_width(760.0), Some(374.0));
+        assert_eq!(pair_width(612.0), Some(300.0));
+        assert_eq!(pair_width(611.0), None, "too narrow: one above the other");
+    }
+
+    #[test]
+    fn an_account_row_says_what_kind_it_is_and_how_it_stands_without_the_uuid() {
+        assert!(account_status(true, false).starts_with("Offline player"));
+        assert!(account_status(false, false).starts_with("Microsoft account"));
+        assert!(account_status(false, true).contains("sign in again"));
+    }
 }

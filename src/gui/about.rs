@@ -98,6 +98,21 @@ fn shortened(path: &std::path::Path) -> String {
     }
 }
 
+/// The logo of the hero, and the room between it and the text.
+const LOGO: f32 = 64.0;
+const LOGO_GAP: f32 = 18.0;
+/// The room between the text of the hero and the update button beside it.
+const BUTTON_GAP: f32 = 16.0;
+/// The narrowest the text of the hero gets with the update button beside it: narrower, and the install kind and the
+/// update status would wrap into scraps.
+const TEXT_MIN: f32 = 300.0;
+
+/// Whether the update button goes under the hero's text rather than beside it, in a hero `room` wide (inside its
+/// margins) with a button `button_w` wide.
+fn update_button_below(room: f32, button_w: f32) -> bool {
+    room - LOGO - LOGO_GAP - BUTTON_GAP - button_w < TEXT_MIN
+}
+
 impl App {
     /// The plain-text details people paste into a bug report.
     pub(super) fn about_details(&self) -> String {
@@ -117,7 +132,6 @@ impl App {
     pub(super) fn about_ui(&mut self, ui: &mut Ui) {
         self.account_corner(
             ui,
-            super::Page::About,
             "About",
             "The version, updates, and where BlockForge keeps its files.",
             COLUMN,
@@ -148,20 +162,37 @@ impl App {
             hero(ui, |ui| {
                 let button_id = ui.scope_id().with("about-update-button");
                 let button_w = remembered_width(ui, button_id, 150.0);
+                // the button goes under the text when beside it the text would have less than TEXT_MIN to wrap in
+                let stacked = update_button_below(ui.available_width(), button_w);
+                let mut update_button = |ui: &mut Ui| {
+                    if available.is_some() {
+                        // the banner's words: a copy that can't update itself gets the download page
+                        if primary(ui, if can_install { "Update now" } else { "Get the update" }).clicked() {
+                            show_offer = true;
+                        }
+                    } else if secondary_enabled(ui, "Check for updates", !busy).clicked() {
+                        check = true;
+                    }
+                };
                 ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 18.0;
-                    let (logo, _) = ui.allocate_exact_size(vec2(64.0, 64.0), egui::Sense::hover());
+                    ui.spacing_mut().item_spacing.x = LOGO_GAP;
+                    let (logo, _) = ui.allocate_exact_size(vec2(LOGO, LOGO), egui::Sense::hover());
                     brand_glow(ui.painter(), logo.center(), 96.0, 1.0);
                     egui::Image::from_texture(&self.logo).paint_at(ui, logo);
                     ui.vertical(|ui| {
-                        // the version wraps rather than run under the button in a narrow window
-                        ui.set_max_width((ui.available_width() - button_w - 16.0).max(140.0));
+                        if !stacked {
+                            ui.set_max_width(ui.available_width() - button_w - BUTTON_GAP);
+                        }
                         ui.spacing_mut().item_spacing.y = 3.0;
                         ui.add_space(2.0);
                         ui.label(RichText::new(crate::NAME).size(FS_TITLE).semibold());
                         ui.horizontal_wrapped(|ui| {
                             ui.spacing_mut().item_spacing.x = 6.0;
-                            ui.label(RichText::new(format!("v{}", version_text())).font(super::fonts::mono(FS_BODY)).color(c_text()));
+                            ui.label(
+                                RichText::new(format!("v{}", version_text()))
+                                    .font(super::fonts::mono(FS_BODY))
+                                    .color(c_text()),
+                            );
                             muted(ui, format!("\u{00B7} {}", install_label(kind)));
                         });
                         ui.add_space(2.0);
@@ -193,21 +224,22 @@ impl App {
                             }
                             ui.add(egui::Label::new(RichText::new(line).color(color).size(size)).wrap());
                         });
+                        if stacked {
+                            // under the text, lined up with it
+                            ui.add_space(10.0);
+                            let used = ui.horizontal(|ui| update_button(ui)).response.rect.width();
+                            remember_width(ui, button_id, used);
+                        }
                     });
-                    let used = ui
-                        .with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            if available.is_some() {
-                                // the banner's words: a copy that can't update itself gets the download page
-                                if primary(ui, if can_install { "Update now" } else { "Get the update" }).clicked() {
-                                    show_offer = true;
-                                }
-                            } else if secondary_enabled(ui, "Check for updates", !busy).clicked() {
-                                check = true;
-                            }
-                            ui.min_rect().width()
-                        })
-                        .inner;
-                    remember_width(ui, button_id, used);
+                    if !stacked {
+                        let used = ui
+                            .with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                update_button(ui);
+                                ui.min_rect().width()
+                            })
+                            .inner;
+                        remember_width(ui, button_id, used);
+                    }
                 });
             });
 
@@ -502,6 +534,17 @@ fn bullet(ui: &mut Ui, text: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_update_button_goes_under_the_text_when_beside_it_the_text_would_be_cramped() {
+        // a wide page: 720 less the hero's margins, a 150 wide button
+        assert!(!update_button_below(680.0, 150.0));
+        // a narrow hero: beside the button the text would have less than 300
+        assert!(update_button_below(540.0, 150.0));
+        // the text keeps at least TEXT_MIN beside the button
+        assert!(!update_button_below(LOGO + LOGO_GAP + TEXT_MIN + BUTTON_GAP + 150.0, 150.0));
+        assert!(update_button_below(LOGO + LOGO_GAP + TEXT_MIN + BUTTON_GAP + 149.0, 150.0));
+    }
 
     #[test]
     fn the_commit_is_shown_only_when_it_looks_like_one() {

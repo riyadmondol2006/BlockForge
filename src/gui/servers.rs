@@ -19,6 +19,8 @@ enum Act {
     Folder(String),
     Backup(String),
     Remove(String),
+    /// Open the window of what to do to install a broken server again.
+    Repair(String),
     Collapse(String, bool),
     Reload,
 }
@@ -119,11 +121,12 @@ impl App {
             }
             let titles = [
                 ("Ready", "Launch one to start it in a terminal window of its own"),
-                ("Need a look", "Fix these before anyone plays on them"),
+                ("Need attention", "Fix these before anyone plays on them"),
                 ("Hidden", "Put away for this account. Show one to use it again"),
             ];
             let mut first = true;
-            for (g, members) in groups.iter().enumerate() {
+            for g in GROUP_ORDER {
+                let members = &groups[g];
                 if members.is_empty() {
                     continue;
                 }
@@ -205,6 +208,7 @@ impl App {
                 }
             }
             Act::Remove(name) => self.svc.server_confirm_remove = Some(name),
+            Act::Repair(name) => self.svc.server_repair = Some(name),
             Act::Collapse(name, collapsed) => {
                 if let (Some(s), Some(uuid)) = (self.server(&name), self.current_account().map(|a| a.uuid.clone())) {
                     if let Some(a) = self.accounts.iter_mut().find(|a| a.uuid == uuid) {
@@ -226,6 +230,7 @@ impl App {
     }
 
     pub(super) fn servers_overlays(&mut self, ctx: &egui::Context) {
+        self.server_repair_ui(ctx);
         if let Some(name) = self.svc.server_confirm_launch.clone() {
             let body = "This server is open to the Log4Shell attack. For your safety, and for the players on your server, delete it and install it again. Start it anyway (not recommended)?";
             match confirm_modal(ctx, "server-launch", "This server isn't safe", body, "Launch anyway", true) {
@@ -261,6 +266,128 @@ impl App {
         }
     }
 }
+
+impl App {
+    /// "Reinstall", for a server with something wrong with it: BlockForge doesn't install servers itself, so the
+    /// window says what to do, in order, with a button for each step. Nothing is deleted from here without the
+    /// usual question: Delete opens it.
+    fn server_repair_ui(&mut self, ctx: &egui::Context) {
+        let Some(name) = self.svc.server_repair.clone() else { return };
+        let Some(s) = self.server(&name) else {
+            self.svc.server_repair = None;
+            return;
+        };
+        let busy = self.server_busy(&name);
+        let mut act = None;
+        let mut close = false;
+        let modal = egui::Modal::new(egui::Id::unique("server-repair")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
+            ui.set_width(super::services::modal_width(ctx, 500.0));
+            if super::discover::dialog_title(ui, &format!("Reinstall \u{201C}{name}\u{201D}")) {
+                close = true;
+            }
+            let pack = if s.pack.is_empty() || s.pack == "Minecraft" {
+                format!("Minecraft {}", s.minecraft_version)
+            } else {
+                format!("{} {}", s.pack, s.version)
+            };
+            ui.add(
+                egui::Label::new(
+                    RichText::new(format!(
+                        "A fresh copy of {pack} replaces this one. BlockForge doesn't install servers, so it is done \
+                         in three steps, and this copy stays until you delete it yourself."
+                    ))
+                    .color(c_muted()),
+                )
+                .wrap(),
+            );
+            ui.add_space(14.0);
+            card(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 0.0;
+                let steps: [(&str, String); 3] = [
+                    ("Back up the world", "Keeps the world, the mods and the settings in a backup".to_string()),
+                    (
+                        "Get the server files again",
+                        format!(
+                            "Download the server files of {pack} from the pack's page or the launcher that installed \
+                             it, into a new folder of the servers folder"
+                        ),
+                    ),
+                    ("Delete this copy", "Once the new one runs. You are asked before anything is removed".to_string()),
+                ];
+                for (n, (title, hint)) in steps.iter().enumerate() {
+                    if n > 0 {
+                        ui.add_space(10.0);
+                        rule(ui);
+                        ui.add_space(10.0);
+                    }
+                    super::settings::option_row(ui, &format!("{}. {title}", n + 1), hint, 180.0, None, |ui| {
+                        match n {
+                            0 if busy => {
+                                spinner_sized(ui, 18.0);
+                            }
+                            0 => {
+                                if secondary(ui, "Back up").clicked() {
+                                    act = Some(Act::Backup(name.clone()));
+                                }
+                            }
+                            1 => {
+                                if secondary_icon(ui, Icon::Folder, "Open servers folder").clicked() {
+                                    act = Some(Act::Folder(String::new()));
+                                }
+                            }
+                            _ => {
+                                if danger_enabled(ui, "Delete\u{2026}", !busy).clicked() {
+                                    act = Some(Act::Remove(name.clone()));
+                                }
+                            }
+                        }
+                    });
+                }
+            });
+            ui.add_space(16.0);
+            super::discover::dialog_footer(
+                ui,
+                "server-repair",
+                |_| {},
+                |ui| {
+                    if secondary(ui, "Close").clicked() {
+                        close = true;
+                    }
+                },
+            );
+        });
+        if modal.should_close() {
+            close = true;
+        }
+        if let Some(a) = act {
+            // the delete question goes on top of this window's place
+            if matches!(a, Act::Remove(_)) {
+                close = true;
+            }
+            self.server_action(a);
+        }
+        if close {
+            self.svc.server_repair = None;
+        }
+    }
+
+    /// For the screenshot tour: the Servers page with the Reinstall window of the first server that needs attention.
+    pub(super) fn shot_server_repair(&mut self) {
+        self.page = super::Page::Servers;
+        self.reload_servers();
+        self.svc.server_repair = self
+            .svc
+            .servers
+            .iter()
+            .zip(&self.svc.server_rows)
+            .find(|(s, row)| server_group(false, s.is_patched_for_log4_shell, row.has_script) == 1)
+            .map(|(s, _)| s.name.clone());
+    }
+}
+
+/// The order the groups are listed in: what needs attention first, then the servers that are ready, then the hidden
+/// ones.
+const GROUP_ORDER: [usize; 3] = [1, 0, 2];
 
 /// Which group a server is listed in: 0 ready, 1 something wrong with it, 2 hidden by the player.
 fn server_group(hidden: bool, patched: bool, has_script: bool) -> usize {
@@ -321,6 +448,22 @@ fn server_row(ui: &mut Ui, s: &Server, row: &ServerRow, hidden: bool, busy: bool
                     "No start script, so there is nothing to launch. Open its folder to add one, or install it again.",
                 );
             }
+            // the ways out, right under what is wrong
+            if (!s.is_patched_for_log4_shell || !row.has_script) && !busy {
+                ui.add_space(6.0);
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing = vec2(8.0, 6.0);
+                    if secondary_icon(ui, Icon::Folder, "Open folder").clicked() {
+                        act = Some(Act::Folder(s.name.clone()));
+                    }
+                    if secondary(ui, "Reinstall\u{2026}")
+                        .on_hover_text("What to do to install it again. Nothing is deleted without asking")
+                        .clicked()
+                    {
+                        act = Some(Act::Repair(s.name.clone()));
+                    }
+                });
+            }
         });
         used = ui
             .with_layout(Layout::right_to_left(Align::Min), |ui| {
@@ -355,13 +498,8 @@ fn server_row(ui: &mut Ui, s: &Server, row: &ServerRow, hidden: bool, busy: bool
                             ui.close();
                         }
                     });
-                    let launch = if row.has_script {
-                        secondary_icon(ui, Icon::Play, "Launch")
-                    } else {
-                        danger_enabled(ui, "Launch", false)
-                            .on_hover_text("This server has no start script, so there is nothing to launch")
-                    };
-                    if launch.clicked() {
+                    // without a start script there is nothing to launch: its row has the ways to fix that instead
+                    if row.has_script && secondary_icon(ui, Icon::Play, "Launch").clicked() {
                         act = Some(Act::Launch(s.name.clone()));
                     }
                 }
@@ -390,5 +528,13 @@ mod tests {
         assert_eq!(server_group(false, false, true), 1, "not patched");
         assert_eq!(server_group(false, true, false), 1, "no start script");
         assert_eq!(server_group(true, false, false), 2, "hidden wins: the player put it away");
+    }
+
+    #[test]
+    fn the_servers_that_need_attention_are_listed_first() {
+        assert_eq!(GROUP_ORDER[0], server_group(false, false, true));
+        let mut order = GROUP_ORDER;
+        order.sort_unstable();
+        assert_eq!(order, [0, 1, 2], "every group is listed once");
     }
 }

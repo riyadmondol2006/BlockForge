@@ -14,6 +14,8 @@ pub struct WhoState {
     name_step: bool,
     name: String,
     error: bool,
+    /// For the screenshot tour: the window as it is the first time, with no account saved yet.
+    first_run: bool,
 }
 
 impl WhoState {
@@ -21,6 +23,46 @@ impl WhoState {
     pub fn offline_step() -> WhoState {
         WhoState { name_step: true, ..Default::default() }
     }
+
+    /// The window as the first start shows it, whatever accounts there are (for the screenshot tour).
+    pub fn first_run() -> WhoState {
+        WhoState { first_run: true, ..Default::default() }
+    }
+}
+
+/// The accounts the window offers, the one that played last (`current`) first and then the ones added last, three at
+/// most: indexes into `uuids`, the saved accounts in the order they are saved in.
+fn offered(uuids: &[&str], current: Option<&str>) -> Vec<usize> {
+    let last = current.and_then(|c| uuids.iter().position(|u| *u == c));
+    let rest = (0..uuids.len()).rev().filter(|i| Some(*i) != last);
+    last.into_iter().chain(rest).take(3).collect()
+}
+
+/// A way to add another account under the saved ones: a quiet outlined tile, its icon beside its name.
+fn small_choice(ui: &mut Ui, width: f32, icon: Icon, title: &str) -> bool {
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, 44.0), Sense::click());
+    let t = motion::hover(ui, resp.id, resp.hovered());
+    let p = ui.painter();
+    let radius = egui::CornerRadius::same(R_CONTROL);
+    p.rect(
+        rect,
+        radius,
+        motion::mix(c_field(), c_field_hover(), t),
+        egui::Stroke::new(1.0, motion::mix(c_control(), c_accent(), t * 0.6)),
+        egui::StrokeKind::Inside,
+    );
+    let ink = if is_dark() { c_accent() } else { c_accent_hover() };
+    icons::paint(p, icon, egui::pos2(rect.left() + 22.0, rect.center().y), 16.0, ink);
+    p.text(
+        egui::pos2(rect.left() + 40.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        title,
+        super::fonts::medium(FS_BODY),
+        c_text(),
+    );
+    focus_ring(ui, &resp, rect, R_CONTROL);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, title));
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked()
 }
 
 /// 3-16 letters, numbers or underscores.
@@ -120,14 +162,20 @@ fn choice(ui: &mut Ui, width: f32, icon: Icon, title: &str, sub: &str, main: boo
 }
 
 /// What is behind one of the accounts under "Continue as": a row of glass whose fill fades in under the pointer `t`,
-/// with an arrow at its end that moves out a little.
-fn account_row_fill(rect: egui::Rect, t: f32) -> Vec<egui::Shape> {
+/// with an arrow at its end that moves out a little. The account that played last (`main`) is the clear next step:
+/// on the brand tint with a brand outline.
+fn account_row_fill(rect: egui::Rect, t: f32, main: bool) -> Vec<egui::Shape> {
     let radius = egui::CornerRadius::same(R_CONTROL);
-    let mut shapes = vec![egui::Shape::rect_filled(rect, radius, motion::mix(c_field(), c_field_hover(), t))];
+    let (fill, line) = if main {
+        (motion::mix(c_accent_soft(), c_accent_soft().gamma_multiply(1.4), t), c_accent().gamma_multiply(0.7 + 0.3 * t))
+    } else {
+        (motion::mix(c_field(), c_field_hover(), t), motion::mix(c_border(), c_control(), t))
+    };
+    let mut shapes = vec![egui::Shape::rect_filled(rect, radius, fill)];
     shapes.push(egui::Shape::rect_stroke(
         rect,
         radius,
-        egui::Stroke::new(1.0, motion::mix(c_border(), c_control(), t)),
+        egui::Stroke::new(if main { 1.5 } else { 1.0 }, line),
         egui::StrokeKind::Inside,
     ));
     let c = egui::pos2(rect.right() - 20.0 + 3.0 * t, rect.center().y);
@@ -147,13 +195,15 @@ impl App {
         let mut pick: Option<String> = None;
         let mut offline: Option<String> = None;
         let mut manage = false;
-        // the window lists the three accounts used last; the others are on the Accounts page
-        let hidden = self.accounts.len().saturating_sub(3);
-        let accounts: Vec<(String, String, &'static str, bool)> = self
-            .accounts
-            .iter()
-            .rev()
-            .take(3)
+        // the window lists the account that played last and the ones added last, three at most; the others are on
+        // the Accounts page. The first start (or the tour's picture of it) has none.
+        let saved = if st.first_run { &[][..] } else { &self.accounts[..] };
+        let hidden = saved.len().saturating_sub(3);
+        let current = self.current_account().map(|a| a.uuid.clone());
+        let uuids: Vec<&str> = saved.iter().map(|a| a.uuid.as_str()).collect();
+        let accounts: Vec<(String, String, &'static str, bool)> = offered(&uuids, current.as_deref())
+            .into_iter()
+            .map(|i| &saved[i])
             .map(|a| (a.uuid.clone(), a.name().to_string(), a.kind(), a.offline))
             .collect();
         let modal = egui::Modal::new(egui::Id::unique("who")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
@@ -169,50 +219,80 @@ impl App {
                 } else {
                     egui::Layout::top_down(egui::Align::Min)
                 };
-                ui.with_layout(layout, |ui| {
-                    ui.spacing_mut().item_spacing = egui::vec2(12.0, 12.0);
-                    if choice(ui, w, Icon::User, "Sign in with Microsoft", "Use your Microsoft account", true) {
-                        sign_in = true;
-                    }
-                    if choice(ui, w, Icon::Play, "Play offline", "Pick any player name", false) {
-                        st.name_step = true;
-                    }
-                });
-                if !accounts.is_empty() {
-                    ui.add_space(20.0);
+                if accounts.is_empty() {
+                    // the first start: the two ways in are the choice to make, large
+                    ui.with_layout(layout, |ui| {
+                        ui.spacing_mut().item_spacing = egui::vec2(12.0, 12.0);
+                        if choice(ui, w, Icon::User, "Sign in with Microsoft", "Use your Microsoft account", true) {
+                            sign_in = true;
+                        }
+                        if choice(ui, w, Icon::Play, "Play offline", "Pick any player name", false) {
+                            st.name_step = true;
+                        }
+                    });
+                } else {
+                    // a return: carrying on as someone saved is the next step, the one that played last first and
+                    // focused (Enter continues); adding someone is the smaller choice under it
                     ui.label(RichText::new("Continue as").size(FS_META).color(c_faint()));
-                    ui.add_space(2.0);
-                    for (uuid, name, kind, offline) in &accounts {
+                    ui.add_space(4.0);
+                    ui.spacing_mut().item_spacing.y = 8.0;
+                    for (n, (uuid, name, kind, offline)) in accounts.iter().enumerate() {
+                        let main = n == 0;
                         // the row's fill is put in behind its contents once it is known whether it is pointed at
                         let fill = ui.painter().add(egui::Shape::Noop);
                         let row = egui::Frame::new()
                             .corner_radius(egui::CornerRadius::same(R_CONTROL))
-                            .inner_margin(egui::Margin::symmetric(12, 10))
+                            .inner_margin(if main {
+                                egui::Margin::symmetric(14, 12)
+                            } else {
+                                egui::Margin::symmetric(12, 8)
+                            })
                             .show(ui, |ui| {
                                 ui.set_width(ui.available_width());
                                 ui.horizontal(|ui| {
                                     ui.spacing_mut().item_spacing.x = 12.0;
                                     // the player's face, like on the sidebar and the Accounts page
-                                    self.account_avatar(ui, uuid, name, *offline, 32.0);
+                                    self.account_avatar(ui, uuid, name, *offline, if main { 40.0 } else { 30.0 });
                                     ui.vertical(|ui| {
                                         ui.spacing_mut().item_spacing.y = 0.0;
-                                        ui.label(RichText::new(name).semibold());
-                                        small_muted(ui, *kind);
+                                        let size = if main { FS_BODY + 2.0 } else { FS_BODY };
+                                        ui.label(RichText::new(name).size(size).semibold());
+                                        let sub = if main {
+                                            format!("{kind} \u{00B7} played last")
+                                        } else {
+                                            kind.to_string()
+                                        };
+                                        small_muted(ui, sub);
                                     });
                                 });
                             });
                         let resp =
                             row.response.interact(Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
                         resp.widget_info(|| {
-                            egui::WidgetInfo::labeled(egui::Role::Button, true, format!("{name}, {kind}"))
+                            egui::WidgetInfo::labeled(egui::Role::Button, true, format!("Continue as {name}, {kind}"))
                         });
+                        if main {
+                            focus_when_shown(ui, &resp);
+                        }
                         let t = motion::hover(ui, resp.id, resp.hovered());
-                        ui.painter().set(fill, egui::Shape::Vec(account_row_fill(resp.rect, t)));
+                        ui.painter().set(fill, egui::Shape::Vec(account_row_fill(resp.rect, t, main)));
                         focus_ring(ui, &resp, resp.rect, R_CONTROL);
                         if resp.clicked() {
                             pick = Some(uuid.clone());
                         }
                     }
+                    ui.add_space(14.0);
+                    ui.label(RichText::new("Add another").size(FS_META).color(c_faint()));
+                    ui.add_space(4.0);
+                    ui.with_layout(layout, |ui| {
+                        ui.spacing_mut().item_spacing = egui::vec2(12.0, 8.0);
+                        if small_choice(ui, w, Icon::User, "Sign in with Microsoft") {
+                            sign_in = true;
+                        }
+                        if small_choice(ui, w, Icon::Play, "Play offline") {
+                            st.name_step = true;
+                        }
+                    });
                 }
                 // the Accounts page has every account, the skins and the other ways to add one
                 ui.add_space(12.0);
@@ -340,6 +420,17 @@ pub(super) fn sign_in_error(e: &anyhow::Error) -> String {
 #[cfg(test)]
 mod name_tests {
     use super::*;
+
+    #[test]
+    fn the_account_that_played_last_is_offered_first_then_the_newest() {
+        let uuids = ["a", "b", "c", "d", "e"];
+        assert_eq!(offered(&uuids, Some("b")), [1, 4, 3], "b played last, then the newest");
+        assert_eq!(offered(&uuids, Some("e")), [4, 3, 2]);
+        assert_eq!(offered(&uuids, None), [4, 3, 2], "nobody chosen: the newest");
+        assert_eq!(offered(&uuids, Some("gone")), [4, 3, 2]);
+        assert_eq!(offered(&["a"], Some("a")), [0]);
+        assert!(offered(&[], None).is_empty());
+    }
 
     #[test]
     fn a_bad_name_is_told_what_is_wrong_with_it() {

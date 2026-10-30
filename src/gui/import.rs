@@ -8,6 +8,7 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use egui::{CornerRadius, RichText, ScrollArea, Stroke, Ui};
 
 use super::App;
+use super::icons::Icon;
 use super::theme::*;
 use super::widgets::*;
 use crate::imports::detect::{self, Source, UrlSource};
@@ -359,13 +360,32 @@ impl App {
 
             ui.label(RichText::new("File, folder or link").semibold());
             ui.add_space(2.0);
-            // the field takes what is left of the row after the buttons, measured on the last frame
+            // the field takes what is left of the row after the two choosers, measured on the last frame; when that
+            // would leave the field too narrow, the choosers go on the line under it
             let buttons_id = ui.scope_id().with("import-buttons");
-            let buttons_w = remembered_width(ui, buttons_id, 200.0);
+            let buttons_w = remembered_width(ui, buttons_id, 280.0);
+            let gap = ui.spacing().item_spacing.x;
+            let below = ui.available_width() - buttons_w - gap < 260.0;
+            let mut choosers = |ui: &mut Ui| {
+                let used = ui
+                    .horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 8.0;
+                        if secondary_icon(ui, Icon::Package, "Choose file\u{2026}").clicked() {
+                            pick_file = true;
+                        }
+                        if secondary_icon(ui, Icon::Folder, "Choose folder\u{2026}").clicked() {
+                            pick_folder = true;
+                        }
+                    })
+                    .response
+                    .rect
+                    .width();
+                remember_width(ui, buttons_id, used);
+            };
             ui.horizontal(|ui| {
-                let field_w = (ui.available_width() - buttons_w - ui.spacing().item_spacing.x).max(160.0);
+                let field_w = if below { ui.available_width() } else { ui.available_width() - buttons_w - gap };
                 let field = ui.add_sized(
-                    [field_w, 32.0],
+                    [field_w.max(160.0), 32.0],
                     egui::TextEdit::singleline(&mut self.import.input)
                         .hint_text(
                             RichText::new("Paste a link, or choose a .mrpack / .zip / instance folder")
@@ -376,20 +396,14 @@ impl App {
                 );
                 // Enter in the field imports, like the button at the bottom
                 enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                let used = ui
-                    .scope(|ui| {
-                        if secondary(ui, "Choose file").clicked() {
-                            pick_file = true;
-                        }
-                        if ghost(ui, "Folder").clicked() {
-                            pick_folder = true;
-                        }
-                    })
-                    .response
-                    .rect
-                    .width();
-                remember_width(ui, buttons_id, used);
+                if !below {
+                    choosers(ui);
+                }
             });
+            if below {
+                ui.add_space(4.0);
+                choosers(ui);
+            }
             if self.import.picking {
                 ui.horizontal(|ui| {
                     spinner(ui);
@@ -503,6 +517,10 @@ impl App {
                     }
                 },
                 |ui| {
+                    ui.spacing_mut().item_spacing.x = 8.0;
+                    if secondary(ui, "Cancel").clicked() {
+                        close = true;
+                    }
                     if primary_enabled(ui, "Import", ok).clicked() || (ok && enter) {
                         run = Some((
                             self.import.input.clone(),

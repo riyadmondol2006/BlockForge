@@ -18,19 +18,32 @@ use crate::accounts::Account;
 use crate::servers::Server;
 use crate::svcsettings::ServiceSettings;
 
-/// A finished network check.
+/// A finished network check, shown on this computer, and how far sharing it got.
 pub struct NetReport {
     pub text: String,
+    pub share: Share,
+}
+
+/// Sharing a network report: only ever started by the player, after the report was shown and they agreed.
+#[derive(Clone, PartialEq, Debug)]
+pub enum Share {
+    /// Not shared: the report is only on this computer.
+    Local,
+    /// "Share report" was pressed: the window says what is uploaded where and asks to go ahead.
+    Asking,
+    Sending,
     /// Where the shared report can be read.
-    pub link: Option<String>,
-    /// Why it could not be shared, if that went wrong.
-    pub error: Option<String>,
+    Shared(String),
+    /// Why it could not be shared.
+    Failed(String),
 }
 
 /// Results coming back from the background.
 pub enum SvcMsg {
     News(Result<Vec<crate::news::NewsItem>, String>),
-    NetworkReport(NetReport),
+    NetworkReport(String),
+    /// The answer of the paste service to a report the player chose to share: its link, or why it failed.
+    NetworkShared(Result<String, String>),
     /// The skin was changed; the account may hold renewed sign-in tokens.
     SkinChanged(Result<Account, String>),
     /// A skin was downloaded for this id; its picture should be read again.
@@ -71,6 +84,8 @@ pub struct SvcState {
     pub servers_loaded: bool,
     pub server_confirm_remove: Option<String>,
     pub server_confirm_launch: Option<String>,
+    /// The server whose "Reinstall" window is open.
+    pub server_repair: Option<String>,
     // Backups
     pub backups: BackupsState,
     // Settings
@@ -106,26 +121,58 @@ pub fn confirm_modal(ctx: &Context, id: &str, title: &str, body: &str, confirm: 
         ui.add_space(6.0);
         ui.add(egui::Label::new(RichText::new(body).color(c_muted())).wrap());
         ui.add_space(20.0);
-        // the buttons that finish the window sit at its right, the answer asked for last
-        super::discover::dialog_footer(
-            ui,
-            id,
-            |_| {},
-            |ui| {
-                if secondary(ui, "Cancel").clicked() {
-                    answer = Some(false);
-                }
-                let clicked = if dangerous { danger(ui, confirm).clicked() } else { primary(ui, confirm).clicked() };
-                if clicked {
-                    answer = Some(true);
-                }
-            },
-        );
+        answer = confirm_buttons(ui, id, "Cancel", confirm, dangerous, true);
     });
     // Escape answers the window on top only: one press never closes two stacked windows
     if modal.should_close() && answer.is_none() {
         answer = Some(false);
     }
+    answer
+}
+
+/// The buttons that finish a window asking to confirm something, in every such window the same way: at its right,
+/// the safe answer (`cancel`) first and the answer asked for last, 8 points apart, red when `dangerous` (it can't be
+/// undone). The safe answer has the keyboard focus when the window opens, so Enter or Space never confirms by
+/// accident; Escape (the window's own) is the safe answer too. `enabled` greys out the answer asked for while it
+/// can't be given. `Some(true)` when confirmed, `Some(false)` when cancelled.
+pub fn confirm_buttons(
+    ui: &mut Ui,
+    key: &str,
+    cancel: &str,
+    confirm: &str,
+    dangerous: bool,
+    enabled: bool,
+) -> Option<bool> {
+    confirm_buttons_with(ui, key, |_| {}, cancel, confirm, dangerous, enabled)
+}
+
+/// [`confirm_buttons`] with quiet things at the left of the row (drawn by `left`).
+pub fn confirm_buttons_with(
+    ui: &mut Ui,
+    key: &str,
+    left: impl FnOnce(&mut Ui),
+    cancel: &str,
+    confirm: &str,
+    dangerous: bool,
+    enabled: bool,
+) -> Option<bool> {
+    let mut answer = None;
+    super::discover::dialog_footer(ui, key, left, |ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        let safe = secondary(ui, cancel);
+        focus_when_shown(ui, &safe);
+        if safe.clicked() {
+            answer = Some(false);
+        }
+        let asked = match (dangerous, enabled) {
+            (true, _) => danger_enabled(ui, confirm, enabled),
+            (false, true) => primary(ui, confirm),
+            (false, false) => primary_enabled(ui, confirm, false),
+        };
+        if asked.clicked() && enabled {
+            answer = Some(true);
+        }
+    });
     answer
 }
 
@@ -152,13 +199,24 @@ impl App {
     pub(super) fn svc_msg(&mut self, msg: SvcMsg) {
         match msg {
             SvcMsg::News(result) => self.svc.news.arrived(result),
-            SvcMsg::NetworkReport(report) => {
-                match (&report.link, &report.error) {
-                    (Some(_), _) => self.toast("Network check finished and shared"),
-                    (None, Some(e)) => self.toast_err(format!("Network check finished, but sharing it failed: {e}")),
-                    _ => self.toast("Network check finished"),
+            SvcMsg::NetworkReport(text) => {
+                self.toast("Network check finished");
+                self.svc.net_report = Some(NetReport { text, share: Share::Local });
+            }
+            SvcMsg::NetworkShared(result) => {
+                let share = match result {
+                    Ok(link) => Share::Shared(link),
+                    Err(e) => Share::Failed(e),
+                };
+                match self.svc.net_report.as_mut() {
+                    Some(report) => report.share = share,
+                    // the window was closed while it was sent: the toast keeps the link
+                    None => match share {
+                        Share::Shared(link) => self.toast(format!("Network report shared: {link}")),
+                        Share::Failed(e) => self.toast_err(format!("The network report could not be shared: {e}")),
+                        _ => {}
+                    },
                 }
-                self.svc.net_report = Some(report);
             }
             SvcMsg::SkinPicked(path) => {
                 if let Some(d) = self.svc.skin_dialog.as_mut() {
@@ -509,6 +567,43 @@ fn folder_setting(text: &str) -> Result<Option<String>, ()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One frame of a confirmation window with `events`: its answer, and which widget has the focus afterwards.
+    fn confirm_frame(ctx: &Context, events: Vec<egui::Event>) -> (Option<bool>, Option<egui::Id>) {
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 600.0))),
+            events,
+            ..Default::default()
+        };
+        let mut answer = None;
+        let mut full = ctx.run_ui(input, |ui| {
+            answer = confirm_modal(ui.ctx(), "test-confirm", "Delete it?", "It can't be undone.", "Delete", true);
+        });
+        full.textures_delta.clear();
+        (answer, ctx.memory(|m| m.focused()))
+    }
+
+    fn key(key: egui::Key) -> egui::Event {
+        egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() }
+    }
+
+    #[test]
+    fn a_confirmation_opens_on_its_safe_answer_and_enter_or_escape_never_confirm() {
+        let ctx = Context::default();
+        for _ in 0..3 {
+            assert_eq!(confirm_frame(&ctx, vec![]).0, None);
+        }
+        assert!(confirm_frame(&ctx, vec![]).1.is_some(), "a button has the focus when the window opens");
+        // Enter presses the focused button: the safe one
+        let (answer, _) = confirm_frame(&ctx, vec![key(egui::Key::Enter)]);
+        assert_eq!(answer, Some(false));
+
+        let ctx = Context::default();
+        for _ in 0..3 {
+            confirm_frame(&ctx, vec![]);
+        }
+        assert_eq!(confirm_frame(&ctx, vec![key(egui::Key::Escape)]).0, Some(false), "Escape is the safe answer");
+    }
 
     #[test]
     fn windows_fit_a_narrow_launcher() {

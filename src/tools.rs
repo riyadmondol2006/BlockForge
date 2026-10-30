@@ -89,7 +89,7 @@ pub const TOOLS: [ToolInfo; 8] = [
     ToolInfo {
         id: "network_checker",
         name: "Network checker",
-        description: "Tests your connection to the servers the launcher needs and shares the result so problems can be diagnosed.",
+        description: "Tests your connection to the servers the launcher needs. The result stays on this computer unless you choose to share it.",
         action: "Run",
     },
     ToolInfo {
@@ -136,8 +136,12 @@ pub const TOOLS: [ToolInfo; 8] = [
     },
 ];
 
-/// The wording the Java edition asks before running the network checker.
-pub const NETWORK_CHECKER_WARNING: &str = "Please note that the data from this tool is sent to ATLauncher so we can diagnose possible issues in your setup. This test may take up to 10 minutes or longer to complete and you will be unable to do anything while it's running. Please also keep in mind that this test will use some of your bandwidth, it will use approximately 100MB.\n\nDo you wish to continue?";
+/// What is said before the network checker runs. The check itself sends nothing anywhere: sharing its result is a
+/// separate step the player takes afterwards (see [`NETWORK_SHARE_NOTE`]).
+pub const NETWORK_CHECK_NOTE: &str = "Pings and traces the servers the launcher needs and looks up their addresses. It can take 10 minutes or more. The result is shown here and stays on this computer.";
+
+/// What is said before a network report is shared, and asked to be agreed to.
+pub const NETWORK_SHARE_NOTE: &str = "The report is uploaded to ATLauncher's paste service (paste.atlauncher.com) so it can be read by whoever you send the link to. IP addresses, your user name and your home folder are taken out first.";
 
 // ---------------------------------------------------------------------------------------------------------
 // Network checker
@@ -174,11 +178,6 @@ impl NetworkCheckOptions {
         let pings = self.ping_hosts.len() * if self.trace_routes { 2 } else { 1 };
         pings + ALL_HOSTS.len() + 2 + usize::from(self.speed_test)
     }
-}
-
-/// The network checker only runs when logs are enabled in the settings (`ToolsViewModel.canRunNetworkChecker`).
-pub fn can_run_network_checker(settings: &ServiceSettings) -> bool {
-    settings.enable_logs
 }
 
 async fn run_command(program: &str, args: &[String], limit: Duration) -> Result<String> {
@@ -342,8 +341,14 @@ pub async fn run_network_check(dirs: &Dirs, options: &NetworkCheckOptions, progr
     Ok(report)
 }
 
-/// Share a report on the paste service. Returns the address where it can be read. Only call this after the
-/// player has agreed (see [`NETWORK_CHECKER_WARNING`]).
+/// The copy of a network report that may be shared: with IP addresses, the user name, the home folder and anything
+/// else personal taken out ([`crate::diagnostics::scrub`]).
+pub fn shareable_report(text: &str) -> String {
+    crate::diagnostics::scrub(text, &[])
+}
+
+/// Share a report on the paste service. Returns the address where it can be read. Only call this when the player
+/// asked to share it and agreed to [`NETWORK_SHARE_NOTE`], and with the [`shareable_report`] copy.
 pub async fn upload_report(title: &str, text: &str) -> Result<String> {
     let r = crate::http::client()
         .post(PASTE_API_URL)
@@ -652,15 +657,21 @@ mod tests {
     }
 
     #[test]
-    fn network_checker_needs_logs_on_and_counts_its_steps() {
-        let mut s = ServiceSettings::default();
-        assert!(!can_run_network_checker(&s));
-        s.enable_logs = true;
-        assert!(can_run_network_checker(&s));
+    fn network_checker_counts_its_steps() {
         let o = NetworkCheckOptions::default();
         assert_eq!(o.steps(), 20 + 16 + 2 + 1);
         let quick = NetworkCheckOptions { trace_routes: false, speed_test: false, ..Default::default() };
         assert_eq!(quick.steps(), 10 + 16 + 2);
+    }
+
+    #[test]
+    fn a_shared_network_report_has_addresses_and_the_home_folder_taken_out() {
+        let report = "Resolution of example.com was 93.184.216.34\nLog in /home/someone/.blockforge\n";
+        let shared = crate::diagnostics::scrub_with(report, &[], Some("/home/someone"), Some("someone"));
+        assert!(!shared.contains("93.184.216.34") && shared.contains("<ip>"));
+        assert!(!shared.contains("/home/someone") && shared.contains("~/.blockforge"));
+        // the same scrubbing as the shared copy, which uses this computer's home folder
+        assert!(!shareable_report(report).contains("93.184.216.34"));
     }
 
     #[test]

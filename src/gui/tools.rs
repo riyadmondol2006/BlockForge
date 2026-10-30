@@ -3,7 +3,9 @@
 use egui::{Align, Color32, CornerRadius, Layout, RichText, ScrollArea, Stroke, Ui, vec2};
 
 use super::icons::{self, Icon};
-use super::services::{NetReport, SvcMsg, SvcState, ToolResult, confirm_modal, modal_scroll_height, modal_width};
+use super::services::{
+    NetReport, Share, SvcMsg, SvcState, ToolResult, confirm_buttons, confirm_modal, modal_scroll_height, modal_width,
+};
 use super::theme::*;
 use super::widgets::*;
 use super::{App, Msg, Page};
@@ -26,21 +28,18 @@ fn is_destructive(id: &str) -> bool {
 /// Where the player can fix what stops a tool from running.
 #[derive(Clone, Copy)]
 enum Fix {
-    Settings,
     Accounts,
 }
 
 impl Fix {
     fn label(self) -> &'static str {
         match self {
-            Fix::Settings => "Open Settings",
             Fix::Accounts => "Open Accounts",
         }
     }
 
     fn page(self) -> Page {
         match self {
-            Fix::Settings => Page::Settings,
             Fix::Accounts => Page::Accounts,
         }
     }
@@ -117,8 +116,6 @@ impl App {
                 .subtitle("Find out what is wrong, gather what to send for help, and free up space")
                 .show(ui, |_| {});
         });
-        // the network checker needs `enableLogs`, which is a plain field of the settings (no need to read them all)
-        let logs_on = self.settings.enable_logs;
         let flatpak = *FLATPAK.get_or_init(tools::is_flatpak);
         let no_accounts = self.accounts.is_empty();
         // what is running decides which tools can start: they are greyed out with the reason, not refused after the
@@ -144,13 +141,6 @@ impl App {
                     // what stops a tool from running now, and where that is fixed
                     let (enabled, hint): (bool, Option<(&str, Option<Fix>)>) = match tool.id {
                         _ if is_running => (false, None),
-                        "network_checker" if !logs_on => (
-                            false,
-                            Some((
-                                "Turn on \"Report pack installs and play time\" in Settings first.",
-                                Some(Fix::Settings),
-                            )),
-                        ),
                         "debug_mode" if flatpak => (false, Some(("Not available in a Flatpak.", None))),
                         "debug_mode" if tools::is_debug_enabled() => (false, Some(("Debug mode is already on.", None))),
                         "skin_updater" if no_accounts => (false, Some(("Add an account first.", Some(Fix::Accounts)))),
@@ -238,17 +228,10 @@ impl App {
         match id {
             "network_checker" => {
                 let opts = NetworkCheckOptions { speed_test: !self.svc.skip_speed_test, ..Default::default() };
+                // the check only looks: its report is shown here, and sharing it is a step of its own (share_net_report)
                 self.start_task("Network checker", move |progress, n| async move {
                     let text = tools::run_network_check(&dirs, &opts, &progress).await?;
-                    progress.stage("Sharing the result");
-                    let (link, error) = match tools::upload_report("BlockForge Network Test Log", &text).await {
-                        Ok(url) => (Some(url), None),
-                        Err(e) => {
-                            crate::logs::error(format!("Network Test failed to submit: {e:#}"));
-                            (None, Some(format!("{e:#}")))
-                        }
-                    };
-                    n.send(Msg::Svc(SvcMsg::NetworkReport(NetReport { text, link, error })));
+                    n.send(Msg::Svc(SvcMsg::NetworkReport(text)));
                     Ok(String::new())
                 });
             }
@@ -349,32 +332,59 @@ impl App {
         }
     }
 
+    /// Upload the network report on display, as the player asked and agreed to: the copy with anything personal
+    /// taken out. The answer comes back as [`SvcMsg::NetworkShared`].
+    fn share_net_report(&mut self) {
+        let Some(report) = self.svc.net_report.as_mut() else { return };
+        report.share = Share::Sending;
+        let text = tools::shareable_report(&report.text);
+        self.start_task("Sharing the network report", move |_p, n| async move {
+            let result = tools::upload_report("BlockForge Network Test Log", &text).await.map_err(|e| {
+                crate::logs::error(format!("Network Test failed to submit: {e:#}"));
+                format!("{e:#}")
+            });
+            let ok = result.is_ok();
+            n.send(Msg::Svc(SvcMsg::NetworkShared(result)));
+            if ok {
+                Ok("Network report shared".to_string())
+            } else {
+                anyhow::bail!("The network report could not be shared")
+            }
+        });
+    }
+
+    /// For the screenshot tour: the report of a network check on display (`share`: with the question whether to
+    /// share it).
+    pub(super) fn shot_net_report(&mut self, share: bool) {
+        let text = "Ping results to 1.1.1.1 was\nPING 1.1.1.1 (1.1.1.1) 56(84) bytes of data.\n64 bytes from 1.1.1.1: icmp_seq=1 ttl=57 time=12.4 ms\n64 bytes from 1.1.1.1: icmp_seq=2 ttl=57 time=11.9 ms\n\n--- 1.1.1.1 ping statistics ---\n10 packets transmitted, 10 received, 0% packet loss\n\n----------------\n\nResolution of authserver.mojang.com was 52.216.10.4\n\nResolution of libraries.minecraft.net was 13.107.246.40\n\n----------------\n\nResponse code to https://download.nodecdn.net/containers/atl was 200\n";
+        self.page = Page::Tools;
+        self.svc.net_report =
+            Some(NetReport { text: text.to_string(), share: if share { Share::Asking } else { Share::Local } });
+    }
+
     /// The windows over the Tools page: confirmations and the network report.
     pub(super) fn tools_overlays(&mut self, ctx: &egui::Context) {
         if let Some(id) = self.svc.tool_confirm {
             let answer = match id {
                 "network_checker" => {
                     let mut answer = None;
-                    egui::Modal::new(egui::Id::unique("tool-confirm")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
-                        ui.set_width(modal_width(ctx, 460.0));
-                        ui.label(RichText::new("Network checker").size(FS_SECTION).semibold());
-                        ui.add_space(4.0);
-                        muted(ui, tools::NETWORK_CHECKER_WARNING);
-                        ui.add_space(6.0);
-                        let mut include = !self.svc.skip_speed_test;
-                        ui.checkbox(&mut include, "Include the 100 MB download speed test");
-                        self.svc.skip_speed_test = !include;
-                        ui.add_space(10.0);
-                        ui.horizontal(|ui| {
-                            if primary(ui, "Run the test").clicked() {
-                                answer = Some(true);
-                            }
-                            if secondary(ui, "Cancel").clicked() {
-                                answer = Some(false);
-                            }
-                        });
-                    });
-                    if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+                    let modal = egui::Modal::new(egui::Id::unique("tool-confirm")).frame(super::modal_frame(ctx)).show(
+                        ctx,
+                        |ui| {
+                            ui.set_width(modal_width(ctx, 460.0));
+                            ui.label(RichText::new("Run the network check?").size(FS_SECTION).semibold());
+                            ui.add_space(6.0);
+                            ui.add(egui::Label::new(RichText::new(tools::NETWORK_CHECK_NOTE).color(c_muted())).wrap());
+                            ui.add_space(8.0);
+                            // the big download is a choice of its own: it uses about 100 MB of the player's data
+                            let mut include = !self.svc.skip_speed_test;
+                            ui.checkbox(&mut include, "Also measure the download speed (downloads 100 MB)");
+                            self.svc.skip_speed_test = !include;
+                            ui.add_space(16.0);
+                            answer = confirm_buttons(ui, "network-check", "Cancel", "Run the check", false, true);
+                        },
+                    );
+                    if modal.should_close() && answer.is_none() {
                         answer = Some(false);
                     }
                     answer
@@ -410,28 +420,42 @@ impl App {
         if self.svc.net_report.is_some() {
             let mut close = false;
             let mut copy: Option<String> = None;
-            if let Some(report) = &self.svc.net_report {
-                egui::Modal::new(egui::Id::unique("net-report")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
+            let mut share = false;
+            if let Some(report) = self.svc.net_report.as_mut() {
+                let modal = egui::Modal::new(egui::Id::unique("net-report")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
                     ui.set_width(modal_width(ctx, 680.0));
-                    ui.label(RichText::new("Network checker").size(FS_SECTION).semibold());
-                    match (&report.link, &report.error) {
-                        (Some(link), _) => {
-                            small_muted(ui, "The result was shared so problems can be diagnosed. Link:");
+                    if super::discover::dialog_title(ui, "Network check") {
+                        close = true;
+                    }
+                    // the consent step needs room under the report: the report scrolls in less then
+                    let asking = report.share == Share::Asking;
+                    match &report.share {
+                        Share::Local | Share::Asking => {
+                            small_muted(ui, "This report is only on this computer. Copy it, or share it when someone helping you asks for it.");
+                        }
+                        Share::Sending => {
                             ui.horizontal(|ui| {
+                                spinner_sized(ui, 14.0);
+                                small_muted(ui, "Sharing the report\u{2026}");
+                            });
+                        }
+                        Share::Shared(link) => {
+                            small_muted(ui, "The report was shared. Send this link to whoever is helping you:");
+                            ui.horizontal_wrapped(|ui| {
                                 ui.add(egui::Hyperlink::from_label_and_url(RichText::new(link).underline(), link));
                                 if secondary(ui, "Copy link").clicked() {
                                     copy = Some(link.clone());
                                 }
                             });
                         }
-                        (None, Some(e)) => {
-                            ui.label(RichText::new(format!("The result could not be shared: {e}")).color(c_danger()));
+                        Share::Failed(e) => {
+                            ui.add(egui::Label::new(RichText::new(format!("The report could not be shared: {e}")).color(c_danger())).wrap());
                         }
-                        _ => {}
                     }
-                    ui.add_space(6.0);
+                    ui.add_space(8.0);
+                    let rest = if asking { 330.0 } else { 200.0 };
                     ScrollArea::vertical()
-                        .max_height(modal_scroll_height(ctx, 360.0, 160.0))
+                        .max_height(modal_scroll_height(ctx, 360.0, rest))
                         .auto_shrink([false, true])
                         .show(ui, |ui| {
                             ui.add(
@@ -440,22 +464,61 @@ impl App {
                                     .desired_width(f32::INFINITY),
                             );
                         });
-                    ui.add_space(8.0);
-                    ui.horizontal(|ui| {
-                        if secondary(ui, "Copy report").clicked() {
-                            copy = Some(report.text.clone());
-                        }
-                        if primary(ui, "Close").clicked() {
-                            close = true;
-                        }
-                    });
+                    ui.add_space(12.0);
+                    if asking {
+                        // the consent, in the window: what is uploaded, where, and what is taken out first
+                        card(ui, |ui| {
+                            ui.label(RichText::new("Share this report?").semibold());
+                            ui.add_space(2.0);
+                            ui.add(egui::Label::new(RichText::new(tools::NETWORK_SHARE_NOTE).size(FS_META).color(c_muted())).wrap());
+                            ui.add_space(12.0);
+                            match confirm_buttons(ui, "net-share", "Don't share", "Share report", false, true) {
+                                Some(true) => share = true,
+                                Some(false) => report.share = Share::Local,
+                                None => {}
+                            }
+                        });
+                        return;
+                    }
+                    super::discover::dialog_footer(
+                        ui,
+                        "net-report",
+                        |ui| {
+                            if ghost(ui, "Copy report").clicked() {
+                                copy = Some(report.text.clone());
+                            }
+                        },
+                        |ui| {
+                            ui.spacing_mut().item_spacing.x = 8.0;
+                            if matches!(report.share, Share::Local | Share::Failed(_)) {
+                                let label = if matches!(report.share, Share::Failed(_)) { "Try again" } else { "Share report\u{2026}" };
+                                if secondary(ui, label).clicked() {
+                                    report.share = Share::Asking;
+                                }
+                            }
+                            if primary(ui, "Close").clicked() {
+                                close = true;
+                            }
+                        },
+                    );
                 });
+                if modal.should_close() {
+                    // Escape steps back out of the question to share before it closes the window
+                    if report.share == Share::Asking {
+                        report.share = Share::Local;
+                    } else {
+                        close = true;
+                    }
+                }
             }
             if let Some(text) = copy {
                 ctx.copy_text(text);
                 self.toast("Copied");
             }
-            if close || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            if share {
+                self.share_net_report();
+            }
+            if close {
                 self.svc.net_report = None;
             }
         }
