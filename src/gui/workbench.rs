@@ -128,7 +128,7 @@ pub fn set_cover_theme(inst: &mut Instance, theme: CoverTheme) {
 /// instance knows the folder before the instance exists, so its preview is the cover the instance gets), version,
 /// loader and theme.
 pub fn cover_spec(inst: &Instance) -> CoverSpec {
-    CoverSpec::new(&inst.folder, inst.mc_version(), inst.loader().map(|(kind, _)| kind), cover_theme(inst))
+    CoverSpec::new(&inst.folder, inst.mc_version(), super::edition::loader_kind(inst), cover_theme(inst))
 }
 
 /// The few sizes covers are drawn at, so a window being resized does not draw a new one every frame: the one whose

@@ -303,6 +303,13 @@ pub(super) fn split_or_stack<S>(
 
 impl App {
     pub(super) fn apply(&mut self, act: Act) {
+        // what is Java's does nothing for a Horizon instance, from wherever it was asked for (the menus leave it out)
+        let horizon =
+            super::edition::act_folder(&act).and_then(|f| self.instance(f)).is_some_and(crate::horizon::is_horizon);
+        if horizon && !super::edition::horizon_allows(&act) {
+            self.toast_err("That isn't for a Horizon instance: it plays without Java, mods or a mod loader.");
+            return;
+        }
         match act {
             Act::Open(f) => self.open_instance(&f),
             Act::Play(f) => self.play_checked(&f, super::PendingPlay::Play),
@@ -408,7 +415,9 @@ impl App {
             }
         }
         ui.separator();
-        if ui.button("Play offline with a new name\u{2026}").clicked() {
+        // Horizon starts only for a Microsoft account
+        let horizon = self.instance(folder).is_some_and(crate::horizon::is_horizon);
+        if !horizon && ui.button("Play offline with a new name\u{2026}").clicked() {
             act = Some(Act::PlayOffline(folder.to_string()));
             ui.close();
         }
@@ -456,14 +465,22 @@ impl App {
         item(ui, "Change image", Act::ChangeImage);
         item(ui, "Change description", Act::ChangeDescription);
         item(ui, "Clone", Act::Duplicate);
-        item(ui, "Export", Act::Export);
+        // a Horizon instance has no mods, loader or Java helpers, and is no modpack to export
+        let horizon = crate::horizon::is_horizon(inst);
+        if !horizon {
+            item(ui, "Export", Act::Export);
+        }
         ui.separator();
-        item(ui, "Mod loader", Act::ChangeLoader);
-        item(ui, "Add mods", Act::AddMods);
-        item(ui, "Edit mods", Act::Mods);
-        let helpers = self.helpers_menu(ui, inst);
+        if !horizon {
+            item(ui, "Mod loader", Act::ChangeLoader);
+            item(ui, "Add mods", Act::AddMods);
+            item(ui, "Edit mods", Act::Mods);
+        }
+        let helpers = if horizon { None } else { self.helpers_menu(ui, inst) };
         item(ui, "Settings", Act::Settings);
-        item(ui, "Repair game files", Act::Repair);
+        if !horizon {
+            item(ui, "Repair game files", Act::Repair);
+        }
         ui.separator();
         let delete = ui.button(RichText::new("Delete instance").color(c_danger())).clicked();
         if delete {

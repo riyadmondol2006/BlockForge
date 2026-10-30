@@ -17,6 +17,7 @@ mod create;
 mod curseforge;
 mod discover;
 mod discover_both;
+mod edition;
 mod export;
 mod fonts;
 mod ftb;
@@ -380,6 +381,8 @@ pub struct App {
     /// Files the program was started with, handed to the import flow once the window is up.
     pending_open: Vec<std::path::PathBuf>,
     last_account_check: Instant,
+    /// The newest Horizon build installed, read with the instances (see `edition`).
+    horizon_build: Option<crate::horizon::Build>,
 }
 
 pub fn run(dirs: Dirs, open_files: Vec<std::path::PathBuf>) -> anyhow::Result<()> {
@@ -537,7 +540,9 @@ impl App {
             frames: 0,
             pending_open: open_files,
             last_account_check: Instant::now() - Duration::from_secs(3600),
+            horizon_build: None,
         };
+        app.refresh_horizon_build();
         app.refresh_manifest();
         app.ftb_check_updates();
         if app.shot.is_none() {
@@ -605,6 +610,10 @@ impl App {
         (self.instances, self.unreadable) = instances::load_all_and_unreadable(&self.dirs);
         if !self.deleting.is_empty() {
             self.instances.retain(|i| !self.deleting.contains(&i.folder));
+        }
+        self.refresh_horizon_build();
+        if self.shot.as_ref().is_some_and(|s| s.horizon) {
+            self.shot_mark_horizon();
         }
     }
 
@@ -806,6 +815,21 @@ impl App {
             self.who = Some(whoplays::WhoState::default());
             return;
         };
+        let horizon = crate::horizon::is_horizon(&instance);
+        if horizon {
+            // Horizon starts only for a Microsoft account that owns the game: the way to add one is opened
+            if let Some(problem) = crate::horizon::account_problem(&account) {
+                self.toast_err(problem);
+                self.page = Page::Accounts;
+                return;
+            }
+        }
+        // Horizon keeps the builds a running game uses where they are while another of its games starts
+        let others_running = horizon
+            && self
+                .games
+                .values()
+                .any(|g| g.active() && self.instance(&g.folder).is_some_and(crate::horizon::is_horizon));
         let (kill_tx, kill_rx) = tokio::sync::oneshot::channel();
         let key = self.new_session_key(folder);
         self.games.insert(
@@ -813,8 +837,9 @@ impl App {
             Game {
                 folder: folder.to_string(),
                 player: account.name().to_string(),
-                fast_start: launch::fast_start_enabled(&self.settings, &instance),
-                lite: launch::lite_enabled(&self.settings, &instance),
+                // the helpers are Java's; Horizon starts without them
+                fast_start: !horizon && launch::fast_start_enabled(&self.settings, &instance),
+                lite: !horizon && launch::lite_enabled(&self.settings, &instance),
                 task: self.next_task,
                 lines: Vec::new(),
                 phase: Phase::Preparing,
@@ -834,7 +859,16 @@ impl App {
                 // was only heard once the game had started, which then started and was killed at once
                 let getting_ready = async {
                     let account = launch::fresh_account(&dirs, &account).await?;
-                    launch::prepare(&dirs, &settings, &instance, &account, &progress, &options).await
+                    if horizon {
+                        let (inst, o) = (&instance, &options);
+                        let start =
+                            crate::horizon::prepare(&dirs, &settings, inst, &account, &progress, o, others_running);
+                        start.await.map(edition::Start::Horizon)
+                    } else {
+                        launch::prepare(&dirs, &settings, &instance, &account, &progress, &options)
+                            .await
+                            .map(edition::Start::Java)
+                    }
                 };
                 let prepared = tokio::select! {
                     prepared = getting_ready => prepared?,
@@ -844,14 +878,14 @@ impl App {
                         return Ok(());
                     }
                 };
-                for note in &prepared.notes {
+                for note in prepared.notes() {
                     n.send(Msg::GameLog(
                         folder_s.clone(),
                         LogLine { text: format!("[BlockForge] {note}"), level: Level::Info },
                     ));
                 }
                 // settings changed in the player's own file are worth saying out loud, not only in the log
-                if prepared.notes.iter().any(|n| n.starts_with(launch::lowend::LOWERED_NOTE)) {
+                if prepared.is_java() && prepared.notes().iter().any(|n| n.starts_with(launch::lowend::LOWERED_NOTE)) {
                     n.send(Msg::Toast(
                         "Low-end mode lowered some graphics settings for smoother play. Settings > Performance \
                          switches it off and puts them back."
@@ -863,7 +897,7 @@ impl App {
                     folder_s.clone(),
                     LogLine { text: format!("[BlockForge] {}", prepared.display()), level: Level::Debug },
                 ));
-                let mut running = match launch::spawn(&prepared) {
+                let mut running = match prepared.spawn() {
                     Ok(r) => r,
                     Err(e) => {
                         // the natives folder, the class-cache claim and the combined jar are let go here too
@@ -888,13 +922,16 @@ impl App {
                 }
                 let mut assembler = LogAssembler::default();
                 let mut stopped = false;
-                // the well known crashes (too little memory, the wrong Java) are spotted as the lines go by
-                let mut watch = launch::gamelog::CrashWatch::new(instance.mc_version());
+                // the well known crashes (too little memory, the wrong Java) are spotted as the lines go by; they are
+                // Java's, so Horizon's lines aren't watched
+                let mut watch = prepared.is_java().then(|| launch::gamelog::CrashWatch::new(instance.mc_version()));
                 loop {
                     tokio::select! {
                         line = running.lines.recv() => match line {
                             Some(l) => {
-                                watch.line(&l);
+                                if let Some(w) = watch.as_mut() {
+                                    w.line(&l);
+                                }
                                 if let Some(entry) = assembler.push(&l) {
                                     n.send_soon(Msg::GameLog(folder_s.clone(), entry));
                                 }
@@ -926,7 +963,7 @@ impl App {
                         }
                     });
                 }
-                if let Some(advice) = watch.advice(code).filter(|_| !stopped) {
+                if let Some(advice) = watch.and_then(|w| w.advice(code)).filter(|_| !stopped) {
                     let text = advice.message.replace('\n', " ");
                     n.send(Msg::GameLog(
                         folder_s.clone(),
@@ -1116,7 +1153,11 @@ impl App {
                     self.svc_after_game_exit(&folder);
                 }
                 if let Some(c) = code.filter(|c| *c != 0) {
-                    self.toast_err(format!("Minecraft closed with an error (code {c}). The Logs tab has details."));
+                    let game = match self.instance(&folder) {
+                        Some(i) if crate::horizon::is_horizon(i) => crate::horizon::NAME,
+                        _ => "Minecraft",
+                    };
+                    self.toast_err(format!("{game} closed with an error (code {c}). The Logs tab has details."));
                 }
                 self.reload_instances();
             }
@@ -2336,6 +2377,8 @@ struct Shot {
     press: Option<(&'static str, Option<u32>)>,
     /// Pointer events for the next frame, handed to egui before it reads the input (see `raw_input_hook`).
     pointer: Vec<egui::Event>,
+    /// The page pictured shows a Horizon instance: one sample instance is shown as one (see `shot_mark_horizon`).
+    horizon: bool,
 }
 
 /// Where the tour's pointer rests for `packs-hover` (`BLOCKFORGE_SHOT_HOVER=520,349`), on the first pack's description.
@@ -2348,7 +2391,7 @@ static SHOT_HOVER: std::sync::LazyLock<Option<egui::Pos2>> = std::sync::LazyLock
 /// The ids of the jobs the tour makes up to show the sidebar busy; no real job gets ids this high.
 const SHOT_TASK: u64 = u64::MAX - 8;
 
-const SHOT_PAGES: [&str; 76] = [
+const SHOT_PAGES: [&str; 82] = [
     "home",
     "library",
     "instance",
@@ -2431,6 +2474,13 @@ const SHOT_PAGES: [&str; 76] = [
     "ftb-pack-ready",
     "ftb-pack-error",
     "explore-worlds",
+    // Horizon, the Rust rewrite: offered in New instance, and a sample instance shown as one of its instances
+    "create-horizon",
+    "create-horizon-configure",
+    "instance-horizon",
+    "instance-horizon-resourcepacks",
+    "instance-horizon-settings",
+    "library-horizon",
 ];
 
 impl Shot {
@@ -2457,6 +2507,7 @@ impl Shot {
             waiting: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             press: None,
             pointer: Vec::new(),
+            horizon: false,
         })
     }
 }
@@ -2488,6 +2539,12 @@ impl App {
             shot.press = None;
             widgets::shot_seek(None);
             self.shot_close_windows(before.trim_end_matches("-light"));
+            // only the Horizon pages show a sample instance as a Horizon one; the others show the data as it is
+            let horizon = name.contains("horizon");
+            if let Some(shot) = self.shot.as_mut().filter(|s| s.horizon != horizon) {
+                shot.horizon = horizon;
+                self.reload_instances();
+            }
             let first = self.instances.first().map(|i| i.folder.clone());
             if name != "who" && name != "who-new" {
                 self.who = None;
@@ -2611,6 +2668,24 @@ impl App {
                 "create-cover" => {
                     self.shot_create(create::Step::Configure);
                     self.shot_press("Change cover");
+                }
+                "create-horizon" => self.shot_create_horizon(create::Step::Version),
+                "create-horizon-configure" => self.shot_create_horizon(create::Step::Configure),
+                "library-horizon" => {
+                    self.page = Page::Library;
+                    self.settings.library_view = "grid".to_string();
+                }
+                "instance-horizon" | "instance-horizon-resourcepacks" | "instance-horizon-settings" => {
+                    let name = name.trim_end_matches("-light");
+                    self.open_instance("Minecraft263");
+                    self.tab = match name {
+                        "instance-horizon-resourcepacks" => InstTab::ResourcePacks,
+                        "instance-horizon-settings" => InstTab::Settings,
+                        _ => InstTab::Overview,
+                    };
+                    if name == "instance-horizon-settings" {
+                        self.shot_instance_settings_tab("Minecraft263", 0);
+                    }
                 }
                 "create-quilt" => {
                     self.shot_create(create::Step::Loader);

@@ -1,4 +1,5 @@
-//! Create: pick a Minecraft version and a loader, then download it all.
+//! Create: pick a Minecraft version and a loader, then download it all. Or pick Horizon, the Rust rewrite, which
+//! plays the version it is made for and needs no loader.
 
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender, channel};
@@ -6,11 +7,13 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use egui::{Color32, CornerRadius, RichText, ScrollArea, Stroke, Ui, vec2};
 
 use super::covers::{CoverSpec, CoverTheme};
+use super::edition::Edition;
 use super::icons::Icon;
 use super::motion;
 use super::theme::*;
 use super::widgets::*;
 use super::{App, Msg, Page};
+use crate::horizon;
 use crate::install::ManifestVersion;
 use crate::instances::{self, LauncherBlock};
 use crate::loaders::{self, Loader};
@@ -19,6 +22,8 @@ use crate::mods::performance;
 pub struct CreateState {
     /// The step of the form that is open: the version, the loader, or the rest.
     pub step: Step,
+    /// The game the instance plays: Minecraft: Java Edition, or Horizon.
+    pub edition: Edition,
     pub name: String,
     pub mc: String,
     /// Which kinds of Minecraft version the grid shows.
@@ -63,7 +68,7 @@ const TILE_H: f32 = 58.0;
 const PANEL_BESIDES_COVER: f32 = 330.0;
 
 /// The three steps of making an instance. They can be gone back to at any time, and forward to once a version is
-/// picked.
+/// picked. Horizon plays the version it is made for and has no loader: its steps are the first and the last.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Step {
     Version,
@@ -90,20 +95,30 @@ impl Step {
         }
     }
 
-    /// The step after this one, if there is one.
-    fn next(self) -> Option<Step> {
-        Step::ALL.get(self.index() + 1).copied()
+    /// Whether the step is left out for `edition`: Horizon has no loader to choose.
+    fn skipped(self, edition: Edition) -> bool {
+        edition == Edition::Horizon && self == Step::Loader
     }
 
-    /// The step before this one, if there is one.
-    fn back(self) -> Option<Step> {
-        self.index().checked_sub(1).map(|i| Step::ALL[i])
+    /// The step after this one for `edition`, if there is one.
+    fn next(self, edition: Edition) -> Option<Step> {
+        let next = Step::ALL.get(self.index() + 1).copied()?;
+        if next.skipped(edition) { next.next(edition) } else { Some(next) }
+    }
+
+    /// The step before this one for `edition`, if there is one.
+    fn back(self, edition: Edition) -> Option<Step> {
+        let back = self.index().checked_sub(1).map(|i| Step::ALL[i])?;
+        if back.skipped(edition) { back.back(edition) } else { Some(back) }
     }
 
     /// Whether the step can be opened: the first always, the others once a Minecraft version is picked (the loaders
-    /// and their versions depend on it).
-    fn reachable(self, mc: &str) -> bool {
-        self == Step::Version || !mc.is_empty()
+    /// and their versions depend on it). Horizon's version is its own, so its last step can be opened at once.
+    fn reachable(self, mc: &str, edition: Edition) -> bool {
+        match edition {
+            Edition::Java => self == Step::Version || !mc.is_empty(),
+            Edition::Horizon => !self.skipped(edition),
+        }
     }
 }
 
@@ -358,13 +373,15 @@ fn soft_tag(ui: &mut Ui, text: &str) {
 /// The steps at the top of the page: a numbered circle and the name of each, joined by lines. The open step is in
 /// the brand gradient, the ones before it have a check; a step that can be opened is pressed to go to it. Returns the
 /// step pressed.
-fn stepper(ui: &mut Ui, open: Step, mc: &str) -> Option<Step> {
+fn stepper(ui: &mut Ui, open: Step, mc: &str, edition: Edition) -> Option<Step> {
     let mut picked = None;
     let width = ui.available_width();
     let (row, _) = ui.allocate_exact_size(vec2(width, 32.0), egui::Sense::hover());
+    // a step left out says so in its place, so the numbers stay those of the steps
+    let label = |s: Step| if s.skipped(edition) { "Loader not needed" } else { s.label() };
     let labels: Vec<std::sync::Arc<egui::Galley>> = Step::ALL
         .iter()
-        .map(|s| ui.painter().layout_no_wrap(s.label().to_string(), super::fonts::medium(FS_BODY), c_text()))
+        .map(|s| ui.painter().layout_no_wrap(label(*s).to_string(), super::fonts::medium(FS_BODY), c_text()))
         .collect();
     // the names are left out when they don't fit, the numbers stay
     let named = labels.iter().map(|g| g.size().x + 40.0).sum::<f32>() + 2.0 * 40.0 <= width;
@@ -374,9 +391,11 @@ fn stepper(ui: &mut Ui, open: Step, mc: &str) -> Option<Step> {
     for (i, step) in Step::ALL.into_iter().enumerate() {
         let item_w = 28.0 + if named { labels[i].size().x + 10.0 } else { 0.0 };
         let rect = egui::Rect::from_min_size(egui::pos2(x, row.top()), vec2(item_w, 32.0));
-        let reachable = step.reachable(mc);
+        let reachable = step.reachable(mc, edition);
         let resp = ui.interact(rect, ui.scope_id().with(("create-step", i)), egui::Sense::click());
-        let done = step.index() < open.index();
+        let skipped = step.skipped(edition);
+        let passed = step.index() < open.index();
+        let done = passed && !skipped;
         let on = step == open;
         let t = motion::hover(ui, resp.id, reachable && !on && resp.hovered());
         let p = ui.painter();
@@ -399,6 +418,10 @@ fn stepper(ui: &mut Ui, open: Step, mc: &str) -> Option<Step> {
                 egui::StrokeKind::Inside,
             );
             super::discover::paint_check(p, circle.center(), 12.0, accent_ink());
+        } else if skipped {
+            // a dash in a quiet ring: nothing to do here
+            p.rect(circle, CornerRadius::same(14), c_field(), Stroke::new(1.0, c_border()), egui::StrokeKind::Inside);
+            p.hline(circle.center().x - 5.0..=circle.center().x + 5.0, circle.center().y, Stroke::new(1.5, c_faint()));
         } else {
             p.rect(
                 circle,
@@ -424,19 +447,19 @@ fn stepper(ui: &mut Ui, open: Step, mc: &str) -> Option<Step> {
             } else {
                 c_faint()
             };
-            let g = ui.painter().layout_no_wrap(step.label().to_string(), super::fonts::medium(FS_BODY), ink);
+            let g = ui.painter().layout_no_wrap(label(step).to_string(), super::fonts::medium(FS_BODY), ink);
             ui.painter().galley(egui::pos2(circle.right() + 10.0, row.center().y - g.size().y / 2.0), g, ink);
         }
         x += item_w;
         if i + 1 < Step::ALL.len() {
             // the line to the next step is in the brand colour once this step is behind
-            let color = if done { accent_ink().gamma_multiply(0.6) } else { c_border() };
+            let color = if passed { accent_ink().gamma_multiply(0.6) } else { c_border() };
             ui.painter().hline(x + 12.0..=x + 12.0 + line_w, row.center().y, Stroke::new(1.5, color));
             x += line_w + 24.0;
         }
         focus_ring(ui, &resp, rect.expand(2.0), 16);
-        let label = format!("Step {}: {}", i + 1, step.label());
-        resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Tab, reachable, on, &label));
+        let name = format!("Step {}: {}", i + 1, label(step));
+        resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Tab, reachable, on, &name));
         if reachable && !on {
             let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
             if resp.clicked() {
@@ -645,6 +668,7 @@ impl Default for CreateState {
         let (picked_tx, picked_rx) = channel();
         CreateState {
             step: Step::Version,
+            edition: Edition::Java,
             name: String::new(),
             mc: String::new(),
             kinds: KindFilter::default(),
@@ -754,18 +778,20 @@ impl App {
         let ctx = ui.ctx().clone();
         self.poll_create_picture(&ctx);
         let mut import = false;
-        PageHeader::new("New instance")
-            .subtitle("Pick a Minecraft version and a mod loader, then BlockForge downloads it all.")
-            .show(ui, |ui| {
-                // a modpack file or another launcher's instance is made into an instance from the import window
-                import = super::discover::ghost_icon(ui, Icon::Download, "Import a modpack or instance")
-                    .on_hover_text("A modpack file (.mrpack, .zip) or an instance from another launcher")
-                    .clicked();
-            });
+        let subtitle = match self.create.edition {
+            Edition::Java => "Pick a Minecraft version and a mod loader, then BlockForge downloads it all.",
+            Edition::Horizon => "Horizon plays the version it is made for. BlockForge gets it ready.",
+        };
+        PageHeader::new("New instance").subtitle(subtitle).show(ui, |ui| {
+            // a modpack file or another launcher's instance is made into an instance from the import window
+            import = super::discover::ghost_icon(ui, Icon::Download, "Import a modpack or instance")
+                .on_hover_text("A modpack file (.mrpack, .zip) or an instance from another launcher")
+                .clicked();
+        });
         if import {
             self.open_import(None);
         }
-        if let Some(step) = stepper(ui, self.create.step, &self.create.mc) {
+        if let Some(step) = stepper(ui, self.create.step, &self.create.mc, self.create.edition) {
             self.create.step = step;
         }
         ui.add_space(18.0);
@@ -808,12 +834,12 @@ impl App {
         }
         match act {
             Some(Go::Next) => {
-                if let Some(next) = self.create.step.next() {
+                if let Some(next) = self.create.step.next(self.create.edition) {
                     self.create.step = next;
                 }
             }
             Some(Go::Back) => {
-                if let Some(back) = self.create.step.back() {
+                if let Some(back) = self.create.step.back(self.create.edition) {
                     self.create.step = back;
                 }
             }
@@ -830,6 +856,16 @@ impl App {
     /// What Create waits for, said when the greyed-out button is pointed at; `None` when it can be pressed.
     fn create_blocker(&self) -> Option<String> {
         let c = &self.create;
+        if c.edition == Edition::Horizon {
+            // its version is its own, and it has no loader to wait for
+            return if !horizon::supported() {
+                Some(NO_HORIZON_BUILD.to_string())
+            } else if self.create_running() {
+                Some("The instance is being made. Its progress is in the sidebar".to_string())
+            } else {
+                None
+            };
+        }
         if c.mc.is_empty() {
             Some("Pick a Minecraft version first".to_string())
         } else if self.create_running() {
@@ -848,6 +884,7 @@ impl App {
     fn step_blocker(&self) -> Option<String> {
         let c = &self.create;
         match c.step {
+            Step::Version if c.edition == Edition::Horizon => self.create_blocker().filter(|_| !self.create_running()),
             Step::Version if c.mc.is_empty() => Some("Pick a Minecraft version first".to_string()),
             Step::Version => None,
             Step::Loader => self.create_blocker().filter(|_| !self.create_running()),
@@ -877,8 +914,20 @@ impl App {
         }
     }
 
-    /// Step 1: the Minecraft version, from a grid of tiles that can be searched and narrowed to the kinds wanted.
+    /// Step 1: the game first (Minecraft: Java Edition or Horizon), then for Java Edition the Minecraft version, from
+    /// a grid of tiles that can be searched and narrowed to the kinds wanted. Horizon has a version of its own: in
+    /// place of the grid it says what it is.
     fn version_step(&mut self, ui: &mut Ui, width: f32, changed_version: &mut bool) {
+        self.edition_choice(ui, width);
+        ui.add_space(14.0);
+        if self.create.edition == Edition::Horizon {
+            ScrollArea::vertical().id_salt("create-horizon").auto_shrink([false, false]).show(ui, |ui| {
+                ui.set_max_width(ui.available_width() - 14.0);
+                self.horizon_step(ui);
+                ui.add_space(8.0);
+            });
+            return;
+        }
         let manifest = self.manifest.clone();
         let latest_release = manifest.as_ref().and_then(|m| m.latest.get("release").cloned()).unwrap_or_default();
         let latest_snapshot = manifest.as_ref().and_then(|m| m.latest.get("snapshot").cloned()).unwrap_or_default();
@@ -1009,6 +1058,132 @@ impl App {
         }
     }
 
+    /// The game a new instance plays, as two cards side by side: Mojang's, and Horizon (greyed out where it has no
+    /// build for this computer).
+    fn edition_choice(&mut self, ui: &mut Ui, width: f32) {
+        const GAP: f32 = 10.0;
+        let w = ((width - 14.0 - GAP) / 2.0).floor().max(120.0);
+        let supported = horizon::supported();
+        let mc = self.horizon_minecraft();
+        let on = self.create.edition;
+        let mut picked = None;
+        // shorter words on narrow cards, so nothing is cut
+        let narrow = w < EDITION_ROOMY;
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = GAP;
+            let (title, line) = if narrow {
+                ("Java Edition", "Every version, mods")
+            } else {
+                ("Minecraft: Java Edition", "Every version, with mod loaders")
+            };
+            let java = edition_card(ui, title, line, false, on == Edition::Java, true, w)
+                .on_hover_text("Minecraft: Java Edition, Mojang's game: every version, with mod loaders");
+            if java.clicked() {
+                picked = Some(Edition::Java);
+            }
+            // what it is in full when pointed at; on the card, the version it plays
+            let (line, hint) = if supported {
+                let line = if narrow {
+                    format!("Plays Minecraft {mc}")
+                } else {
+                    format!("Experimental \u{00B7} plays Minecraft {mc}")
+                };
+                (line, format!("{}, plays Minecraft {mc}", horizon::TAGLINE))
+            } else {
+                (NO_HORIZON_BUILD.to_string(), NO_HORIZON_BUILD.to_string())
+            };
+            let hz = edition_card(ui, horizon::NAME, &line, true, on == Edition::Horizon, supported, w);
+            let hz = hz.on_hover_text(hint);
+            if hz.clicked() && supported {
+                picked = Some(Edition::Horizon);
+            }
+        });
+        if let Some(e) = picked.filter(|e| *e != on) {
+            self.create.edition = e;
+            if self.create.step.skipped(e) {
+                self.create.step = Step::Version;
+            }
+        }
+    }
+
+    /// Horizon chosen on the first step: what it is, what plays and what doesn't, what it needs and what BlockForge
+    /// does to get it, and who makes it.
+    fn horizon_step(&mut self, ui: &mut Ui) {
+        let mc = self.horizon_minecraft();
+        let build = self.horizon_tag().map(str::to_string);
+        let mut link = None;
+        card(ui, |ui| {
+            ui.spacing_mut().item_spacing.y = 6.0;
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                ui.label(RichText::new(horizon::NAME).size(FS_FIGURE).semibold());
+                super::edition::horizon_tags(ui);
+            });
+            let about = format!(
+                "{}, by the Horizon project. It plays Minecraft {mc}, the version its builds are made for.",
+                horizon::TAGLINE
+            );
+            ui.add(egui::Label::new(RichText::new(about).color(c_muted())).wrap());
+            ui.add_space(4.0);
+            facts(
+                ui,
+                &[
+                    ("Minecraft", mc.clone()),
+                    ("Build", build.unwrap_or_else(|| "Newest release".into())),
+                    ("First download", "1.5 GB".into()),
+                ],
+            );
+            ui.add_space(4.0);
+            rule(ui);
+            ui.add_space(6.0);
+            let works = |ui: &mut Ui| {
+                ui.label(RichText::new("What plays").semibold());
+                for text in HORIZON_PLAYS {
+                    point(ui, true, text);
+                }
+            };
+            let doesnt = |ui: &mut Ui| {
+                ui.label(RichText::new("What doesn't").semibold());
+                for text in HORIZON_DOESNT {
+                    point(ui, false, text);
+                }
+            };
+            if ui.available_width() >= 520.0 {
+                ui.columns(2, |cols| {
+                    cols[0].spacing_mut().item_spacing.y = 6.0;
+                    cols[1].spacing_mut().item_spacing.y = 6.0;
+                    works(&mut cols[0]);
+                    doesnt(&mut cols[1]);
+                });
+            } else {
+                works(ui);
+                ui.add_space(6.0);
+                doesnt(ui);
+            }
+            ui.add_space(6.0);
+            rule(ui);
+            ui.add_space(6.0);
+            fact_line(
+                ui,
+                Icon::User,
+                "It needs a Microsoft account that owns Minecraft: Java Edition, as Horizon's own launcher does.",
+            );
+            let download = format!(
+                "BlockForge downloads Horizon's signed release, checks it, and prepares it from BlockForge's own copy \
+                 of Minecraft {mc}: about 1.5 GB the first time. Your normal Minecraft and its instances are left as \
+                 they are."
+            );
+            fact_line(ui, Icon::Download, &download);
+            ui.add_space(6.0);
+            rule(ui);
+            ui.add_space(6.0);
+            link = super::edition::credit(ui);
+        });
+        if let Some(url) = link {
+            self.open_link(&url);
+        }
+    }
+
     /// Step 2: the mod loader as a list to pick one from, and the version of it.
     fn loader_step(&mut self, ui: &mut Ui, changed_version: &mut bool) {
         let mc = self.create.mc.clone();
@@ -1118,9 +1293,9 @@ impl App {
                         ui.label(RichText::new("Name").semibold());
                     },
                 );
-                let c = &mut self.create;
                 // the hint is the name the instance gets when the field is left empty
-                let hint = if c.mc.is_empty() { "My instance".to_string() } else { default_name(&c.mc, c.loader) };
+                let hint = self.create_default_name();
+                let c = &mut self.create;
                 let name_field = ui.add_sized(
                     [ui.available_width().min(420.0), 34.0],
                     egui::TextEdit::singleline(&mut c.name)
@@ -1132,6 +1307,11 @@ impl App {
                 *enter = name_field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
             });
             rule(ui);
+            if self.create.edition == Edition::Horizon {
+                // Horizon isn't Java: there is no memory to give it, and no performance mods for it
+                small_muted(ui, "Horizon runs without Java, so there is no memory to set and no mods to add here.");
+                return;
+            }
             self.memory_row(ui);
             let key = self.create.loader.modrinth_name();
             if performance::offered_for(key) {
@@ -1238,6 +1418,9 @@ impl App {
     /// Minecraft version and its loader.
     fn create_identity(&self) -> (String, String, Option<&'static str>) {
         let c = &self.create;
+        if c.edition == Edition::Horizon {
+            return (self.create_name(), self.horizon_minecraft(), Some(horizon::NAME));
+        }
         let loader = (c.loader != Loader::Vanilla).then(|| c.loader.label());
         (self.create_name(), c.mc.clone(), loader)
     }
@@ -1252,8 +1435,14 @@ impl App {
     /// The name the instance will get.
     fn create_name(&self) -> String {
         let c = &self.create;
-        if !c.name.trim().is_empty() {
-            c.name.trim().to_string()
+        if !c.name.trim().is_empty() { c.name.trim().to_string() } else { self.create_default_name() }
+    }
+
+    /// The name the instance gets when the name field is left empty.
+    fn create_default_name(&self) -> String {
+        let c = &self.create;
+        if c.edition == Edition::Horizon {
+            horizon::NAME.to_string()
         } else if c.mc.is_empty() {
             "My instance".to_string()
         } else {
@@ -1313,7 +1502,7 @@ impl App {
                     .paint_at(ui, rect);
             }
             None => {
-                let loader = (self.create.loader != Loader::Vanilla).then(|| self.create.loader.label());
+                let (_, _, loader) = self.create_identity();
                 super::instance_icon::paint_default_icon(ui, rect, loader);
             }
         }
@@ -1431,8 +1620,10 @@ impl App {
             ui.add_space(4.0);
             ui.add(egui::Label::new(RichText::new(&name).font(super::fonts::semibold(FS_BODY + 1.0))).wrap());
             let c = &self.create;
+            let horizon = c.edition == Edition::Horizon;
             let latest = self.manifest.as_ref().and_then(|m| m.latest.get("release")).is_some_and(|l| *l == c.mc);
             let line = match (c.mc.is_empty(), latest) {
+                _ if horizon => format!("{} \u{00B7} Minecraft {mc}", horizon::NAME),
                 (true, _) => "No version picked yet".to_string(),
                 (false, true) => format!("Minecraft {} \u{00B7} Latest release", c.mc),
                 (false, false) => format!("Minecraft {}", c.mc),
@@ -1447,13 +1638,24 @@ impl App {
                 (l, None) => l.label().to_string(),
             };
             let taken: Vec<&str> = self.instances.iter().map(|i| i.folder.as_str()).collect();
-            let mut rows: Vec<(&str, String, bool)> = vec![
-                ("Minecraft", if c.mc.is_empty() { "\u{2014}".to_string() } else { c.mc.clone() }, true),
-                ("Loader", loader_text, true),
-                ("Folder", preview_folder(&name, &taken), true),
-                ("Memory", memory_summary(&c.extras), false),
-            ];
-            if performance::offered_for(c.loader.modrinth_name()) {
+            let folder = preview_folder(&name, &taken);
+            let mut rows: Vec<(&str, String, bool)> = if horizon {
+                let build = self.horizon_tag().map(str::to_string).unwrap_or_else(|| "Newest".into());
+                vec![
+                    ("Edition", horizon::NAME.to_string(), false),
+                    ("Minecraft", mc.clone(), true),
+                    ("Build", build, true),
+                    ("Folder", folder, true),
+                ]
+            } else {
+                vec![
+                    ("Minecraft", if c.mc.is_empty() { "\u{2014}".to_string() } else { c.mc.clone() }, true),
+                    ("Loader", loader_text, true),
+                    ("Folder", folder, true),
+                    ("Memory", memory_summary(&c.extras), false),
+                ]
+            };
+            if !horizon && performance::offered_for(c.loader.modrinth_name()) {
                 rows.push(("Performance mods", if c.performance { "Added" } else { "None" }.to_string(), false));
             }
             for (key, value, mono) in rows {
@@ -1518,8 +1720,11 @@ impl App {
         let mut act = None;
         let blocker = self.step_blocker();
         let creating = self.create_running();
-        let summary = summary(&self.create);
         let (name, mc, loader) = self.create_identity();
+        let summary = match self.create.edition {
+            Edition::Horizon => format!("{} \u{00B7} Minecraft {mc}", horizon::NAME),
+            Edition::Java => summary(&self.create),
+        };
         let spec = CoverSpec::new(&self.create_cover_key(&name), &mc, loader, self.create.extras.cover);
         let tex = self.covers.texture(&self.ctx, &spec, 128, 128);
         card_frame().inner_margin(egui::Margin::symmetric(14, 10)).show(ui, |ui| {
@@ -1563,6 +1768,7 @@ impl App {
     pub(super) fn shot_create(&mut self, step: Step) {
         self.page = Page::Create;
         let c = &mut self.create;
+        c.edition = Edition::Java;
         c.step = step;
         c.loader = if step == Step::Version { Loader::Vanilla } else { Loader::Fabric };
         if step == Step::Configure {
@@ -1572,8 +1778,48 @@ impl App {
         self.request_loader_versions();
     }
 
+    /// The screenshot tour's New instance with Horizon chosen, on `step`; a name and a cover on the last.
+    pub(super) fn shot_create_horizon(&mut self, step: Step) {
+        self.page = Page::Create;
+        let c = &mut self.create;
+        c.edition = Edition::Horizon;
+        c.step = step;
+        if step == Step::Configure {
+            c.name = "Horizon survival".into();
+            c.extras.cover = CoverTheme::Auto;
+        }
+    }
+
+    /// Make a Horizon instance as the form says: Horizon installs it (its build, the Minecraft it prepares from, the
+    /// instance), then the form's description, cover and picture go into it.
+    fn start_create_horizon(&mut self) {
+        let c = &self.create;
+        let wanted = if c.name.trim().is_empty() { horizon::NAME.to_string() } else { c.name.trim().to_string() };
+        let name = unique_instance_name(&self.instances, &wanted);
+        // the memory is Java's, and the form hides it for Horizon: a choice made before switching is left out
+        let extras = Extras { memory: Memory::Follow, ..c.extras.clone() };
+        let dirs = self.dirs.clone();
+        let label = format!("Creating {name}");
+        self.create.task_label = Some(label.clone());
+        self.start_task(label, move |p, _| async move {
+            let mut inst = horizon::create_instance(&dirs, &name, &p).await?;
+            Ok(finish_extras(&mut inst, &extras).await)
+        });
+        let c = &mut self.create;
+        c.name.clear();
+        c.step = Step::Version;
+        c.extras = Extras::default();
+        c.picture_preview = None;
+        c.picture_error = None;
+        self.page = Page::Library;
+    }
+
     /// Make the instance as the form says, in a sidebar task, and go to the library where it shows up.
     fn start_create(&mut self) {
+        if self.create.edition == Edition::Horizon {
+            self.start_create_horizon();
+            return;
+        }
         let c = &self.create;
         let loader = c.loader;
         let mc = c.mc.clone();
@@ -1588,34 +1834,7 @@ impl App {
         self.create.task_label = Some(label.clone());
         self.start_task(label, move |p, _| async move {
             let mut inst = instances::create(&dirs, &name, &mc, loader, version.as_deref(), &p).await?;
-            let mut ready = format!("\"{}\" is ready", inst.name());
-            // the options of "More options": the instance is there already, so one that can't be applied is said
-            // in the message rather than undoing it all
-            if extras.changes_file() {
-                extras.apply(&mut inst.file.launcher);
-                super::workbench::set_cover_theme(&mut inst, extras.cover);
-                if let Err(e) = inst.save() {
-                    ready.push_str(&format!(". Its memory, cover and description weren't saved: {e:#}"));
-                }
-            }
-            if let Some(path) = extras.picture.clone() {
-                let target = inst.root.join("instance.png");
-                // the same as choosing a picture for an instance afterwards: shrunk to 256 points, saved as a PNG
-                let saved = tokio::task::spawn_blocking(move || {
-                    image::open(&path)
-                        .and_then(|img| {
-                            img.resize(256, 256, image::imageops::FilterType::Lanczos3)
-                                .save_with_format(&target, image::ImageFormat::Png)
-                        })
-                        .map_err(|e| e.to_string())
-                })
-                .await
-                .map_err(|e| e.to_string())
-                .and_then(|r| r);
-                if let Err(e) = saved {
-                    ready.push_str(&format!(". The picture couldn't be used: {e}"));
-                }
-            }
+            let ready = finish_extras(&mut inst, &extras).await;
             if !performance {
                 return Ok(ready);
             }
@@ -1632,6 +1851,150 @@ impl App {
         c.picture_error = None;
         self.page = Page::Library;
     }
+}
+
+/// Put the options of the form into the instance just made, and say it is ready. The instance is there already, so
+/// an option that can't be applied is said in the message rather than undoing it all.
+async fn finish_extras(inst: &mut instances::Instance, extras: &Extras) -> String {
+    let mut ready = format!("\"{}\" is ready", inst.name());
+    if extras.changes_file() {
+        extras.apply(&mut inst.file.launcher);
+        super::workbench::set_cover_theme(inst, extras.cover);
+        if let Err(e) = inst.save() {
+            ready.push_str(&format!(". Its memory, cover and description weren't saved: {e:#}"));
+        }
+    }
+    if let Some(path) = extras.picture.clone() {
+        let target = inst.root.join("instance.png");
+        // the same as choosing a picture for an instance afterwards: shrunk to 256 points, saved as a PNG
+        let saved = tokio::task::spawn_blocking(move || {
+            image::open(&path)
+                .and_then(|img| {
+                    img.resize(256, 256, image::imageops::FilterType::Lanczos3)
+                        .save_with_format(&target, image::ImageFormat::Png)
+                })
+                .map_err(|e| e.to_string())
+        })
+        .await
+        .map_err(|e| e.to_string())
+        .and_then(|r| r);
+        if let Err(e) = saved {
+            ready.push_str(&format!(". The picture couldn't be used: {e}"));
+        }
+    }
+    ready
+}
+
+/// What the Horizon card is greyed out with where Horizon publishes no build.
+const NO_HORIZON_BUILD: &str = "Horizon has no build for this computer yet";
+
+/// What plays in Horizon, and what doesn't, as its card on the first step lists them.
+const HORIZON_PLAYS: [&str; 4] =
+    ["Singleplayer and servers", "Worlds in Minecraft's own format", "Resource packs", "Horizon's own mods"];
+const HORIZON_DOESNT: [&str; 2] = [
+    "Java mods and mod loaders (Fabric, Forge, NeoForge, Quilt)",
+    "Shader packs, and what is Java's: memory, the Java used, fast start",
+];
+
+/// How tall a card of the choice of game is, and from what width it has room for the long words.
+const EDITION_H: f32 = 64.0;
+const EDITION_ROOMY: f32 = 270.0;
+
+/// A game to make an instance of, chosen the way a radio button is (like a loader's row): a ring that fills in the
+/// brand gradient, the name with Horizon's label after it (`horizon`), and a line under it. Greyed out and not
+/// pressable when not `enabled`.
+fn edition_card(
+    ui: &mut Ui,
+    title: &str,
+    line: &str,
+    horizon: bool,
+    selected: bool,
+    enabled: bool,
+    width: f32,
+) -> egui::Response {
+    let sense = if enabled { egui::Sense::click() } else { egui::Sense::hover() };
+    let (rect, resp) = ui.allocate_exact_size(vec2(width, EDITION_H), sense);
+    if ui.is_rect_visible(rect) {
+        let t = motion::hover(ui, resp.id, enabled && resp.hovered());
+        let s = motion::toward(ui.ctx(), resp.id.with("on"), selected, motion::MEDIUM);
+        let p = ui.painter();
+        let fill = motion::mix(motion::mix(c_card(), c_hover(), t), c_accent_soft(), s);
+        let edge =
+            motion::mix(motion::mix(c_border(), c_control().gamma_multiply(0.7), t), c_accent().gamma_multiply(0.8), s);
+        p.rect(rect, CornerRadius::same(R_CARD), fill, Stroke::new(1.0, edge), egui::StrokeKind::Inside);
+        let ring = egui::Rect::from_center_size(egui::pos2(rect.left() + 26.0, rect.center().y), vec2(20.0, 20.0));
+        let ring_ink = if enabled { c_control() } else { c_border() };
+        p.rect_stroke(
+            ring,
+            CornerRadius::same(10),
+            Stroke::new(1.5, ring_ink.gamma_multiply(1.0 - s)),
+            egui::StrokeKind::Inside,
+        );
+        if s > 0.0 {
+            motion::gradient_rect(p, ring, 10, c_accent().gamma_multiply(s), c_accent2().gamma_multiply(s));
+            super::discover::paint_check(p, ring.center(), 10.0, c_on_accent().gamma_multiply(s));
+        }
+        let left = rect.left() + 50.0;
+        let room = rect.right() - left - 12.0;
+        let (ink, sub) = if enabled { (c_text(), c_muted()) } else { (c_faint(), c_faint()) };
+        let mut job = egui::text::LayoutJob::single_section(
+            title.to_string(),
+            egui::TextFormat::simple(super::fonts::semibold(FS_BODY + 1.0), ink),
+        );
+        job.wrap = egui::text::TextWrapping::truncate_at_width(room);
+        let name = p.layout_job(job);
+        let name_y = rect.center().y - 19.0;
+        let name_w = name.size().x;
+        p.galley(egui::pos2(left, name_y), name, ink);
+        if horizon {
+            // what it is, on a label after the name when there is room for it
+            let color = if enabled { loader_color(horizon::NAME) } else { c_faint() };
+            let g = p.layout_no_wrap("Rust rewrite".to_string(), super::fonts::medium(11.5), color);
+            let tag =
+                egui::Rect::from_min_size(egui::pos2(left + name_w + 8.0, name_y + 1.0), vec2(g.size().x + 12.0, 19.0));
+            if tag.right() <= rect.right() - 12.0 {
+                p.rect_filled(tag, CornerRadius::same(R_TAG), color.gamma_multiply(0.14));
+                p.galley(tag.center() - g.size() / 2.0, g, color);
+            }
+        }
+        let mut job = egui::text::LayoutJob::single_section(
+            line.to_string(),
+            egui::TextFormat::simple(egui::FontId::proportional(FS_META), sub),
+        );
+        job.wrap = egui::text::TextWrapping::truncate_at_width(room);
+        p.galley(egui::pos2(left, rect.center().y + 4.0), p.layout_job(job), sub);
+    }
+    focus_ring(ui, &resp, rect, R_CARD);
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::RadioButton, enabled, selected, title));
+    if enabled { resp.on_hover_cursor(egui::CursorIcon::PointingHand) } else { resp }
+}
+
+/// A point of Horizon's card: a check in the brand colour for what plays, a cross for what doesn't, then the words.
+fn point(ui: &mut Ui, plays: bool, text: &str) {
+    ui.horizontal_top(|ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        let (rect, _) = ui.allocate_exact_size(vec2(14.0, 18.0), egui::Sense::hover());
+        let c = rect.center();
+        if plays {
+            super::discover::paint_check(ui.painter(), c, 12.0, accent_ink());
+        } else {
+            let stroke = Stroke::new(1.5, c_muted());
+            ui.painter().line_segment([c + vec2(-4.0, -4.0), c + vec2(4.0, 4.0)], stroke);
+            ui.painter().line_segment([c + vec2(-4.0, 4.0), c + vec2(4.0, -4.0)], stroke);
+        }
+        let ink = if plays { c_text() } else { c_muted() };
+        ui.add(egui::Label::new(RichText::new(text).color(ink)).wrap());
+    });
+}
+
+/// A line of Horizon's card about what it needs or what is done for it, with an icon in front.
+fn fact_line(ui: &mut Ui, icon: Icon, text: &str) {
+    ui.horizontal_top(|ui| {
+        ui.spacing_mut().item_spacing.x = 10.0;
+        let (rect, _) = ui.allocate_exact_size(vec2(16.0, 18.0), egui::Sense::hover());
+        super::icons::paint(ui.painter(), icon, rect.center(), 14.0, c_muted());
+        ui.add(egui::Label::new(RichText::new(text).size(FS_META + 1.0).color(c_muted())).wrap());
+    });
 }
 
 /// One line of the summary panel: what, in grey, and its value at the right (in the monospace face with `mono`, for
@@ -1816,14 +2179,31 @@ mod tests {
 
     #[test]
     fn the_steps_go_on_and_back_and_wait_for_a_version() {
-        assert_eq!(Step::Version.next(), Some(Step::Loader));
-        assert_eq!(Step::Configure.next(), None);
-        assert_eq!(Step::Loader.back(), Some(Step::Version));
-        assert_eq!(Step::Version.back(), None);
+        let java = Edition::Java;
+        assert_eq!(Step::Version.next(java), Some(Step::Loader));
+        assert_eq!(Step::Configure.next(java), None);
+        assert_eq!(Step::Loader.back(java), Some(Step::Version));
+        assert_eq!(Step::Version.back(java), None);
         // without a version only the first step can be opened; with one, any step can, in any order
-        assert!(Step::Version.reachable(""));
-        assert!(!Step::Loader.reachable("") && !Step::Configure.reachable(""));
-        assert!(Step::ALL.iter().all(|s| s.reachable("1.21.1")));
+        assert!(Step::Version.reachable("", java));
+        assert!(!Step::Loader.reachable("", java) && !Step::Configure.reachable("", java));
+        assert!(Step::ALL.iter().all(|s| s.reachable("1.21.1", java)));
+    }
+
+    #[test]
+    fn horizon_has_no_loader_step() {
+        let hz = Edition::Horizon;
+        // Continue goes from the version straight to Configure, and Back the other way
+        assert_eq!(Step::Version.next(hz), Some(Step::Configure));
+        assert_eq!(Step::Configure.back(hz), Some(Step::Version));
+        assert_eq!(Step::Configure.next(hz), None);
+        assert_eq!(Step::Version.back(hz), None);
+        assert!(Step::Loader.skipped(hz) && !Step::Loader.skipped(Edition::Java));
+        assert!(!Step::Version.skipped(hz) && !Step::Configure.skipped(hz));
+        // its version is its own: Configure can be opened without one picked, the loader never
+        assert!(Step::Version.reachable("", hz) && Step::Configure.reachable("", hz));
+        assert!(!Step::Loader.reachable("", hz) && !Step::Loader.reachable("1.21.1", hz));
+        assert_eq!(CreateState::default().edition, Edition::Java);
     }
 
     #[test]

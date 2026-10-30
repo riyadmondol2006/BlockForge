@@ -352,6 +352,7 @@ fn loader_rgb(loader: Option<&str>) -> Option<Rgb> {
         "Forge" => Some(hex(0x7FA8E8)),
         "NeoForge" => Some(hex(0xF09A4F)),
         "Quilt" => Some(hex(0xB98BE0)),
+        "Horizon" => Some(hex(0xF28BA8)),
         _ => None,
     }
 }

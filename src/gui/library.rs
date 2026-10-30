@@ -86,8 +86,7 @@ impl App {
                 }
                 None => {
                     ui.add(
-                        egui::Label::new(RichText::new(mods_text(inst.mod_count)).size(FS_META).color(c_faint()))
-                            .truncate(),
+                        egui::Label::new(RichText::new(contents_text(inst)).size(FS_META).color(c_faint())).truncate(),
                     );
                 }
             }
@@ -121,9 +120,10 @@ impl App {
     /// whole line would be cut, the loader's version is left out: a line never ends on a dot and an ellipsis.
     fn loader_line(&self, ui: &mut Ui, inst: &Instance, version: bool) {
         let room = ui.available_width();
-        let mut job = loader_job(inst, FS_META, version);
+        let build = self.horizon_tag();
+        let mut job = loader_job(inst, FS_META, version, build);
         if version && ui.painter().layout_job(job.clone()).size().x > room {
-            job = loader_job(inst, FS_META, false);
+            job = loader_job(inst, FS_META, false, build);
         }
         ui.add(egui::Label::new(job).truncate());
     }
@@ -157,10 +157,11 @@ impl App {
         ui.add_space(6.0);
         // the version, the loader and its version and the mods, a whole part at a time left out until it fits
         let room = ui.available_width();
+        let build = self.horizon_tag();
         let job = (0..BANNER_META_LEVELS)
-            .map(|level| banner_meta(h, level))
+            .map(|level| banner_meta(h, level, build))
             .find(|job| ui.painter().layout_job(job.clone()).size().x <= room)
-            .unwrap_or_else(|| banner_meta(h, BANNER_META_LEVELS - 1));
+            .unwrap_or_else(|| banner_meta(h, BANNER_META_LEVELS - 1, build));
         ui.add(egui::Label::new(job).truncate());
         ui.add_space(gap(20.0));
         ui.horizontal(|ui| {
@@ -192,14 +193,17 @@ impl App {
                         act = Some(a);
                     }
                 });
-                if let Some(a) = self.helpers_menu(ui, h) {
-                    act = Some(a);
+                // the helpers are Java's: Horizon starts without them
+                if !crate::horizon::is_horizon(h) {
+                    if let Some(a) = self.helpers_menu(ui, h) {
+                        act = Some(a);
+                    }
+                    ui.separator();
+                    ui.add_enabled(
+                        false,
+                        egui::Label::new(RichText::new(self.speed_summary(h)).size(FS_META).color(c_faint())),
+                    );
                 }
-                ui.separator();
-                ui.add_enabled(
-                    false,
-                    egui::Label::new(RichText::new(self.speed_summary(h)).size(FS_META).color(c_faint())),
-                );
                 act
             });
             if let Some(Some(a)) = menu.map(|r| r.inner) {
@@ -736,7 +740,7 @@ impl App {
                 None => {
                     let when =
                         if inst.last_played() > 0 { time_ago(inst.last_played()) } else { "Not played yet".into() };
-                    let note = format!("{} \u{00B7} {}", mods_text(inst.mod_count), when.to_lowercase());
+                    let note = format!("{} \u{00B7} {}", contents_text(inst), when.to_lowercase());
                     ui.add(egui::Label::new(RichText::new(note).size(FS_META).color(c_faint())).truncate());
                 }
             }
@@ -879,8 +883,8 @@ impl App {
         }
         if let Some(x) = spans.loader {
             list_cell(ui, row, x, |ui| {
-                let (text, color) = match inst.loader() {
-                    Some((kind, ver)) => (format!("{kind} {ver}"), loader_color(kind)),
+                let (text, color) = match super::edition::loader_parts(inst, self.horizon_tag()) {
+                    Some((kind, ver)) => (super::edition::joined(kind, ver), loader_color(kind)),
                     None => ("Vanilla".to_string(), c_muted()),
                 };
                 ui.add(egui::Label::new(RichText::new(text).font(super::fonts::mono(13.0)).color(color)).truncate());
@@ -949,8 +953,15 @@ impl App {
         // keeps to this column instead of stretching; the scroll bar has its own strip at the window's edge.
         let room = ui.available_width();
         let column = (room - ui.spacing().scroll.allocated_width()).min(INSTANCE_COLUMN);
-        // the Mods tab lists the mods, Resource packs the packs and the shaders
+        // a Horizon instance has no Mods tab (whichever tab was open for the instance before)
+        if !super::edition::has_tab(&inst, self.tab) {
+            self.tab = InstTab::Overview;
+        }
+        // the Mods tab lists the mods, Resource packs the packs and the shaders (only the packs for Horizon)
         self.mods_follow_tab();
+        if crate::horizon::is_horizon(&inst) {
+            self.mods_keep_to_packs();
+        }
         ui.scope(|ui| {
             ui.set_max_width(column);
             self.instance_header(ui, &inst, &mut action);
@@ -1008,6 +1019,9 @@ impl App {
                 (InstTab::Logs, "Logs"),
                 (InstTab::Settings, "Settings"),
             ] {
+                if !super::edition::has_tab(inst, t) {
+                    continue;
+                }
                 let mark = (t == InstTab::Settings).then_some(unsaved);
                 let r = tab_marked(ui, label, self.tab == t, mark);
                 let r = if mark == Some(true) { r.on_hover_text("Changes here aren't saved yet") } else { r };
@@ -1075,7 +1089,14 @@ impl App {
                 self.overview_files(ui, inst);
             }
             ui.add_space(OVERVIEW_GAP);
-            self.overview_play(ui, inst, &mut change);
+            if crate::horizon::is_horizon(inst) {
+                // what it is and who makes it, then joining a server; the Java helpers have nothing to say here
+                self.horizon_about_card(ui);
+                ui.add_space(OVERVIEW_GAP);
+                card(ui, |ui| self.overview_join(ui, inst));
+            } else {
+                self.overview_play(ui, inst, &mut change);
+            }
             ui.add_space(16.0);
         });
         if change {
@@ -1105,22 +1126,7 @@ impl App {
             ui.add_space(2.0);
             ui.add(egui::Label::new(RichText::new(this.speed_summary(inst)).size(FS_BODY).color(c_muted())).wrap());
         };
-        let join = |ui: &mut Ui, this: &mut Self| {
-            block_title(ui, "Join a server on start");
-            small_muted(ui, "An address like play.example.com, or play.example.com:25566");
-            ui.add_space(8.0);
-            ui.horizontal_wrapped(|ui| {
-                let mut s = std::mem::take(&mut this.quick_server);
-                search_field(ui, &mut s, "Server address", (ui.available_width() - 150.0).clamp(150.0, 280.0));
-                this.quick_server = s;
-                let ready = !this.quick_server.trim().is_empty() && !this.is_playing(&inst.folder);
-                // neutral: the one green button of the page is Play
-                if ui.add_enabled_ui(ready, |ui| secondary_icon(ui, Icon::Play, "Play and join")).inner.clicked() {
-                    let server = this.quick_server.trim().to_string();
-                    this.play_checked(&inst.folder, super::PendingPlay::Join(server));
-                }
-            });
-        };
+        let join = |ui: &mut Ui, this: &mut Self| this.overview_join(ui, inst);
         // one card: the two halves side by side with a line between them, or one over the other when it is narrow
         card(ui, |ui| {
             let room = ui.available_width();
@@ -1144,6 +1150,24 @@ impl App {
                 rule(ui);
                 ui.add_space(12.0);
                 join(ui, self);
+            }
+        });
+    }
+
+    /// Joining a server on start: an address, and the button that plays and joins it.
+    fn overview_join(&mut self, ui: &mut Ui, inst: &Instance) {
+        block_title(ui, "Join a server on start");
+        small_muted(ui, "An address like play.example.com, or play.example.com:25566");
+        ui.add_space(8.0);
+        ui.horizontal_wrapped(|ui| {
+            let mut s = std::mem::take(&mut self.quick_server);
+            search_field(ui, &mut s, "Server address", (ui.available_width() - 150.0).clamp(150.0, 280.0));
+            self.quick_server = s;
+            let ready = !self.quick_server.trim().is_empty() && !self.is_playing(&inst.folder);
+            // neutral: the one green button of the page is Play
+            if ui.add_enabled_ui(ready, |ui| secondary_icon(ui, Icon::Play, "Play and join")).inner.clicked() {
+                let server = self.quick_server.trim().to_string();
+                self.play_checked(&inst.folder, super::PendingPlay::Join(server));
             }
         });
     }
@@ -1541,9 +1565,9 @@ fn library_show(ctx: &egui::Context) -> Show {
     ctx.data(|d| d.get_temp::<Show>(egui::Id::unique(SHOW_KEY))).unwrap_or_default()
 }
 
-/// The loader of an instance as the filters name it: `Fabric`, `Forge`, … or `Vanilla`.
+/// The loader of an instance as the filters name it: `Fabric`, `Forge`, …, `Horizon` or `Vanilla`.
 fn loader_kind(inst: &Instance) -> &str {
-    inst.loader().map(|(kind, _)| kind).unwrap_or("Vanilla")
+    super::edition::loader_kind(inst).unwrap_or("Vanilla")
 }
 
 /// The order loaders are listed and grouped in: the known ones by name, then any other, plain Minecraft last.
@@ -1553,6 +1577,7 @@ fn loader_rank(kind: &str) -> (u8, String) {
         "Forge" => 1,
         "NeoForge" => 2,
         "Quilt" => 3,
+        "Horizon" => 4,
         "Vanilla" => 9,
         _ => 5,
     };
@@ -1862,6 +1887,12 @@ fn set_favorite(inst: &mut Instance, on: bool) {
     }
 }
 
+/// What a card says an instance holds: its mods, or for a Horizon instance (which has none of BlockForge's to count)
+/// what it is.
+fn contents_text(inst: &Instance) -> String {
+    if crate::horizon::is_horizon(inst) { "Rust rewrite".to_string() } else { mods_text(inst.mod_count) }
+}
+
 /// "No mods", "1 mod", "12 mods".
 fn mods_text(n: usize) -> String {
     match n {
@@ -1872,14 +1903,15 @@ fn mods_text(n: usize) -> String {
 }
 
 /// "1.21.1 · Fabric 0.20.0" in the monospace face at `size`: the version in grey, the loader in its own colour (with
-/// its version when `version` is true), "Vanilla" for plain Minecraft.
-fn loader_job(inst: &Instance, size: f32, version: bool) -> egui::text::LayoutJob {
+/// its version when `version` is true), "Vanilla" for plain Minecraft. A Horizon instance has "Horizon" there, with
+/// the installed build (`build`) as its version.
+fn loader_job(inst: &Instance, size: f32, version: bool, build: Option<&str>) -> egui::text::LayoutJob {
     let part = |color: Color32| egui::TextFormat { font_id: super::fonts::mono(size), color, ..Default::default() };
     let mut job = egui::text::LayoutJob::default();
     job.append(inst.mc_version(), 0.0, part(c_muted()));
     job.append(" \u{00B7} ", 0.0, part(c_faint()));
-    match inst.loader() {
-        Some((kind, ver)) if version => job.append(&format!("{kind} {ver}"), 0.0, part(loader_color(kind))),
+    match super::edition::loader_parts(inst, build) {
+        Some((kind, ver)) if version => job.append(&super::edition::joined(kind, ver), 0.0, part(loader_color(kind))),
         Some((kind, _)) => job.append(kind, 0.0, part(loader_color(kind))),
         None => job.append("Vanilla", 0.0, part(c_muted())),
     }
@@ -1890,8 +1922,9 @@ fn loader_job(inst: &Instance, size: f32, version: bool) -> egui::text::LayoutJo
 const BANNER_META_LEVELS: usize = 3;
 
 /// "1.21.1 · Fabric 0.20.0 · 7 mods" in light monospace type, for the banner's cover. `level` 0 is all of it; each next
-/// level leaves out one more part from the end (the mods, then the loader's version).
-fn banner_meta(inst: &Instance, level: usize) -> egui::text::LayoutJob {
+/// level leaves out one more part from the end (the mods, then the loader's version). A Horizon instance has
+/// "Horizon" and its build (`build`) for the loader, and no mods.
+fn banner_meta(inst: &Instance, level: usize, build: Option<&str>) -> egui::text::LayoutJob {
     let part = |a: u8| egui::TextFormat {
         font_id: super::fonts::mono(14.0),
         color: Color32::from_white_alpha(a),
@@ -1900,12 +1933,12 @@ fn banner_meta(inst: &Instance, level: usize) -> egui::text::LayoutJob {
     let mut job = egui::text::LayoutJob::default();
     job.append(inst.mc_version(), 0.0, part(225));
     job.append(" \u{00B7} ", 0.0, part(120));
-    match inst.loader() {
-        Some((kind, ver)) if level < 2 => job.append(&format!("{kind} {ver}"), 0.0, part(225)),
+    match super::edition::loader_parts(inst, build) {
+        Some((kind, ver)) if level < 2 => job.append(&super::edition::joined(kind, ver), 0.0, part(225)),
         Some((kind, _)) => job.append(kind, 0.0, part(225)),
         None => job.append("Vanilla", 0.0, part(225)),
     }
-    if level == 0 {
+    if level == 0 && !crate::horizon::is_horizon(inst) {
         job.append(" \u{00B7} ", 0.0, part(120));
         job.append(&mods_text(inst.mod_count), 0.0, part(225));
     }
@@ -2274,6 +2307,8 @@ fn is_automatic_description(desc: &str, inst: &Instance) -> bool {
     let mc = inst.mc_version();
     desc == format!("Minecraft {mc}")
         || inst.loader().is_some_and(|(kind, _)| desc == format!("Minecraft {mc} with {kind}"))
+        || (crate::horizon::is_horizon(inst)
+            && desc == format!("{}: {} ({mc})", crate::horizon::NAME, crate::horizon::TAGLINE))
 }
 
 #[cfg(test)]

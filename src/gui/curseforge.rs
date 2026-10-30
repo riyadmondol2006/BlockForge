@@ -312,6 +312,17 @@ impl App {
         if !self.cf.active {
             return false;
         }
+        // a Horizon instance isn't the target of what it can't take
+        let section = self.cf.section;
+        if self
+            .discover
+            .target
+            .as_ref()
+            .and_then(|f| self.instance(f))
+            .is_some_and(|i| !super::edition::takes(i, section.into()))
+        {
+            self.discover.target = None;
+        }
         let ctx = ui.ctx().clone();
         let enabled = *self.cf.enabled.get_or_insert_with(|| curseforge::platform_enabled(&self.dirs, "modsEnabled"));
         if self.explore_header(ui) {
@@ -415,8 +426,13 @@ impl App {
         let projects = std::mem::take(&mut self.cf.projects);
         let section = self.cf.section;
         let target = self.discover.target.clone();
-        let instance_choices: Vec<(String, String)> =
-            self.instances.iter().map(|i| (i.folder.clone(), super::discover::instance_choice(i))).collect();
+        // a Horizon instance only for what it can take
+        let instance_choices: Vec<(String, String)> = self
+            .instances
+            .iter()
+            .filter(|i| super::edition::takes(i, section.into()))
+            .map(|i| (i.folder.clone(), super::discover::instance_choice(i)))
+            .collect();
         let mut act: Option<CardAct> = None;
         let mut more = false;
         let installing: HashSet<String> =

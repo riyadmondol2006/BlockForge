@@ -38,19 +38,22 @@ fn on_cover(alpha: u8) -> Color32 {
 }
 
 /// "1.21.1 · Fabric 0.20.0 · 7 mods" in the monospace face, for the banner. `level` 0 is all of it; each next level
-/// leaves out one more part from the end (the mods, then the loader's version).
-fn banner_meta(inst: &Instance, level: usize) -> egui::text::LayoutJob {
+/// leaves out one more part from the end (the mods, then the loader's version). A Horizon instance has "Horizon" and
+/// its build (`build`) for the loader, and no mods.
+fn banner_meta(inst: &Instance, level: usize, build: Option<&str>) -> egui::text::LayoutJob {
     let part = |color: Color32| egui::TextFormat { font_id: super::fonts::mono(13.0), color, ..Default::default() };
     let sep = "  \u{00B7}  ";
     let mut job = egui::text::LayoutJob::default();
     job.append(inst.mc_version(), 0.0, part(on_cover(225)));
     job.append(sep, 0.0, part(on_cover(110)));
-    match inst.loader() {
-        Some((kind, ver)) if level == 0 || level == 1 => job.append(&format!("{kind} {ver}"), 0.0, part(on_cover(225))),
+    match super::edition::loader_parts(inst, build) {
+        Some((kind, ver)) if level == 0 || level == 1 => {
+            job.append(&super::edition::joined(kind, ver), 0.0, part(on_cover(225)))
+        }
         Some((kind, _)) => job.append(kind, 0.0, part(on_cover(225))),
         None => job.append("Vanilla", 0.0, part(on_cover(225))),
     }
-    if level == 0 {
+    if level == 0 && !crate::horizon::is_horizon(inst) {
         job.append(sep, 0.0, part(on_cover(110)));
         job.append(&mods_text(inst.mod_count), 0.0, part(on_cover(225)));
     }
@@ -317,10 +320,11 @@ impl App {
         let name = RichText::new(inst.name()).font(super::fonts::semibold(size)).color(on_cover(250));
         ui.add(egui::Label::new(name).truncate()).on_hover_text(inst.name());
         let room = ui.available_width();
+        let build = self.horizon_tag();
         let job = (0..3)
-            .map(|level| banner_meta(inst, level))
+            .map(|level| banner_meta(inst, level, build))
             .find(|job| ui.painter().layout_job(job.clone()).size().x <= room)
-            .unwrap_or_else(|| banner_meta(inst, 2));
+            .unwrap_or_else(|| banner_meta(inst, 2, build));
         ui.add(egui::Label::new(job).truncate());
     }
 
@@ -338,8 +342,9 @@ impl App {
         if let Some(a) = picked.and_then(|r| r.inner) {
             *action = Some(a);
         }
-        // decided by the banner's width alone, the same on every tab (it is under Performance in the menu as well)
-        if width >= PERFORMANCE_ROOM - ACTIONS_RIGHT - BANNER_PAD {
+        // decided by the banner's width alone, the same on every tab (it is under Performance in the menu as well).
+        // Its helpers are Java's: a Horizon instance has none
+        if width >= PERFORMANCE_ROOM - ACTIONS_RIGHT - BANNER_PAD && !crate::horizon::is_horizon(inst) {
             if let Some(a) = self.performance_button(ui, inst, ACTION_H) {
                 *action = Some(a);
             }
@@ -396,6 +401,20 @@ impl App {
             (n, _) if enabled < n => format!("{} off", n - enabled),
             _ => "All on".to_string(),
         };
+        if crate::horizon::is_horizon(inst) {
+            // no mods of BlockForge's to count, and no Java: what it plays instead
+            let build = self.horizon_tag().map(str::to_string).unwrap_or_else(|| "Not downloaded yet".into());
+            stat_cards(
+                ui,
+                &[
+                    ("Last played", last, last_sub),
+                    ("Play time", time, sessions),
+                    ("Edition", crate::horizon::NAME.to_string(), build),
+                    ("Runs on", "Rust".to_string(), "No Java needed".to_string()),
+                ],
+            );
+            return;
+        }
         let (java, java_sub) = match inst.file.version.java_version.as_ref() {
             Some(j) => (j.major_version.to_string(), "Provided by Minecraft".to_string()),
             None => ("Auto".to_string(), "Picked at launch".to_string()),

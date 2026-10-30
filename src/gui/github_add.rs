@@ -41,10 +41,14 @@ impl App {
         let g = &mut self.gh;
         g.open = true;
         g.error = None;
-        let target = self.discover.target.clone().or_else(|| self.selected.clone());
+        // what comes from GitHub is a mod: never for a Horizon instance
+        let fits =
+            |f: &String| self.instance(f).is_some_and(|i| super::edition::takes(i, super::edition::Content::Mods));
+        let target = self.discover.target.clone().or_else(|| self.selected.clone()).filter(fits);
+        let first = self.instances.iter().map(|i| i.folder.clone()).find(fits);
         let g = &mut self.gh;
         if g.target.is_none() || target.is_some() {
-            g.target = target.or_else(|| self.instances.first().map(|i| i.folder.clone()));
+            g.target = target.or(first);
         }
     }
 
@@ -155,8 +159,12 @@ impl App {
         let target_inst = self.gh.target.as_ref().and_then(|f| self.instance(f)).cloned();
         let loader = target_inst.as_ref().and_then(|i| i.loader()).map(|(k, _)| k.to_ascii_lowercase());
         let mc = target_inst.as_ref().map(|i| i.mc_version().to_string()).unwrap_or_default();
-        let choices: Vec<(String, String)> =
-            self.instances.iter().map(|i| (i.folder.clone(), instance_choice(i))).collect();
+        let choices: Vec<(String, String)> = self
+            .instances
+            .iter()
+            .filter(|i| super::edition::takes(i, super::edition::Content::Mods))
+            .map(|i| (i.folder.clone(), instance_choice(i)))
+            .collect();
         let modal = egui::Modal::new(egui::Id::unique("github-add")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
             ui.set_width(width);
             let g = &mut self.gh;

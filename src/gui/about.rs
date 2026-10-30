@@ -339,6 +339,8 @@ impl App {
                     ui,
                     &crate::tr!("Inter, by The Inter Project Authors (SIL Open Font License 1.1): the typeface of the window."),
                 );
+                // the game BlockForge can download and start besides Minecraft: Java Edition
+                bullet(ui, &format!("{} ({}). {}", crate::horizon::NAME, crate::horizon::TAGLINE, crate::horizon::CREDIT));
                 #[cfg(feature = "converter")]
                 {
                     bullet(
@@ -357,6 +359,15 @@ impl App {
                 &[
                     (&crate::tr!("Chunker on GitHub"), "https://github.com/HiveGamesOSS/Chunker".to_string()),
                     (&crate::tr!("Chunker license"), format!("{REPO}/blob/main/NOTICE.md")),
+                ],
+            ) {
+                link = Some(url);
+            }
+            if let Some(url) = links(
+                ui,
+                &[
+                    ("Horizon website", crate::horizon::WEBSITE.to_string()),
+                    ("Horizon on GitHub", crate::horizon::REPOSITORY.to_string()),
                 ],
             ) {
                 link = Some(url);
@@ -480,7 +491,7 @@ fn key_value(ui: &mut Ui, key: &str, value: impl FnOnce(&mut Ui)) {
 
 /// A row of links, each a small pill with an arrow that says it opens in the browser. Returns the address of the one
 /// that was clicked.
-fn links(ui: &mut Ui, items: &[(&str, String)]) -> Option<String> {
+pub(super) fn links(ui: &mut Ui, items: &[(&str, String)]) -> Option<String> {
     let mut clicked = None;
     ui.add_space(6.0);
     ui.horizontal_wrapped(|ui| {

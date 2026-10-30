@@ -549,8 +549,13 @@ impl App {
         let packs = std::mem::take(&mut self.discover.sm.packs);
         let merged = std::mem::take(&mut self.discover.merged);
         let target = self.discover.target.clone();
-        let choices: Vec<(String, String)> =
-            self.instances.iter().map(|i| (i.folder.clone(), instance_choice(i))).collect();
+        // a Horizon instance only for what it can take
+        let choices: Vec<(String, String)> = self
+            .instances
+            .iter()
+            .filter(|i| super::edition::takes(i, kind.into()))
+            .map(|i| (i.folder.clone(), instance_choice(i)))
+            .collect();
         let mut act: Option<Act> = None;
         let mut more = false;
         let cards = self.results_as_cards();

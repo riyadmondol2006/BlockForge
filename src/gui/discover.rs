@@ -162,7 +162,10 @@ pub(super) fn data_pack_button(
                 if instances.is_empty() {
                     ui.label("Create an instance first");
                 }
-                for inst in instances {
+                // Horizon's worlds are its own: data packs aren't put into them
+                let takes =
+                    |i: &&crate::instances::Instance| super::edition::takes(i, super::edition::Content::DataPacks);
+                for inst in instances.iter().filter(takes) {
                     ui.menu_button(instance_choice(inst), |ui| {
                         if let Some(w) = world_entries(ui, inst, &have(inst)) {
                             chosen = Some((inst.folder.clone(), w));
@@ -222,7 +225,7 @@ impl DiscoverState {
 /// An instance as the "For" list and the Install menu name it: its name, Minecraft version and mod loader, so the one
 /// a mod fits can be told apart from the rest.
 pub(super) fn instance_choice(inst: &crate::instances::Instance) -> String {
-    let loader = inst.loader().map(|(kind, _)| kind.to_string()).unwrap_or_else(|| "no mod loader".into());
+    let loader = super::edition::loader_kind(inst).map(str::to_string).unwrap_or_else(|| "no mod loader".into());
     format!("{} \u{00B7} {} \u{00B7} {loader}", inst.name(), inst.mc_version())
 }
 
@@ -1892,6 +1895,7 @@ impl App {
             .map(|i| clip(i.name(), 24))
             .unwrap_or_else(|| "Any instance".into());
         let instances = &self.instances;
+        let kind = self.discover.kind;
         let target = &mut self.discover.target;
         dropdown(ui, "target", "For", &current, target.is_some(), false, |ui| {
             if ui.selectable_label(target.is_none(), "Any instance").clicked() {
@@ -1899,7 +1903,8 @@ impl App {
                 *search = true;
             }
             ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
-                for inst in instances {
+                // a Horizon instance only for what it can take
+                for inst in instances.iter().filter(|i| super::edition::takes(i, kind.into())) {
                     let on = target.as_ref() == Some(&inst.folder);
                     if ui.selectable_label(on, instance_choice(inst)).clicked() {
                         *target = Some(inst.folder.clone());
@@ -2237,6 +2242,12 @@ impl App {
             self.toast_err("That instance isn't there any more. Choose another one.");
             return;
         };
+        // the lists leave Horizon instances out for what they can't take; this says so if one is asked for anyway
+        if !super::edition::takes(inst, kind.into()) {
+            let text = format!("{title} can't go into {}: a Horizon instance takes resource packs", inst.name());
+            self.toast_err(text);
+            return;
+        }
         let (root, inst_folder, inst_name) = (inst.root.clone(), inst.folder.clone(), inst.name().to_string());
         if content == ContentKind::Mods && inst.loader().is_none() {
             // a mod in an instance without a mod loader is never loaded: offer to add one instead
@@ -2464,8 +2475,15 @@ impl App {
     }
 
     pub(super) fn discover_ui(&mut self, ui: &mut Ui) {
-        // an instance that was deleted or renamed can't be the target any more
-        if self.discover.target.as_ref().is_some_and(|f| self.instance(f).is_none()) {
+        // an instance that was deleted or renamed can't be the target any more, nor a Horizon instance for what it
+        // can't take (its mods, say, after its resource packs)
+        let kind = self.discover.kind;
+        if self
+            .discover
+            .target
+            .as_ref()
+            .is_some_and(|f| self.instance(f).is_none_or(|i| !super::edition::takes(i, kind.into())))
+        {
             self.discover.target = None;
             self.discover.searched = false;
         }
@@ -2634,7 +2652,7 @@ impl App {
                             if self.instances.is_empty() {
                                 ui.label("Create an instance first");
                             }
-                            for inst in &self.instances {
+                            for inst in self.instances.iter().filter(|i| super::edition::takes(i, kind.into())) {
                                 if ui.button(instance_choice(inst)).clicked() {
                                     install = Some((hit.clone(), Some(inst.folder.clone())));
                                     ui.close();

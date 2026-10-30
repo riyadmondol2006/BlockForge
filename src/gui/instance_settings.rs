@@ -510,6 +510,11 @@ impl App {
             self.inst_draft = Some(d);
         }
         let mut d = self.inst_draft.take().unwrap();
+        // Horizon isn't Java: of the settings only the general ones are for it
+        let horizon = crate::horizon::is_horizon(inst);
+        if horizon {
+            d.tab = 0;
+        }
         let total_mb = total_memory_mb();
         let launcher_auto = self.settings.automatic_memory != Some(false);
         let launcher_mem = self.settings.maximum_memory;
@@ -534,7 +539,9 @@ impl App {
             ui.set_max_width(form_w);
             let mut bar = SplitRow::new(ui, egui::Id::unique("instance-settings-bar"), 32.0);
             bar.left(ui, |ui| {
-                if let Some(i) = segmented(ui, &["General", "Java and Minecraft", "Commands"], d.tab as usize) {
+                if horizon {
+                    small_muted(ui, "Horizon runs without Java: there is no memory, Java or command to set");
+                } else if let Some(i) = segmented(ui, &["General", "Java and Minecraft", "Commands"], d.tab as usize) {
                     d.tab = i as u8;
                 }
             });
@@ -631,9 +638,11 @@ impl App {
                         }
                     });
                     save_note(ui, "Changes above apply with Save");
-                    group(ui, Icon::Sliders, "Performance", "These apply right away, from the next start of the game", |ui, r| {
-                        helper_change = self.instance_performance_rows(ui, inst, r);
-                    });
+                    if !horizon {
+                        group(ui, Icon::Sliders, "Performance", "These apply right away, from the next start of the game", |ui, r| {
+                            helper_change = self.instance_performance_rows(ui, inst, r);
+                        });
+                    }
                     group(ui, Icon::Folder, "Instance", "Change its name, or remove it", |ui, r| {
                         row(ui, r, "Name", &format!("Shown in the library as \u{201C}{}\u{201D}", inst.name()), 120.0, None, |ui| {
                             if secondary(ui, "Rename").clicked() {

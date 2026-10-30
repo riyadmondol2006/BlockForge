@@ -100,7 +100,7 @@ impl App {
                 // a hairline keeps a pale logo from melting into a pale card
                 ui.painter().rect_stroke(rect, corner, Stroke::new(1.0, c_border()), egui::StrokeKind::Inside);
             }
-            None => paint_default_icon(ui, rect, inst.loader().map(|(kind, _)| kind)),
+            None => paint_default_icon(ui, rect, super::edition::loader_kind(inst)),
         }
     }
 }

@@ -882,6 +882,13 @@ impl App {
         if detected.kind.is_modpack() {
             return false;
         }
+        // a Horizon instance takes resource packs only: it runs no Java mods, shader packs or data packs
+        if self.instance(&folder).is_some_and(crate::horizon::is_horizon)
+            && detected.kind.content_kind() != Some(ContentKind::ResourcePacks)
+        {
+            self.toast_err(format!("{} can't go into a Horizon instance: it takes resource packs", detected.file_name));
+            return true;
+        }
         let record_type = match detected.kind {
             metadata::FileKind::DataPack => "datapack",
             k => match k.content_kind() {
@@ -1156,6 +1163,8 @@ impl App {
             self.mods.updates.contains_key(&e.key())
         });
         self.mods.show = keep_shown(self.mods.show, &useful_chips(&counts));
+        // Horizon reads resource packs, not shader packs: its tab has the packs alone
+        let packs_only = crate::horizon::is_horizon(inst);
         let tools_id = ui.scope_id().with("mods-tools");
         // the width the right part takes with every button out, remembered from when it last had them
         let full_id = tools_id.with("full");
@@ -1171,6 +1180,12 @@ impl App {
                 ui.spacing_mut().item_spacing.x = 6.0;
                 if kind == ContentKind::Mods {
                     show_chips(ui, &mut this.mods.show, &counts);
+                } else if packs_only {
+                    ui.label(RichText::new(format!("Resource packs ({total})")).font(super::fonts::medium(13.0)));
+                    if total > 0 {
+                        ui.add_space(6.0);
+                        show_chips(ui, &mut this.mods.show, &counts);
+                    }
                 } else {
                     let n = |k: ContentKind| this.mods.entries.get(&k).map_or(0, Vec::len);
                     let labels = [
@@ -1520,6 +1535,16 @@ impl App {
         };
         filter_field(ui, &mut f, what, (ui.available_width() - 16.0).clamp(100.0, 220.0));
         self.mods.filter = f;
+    }
+
+    /// The Resource packs tab of a Horizon instance shows the resource packs, never the shaders.
+    pub(super) fn mods_keep_to_packs(&mut self) {
+        if self.mods.kind() == ContentKind::Shaders {
+            self.mods.kind = Some(ContentKind::ResourcePacks);
+            self.mods.expanded = None;
+            self.mods.selected.clear();
+            self.mods.select_mode = false;
+        }
     }
 
     /// Show the kind the open tab is about: Mods the mods; Resource packs the packs or the shaders, whichever was open

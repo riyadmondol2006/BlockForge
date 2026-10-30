@@ -558,6 +558,8 @@ pub fn loader_color(name: &str) -> Color32 {
         "Quilt" => ((0xB9, 0x8B, 0xE0), (0x6E, 0x45, 0xA6)),
         "Forge" => ((0x7F, 0xA8, 0xE8), (0x2A, 0x5F, 0x9E)),
         "NeoForge" => ((0xF0, 0x9A, 0x4F), (0x9A, 0x4E, 0x0E)),
+        // Horizon, the Rust rewrite, plays where a loader would be: a sunset rose
+        "Horizon" => ((0xF2, 0x8B, 0xA8), (0xA8, 0x2E, 0x58)),
         _ => return c_muted(),
     };
     let (r, g, b) = if dark { d } else { l };
