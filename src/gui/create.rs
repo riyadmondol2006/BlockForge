@@ -1106,6 +1106,7 @@ impl App {
         small_muted(ui, "The picture behind the instance on Home and in the Library. Automatic picks one for it.");
         ui.add_space(6.0);
         let (name, mc, loader) = self.create_identity();
+        let key = self.create_cover_key(&name);
         let gap = 8.0;
         let (cols, w) = grid_columns(ui.available_width(), 92.0, gap);
         let mut picked = None;
@@ -1113,7 +1114,7 @@ impl App {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = gap;
                 for theme in row {
-                    let spec = CoverSpec::new(&name, &mc, loader, *theme);
+                    let spec = CoverSpec::new(&key, &mc, loader, *theme);
                     let tex = self.covers.texture(&self.ctx, &spec, 160, 90);
                     if theme_tile(ui, &tex, theme.label(), self.create.extras.cover == *theme, w).clicked() {
                         picked = Some(*theme);
@@ -1133,6 +1134,13 @@ impl App {
         let c = &self.create;
         let loader = (c.loader != Loader::Vanilla).then(|| c.loader.label());
         (self.create_name(), c.mc.clone(), loader)
+    }
+
+    /// What the new instance's cover is drawn from: the folder it will get, as `workbench::cover_spec` does for an
+    /// instance that exists, so the preview is the cover it ends up with.
+    fn create_cover_key(&self, name: &str) -> String {
+        let taken: Vec<&str> = self.instances.iter().map(|i| i.folder.as_str()).collect();
+        preview_folder(name, &taken)
     }
 
     /// The name the instance will get.
@@ -1293,7 +1301,7 @@ impl App {
             let w = ui.available_width();
             let cover_h = (room - PANEL_BESIDES_COVER).clamp(64.0, (w * 0.42).round());
             let (rect, _) = ui.allocate_exact_size(vec2(w, cover_h), egui::Sense::hover());
-            let spec = CoverSpec::new(&name, &mc, loader, theme).with_fade_left(true);
+            let spec = CoverSpec::new(&self.create_cover_key(&name), &mc, loader, theme).with_fade_left(true);
             let (tw, th) = super::workbench::cover_size(rect.size());
             let tex = self.covers.texture(&self.ctx, &spec, tw, th);
             egui::Image::from_texture((tex.id(), vec2(tw as f32, th as f32)))
@@ -1399,7 +1407,7 @@ impl App {
         let creating = self.create_running();
         let summary = summary(&self.create);
         let (name, mc, loader) = self.create_identity();
-        let spec = CoverSpec::new(&name, &mc, loader, self.create.extras.cover);
+        let spec = CoverSpec::new(&self.create_cover_key(&name), &mc, loader, self.create.extras.cover);
         let tex = self.covers.texture(&self.ctx, &spec, 128, 128);
         card_frame().inner_margin(egui::Margin::symmetric(14, 10)).show(ui, |ui| {
             ui.set_width(ui.available_width());

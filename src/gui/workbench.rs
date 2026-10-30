@@ -139,10 +139,11 @@ pub fn set_cover_theme(inst: &mut Instance, theme: CoverTheme) {
     }
 }
 
-/// What an instance's cover is drawn from: its id (so a rename keeps the picture), version, loader and theme.
+/// What an instance's cover is drawn from: its folder (a rename keeps the folder, so it keeps the picture, and New
+/// instance knows the folder before the instance exists, so its preview is the cover the instance gets), version,
+/// loader and theme.
 pub fn cover_spec(inst: &Instance) -> CoverSpec {
-    let key = if inst.file.uuid.is_empty() { inst.folder.as_str() } else { inst.file.uuid.as_str() };
-    CoverSpec::new(key, inst.mc_version(), inst.loader().map(|(kind, _)| kind), cover_theme(inst))
+    CoverSpec::new(&inst.folder, inst.mc_version(), inst.loader().map(|(kind, _)| kind), cover_theme(inst))
 }
 
 /// The few sizes covers are drawn at, so a window being resized does not draw a new one every frame: the one whose
