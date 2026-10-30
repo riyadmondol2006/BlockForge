@@ -75,24 +75,40 @@ pub fn render_distance_in(options: &str) -> Option<u32> {
     options.lines().find_map(|l| l.trim().strip_prefix("renderDistance:")?.trim().parse().ok())
 }
 
+/// Whether options.txt text has a line for `key`.
+fn has_key(options: &str, key: &str) -> bool {
+    options.lines().any(|l| l.trim().strip_prefix(key).is_some_and(|rest| rest.starts_with(':')))
+}
+
 /// Write the settings for an instance's first start in `root`: the render distance for `budget_mb` into options.txt
 /// when it has none yet, and the workers into horizon-graphics.txt when there is none yet. The game fills in
 /// everything else itself. Returns what was set, for the log.
 pub fn first_start(root: &Path, budget_mb: u32, cores: usize, low_memory: bool) -> Vec<String> {
     let mut notes = Vec::new();
     let options = root.join("options.txt");
-    let text = std::fs::read_to_string(&options).unwrap_or_default();
-    if render_distance_in(&text).is_none() {
-        if let Some(rd) = render_distance_for(budget_mb) {
-            let mut text = text;
-            if !text.is_empty() && !text.ends_with('\n') {
-                text.push('\n');
-            }
-            text.push_str(&format!("renderDistance:{rd}\nsimulationDistance:{}\n", rd.min(12)));
-            match std::fs::write(&options, text) {
-                Ok(()) => notes.push(format!("First start: render distance {rd} for {budget_mb} MB of memory")),
-                Err(e) => notes.push(format!("Couldn't write {}: {e}", options.display())),
-            }
+    // only a missing file is an empty one: a file that can't be read (or isn't text) is the player's, and is left
+    let text = match std::fs::read_to_string(&options) {
+        Ok(text) => Some(text),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some(String::new()),
+        Err(e) => {
+            notes.push(format!("Left {} as it is: {e}", options.display()));
+            None
+        }
+    };
+    if let Some((text, rd)) = text.filter(|t| render_distance_in(t).is_none()).zip(render_distance_for(budget_mb)) {
+        // each setting only when the file has none of its own (the game takes the last of two)
+        let mut added = format!("renderDistance:{rd}\n");
+        if !has_key(&text, "simulationDistance") {
+            added.push_str(&format!("simulationDistance:{}\n", rd.min(12)));
+        }
+        let mut text = text;
+        if !text.is_empty() && !text.ends_with('\n') {
+            text.push('\n');
+        }
+        text.push_str(&added);
+        match std::fs::write(&options, text) {
+            Ok(()) => notes.push(format!("First start: render distance {rd} for {budget_mb} MB of memory")),
+            Err(e) => notes.push(format!("Couldn't write {}: {e}", options.display())),
         }
     }
     let graphics = root.join("horizon-graphics.txt");
@@ -219,6 +235,24 @@ mod tests {
         for d in [root, other, big] {
             let _ = std::fs::remove_dir_all(d);
         }
+    }
+
+    #[test]
+    fn the_first_start_keeps_a_simulation_distance_and_a_file_it_cant_read() {
+        let root = crate::testutil::scratch("hz-first-start-keep");
+        std::fs::write(root.join("options.txt"), "simulationDistance:24\n").unwrap();
+        first_start(&root, 2560, 8, false);
+        assert_eq!(
+            std::fs::read_to_string(root.join("options.txt")).unwrap(),
+            "simulationDistance:24\nrenderDistance:6\n"
+        );
+        // not text: left byte for byte, with a note
+        let bytes = [b'f', b'o', b'v', b':', 0xff, 0xfe, b'\n'];
+        std::fs::write(root.join("options.txt"), bytes).unwrap();
+        let notes = first_start(&root, 2560, 8, false);
+        assert_eq!(std::fs::read(root.join("options.txt")).unwrap(), bytes);
+        assert!(notes.iter().any(|n| n.starts_with("Left ")), "{notes:?}");
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
