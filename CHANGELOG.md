@@ -3,7 +3,70 @@
 The section for a version is used as the text of its release on GitHub. Older releases (the Java versions, up to
 3.4.42.x) are on the [releases page](https://github.com/riyadmondol2006/BlockForge/releases).
 
-## 4.9.1
+## 5.0.0
+
+**The Workbench.** BlockForge is rebuilt around playing: the game you play comes first, every instance has a face of
+its own, and the technical tools stay a click away without crowding the rest. Every feature of 4.9 is still here.
+
+### A new home for everything
+
+- **Five places** in the sidebar instead of nine: **Home** (play and what you played lately), **Library** (your
+  instances), **Explore** (mods, modpacks and every source), **Workshop** (the crafting calculator and the world
+  converter) and **Utilities** (tools, diagnostics and servers). Settings, About and your account sit at the bottom.
+  Each place opens on the page you left it on.
+- **A new look:** a deep blue-black ground with a faint pattern of blocks (Settings > Appearance > Show background
+  artwork turns it off), a mint green for Play and the main actions, a warm amber for favourites and waiting updates,
+  and versions, paths and logs in a monospace face. The light look has all of it too.
+- **Covers.** Every instance gets its own pixel-art landscape, drawn from its version and mod loader: meadows,
+  forests, cherry groves, deserts, snow, oceans, the Nether or the End, by day or night, with the loader's colour in
+  its banner and ores. Pick a theme for an instance in its settings, or let it choose. A picture of your own still
+  shows on top.
+
+### Home and Library
+
+- **Home** opens on a large Continue playing banner on the cover of the instance you played last: its name, version,
+  loader and mods, a big Play (Stop while it runs), the other ways to play in its menu, when you last played and a
+  strip of the days you played. Under it a row of your other instances as cover tiles, and the news as small cards.
+- **Library** shows your instances as cover cards or as a list, with a search, a filter for favourites and for each
+  mod loader, and the sort you choose. Star an instance to make it a favourite.
+
+### One instance
+
+- An instance opens on its **cover banner** with Play (and Play as) right there, and five tabs: **Overview**, **Mods**,
+  **Resource packs**, **Logs** and **Settings**.
+- **Overview:** when you last played, **how long you have played** (counted from now on), the mods and the Java it
+  uses, your play over the last eight weeks, its description, its folder, saves and backups.
+- **Mods** is a compact table: icon, name, version, loader and source, an on/off switch and an amber "Update available"
+  where there is one, with filters for enabled, disabled and updates.
+- **Resource packs** (new): the instance's resource packs and shaders, to open, remove or find more.
+- **Logs** in a monospace face, warnings and errors marked so they stand out.
+
+### Explore
+
+- **One place for every source:** Modrinth, CurseForge or both together, ATLauncher, Technic and FTB, switched with
+  one row of pills at the top. Mods, modpacks, resource packs, shaders and data packs, with the filters of each source.
+- Each result shows its icon large, the Minecraft version and loaders it works with, its categories, its downloads and
+  an **Install** button that says when it is installed or has an update.
+
+### New instance
+
+- **Three steps:** choose the Minecraft version, choose the mod loader, then the rest (name, cover, picture, memory,
+  performance mods). A summary beside the steps shows exactly what will be installed, with the cover the instance will
+  get. Importing a modpack or an instance from another launcher is on the page too.
+
+### Workshop and Utilities
+
+- **Crafting calculator:** the items on the left; the item with quick amounts (1, 4, 16, 64 or stacks) and its recipe
+  in the crafting grid; then what to gather, the steps, a recipe tree and the storage.
+- **World converter, step by step:** Bedrock world, Convert to, What comes along, Save, Convert, each step marked
+  ready or saying what it still needs, with every option of 4.9.
+- **Tools & diagnostics** and **Servers** in clear groups, with one way of saying what worked, what wants a look and
+  what failed.
+
+### Settings
+
+- A list of sections down the left and a **search** across all settings.
+- **Theme cards** for Dark, Light and the new **System**, which follows your computer's look as it changes.
 
 ### Fixed
 
