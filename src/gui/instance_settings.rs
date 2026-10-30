@@ -340,15 +340,27 @@ fn row(
 /// The room the "Launcher default / Yes / No" choice takes at the right of a row.
 const TRI_W: f32 = 210.0;
 
-/// A titled group of a settings tab, drawn as the groups of the Settings page are: its icon, name and one line about
-/// it above one glass card holding its rows, divided by hairlines.
+/// A titled group of a settings tab, compact: a small icon, its name and one quiet line about it on one line, above
+/// one glass card holding its rows, divided by hairlines.
 fn group(ui: &mut Ui, icon: Icon, title: &str, hint: &str, add: impl FnOnce(&mut Ui, &mut Rows)) {
-    super::settings::group_head(ui, icon, title, hint);
-    card(ui, |ui| {
+    ui.add_space(18.0);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        let (r, _) = ui.allocate_exact_size(egui::vec2(16.0, 18.0), egui::Sense::hover());
+        super::icons::paint(ui.painter(), icon, r.center(), 15.0, c_muted());
+        ui.label(RichText::new(title).font(super::fonts::semibold(FS_BODY + 1.0)));
+        if !hint.is_empty() {
+            ui.add(egui::Label::new(RichText::new(hint).size(FS_META).color(c_faint())).truncate());
+        }
+    });
+    ui.add_space(8.0);
+    let out = card_frame().inner_margin(egui::Margin::symmetric(16, 14)).show(ui, |ui| {
+        ui.set_width(ui.available_width());
         // the title of a row sits close to its explanation
         ui.spacing_mut().item_spacing.y = 2.0;
         add(ui, &mut Rows::new());
     });
+    glass_edge(ui.painter(), out.response.rect, R_CARD);
 }
 
 /// A name to type, such as a variable of the commands: monospace on a small tinted plate.
@@ -542,6 +554,11 @@ impl App {
             ui.spacing_mut().item_spacing.y = 4.0;
             match d.tab {
                 0 => {
+                    group(ui, Icon::Layers, "Cover", "The picture of this instance on Home, in the Library and on this page", |ui, _| {
+                        small_muted(ui, "Auto picks a landscape from the instance itself. The loader and the version always show in it.");
+                        ui.add_space(10.0);
+                        self.cover_picker(ui, inst);
+                    });
                     group(ui, Icon::User, "Account", "Who plays this instance", |ui, r| {
                         let reset = d.account.is_some().then_some("Use launcher default");
                         let hint = "The account used to start this instance. The launcher default is whichever account is selected in the launcher";

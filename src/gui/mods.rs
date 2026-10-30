@@ -15,7 +15,7 @@ use std::time::SystemTime;
 use egui::{Align, CornerRadius, Layout, RichText, ScrollArea, Stroke, Ui};
 
 use super::icons::{self, Icon};
-use super::instance_menu::{secondary_menu, split_or_stack};
+use super::instance_menu::{menu_items, split_or_stack};
 use super::motion;
 use super::theme::*;
 use super::widgets::*;
@@ -31,7 +31,7 @@ use crate::mods::{ModContext, ModSettings, install, performance, versions};
 use crate::snapshots;
 
 /// How tall a row of the list is, and how big the picture in it.
-const ROW_H: f32 = 60.0;
+const ROW_H: f32 = 58.0;
 const ICON: f32 = 38.0;
 
 /// How wide the grey names before the values of a mod's details are.
@@ -116,6 +116,56 @@ fn order_rows<T>(rows: &mut [T], order: Order, added: impl Fn(&T) -> Option<Syst
         Order::Added => rows.sort_by_key(|r| std::cmp::Reverse(added(r))),
         Order::Updates => rows.sort_by_key(|r| !update(r)),
     }
+}
+
+/// How many items each filter chip would show.
+#[derive(Debug, Default, PartialEq)]
+struct ShowCounts {
+    all: usize,
+    on: usize,
+    off: usize,
+    updates: usize,
+}
+
+fn show_counts(entries: &[ModEntry], has_update: impl Fn(&ModEntry) -> bool) -> ShowCounts {
+    let off = entries.iter().filter(|e| e.record.disabled).count();
+    ShowCounts {
+        all: entries.len(),
+        on: entries.len() - off,
+        off,
+        updates: entries.iter().filter(|e| has_update(e)).count(),
+    }
+}
+
+/// The filter chips over the list: All, Enabled, Disabled and Updates, each with how many it would show.
+fn show_chips(ui: &mut Ui, show: &mut Show, counts: &ShowCounts) {
+    for (which, label, n) in [
+        (Show::All, "All", counts.all),
+        (Show::On, "Enabled", counts.on),
+        (Show::Off, "Disabled", counts.off),
+        (Show::Updates, "Updates", counts.updates),
+    ] {
+        if chip(ui, &format!("{label} ({n})"), *show == which).clicked() {
+            *show = which;
+        }
+    }
+}
+
+/// The kind a tab of the instance page should show, when it isn't the one shown (`current`): Mods shows the mods, and
+/// Resource packs the packs or the shaders (`packs`, whichever it had open last).
+fn kind_for_tab(tab: InstTab, current: ContentKind, packs: ContentKind) -> Option<ContentKind> {
+    let wanted = match tab {
+        InstTab::Mods => ContentKind::Mods,
+        InstTab::ResourcePacks if current == ContentKind::Mods => {
+            if packs == ContentKind::Mods {
+                ContentKind::ResourcePacks
+            } else {
+                packs
+            }
+        }
+        _ => return None,
+    };
+    (wanted != current).then_some(wanted)
 }
 
 /// What was read from inside a jar, kept for the list and the details.
@@ -209,6 +259,8 @@ pub struct ModsState {
     last_report: Option<SyncReport>,
     /// Why looking through the folders failed, shown in place of the list until it works.
     sync_error: Option<String>,
+    /// Which list the Resource packs tab had open last: the packs or the shaders.
+    pack_kind: Option<ContentKind>,
 }
 
 impl ModsState {
@@ -217,9 +269,10 @@ impl ModsState {
     }
 
     fn reset_for(&mut self, folder: &str) {
-        let kind = self.kind;
+        let (kind, pack_kind) = (self.kind, self.pack_kind);
         *self = ModsState::default();
         self.kind = kind;
+        self.pack_kind = pack_kind;
         self.folder = folder.to_string();
     }
 }
@@ -348,139 +401,6 @@ fn short(text: &str, max: usize) -> String {
     }
 }
 
-/// The kinds of content as one control: each a tab with its count in a small badge, the open one on a raised pill
-/// that slides to the one opened next. Returns the kind that was opened.
-fn kind_tabs(ui: &mut Ui, kinds: &[(ContentKind, usize)], open: ContentKind) -> Option<ContentKind> {
-    const PAD: f32 = 14.0;
-    let font = super::fonts::medium(13.0);
-    let badge_font = super::fonts::medium(FS_META - 1.0);
-    let badge_w = |n: usize, ui: &Ui| {
-        ui.painter().layout_no_wrap(n.to_string(), badge_font.clone(), c_text()).size().x.max(8.0) + 12.0
-    };
-    let widths: Vec<f32> = kinds
-        .iter()
-        .map(|(k, n)| {
-            let label = ui.painter().layout_no_wrap(k.label().to_string(), font.clone(), c_text()).size().x;
-            label + 2.0 * PAD + if *n > 0 { badge_w(*n, ui) + 7.0 } else { 0.0 }
-        })
-        .collect();
-    let total: f32 = widths.iter().sum::<f32>() + 6.0;
-    let (outer, outer_resp) = ui.allocate_exact_size(egui::vec2(total, 36.0), egui::Sense::hover());
-    let p = ui.painter();
-    p.rect(outer, CornerRadius::same(R_CONTROL + 1), c_field(), Stroke::new(1.0, c_border()), egui::StrokeKind::Inside);
-    let chosen = kinds.iter().position(|(k, _)| *k == open).unwrap_or(0);
-    let sel_x = outer.left() + 3.0 + widths.iter().take(chosen).sum::<f32>();
-    if let Some(w) = widths.get(chosen) {
-        let id = outer_resp.id.with("pill");
-        let x = motion::glide(ui.ctx(), id.with("x"), sel_x, motion::MEDIUM);
-        let pw = motion::glide(ui.ctx(), id.with("w"), *w, motion::MEDIUM);
-        let pill = egui::Rect::from_min_size(egui::pos2(x, outer.top() + 3.0), egui::vec2(pw, 30.0));
-        let radius = CornerRadius::same(R_CONTROL - 2);
-        let shade = egui::Color32::from_black_alpha(if is_dark() { 90 } else { 26 });
-        p.add(egui::Shadow { offset: [0, 2], blur: 8, spread: 0, color: shade }.as_shape(pill, radius));
-        p.rect_filled(pill, radius, if is_dark() { c_active() } else { c_card() });
-        glass_edge(p, pill, R_CONTROL - 2);
-    }
-    let mut pressed = None;
-    let mut x = outer.left() + 3.0;
-    for (i, ((k, n), w)) in kinds.iter().zip(widths).enumerate() {
-        let rect = egui::Rect::from_min_size(egui::pos2(x, outer.top() + 3.0), egui::vec2(w, 30.0));
-        x += w;
-        let resp = ui.interact(rect, ui.scope_id().with(("kind-tab", i)), egui::Sense::click());
-        let on = *k == open;
-        let t = motion::hover(ui, resp.id, on || resp.hovered());
-        let s = motion::toward(ui.ctx(), resp.id.with("on"), on, motion::MEDIUM);
-        let fg = motion::mix(c_muted(), c_text(), t);
-        let galley = ui.painter().layout_no_wrap(k.label().to_string(), font.clone(), fg);
-        let label_y = rect.center().y - galley.size().y / 2.0;
-        let label_w = galley.size().x;
-        ui.painter().galley(egui::pos2(rect.left() + PAD, label_y), galley, fg);
-        if *n > 0 {
-            // the count: a quiet badge, in the brand's soft tint on the open kind
-            let bw = badge_w(*n, ui);
-            let badge = egui::Rect::from_min_size(
-                egui::pos2(rect.left() + PAD + label_w + 7.0, rect.center().y - 9.0),
-                egui::vec2(bw, 18.0),
-            );
-            let ink = if is_dark() { c_accent() } else { c_accent_hover() };
-            let bg = motion::mix(c_hover(), c_accent_soft(), s);
-            ui.painter().rect_filled(badge, CornerRadius::same(9), bg);
-            let bfg = motion::mix(c_muted(), ink, s);
-            let g = ui.painter().layout_no_wrap(n.to_string(), badge_font.clone(), bfg);
-            ui.painter().galley(badge.center() - g.size() / 2.0, g, bfg);
-        }
-        focus_ring(ui, &resp, rect, R_CONTROL - 2);
-        let label = if *n > 0 { format!("{} {n}", k.label()) } else { k.label().to_string() };
-        resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Tab, true, on, &label));
-        if resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() && !on {
-            pressed = Some(*k);
-        }
-    }
-    pressed
-}
-
-/// The toolbar over the list: the search and the On / Off choice (`find`), the origin and the order (`view`), and
-/// the tools at the right end. All on one line when they fit; otherwise the search on a line of its own with the
-/// rest sharing the next; and in a very narrow window each part wraps on lines of its own, the tools at the right
-/// while they fit on one line. What the closures share (`state`) is handed to each.
-fn tool_rows<S>(
-    ui: &mut Ui,
-    id: egui::Id,
-    state: &mut S,
-    find: impl FnOnce(&mut Ui, &mut S),
-    view: impl FnOnce(&mut Ui, &mut S),
-    tools: impl FnOnce(&mut Ui, &mut S),
-) {
-    let (find_id, view_id, tools_id) = (id.with("find"), id.with("view"), id.with("tools"));
-    let find_w = remembered_width(ui, find_id, 0.0);
-    let view_w = remembered_width(ui, view_id, 0.0);
-    let tools_w = remembered_width(ui, tools_id, 240.0);
-    let avail = ui.available_width();
-    let gap = ui.spacing().item_spacing.x;
-    /// A part laid out on one line, keeping what it took.
-    fn natural<S>(ui: &mut Ui, state: &mut S, id: egui::Id, add: impl FnOnce(&mut Ui, &mut S)) {
-        let used = ui.horizontal(|ui| add(ui, state)).response.rect.width();
-        remember_width(ui, id, used);
-    }
-    /// A part that wraps, keeping what it took: the whole line once it wraps, so the parts stay apart until there
-    /// is room for them side by side.
-    fn wrapped<S>(ui: &mut Ui, state: &mut S, id: egui::Id, add: impl FnOnce(&mut Ui, &mut S)) {
-        let used = ui
-            .horizontal_wrapped(|ui| {
-                add(ui, state);
-                ui.min_rect().width()
-            })
-            .inner;
-        remember_width(ui, id, used);
-    }
-    /// The tools at the right end of the line they are on.
-    fn at_end<S>(ui: &mut Ui, state: &mut S, id: egui::Id, add: impl FnOnce(&mut Ui, &mut S)) {
-        let used = super::discover::end_aligned(ui, id.with("end"), |ui| add(ui, state));
-        remember_width(ui, id, used);
-    }
-    if avail >= find_w + view_w + tools_w + 2.0 * gap + 16.0 {
-        ui.horizontal(|ui| {
-            natural(ui, state, find_id, find);
-            natural(ui, state, view_id, view);
-            at_end(ui, state, tools_id, tools);
-        });
-    } else if avail >= find_w && avail >= view_w + tools_w + gap + 8.0 {
-        natural(ui, state, find_id, find);
-        ui.horizontal(|ui| {
-            natural(ui, state, view_id, view);
-            at_end(ui, state, tools_id, tools);
-        });
-    } else {
-        wrapped(ui, state, find_id, find);
-        wrapped(ui, state, view_id, view);
-        if tools_w <= avail {
-            ui.horizontal(|ui| at_end(ui, state, tools_id, tools));
-        } else {
-            wrapped(ui, state, tools_id, tools);
-        }
-    }
-}
-
 /// The search box of the list, with a magnifier at its start.
 fn filter_field(ui: &mut Ui, text: &mut String, hint: &str, width: f32) -> egui::Response {
     let r = ui.add_sized(
@@ -530,28 +450,6 @@ fn empty_state(ui: &mut Ui, icon: Icon, text: &str, action: Option<&str>) -> Opt
     out
 }
 
-/// A quiet action of a list row: text that fades in with the row's fill (`shown`, 0 to 1) while the row is pointed
-/// at, or at once when the keyboard reaches it, with a fill of its own under the pointer. `hot` is its colour then.
-fn row_action(ui: &mut Ui, text: &str, hot: Option<egui::Color32>, shown: f32) -> egui::Response {
-    let font = super::fonts::medium(FS_BODY);
-    let w = ui.painter().layout_no_wrap(text.to_string(), font.clone(), c_muted()).size().x;
-    let (rect, resp) = ui.allocate_exact_size(egui::vec2(w + 20.0, 28.0), egui::Sense::click());
-    let pointed = resp.hovered() || resp.is_pointer_button_down_on();
-    let p = motion::hover(ui, resp.id, pointed);
-    let alpha = if resp.has_focus() { 1.0 } else { shown.max(p) };
-    if ui.is_rect_visible(rect) && alpha > 0.0 {
-        if p > 0.0 {
-            ui.painter().rect_filled(rect, CornerRadius::same(R_CONTROL - 2), c_active().gamma_multiply(p));
-        }
-        let fg = motion::mix(c_muted(), hot.unwrap_or_else(c_text), p).gamma_multiply(alpha);
-        let galley = ui.painter().layout_no_wrap(text.to_string(), font, fg);
-        ui.painter().galley(rect.center() - galley.size() / 2.0, galley, fg);
-    }
-    focus_ring(ui, &resp, rect, R_CONTROL - 2);
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, text));
-    resp.on_hover_cursor(egui::CursorIcon::PointingHand)
-}
-
 /// The tick box of a row while choosing several: an outlined rounded square, filled with the brand gradient and a
 /// tick when it is ticked.
 fn check(ui: &mut Ui, on: &mut bool) -> egui::Response {
@@ -577,43 +475,115 @@ fn check(ui: &mut Ui, on: &mut bool) -> egui::Response {
     resp.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
-/// What an update pill adds to the width of its text: the arrow and the padding.
-const UPDATE_PAD: f32 = 36.0;
-
-/// A row's update: a small pill in the brand's soft tint with an arrow, always shown so what can be updated is seen at
-/// a glance, that turns into the brand gradient under the pointer. Greyed while the list is busy.
-fn update_pill(ui: &mut Ui, text: &str) -> egui::Response {
+/// "Update available" on a row: an arrow and the words in the secondary colour on its soft tint, always shown so what
+/// can be updated is seen at a glance; just the arrow in a narrow list. Brighter under the pointer; greyed while the
+/// list is busy.
+fn update_badge(ui: &mut Ui, narrow: bool) -> egui::Response {
     let enabled = ui.is_enabled();
-    let font = super::fonts::medium(FS_META);
-    let w = ui.painter().layout_no_wrap(text.to_string(), font.clone(), c_text()).size().x;
-    let (rect, resp) = ui.allocate_exact_size(egui::vec2(w + UPDATE_PAD, 26.0), egui::Sense::click());
+    let w = update_badge_width(ui, narrow);
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, 26.0), egui::Sense::click());
     if ui.is_rect_visible(rect) {
         let t = motion::hover(ui, resp.id, enabled && resp.hovered());
-        let ink = if is_dark() { c_accent() } else { c_accent_hover() };
-        let fg = if enabled { motion::mix(ink, c_on_accent(), t) } else { c_faint() };
-        let line = if enabled { c_accent().gamma_multiply(0.35 * (1.0 - t)) } else { c_border() };
-        ui.painter().rect(
-            rect,
-            CornerRadius::same(13),
-            if enabled { c_accent_soft() } else { c_field() },
-            Stroke::new(1.0, line),
-            egui::StrokeKind::Inside,
-        );
-        if t > 0.0 {
-            motion::gradient_rect(ui.painter(), rect, 13, c_accent().gamma_multiply(t), c_accent2().gamma_multiply(t));
-        }
+        let ink = if enabled { c_secondary() } else { c_faint() };
+        let bg =
+            if enabled { motion::mix(c_secondary_soft(), c_secondary().gamma_multiply(0.3), t) } else { c_field() };
+        let line = if enabled { c_secondary().gamma_multiply(0.3 + 0.3 * t) } else { c_border() };
+        ui.painter().rect(rect, CornerRadius::same(13), bg, Stroke::new(1.0, line), egui::StrokeKind::Inside);
         // an arrow pointing up: a newer version
-        let a = egui::pos2(rect.left() + 15.0, rect.center().y);
-        let s = Stroke::new(1.6, fg);
+        let a = egui::pos2(rect.left() + if narrow { rect.width() / 2.0 } else { 14.0 }, rect.center().y);
+        let s = Stroke::new(1.6, ink);
         ui.painter().line_segment([a + egui::vec2(0.0, 4.5), a + egui::vec2(0.0, -4.5)], s);
         ui.painter().line_segment([a + egui::vec2(-3.5, -1.0), a + egui::vec2(0.0, -4.5)], s);
         ui.painter().line_segment([a + egui::vec2(3.5, -1.0), a + egui::vec2(0.0, -4.5)], s);
-        let galley = ui.painter().layout_no_wrap(text.to_string(), font, fg);
-        ui.painter().galley(egui::pos2(rect.left() + 25.0, rect.center().y - galley.size().y / 2.0), galley, fg);
+        if !narrow {
+            let galley = ui.painter().layout_no_wrap(UPDATE_TEXT.to_string(), super::fonts::medium(FS_META), ink);
+            ui.painter().galley(egui::pos2(rect.left() + 24.0, rect.center().y - galley.size().y / 2.0), galley, ink);
+        }
     }
     focus_ring(ui, &resp, rect, 13);
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, text));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, UPDATE_TEXT));
     if enabled { resp.on_hover_cursor(egui::CursorIcon::PointingHand) } else { resp }
+}
+
+const UPDATE_TEXT: &str = "Update available";
+
+fn update_badge_width(ui: &Ui, narrow: bool) -> f32 {
+    if narrow {
+        return 28.0;
+    }
+    ui.painter().layout_no_wrap(UPDATE_TEXT.to_string(), super::fonts::medium(FS_META), c_text()).size().x + 36.0
+}
+
+/// The quiet parts after an item's name, in the order they are given up when the row is short: its version (in the
+/// monospace face), then for a mod its loader and for a pack its size and whether it is a zip or a folder, then where
+/// it came from. Each part says whether it is monospace.
+fn row_meta(e: &ModEntry, info: Option<&ModInfo>, kind: ContentKind) -> Vec<(String, bool)> {
+    let rec = &e.record;
+    let mut parts = Vec::new();
+    // the version the file gives itself ("0.116.7+1.21.1") reads better than the name of a release on a site
+    // ("[1.21.1] Fabric API 0.116.7"); a pack's version is often just its description again
+    let version = info.and_then(|i| i.version.clone()).filter(|v| !v.is_empty() && !v.contains("${"));
+    let version = version.unwrap_or_else(|| rec.version.clone());
+    if !version.is_empty() && version != "Unknown" && version != rec.description {
+        parts.push((short(&version, 32), true));
+    }
+    if kind == ContentKind::Mods {
+        if let Some(l) = info.and_then(|i| i.loader.as_deref()) {
+            parts.push((versions::display_name(Some(l)), false));
+        }
+    } else {
+        let folder = e.path.as_ref().is_some_and(|p| p.is_dir());
+        parts.push((if folder { "Folder".to_string() } else { human_size(e.size) }, true));
+        if !folder {
+            let ext = rec.file.rsplit_once('.').map(|(_, x)| x.to_lowercase()).unwrap_or_default();
+            if !ext.is_empty() && ext.len() <= 5 {
+                parts.push((ext, true));
+            }
+        }
+    }
+    if files::is_from_modrinth(rec) {
+        parts.push(("Modrinth".into(), false));
+    } else if files::is_from_curseforge(rec) {
+        parts.push(("CurseForge".into(), false));
+    }
+    if !rec.user_added {
+        parts.push(("Part of the modpack".into(), false));
+    }
+    parts
+}
+
+/// The name a row shows: a pack known only by its file loses the file's ending, which the row says after its size.
+fn row_name(e: &ModEntry, kind: ContentKind) -> String {
+    let name = e.name();
+    if kind == ContentKind::Mods || name != e.record.file {
+        return name;
+    }
+    match name.rsplit_once('.') {
+        Some((stem, ext)) if !stem.is_empty() && ext.len() <= 5 => stem.to_string(),
+        _ => name,
+    }
+}
+
+/// The parts of [`row_meta`] as one line of faint text, " · " between them.
+fn meta_job(parts: &[(String, bool)]) -> egui::text::LayoutJob {
+    let mut job = egui::text::LayoutJob::default();
+    for (i, (text, mono)) in parts.iter().enumerate() {
+        let fmt = |font: egui::FontId, color| egui::TextFormat { font_id: font, color, ..Default::default() };
+        if i > 0 {
+            job.append(META_SEP, 0.0, fmt(egui::FontId::proportional(FS_META), c_faint()));
+        }
+        let font = if *mono { super::fonts::mono(FS_META) } else { egui::FontId::proportional(FS_META) };
+        job.append(text, 0.0, fmt(font, if i == 0 { c_muted() } else { c_faint() }));
+    }
+    job
+}
+
+/// The item's page on Modrinth, when it is known there.
+fn modrinth_page(rec: &crate::modrecord::ModRecord) -> Option<String> {
+    let p = rec.modrinth_project.as_ref()?;
+    let s = |k: &str| p.get(k).and_then(|v| v.as_str()).filter(|v| !v.is_empty()).map(str::to_string);
+    let slug = s("slug")?;
+    Some(format!("https://modrinth.com/{}/{slug}", s("project_type").unwrap_or_else(|| "mod".into())))
 }
 
 impl App {
@@ -876,7 +846,7 @@ impl App {
     /// A file dropped on the window while the Mods tab is open is added to the instance. Returns whether it was
     /// taken, so the caller knows not to complain about it.
     pub(super) fn mods_accept_drop(&mut self, path: &Path) -> bool {
-        if self.page != Page::Instance || self.tab != InstTab::Mods {
+        if self.page != Page::Instance || !matches!(self.tab, InstTab::Mods | InstTab::ResourcePacks) {
             return false;
         }
         let Some(folder) = self.selected.clone() else { return false };
@@ -1090,7 +1060,7 @@ impl App {
             Act::Add => {
                 self.discover.kind = discover_kind(self.mods.kind());
                 self.discover.target = Some(folder);
-                self.page = Page::Discover;
+                self.go(Page::Discover);
                 self.discover_search(true);
                 // when CurseForge is the side shown, it opens on the same kind with a search for this instance
                 self.cf_show_for(self.mods.kind());
@@ -1149,65 +1119,40 @@ impl App {
             .clone()
             .unwrap_or_else(|| crate::mods::InstanceTarget::of(inst, &crate::mods::RemoteConfig::load(&self.dirs)));
 
-        // kinds on the left, the folder and the main action on the right; then the search and the filters on the left
-        // and the tools on the right. Each pair shares a line, or the right part goes on the next line in a narrow window.
+        // the filters on the left (on Resource packs after the choice of packs or shaders); checking for updates, the
+        // order, the folder and the rest on the right. One line when they fit, the right part under the left one
+        // otherwise. The search and Add are at the end of the breadcrumb above.
         let total = self.mods.entries.get(&kind).map_or(0, Vec::len);
         let offers_n = self.mods.updates.values().filter(|o| o.kind == kind).count();
-        let kinds_id = ui.scope_id().with("mods-kinds");
+        let counts = show_counts(self.mods.entries.get(&kind).map_or(&[][..], Vec::as_slice), |e| {
+            self.mods.updates.contains_key(&e.key())
+        });
         let tools_id = ui.scope_id().with("mods-tools");
         let mut st = (&mut *self, &mut acts);
         split_or_stack(
             ui,
-            kinds_id,
+            tools_id,
             34.0,
             &mut st,
             |ui, (this, acts)| {
-                let kinds: Vec<(ContentKind, usize)> =
-                    ContentKind::ALL.iter().map(|k| (*k, this.mods.entries.get(k).map_or(0, Vec::len))).collect();
-                if let Some(k) = kind_tabs(ui, &kinds, kind) {
-                    acts.push(Act::Kind(k));
-                }
-            },
-            |ui, (_, acts)| {
-                if secondary_icon(ui, Icon::Folder, "Open folder").clicked() {
-                    acts.push(Act::OpenFolder);
-                }
-                if primary_icon(ui, Icon::Plus, "Add").clicked() {
-                    acts.push(Act::Add);
-                }
-            },
-        );
-        ui.add_space(10.0);
-        tool_rows(
-            ui,
-            tools_id,
-            &mut st,
-            |ui, (this, _)| {
-                let mut f = std::mem::take(&mut this.mods.filter);
-                let width = 220.0f32.min(ui.available_width());
-                filter_field(ui, &mut f, &format!("Filter {}", kind.label().to_lowercase()), width);
-                this.mods.filter = f;
-                ui.add_space(4.0);
-                let updates = if offers_n > 0 { format!("Updates {offers_n}") } else { "Updates".to_string() };
-                let choices =
-                    [(Show::All, "All"), (Show::On, "On"), (Show::Off, "Off"), (Show::Updates, updates.as_str())];
                 ui.spacing_mut().item_spacing.x = 6.0;
-                for (show, label) in choices {
-                    if chip(ui, label, this.mods.show == show).clicked() {
-                        this.mods.show = show;
+                if kind == ContentKind::Mods {
+                    show_chips(ui, &mut this.mods.show, &counts);
+                } else {
+                    let n = |k: ContentKind| this.mods.entries.get(&k).map_or(0, Vec::len);
+                    let labels = [
+                        format!("Resource packs ({})", n(ContentKind::ResourcePacks)),
+                        format!("Shaders ({})", n(ContentKind::Shaders)),
+                    ];
+                    let labels: Vec<&str> = labels.iter().map(String::as_str).collect();
+                    let at = usize::from(kind == ContentKind::Shaders);
+                    if let Some(i) = segmented(ui, &labels, at) {
+                        acts.push(Act::Kind(if i == 0 { ContentKind::ResourcePacks } else { ContentKind::Shaders }));
                     }
                 }
-            },
-            |ui, (this, _)| {
-                this.mods_origin_dropdown(ui, kind);
-                let order = &mut this.mods.order;
-                super::discover::dropdown(ui, "mods-order", "Sort", order.label(), false, false, |ui| {
-                    for o in Order::ALL {
-                        ui.selectable_value(order, o, o.label());
-                    }
-                });
             },
             |ui, (this, acts)| {
+                ui.spacing_mut().item_spacing.x = 8.0;
                 if let Some(b) = &this.mods.busy {
                     working(ui, &format!("{b}\u{2026}"));
                 }
@@ -1233,12 +1178,23 @@ impl App {
                         acts.push(Act::UpdateAll);
                     }
                 }
-                let select = if this.mods.select_mode { "Done selecting" } else { "Select" };
-                if ghost(ui, select).clicked() {
-                    this.mods.select_mode = !this.mods.select_mode;
-                    this.mods.selected.clear();
+                this.mods_order_dropdown(ui, kind);
+                if secondary_icon(ui, Icon::Folder, "Open folder")
+                    .on_hover_text(format!("Open the {} folder", kind.folder()))
+                    .clicked()
+                {
+                    acts.push(Act::OpenFolder);
                 }
-                secondary_menu(ui, "More", |ui| {
+                kebab_menu(ui, |ui| {
+                    menu_items(ui);
+                    ui.set_min_width(240.0);
+                    let select = if this.mods.select_mode { "Stop selecting" } else { "Select several\u{2026}" };
+                    if ui.button(select).clicked() {
+                        this.mods.select_mode = !this.mods.select_mode;
+                        this.mods.selected.clear();
+                        ui.close();
+                    }
+                    ui.separator();
                     if ui.button("Look for new and missing files").clicked() {
                         acts.push(Act::Rescan);
                         ui.close();
@@ -1280,6 +1236,13 @@ impl App {
             },
         );
 
+        if kind != ContentKind::Mods && total > 0 {
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                show_chips(ui, &mut self.mods.show, &counts);
+            });
+        }
         if self.mods.select_mode {
             let chosen: Vec<ModKey> = self.mods.selected.iter().cloned().collect();
             let shown: Vec<ModKey> = self.mods_rows(kind).iter().map(|e| e.key()).collect();
@@ -1365,14 +1328,21 @@ impl App {
                     acts.push(Act::Loader);
                 }
             } else {
-                let text = match kind {
-                    ContentKind::Mods => "No mods yet. Add some from Modrinth, or drop .jar files onto this window.",
-                    ContentKind::ResourcePacks => {
-                        "No resource packs yet. Browse Modrinth, or drop .zip files onto this window."
+                let (text, action) = match kind {
+                    ContentKind::Mods => {
+                        ("No mods yet. Add some from Modrinth, or drop .jar files onto this window.", "Add mods")
                     }
-                    ContentKind::Shaders => "No shaders yet. Browse Modrinth, or drop .zip files onto this window.",
+                    ContentKind::ResourcePacks => (
+                        "No resource packs yet. Find some on Modrinth, or drop .zip files onto this window.",
+                        "Find resource packs",
+                    ),
+                    ContentKind::Shaders => {
+                        ("No shaders yet. Find some on Modrinth, or drop .zip files onto this window.", "Find shaders")
+                    }
                 };
-                card(ui, |ui| empty_state(ui, kind_icon(kind), text, None));
+                if card(ui, |ui| empty_state(ui, kind_icon(kind), text, Some(action))).is_some_and(|r| r.clicked()) {
+                    acts.push(Act::Add);
+                }
             }
         } else {
             // one glass card holds the list; it ends under the last row, or at the bottom of the window
@@ -1433,13 +1403,22 @@ impl App {
         rows
     }
 
-    /// The control that narrows the list to where its items came from, each choice with how many it has.
-    fn mods_origin_dropdown(&mut self, ui: &mut Ui, kind: ContentKind) {
+    /// "Sort: Name": the order of the list, and under it where the items it shows came from, each choice with how
+    /// many it has. Tinted while the list is narrowed to one origin.
+    fn mods_order_dropdown(&mut self, ui: &mut Ui, kind: ContentKind) {
         let entries = self.mods.entries.get(&kind);
-        let origin = &mut self.mods.origin;
+        let (order, origin) = (&mut self.mods.order, &mut self.mods.origin);
         let active = *origin != Origin::Anywhere;
-        super::discover::dropdown(ui, "mods-origin", "From", origin.label(), active, false, |ui| {
-            ui.set_min_width(200.0);
+        let value =
+            if active { format!("{} \u{00B7} {}", order.label(), origin.label()) } else { order.label().into() };
+        super::discover::dropdown(ui, "mods-order", "Sort", &value, active, false, |ui| {
+            ui.set_min_width(220.0);
+            small_muted(ui, "Order");
+            for o in Order::ALL {
+                ui.selectable_value(order, o, o.label());
+            }
+            ui.separator();
+            small_muted(ui, "Show the ones from");
             for o in Origin::ALL {
                 let n = entries.into_iter().flatten().filter(|e| o.has(&e.record)).count();
                 let r = ui.selectable_value(origin, o, format!("{}  ({n})", o.label()));
@@ -1448,6 +1427,63 @@ impl App {
                 }
             }
         });
+    }
+
+    /// Used by the screenshot tour: an update waiting for the second and the fourth mod.
+    pub(super) fn shot_mod_updates(&mut self) {
+        let list = self.mods.entries.get(&ContentKind::Mods).cloned().unwrap_or_default();
+        for e in list.iter().skip(1).step_by(2).take(2) {
+            let offer = UpdateOffer {
+                key: e.key(),
+                name: e.name(),
+                kind: ContentKind::Mods,
+                platform: updates::Platform::Modrinth,
+                current: e.record.version.clone(),
+                newer: "the newest release".into(),
+                modrinth: None,
+                external: None,
+            };
+            self.mods.updates.insert(e.key(), offer);
+        }
+    }
+
+    /// The search of the list and the way to add to it, at the right end of the breadcrumb of the Mods and Resource
+    /// packs tabs: "Add mods", or "Find resource packs" and "Find shaders", which open Explore on that kind.
+    pub(super) fn mods_header_tools(&mut self, ui: &mut Ui, inst: &Instance) {
+        let kind = self.mods.kind();
+        ui.spacing_mut().item_spacing.x = 8.0;
+        let mut f = std::mem::take(&mut self.mods.filter);
+        let what = match kind {
+            ContentKind::Mods => "Search mods\u{2026}",
+            ContentKind::ResourcePacks => "Search resource packs\u{2026}",
+            ContentKind::Shaders => "Search shaders\u{2026}",
+        };
+        filter_field(ui, &mut f, what, 220.0);
+        self.mods.filter = f;
+        let pressed = match kind {
+            ContentKind::Mods => primary_icon(ui, Icon::Plus, "Add mods"),
+            ContentKind::ResourcePacks => primary_icon(ui, Icon::Search, "Find resource packs"),
+            ContentKind::Shaders => primary_icon(ui, Icon::Search, "Find shaders"),
+        };
+        if pressed.clicked() {
+            self.mods_apply(inst, Act::Add);
+        }
+    }
+
+    /// Show the kind the open tab is about: Mods the mods; Resource packs the packs or the shaders, whichever was open
+    /// there last.
+    pub(super) fn mods_follow_tab(&mut self) {
+        let current = self.mods.kind();
+        if current != ContentKind::Mods {
+            self.mods.pack_kind = Some(current);
+        }
+        let packs = self.mods.pack_kind.unwrap_or(ContentKind::ResourcePacks);
+        if let Some(k) = kind_for_tab(self.tab, current, packs) {
+            self.mods.kind = Some(k);
+            self.mods.expanded = None;
+            self.mods.selected.clear();
+            self.mods.select_mode = false;
+        }
     }
 
     /// Notes above the list: the malware scan result, shader setup, a missing loader.
@@ -1524,16 +1560,22 @@ impl App {
         let offer = self.mods.updates.get(key);
         let details = self.mods.details.get(key);
         let expanded = self.mods.expanded.as_ref() == Some(key);
-        let name = e.name();
+        let kind = self.mods.kind();
+        let name = row_name(e, kind);
         let off = rec.disabled;
 
         // the fill under the row is laid down first and sized at the end, when it is known how far the details reach
         let fill = ui.painter().add(egui::Shape::Noop);
         let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), ROW_H), egui::Sense::hover());
+        // a click anywhere on the row that isn't one of its controls opens its details (the controls are added after
+        // this, so they are on top of it)
+        let row = ui.interact(rect, ui.scope_id().with("row-click"), egui::Sense::click());
+        if row.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+            acts.push(Act::Details(key.clone()));
+        }
         let hovered = ui.rect_contains_pointer(rect);
-        // the row's fill and its quiet actions fade in together under the pointer
         let hot = motion::hover(ui, ui.scope_id().with("row"), hovered || expanded);
-        let inner = rect.shrink2(egui::vec2(10.0, 0.0));
+        let inner = rect.shrink2(egui::vec2(12.0, 0.0));
         let mut left = inner.left();
         if self.mods.select_mode {
             let mut on = self.mods.selected.contains(key);
@@ -1543,7 +1585,7 @@ impl App {
             }
             left += 32.0;
         }
-        // the picture, dimmed while the mod is off
+        // the picture, dimmed while the item is off
         let icon = egui::Rect::from_min_size(egui::pos2(left, rect.center().y - ICON / 2.0), egui::vec2(ICON, ICON));
         let mut picture = ui.new_child(egui::UiBuilder::new().max_rect(icon));
         if off {
@@ -1556,46 +1598,44 @@ impl App {
                         .fit_to_exact_size(egui::vec2(ICON, ICON))
                         .corner_radius(CornerRadius::same(R_CONTROL)),
                 );
+                picture.painter().rect_stroke(
+                    icon,
+                    CornerRadius::same(R_CONTROL),
+                    Stroke::new(1.0, c_border()),
+                    egui::StrokeKind::Inside,
+                );
             }
             None => paint_avatar(&picture, icon, &name),
         }
         left += ICON + 14.0;
-        // the switch, at the right edge
+        // at the right end, read from left to right: the update, the switch and the menu
+        let narrow = rect.width() < 600.0;
+        let mut right = inner.right();
+        let menu = egui::Rect::from_center_size(egui::pos2(right - 14.0, rect.center().y), egui::vec2(28.0, 28.0));
+        right = menu.left() - 6.0;
+        let switch = egui::Rect::from_center_size(egui::pos2(right - 20.0, rect.center().y), egui::vec2(40.0, 28.0));
+        right = switch.left() - 10.0;
         let mut on = !off;
-        let switch =
-            egui::Rect::from_center_size(egui::pos2(inner.right() - 18.0, rect.center().y), egui::vec2(36.0, 20.0));
         let switched = toggle(&mut ui.new_child(egui::UiBuilder::new().max_rect(switch)), &mut on);
         if switched.on_hover_text(if on { "Switched on" } else { "Switched off" }).changed() {
             acts.push(Act::Toggle(key.clone(), on));
         }
-        // what can be done with it, left of the switch
-        let update_label = offer.map(|o| format!("Update: {}", short(&o.newer, 18)));
-        let text_w = |ui: &Ui, t: &str, size: f32| {
-            ui.painter().layout_no_wrap(t.to_string(), super::fonts::medium(size), c_text()).size().x
-        };
-        let actions_w = 2.0 * 8.0
-            + text_w(ui, "Remove", FS_BODY)
-            + 20.0
-            + text_w(ui, "Details", FS_BODY)
-            + 20.0
-            + update_label.as_deref().map_or(0.0, |t| text_w(ui, t, FS_META) + UPDATE_PAD + 8.0);
-        let actions = egui::Rect::from_min_max(
-            egui::pos2((switch.left() - 14.0 - actions_w).max(left + 120.0), rect.top()),
-            egui::pos2(switch.left() - 14.0, rect.bottom()),
-        );
-        let mut ac =
-            ui.new_child(egui::UiBuilder::new().max_rect(actions).layout(Layout::right_to_left(Align::Center)));
-        ac.spacing_mut().item_spacing.x = 0.0;
-        if row_action(&mut ac, "Remove", Some(c_danger()), hot).clicked() {
-            acts.push(Act::Remove(vec![key.clone()]));
-        }
-        if row_action(&mut ac, if expanded { "Hide" } else { "Details" }, None, hot).clicked() {
-            acts.push(Act::Details(key.clone()));
-        }
-        if let (Some(o), Some(label)) = (offer, update_label) {
-            ac.add_space(8.0);
-            let r = ac.add_enabled_ui(!busy, |ui| update_pill(ui, &label)).inner.on_hover_text(format!(
-                "{} \u{2192} {} on {}",
+        let mut mc = ui.new_child(egui::UiBuilder::new().max_rect(menu));
+        kebab_menu(&mut mc, |ui| {
+            menu_items(ui);
+            ui.set_min_width(220.0);
+            self.mod_menu(ui, e, offer, expanded, busy, acts);
+        });
+        if let Some(o) = offer {
+            let w = update_badge_width(ui, narrow);
+            let badge = egui::Rect::from_min_max(
+                egui::pos2(right - w, rect.center().y - 13.0),
+                egui::pos2(right, rect.center().y + 13.0),
+            );
+            right = badge.left() - 12.0;
+            let mut bc = ui.new_child(egui::UiBuilder::new().max_rect(badge));
+            let r = bc.add_enabled_ui(!busy, |ui| update_badge(ui, narrow)).inner.on_hover_text(format!(
+                "{} \u{2192} {} on {}. Click to update.",
                 o.current,
                 o.newer,
                 o.platform.label()
@@ -1604,46 +1644,27 @@ impl App {
                 acts.push(Act::Update(key.clone()));
             }
         }
-        // the name and what is known about it
-        let text = egui::Rect::from_min_max(
-            egui::pos2(left, rect.top() + 9.0),
-            egui::pos2(actions.left() - 8.0, rect.bottom() - 9.0),
-        );
+        // the name and what is known about it, then a line about it
+        let text =
+            egui::Rect::from_min_max(egui::pos2(left, rect.top() + 10.0), egui::pos2(right, rect.bottom() - 9.0));
         let mut tc = ui.new_child(egui::UiBuilder::new().max_rect(text).layout(Layout::top_down(Align::Min)));
         tc.set_clip_rect(tc.clip_rect().intersect(text));
         tc.spacing_mut().item_spacing = egui::vec2(8.0, 3.0);
         tc.spacing_mut().interact_size.y = 20.0;
-        let version =
-            if rec.version.is_empty() || rec.version == "Unknown" { String::new() } else { short(&rec.version, 40) };
-        // a tag is for what needs a look; where the mod came from is plain grey text at the end of the version
+        let text_w =
+            |ui: &Ui, t: &str, font: egui::FontId| ui.painter().layout_no_wrap(t.to_string(), font, c_text()).size().x;
+        // a tag is for what needs a look; the rest is quiet text after the name
         let mut tags: Vec<(&str, egui::Color32)> = Vec::new();
         if !e.exists {
             tags.push(("File missing", c_danger()));
         }
-        let tags_w: f32 = tags.iter().map(|(t, _)| text_w(&tc, t, FS_META) + 12.0 + 8.0).sum();
-        let name_text = RichText::new(&name).semibold().color(if off { c_muted() } else { c_text() });
-        let name_nat = tc.painter().layout_no_wrap(name.clone(), super::fonts::semibold(FS_BODY), c_text()).size().x;
+        let tags_w: f32 = tags.iter().map(|(t, _)| text_w(&tc, t, egui::FontId::proportional(FS_META)) + 20.0).sum();
+        let name_nat = text_w(&tc, &name, super::fonts::semibold(FS_BODY));
         let name_w = name_nat.min((text.width() - tags_w - 8.0).max(text.width() * 0.4));
-        // the version and the rest take what is left on the line: a part that does not fit is left out whole, and
-        // all of it is left to the details when there is no room
         let left_over = text.width() - name_w - tags_w - 16.0;
-        let mut meta: Vec<&str> = Vec::new();
-        if !version.is_empty() {
-            meta.push(&version);
-        }
-        if files::is_from_modrinth(rec) {
-            meta.push("Modrinth");
-        }
-        if files::is_from_curseforge(rec) {
-            meta.push("CurseForge");
-        }
-        if !rec.user_added {
-            meta.push("Part of the modpack");
-        }
-        let meta_w = |parts: &[&str]| {
-            let font = egui::FontId::proportional(FS_META);
-            tc.painter().layout_no_wrap(parts.join(META_SEP), font, c_muted()).size().x
-        };
+        let mut meta = row_meta(e, details.map(|d| &d.info), kind);
+        let meta_w = |parts: &[(String, bool)]| tc.painter().layout_job(meta_job(parts)).size().x;
+        // a part that doesn't fit is left out whole, from the end; with no room for any, the details have it all
         while meta.len() > 1 && meta_w(&meta) > left_over {
             meta.pop();
         }
@@ -1651,28 +1672,28 @@ impl App {
         tc.horizontal(|ui| {
             ui.scope(|ui| {
                 ui.set_max_width(name_w);
-                ui.add(egui::Label::new(name_text).truncate());
+                let color = if off { c_muted() } else { c_text() };
+                ui.add(egui::Label::new(RichText::new(&name).semibold().color(color)).truncate().selectable(false));
             });
             if show_meta {
-                ui.scope(|ui| {
-                    ui.set_max_width(left_over);
-                    ui.add(
-                        egui::Label::new(RichText::new(meta.join(META_SEP)).color(c_faint()).size(FS_META)).truncate(),
-                    );
-                });
+                ui.add(egui::Label::new(meta_job(&meta)).truncate().selectable(false));
             }
             for (t, c) in &tags {
                 tag(ui, t, *c);
             }
         });
+        let line = |text: RichText| egui::Label::new(text.size(FS_META)).truncate().selectable(false);
         if let Some(p) = details.and_then(|d| d.problem.as_ref()) {
-            tc.add(
-                egui::Label::new(RichText::new(format!("May not work here: {p}")).color(c_warn()).size(FS_META))
-                    .truncate(),
-            );
+            tc.add(line(RichText::new(format!("May not work here: {p}")).color(c_warn())));
         } else if !rec.description.is_empty() {
-            let color = if off { c_faint() } else { c_muted() };
-            tc.add(egui::Label::new(RichText::new(short(&rec.description, 160)).color(color).size(FS_META)).truncate());
+            tc.add(line(RichText::new(short(&rec.description, 160)).color(if off { c_faint() } else { c_muted() })));
+        } else {
+            // nothing to say about it: its file, which at least tells two alike apart
+            tc.add(
+                egui::Label::new(RichText::new(&rec.file).font(super::fonts::mono(FS_META - 1.0)).color(c_faint()))
+                    .truncate()
+                    .selectable(false),
+            );
         }
         if expanded {
             ui.add_space(2.0);
@@ -1703,6 +1724,46 @@ impl App {
         if !last && hot < 1.0 {
             let y = bottom - 0.5;
             ui.painter().hline(left..=inner.right(), y, Stroke::new(1.0, c_rule().gamma_multiply(1.0 - hot)));
+        }
+    }
+
+    /// The "…" menu of a row: its details, its update and versions, where it lives, and removing it.
+    fn mod_menu(
+        &self,
+        ui: &mut Ui,
+        e: &ModEntry,
+        offer: Option<&UpdateOffer>,
+        expanded: bool,
+        busy: bool,
+        acts: &mut Vec<Act>,
+    ) {
+        let rec = &e.record;
+        let key = e.key();
+        let mut item = |ui: &mut Ui, enabled: bool, text: String, act: Act| {
+            if ui.add_enabled(enabled, egui::Button::new(text)).clicked() {
+                acts.push(act);
+                ui.close();
+            }
+        };
+        item(ui, true, (if expanded { "Hide details" } else { "Details" }).into(), Act::Details(key.clone()));
+        if let Some(o) = offer {
+            item(ui, !busy, format!("Update to {}", short(&o.newer, 28)), Act::Update(key.clone()));
+        }
+        if files::is_from_modrinth(rec) {
+            item(ui, !busy, "Versions\u{2026}".into(), Act::Versions(key.clone()));
+            item(ui, !busy, "Check for an update".into(), Act::CheckOne(key.clone()));
+            item(ui, !busy, "Reinstall".into(), Act::Reinstall(key.clone()));
+        }
+        item(ui, !busy, "Refresh from Modrinth".into(), Act::Refresh(vec![key.clone()]));
+        ui.separator();
+        if let Some(url) = modrinth_page(rec) {
+            item(ui, true, "Open on Modrinth".into(), Act::Url(url));
+        }
+        item(ui, true, "Show in folder".into(), Act::ShowInFolder(key.clone()));
+        ui.separator();
+        if ui.button(RichText::new("Remove").color(c_danger())).clicked() {
+            acts.push(Act::Remove(vec![key]));
+            ui.close();
         }
     }
 
@@ -2188,5 +2249,48 @@ mod tests {
                 assert_eq!(o.has(rec), o == from || o == Origin::Anywhere, "{} in {o:?}", rec.name);
             }
         }
+    }
+
+    fn entry(name: &str, file: &str, kind: &str) -> ModEntry {
+        let record = crate::modrecord::ModRecord::new(name, file, kind);
+        ModEntry { record, path: None, exists: true, size: 2_400_000 }
+    }
+
+    #[test]
+    fn the_chips_count_what_each_would_show() {
+        let mut off = entry("Off", "off.jar", "mods");
+        off.record.disabled = true;
+        let list = vec![entry("A", "a.jar", "mods"), entry("B", "b.jar", "mods"), off];
+        let counts = show_counts(&list, |e| e.record.file == "b.jar");
+        assert_eq!(counts, ShowCounts { all: 3, on: 2, off: 1, updates: 1 });
+        assert_eq!(show_counts(&[], |_| true), ShowCounts::default());
+    }
+
+    #[test]
+    fn each_tab_shows_its_own_kind_and_resource_packs_remember_shaders() {
+        use ContentKind::*;
+        assert_eq!(kind_for_tab(InstTab::Mods, ResourcePacks, ResourcePacks), Some(Mods));
+        assert_eq!(kind_for_tab(InstTab::Mods, Mods, Shaders), None);
+        assert_eq!(kind_for_tab(InstTab::ResourcePacks, Mods, ResourcePacks), Some(ResourcePacks));
+        assert_eq!(kind_for_tab(InstTab::ResourcePacks, Mods, Shaders), Some(Shaders));
+        // shaders picked on the tab stay
+        assert_eq!(kind_for_tab(InstTab::ResourcePacks, Shaders, ResourcePacks), None);
+        assert_eq!(kind_for_tab(InstTab::Logs, Shaders, Shaders), None);
+    }
+
+    #[test]
+    fn a_row_says_the_version_then_what_kind_of_file_then_where_it_came_from() {
+        let mut pack = entry("Faithful", "Faithful 32x.zip", "resourcepack");
+        pack.record.version = "1.21".into();
+        let parts: Vec<String> = row_meta(&pack, None, ContentKind::ResourcePacks).into_iter().map(|p| p.0).collect();
+        assert_eq!(parts, ["1.21", "2.4 MB", "zip"]);
+        let info = ModInfo { loader: Some("fabric".into()), ..Default::default() };
+        let mut m = entry("Sodium", "sodium.jar", "mods");
+        m.record.version = "0.6.0".into();
+        m.record.modrinth_project = Some(serde_json::json!({"id": "AANobbMI", "slug": "sodium"}));
+        m.record.modrinth_version = Some(serde_json::json!({"id": "v1"}));
+        let parts: Vec<String> = row_meta(&m, Some(&info), ContentKind::Mods).into_iter().map(|p| p.0).collect();
+        assert_eq!(parts, ["0.6.0", "Fabric", "Modrinth"]);
+        assert_eq!(modrinth_page(&m.record).as_deref(), Some("https://modrinth.com/mod/sodium"));
     }
 }

@@ -32,6 +32,8 @@ pub struct BackupsState {
     /// The backup to restore and the folder of the instance it goes back into (the one whose card was clicked).
     restore: Option<(String, PathBuf)>,
     delete: Option<PathBuf>,
+    /// The instance whose backups are open in their own window ("Manage" on its overview).
+    manage: Option<String>,
 }
 
 /// The label of the job that restores into an instance, also used to see whether one is running.
@@ -50,13 +52,25 @@ impl BackupsState {
     }
 }
 
+/// "5 backups · Last on 12 Nov 2024" for a list that is newest first.
+fn summary(list: &[Backup]) -> String {
+    match list.first() {
+        None => "No backups yet".to_string(),
+        Some(newest) => {
+            let n = if list.len() == 1 { "1 backup".to_string() } else { format!("{} backups", list.len()) };
+            format!("{n}  \u{00B7}  Last on {}", newest.created.format("%-d %b %Y"))
+        }
+    }
+}
+
 fn when(b: &Backup) -> String {
     b.created.format("%d %b %Y, %H:%M").to_string()
 }
 
 impl App {
-    /// The card on the instance page's overview. Call it with the instance being shown.
-    pub(super) fn backups_card(&mut self, ui: &mut Ui, inst: &Instance) {
+    /// Read the list of an instance's backups again when it is of another instance, was changed, or is a few seconds
+    /// old.
+    fn backups_refresh(&mut self, inst: &Instance) {
         let st = &mut self.svc.backups;
         if st.folder != inst.folder || st.stale || st.loaded.is_none_or(|t| t.elapsed() > REFRESH_AFTER) {
             if st.folder != inst.folder {
@@ -69,6 +83,23 @@ impl App {
             st.loaded = Some(Instant::now());
             st.stale = false;
         }
+    }
+
+    /// "5 backups · Last on 12 Nov 2024", or that there are none yet: the line of the overview.
+    pub(super) fn backups_summary(&mut self, inst: &Instance) -> String {
+        self.backups_refresh(inst);
+        summary(&self.svc.backups.list)
+    }
+
+    /// Open the window with the backups of an instance.
+    pub(super) fn manage_backups(&mut self, folder: &str) {
+        self.svc.backups.manage = Some(folder.to_string());
+    }
+
+    /// The backups of an instance: make one, and restore or delete earlier ones. Drawn in the window "Manage" opens.
+    pub(super) fn backups_card(&mut self, ui: &mut Ui, inst: &Instance) {
+        self.backups_refresh(inst);
+        let st = &mut self.svc.backups;
         // the list is handed back after drawing, so it isn't copied on every frame
         let list: Vec<Backup> = std::mem::take(&mut st.list);
         let svc = st.svc.clone().unwrap_or_default();
@@ -243,6 +274,35 @@ impl App {
 
     /// The confirmation windows for restoring and deleting.
     pub(super) fn backups_overlays(&mut self, ctx: &egui::Context) {
+        // the window of one instance's backups, under the questions it asks
+        if let Some(folder) = self.svc.backups.manage.clone() {
+            match self.instance(&folder).cloned() {
+                Some(inst) => {
+                    let mut close = false;
+                    let modal = egui::Modal::new(egui::Id::unique("manage-backups"))
+                        .frame(super::modal_frame(ctx))
+                        .show(ctx, |ui| {
+                            ui.set_width((ctx.content_rect().width() - 120.0).clamp(320.0, 640.0));
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    RichText::new(format!("Backups of {}", inst.name())).size(FS_SECTION).semibold(),
+                                );
+                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                    close = ghost(ui, "Close").clicked();
+                                });
+                            });
+                            ui.add_space(6.0);
+                            egui::ScrollArea::vertical()
+                                .max_height((ctx.content_rect().height() - 200.0).max(200.0))
+                                .show(ui, |ui| self.backups_card(ui, &inst));
+                        });
+                    if close || modal.should_close() {
+                        self.svc.backups.manage = None;
+                    }
+                }
+                None => self.svc.backups.manage = None,
+            }
+        }
         if let Some((folder, path)) = self.svc.backups.restore.clone() {
             // the instance whose card was clicked, even if another one is selected by now
             let Some(inst) = self.instance(&folder).cloned() else {
@@ -305,5 +365,19 @@ impl App {
                 None => {}
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_overview_line_counts_the_backups_and_dates_the_newest() {
+        assert_eq!(summary(&[]), "No backups yet");
+        let at = |d: u32| chrono::TimeZone::with_ymd_and_hms(&chrono::Local, 2024, 11, d, 10, 0, 0).unwrap();
+        let b = |d: u32| Backup { path: PathBuf::new(), file_name: String::new(), size: 0, created: at(d) };
+        assert_eq!(summary(&[b(12)]), "1 backup  \u{00B7}  Last on 12 Nov 2024");
+        assert_eq!(summary(&[b(12), b(3), b(1)]), "3 backups  \u{00B7}  Last on 12 Nov 2024");
     }
 }

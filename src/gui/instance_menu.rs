@@ -176,13 +176,6 @@ fn secondary_menu_closing<R>(
     (resp, out)
 }
 
-/// One line across the page between two blocks, with the same air on both sides.
-pub(super) fn section_break(ui: &mut Ui) {
-    ui.add_space(12.0);
-    rule(ui);
-    ui.add_space(12.0);
-}
-
 /// The height of the title row of a block on the instance page, with or without a button at its end, so the titles
 /// of blocks side by side line up.
 pub(super) const BLOCK_TITLE_H: f32 = 32.0;
@@ -219,11 +212,6 @@ impl SplitRow {
         SplitRow { id: None, row, right_w, used: right_w }
     }
 
-    /// How wide the right part turned out this frame.
-    pub(super) fn used(&self) -> f32 {
-        self.used
-    }
-
     /// The whole row.
     pub(super) fn rect(&self) -> egui::Rect {
         self.row
@@ -256,6 +244,17 @@ impl SplitRow {
     pub(super) fn finish(self, ui: &Ui) {
         if let Some(id) = self.id {
             remember_width(ui, id, self.used);
+        }
+    }
+
+    /// [`Self::finish`], and what comes next starts under the whole row, even when what is in it is shorter than the
+    /// row (a part laid out in a scope leaves the cursor where its own content ends).
+    pub(super) fn finish_whole(self, ui: &mut Ui) {
+        let bottom = self.row.bottom() + ui.spacing().item_spacing.y;
+        self.finish(ui);
+        let short = bottom - ui.cursor().top();
+        if short > 0.0 {
+            ui.add_space(short);
         }
     }
 }
@@ -385,17 +384,6 @@ impl App {
             Act::Export(f) => self.open_export(&f),
             Act::Delete(f) => self.confirm_delete = Some(f),
         }
-    }
-
-    /// The "Play as" button next to the big Play button, opening the menu for playing as somebody else. Under a
-    /// right-to-left layout it is added after the button so it ends up on its left.
-    pub(super) fn play_as_menu(&self, ui: &mut Ui, folder: &str) -> Option<Act> {
-        let running =
-            self.sessions_of(folder).iter().filter(|k| self.games.get(*k).is_some_and(|g| g.active())).count();
-        let label = if running > 0 { format!("Play as ({running} running)") } else { "Play as".to_string() };
-        let (resp, act) = secondary_menu(ui, &label, |ui| self.account_menu(ui, folder));
-        resp.on_hover_text("Play as another account, or start another game at the same time");
-        act.flatten()
     }
 
     /// The menu for playing as somebody else: every account, a new offline name, a new Microsoft account, and a way to

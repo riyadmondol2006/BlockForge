@@ -41,6 +41,7 @@ mod updates;
 mod whoplays;
 mod widgets;
 mod workbench;
+mod workspace;
 
 // services: tools, servers, news, skins, backups
 mod backups;
@@ -111,6 +112,8 @@ pub enum Page {
 pub enum InstTab {
     Overview,
     Mods,
+    /// The instance's resource packs and shader packs.
+    ResourcePacks,
     Logs,
     Settings,
 }
@@ -865,6 +868,7 @@ impl App {
                     }
                 };
                 n.send(Msg::GameRunning(folder_s.clone()));
+                let began = Instant::now();
                 // the instance as it is on disk now, not as it was when Play was pressed: a rename or a settings
                 // change made while the game was getting ready must not be written over. Done on the side, so a mod
                 // job holding the instance for minutes doesn't hold up the log or Stop
@@ -905,6 +909,19 @@ impl App {
                 // stopped by the player: not an error, whatever code the killed process left (1 on Windows)
                 let code = if stopped { None } else { launch::exit_code(&status) };
                 n.send(Msg::GameExit(folder_s.clone(), code));
+                // how long it ran, added to the instance's play time (on the side, like the start above)
+                {
+                    let (root, secs, n) = (instance.root.clone(), began.elapsed().as_secs(), n.clone());
+                    tokio::spawn(async move {
+                        let lock = mods::instance_lock(&root);
+                        let _held = lock.lock().await;
+                        if let Some(mut fresh) = instances::load_one(&root) {
+                            if fresh.add_play_time(secs).is_ok() {
+                                n.send(Msg::Reload);
+                            }
+                        }
+                    });
+                }
                 if let Some(advice) = watch.advice(code).filter(|_| !stopped) {
                     let text = advice.message.replace('\n', " ");
                     n.send(Msg::GameLog(
@@ -2273,11 +2290,12 @@ struct Shot {
 /// The ids of the jobs the tour makes up to show the sidebar busy; no real job gets ids this high.
 const SHOT_TASK: u64 = u64::MAX - 8;
 
-const SHOT_PAGES: [&str; 50] = [
+const SHOT_PAGES: [&str; 51] = [
     "home",
     "library",
     "instance",
     "instance-mods",
+    "instance-resourcepacks",
     "instance-logs",
     "instance-settings",
     "instance-settings-java",
@@ -2408,6 +2426,7 @@ impl App {
                 }
                 "instance"
                 | "instance-mods"
+                | "instance-resourcepacks"
                 | "instance-logs"
                 | "instance-settings"
                 | "instance-settings-java"
@@ -2417,6 +2436,7 @@ impl App {
                         self.open_instance(&f);
                         self.tab = match name {
                             "instance-mods" => InstTab::Mods,
+                            "instance-resourcepacks" => InstTab::ResourcePacks,
                             "instance-logs" => InstTab::Logs,
                             "instance-settings" | "instance-settings-java" | "instance-settings-cmd" => {
                                 InstTab::Settings
@@ -2639,11 +2659,18 @@ impl App {
                 | "loader"
                 | "import"
         ) || name.trim_end_matches("-light").starts_with("craft")
+            || name.trim_end_matches("-light") == "instance-resourcepacks"
         {
             180
         } else {
             30
         };
+        // two mods with an update waiting, as a check would find (the tour doesn't ask the sites)
+        if name.trim_end_matches("-light") == "instance-mods"
+            && self.shot.as_ref().is_some_and(|s| s.frames + 20 == wait)
+        {
+            self.shot_mod_updates();
+        }
         let shot = self.shot.as_mut().unwrap();
         if shot.frames == wait {
             let path = shot.dir.join(format!("{name}.png"));

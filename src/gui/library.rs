@@ -3,7 +3,7 @@
 use egui::{Align, Color32, CornerRadius, Layout, RichText, ScrollArea, Sense, Stroke, Ui, UiBuilder, vec2};
 
 use super::icons::{self, Icon};
-use super::instance_menu::{Act, BLOCK_TITLE_H, SplitRow, block_title, menu_items, section_break};
+use super::instance_menu::{Act, BLOCK_TITLE_H, SplitRow, block_title, menu_items};
 use super::motion;
 use super::theme::*;
 use super::widgets::*;
@@ -234,23 +234,6 @@ impl App {
             ui.add(
                 egui::Label::new(RichText::new(caption).size(FS_META).color(Color32::from_white_alpha(170))).truncate(),
             );
-        });
-    }
-
-    /// The picture and name at the top of an instance's page, and under the name one line of what it is. The line
-    /// is made shorter, a whole part at a time, until it fits: it never ends in the middle of a word.
-    fn instance_title(&self, ui: &mut Ui, inst: &Instance) {
-        ui.spacing_mut().item_spacing.x = 18.0;
-        self.instance_icon(ui, inst, PAGE_ICON);
-        ui.vertical(|ui| {
-            ui.spacing_mut().item_spacing.y = 4.0;
-            ui.add(egui::Label::new(RichText::new(inst.name()).size(FS_TITLE).semibold()).truncate());
-            let room = ui.available_width();
-            let job = (0..META_LEVELS)
-                .map(|level| instance_meta(inst, level))
-                .find(|job| ui.painter().layout_job(job.clone()).size().x <= room)
-                .unwrap_or_else(|| instance_meta(inst, META_LEVELS - 1));
-            ui.add(egui::Label::new(job).truncate());
         });
     }
 
@@ -957,18 +940,20 @@ impl App {
             return;
         };
         let mut action = None;
-        // one right edge, and the same one on every tab: the back link, the title row, the tab bar and what is under
+        // one right edge, and the same one on every tab: the breadcrumb, the banner, the tab bar and what is under
         // them all end at the same x, so Play stays where it is when the tab changes. In a wider window the page
         // keeps to this column instead of stretching; the scroll bar has its own strip at the window's edge.
         let room = ui.available_width();
         let column = (room - ui.spacing().scroll.allocated_width()).min(INSTANCE_COLUMN);
+        // the Mods tab lists the mods, Resource packs the packs and the shaders
+        self.mods_follow_tab();
         ui.scope(|ui| {
             ui.set_max_width(column);
             self.instance_header(ui, &inst, &mut action);
         });
         match self.tab {
             InstTab::Overview => self.tab_overview(ui, &inst),
-            InstTab::Mods => {
+            InstTab::Mods | InstTab::ResourcePacks => {
                 ui.scope(|ui| {
                     ui.set_max_width(column);
                     self.mods_tab(ui, &inst);
@@ -989,78 +974,36 @@ impl App {
         }
     }
 
-    /// The back link, the picture and name with Play and the menu, and the tabs of an instance's page.
+    /// The breadcrumb (with the search and Add of the Mods and Resource packs tabs at its right end), the cover banner
+    /// with Play and the menus, and the tabs of an instance's page.
     fn instance_header(&mut self, ui: &mut Ui, inst: &Instance, action: &mut Option<Act>) {
-        let folder = inst.folder.clone();
-        if back_link(ui, "Library").clicked() {
-            self.page = Page::Library;
-        }
-        ui.add_space(6.0);
-        // the picture and the name on the left; what is going on, Play as, Play and the menu on the right, read from
-        // left to right, all on a panel of their own. "Play as" goes to the menu, which has it too, when the window is
-        // narrow or the name would be left with less than 300 for its lines (after the picture and the gaps).
-        let full_id = egui::Id::unique("instance-header-full");
-        let full_w: f32 = ui.data(|d| d.get_temp(full_id)).unwrap_or(300.0);
-        let room = ui.available_width() - 2.0 * PAGE_PAD;
-        let compact = room < 560.0 || room - full_w - (PAGE_ICON + 18.0 + 16.0) < 300.0;
-        let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), PAGE_ICON + 2.0 * PAGE_PAD), Sense::hover());
-        let icon_center = rect.left_top() + vec2(PAGE_PAD + PAGE_ICON / 2.0, PAGE_PAD + PAGE_ICON / 2.0);
-        hero_ground(ui, rect, icon_center, self.is_playing(&folder));
-        let mut panel =
-            ui.new_child(UiBuilder::new().max_rect(rect.shrink(PAGE_PAD)).layout(Layout::top_down(Align::Min)));
-        {
-            let ui = &mut panel;
-            let mut header = SplitRow::new(ui, egui::Id::unique("instance-header"), PAGE_ICON);
-            header.left(ui, |ui| self.instance_title(ui, inst));
-            header.right(ui, |ui| {
-                ui.spacing_mut().item_spacing.x = 8.0;
-                match self.games.get(&folder).map(|g| g.phase) {
-                    Some(Phase::Preparing) => {
-                        spinner_sized(ui, 14.0);
-                        ui.label(RichText::new("Getting ready").color(c_muted()));
-                    }
-                    Some(Phase::Running) => {
-                        live_dot(ui);
-                        ui.label(RichText::new("Running").color(c_muted()));
-                    }
-                    _ => {}
-                }
-                if !compact {
-                    // a narrow header has these in its menu (Play as, and Performance…)
-                    if let Some(a) = self.performance_button(ui, inst) {
-                        *action = Some(a);
-                    }
-                    if let Some(a) = self.play_as_menu(ui, &folder) {
-                        *action = Some(a);
-                    }
-                }
-                if self.is_playing(&folder) {
-                    if danger_big(ui, Icon::Stop, "Stop").clicked() {
-                        *action = Some(Act::Stop(folder.clone()));
-                    }
-                } else if play_button(ui, true).clicked() {
-                    *action = Some(Act::Play(folder.clone()));
-                }
-                if let Some(Some(a)) = kebab_menu(ui, |ui| {
-                    menu_items(ui);
-                    self.instance_menu(ui, inst)
-                }) {
-                    *action = Some(a);
-                }
-            });
-            if !compact {
-                let used = header.used();
-                ui.data_mut(|d| d.insert_temp(full_id, used));
+        let lists = matches!(self.tab, InstTab::Mods | InstTab::ResourcePacks);
+        let mut crumb = SplitRow::new(ui, egui::Id::unique("instance-crumb"), 36.0);
+        crumb.left(ui, |ui| {
+            ui.spacing_mut().item_spacing.x = 2.0;
+            if back_link(ui, "Library").clicked() {
+                self.page = Page::Library;
             }
-            header.finish(ui);
-        }
-        ui.add_space(10.0);
+            ui.label(RichText::new("\u{203A}").size(FS_BODY).color(c_faint()));
+            ui.add_space(6.0);
+            ui.add(egui::Label::new(RichText::new(inst.name()).font(super::fonts::medium(13.0))).truncate());
+        });
+        crumb.right(ui, |ui| {
+            if lists {
+                self.mods_header_tools(ui, inst);
+            }
+        });
+        crumb.finish_whole(ui);
+        ui.add_space(8.0);
+        self.instance_banner(ui, inst, action);
+        ui.add_space(6.0);
         // a dot on Settings while changes there weren't saved
-        let unsaved = self.unsaved_draft(&folder);
+        let unsaved = self.unsaved_draft(&inst.folder);
         tab_bar(ui, |ui| {
             for (t, label) in [
                 (InstTab::Overview, "Overview"),
                 (InstTab::Mods, "Mods"),
+                (InstTab::ResourcePacks, "Resource packs"),
                 (InstTab::Logs, "Logs"),
                 (InstTab::Settings, "Settings"),
             ] {
@@ -1086,6 +1029,7 @@ impl App {
         let column = (ui.available_width() - ui.spacing().scroll.allocated_width()).min(FORM_COLUMN);
         ScrollArea::vertical().id_salt("instance-overview").auto_shrink(false).show(ui, |ui| {
             ui.set_max_width(column);
+            ui.spacing_mut().item_spacing.y = 0.0;
             // a newer version of the pack this instance came from
             if let Some(v) = self.ftb.updates.get(&inst.folder).cloned() {
                 let text = format!("A newer version of this modpack is available: {}", v.label());
@@ -1096,63 +1040,16 @@ impl App {
                 }
                 ui.add_space(12.0);
             }
-            // the description, when it says more than the version and loader under the name already do (a pack's own
-            // words, or what the player wrote with "Change description")
-            let desc = inst.file.launcher.description.trim();
-            if !desc.is_empty() && !is_automatic_description(desc, inst) {
-                let format = egui::TextFormat {
-                    font_id: egui::FontId::proportional(FS_BODY),
-                    color: c_muted(),
-                    ..Default::default()
-                };
-                let mut job = egui::text::LayoutJob::single_section(desc.to_string(), format);
-                job.wrap = egui::text::TextWrapping {
-                    max_width: ui.available_width(),
-                    max_rows: 3,
-                    break_anywhere: false,
-                    overflow_character: Some('\u{2026}'),
-                };
-                ui.add(egui::Label::new(job)).on_hover_text(desc);
-                ui.add_space(10.0);
-            }
-            // what this instance is, in one strip across the page (the version and the loader are under its name)
-            let java = inst
-                .file
-                .version
-                .java_version
-                .as_ref()
-                .map(|j| j.major_version.to_string())
-                .unwrap_or_else(|| "Automatic".into());
-            let played = if inst.last_played() > 0 { time_ago(inst.last_played()) } else { "\u{2014}".to_string() };
-            facts(
-                ui,
-                &[
-                    ("Last played", played),
-                    ("Times played", inst.file.launcher.num_plays.unwrap_or(0).to_string()),
-                    ("Mods", inst.mod_count.to_string()),
-                    ("Java", java),
-                ],
-            );
-            section_break(ui);
-            // under it, what happens when it is played on the left and its files on the right; one column when the
-            // page is narrow
-            let room = ui.available_width();
-            if room >= OVERVIEW_SPLIT {
-                let left_w = ((room - HOME_GAP) * 0.56).floor();
-                two_columns(
-                    ui,
-                    left_w,
-                    HOME_GAP,
-                    self,
-                    |ui, this| this.overview_play(ui, inst, &mut change),
-                    |ui, this| this.overview_files(ui, inst),
-                );
-            } else {
-                self.overview_play(ui, inst, &mut change);
-                section_break(ui);
-                self.overview_files(ui, inst);
-            }
-            ui.add_space(12.0);
+            // what this instance is, on four small cards; the days it was played; then what it is about, where its
+            // files are, and what happens when it is played
+            self.overview_stats(ui, inst);
+            ui.add_space(OVERVIEW_GAP);
+            self.overview_history(ui, inst);
+            ui.add_space(OVERVIEW_GAP);
+            self.overview_files(ui, inst);
+            ui.add_space(OVERVIEW_GAP);
+            self.overview_play(ui, inst, &mut change);
+            ui.add_space(16.0);
         });
         if change {
             // the Performance group is on the first tab of the settings, whichever one was open last
@@ -1163,64 +1060,133 @@ impl App {
         }
     }
 
-    /// The overview's blocks about playing: the history, the performance switches, and joining a server on start.
+    /// The overview's cards about playing: the performance switches, and joining a server on start. Side by side, or
+    /// one under the other when the page is narrow.
     fn overview_play(&mut self, ui: &mut Ui, inst: &Instance, change: &mut bool) {
-        self.play_history(ui, inst);
-        section_break(ui);
-
-        // what the three switches say now, read only: they are changed in the settings of the instance
-        let mut head = SplitRow::new(ui, egui::Id::unique("overview-performance"), BLOCK_TITLE_H);
-        head.left(ui, |ui| {
-            ui.label(RichText::new("Performance").size(FS_SECTION).semibold());
-        });
-        head.right(ui, |ui| {
-            if ghost(ui, "Change").clicked() {
-                *change = true;
-            }
-        });
-        head.finish(ui);
-        ui.add(egui::Label::new(RichText::new(self.speed_summary(inst)).size(FS_BODY).color(c_muted())).wrap());
-        section_break(ui);
-
-        block_title(ui, "Join a server on start");
-        small_muted(ui, "Enter an address like play.example.com or play.example.com:25566");
-        ui.add_space(2.0);
-        ui.horizontal_wrapped(|ui| {
-            let mut s = std::mem::take(&mut self.quick_server);
-            search_field(ui, &mut s, "Server address", ui.available_width().clamp(160.0, 280.0));
-            self.quick_server = s;
-            let ready = !self.quick_server.trim().is_empty() && !self.is_playing(&inst.folder);
-            // neutral: the one green button of the page is Play
-            if ui.add_enabled_ui(ready, |ui| secondary_icon(ui, Icon::Play, "Play and join")).inner.clicked() {
-                let server = self.quick_server.trim().to_string();
-                self.play_checked(&inst.folder, super::PendingPlay::Join(server));
+        let performance = |ui: &mut Ui, this: &mut Self, change: &mut bool| {
+            // what the three switches say now, read only: they are changed in the settings of the instance
+            let mut head = SplitRow::new(ui, egui::Id::unique("overview-performance"), BLOCK_TITLE_H);
+            head.left(ui, |ui| {
+                ui.label(RichText::new("Performance").size(FS_SECTION).semibold());
+            });
+            head.right(ui, |ui| {
+                if ghost(ui, "Change").clicked() {
+                    *change = true;
+                }
+            });
+            head.finish_whole(ui);
+            ui.add_space(2.0);
+            ui.add(egui::Label::new(RichText::new(this.speed_summary(inst)).size(FS_BODY).color(c_muted())).wrap());
+        };
+        let join = |ui: &mut Ui, this: &mut Self| {
+            block_title(ui, "Join a server on start");
+            small_muted(ui, "An address like play.example.com, or play.example.com:25566");
+            ui.add_space(8.0);
+            ui.horizontal_wrapped(|ui| {
+                let mut s = std::mem::take(&mut this.quick_server);
+                search_field(ui, &mut s, "Server address", (ui.available_width() - 150.0).clamp(150.0, 280.0));
+                this.quick_server = s;
+                let ready = !this.quick_server.trim().is_empty() && !this.is_playing(&inst.folder);
+                // neutral: the one green button of the page is Play
+                if ui.add_enabled_ui(ready, |ui| secondary_icon(ui, Icon::Play, "Play and join")).inner.clicked() {
+                    let server = this.quick_server.trim().to_string();
+                    this.play_checked(&inst.folder, super::PendingPlay::Join(server));
+                }
+            });
+        };
+        // one card: the two halves side by side with a line between them, or one over the other when it is narrow
+        card(ui, |ui| {
+            let room = ui.available_width();
+            if room >= OVERVIEW_SPLIT * 0.7 {
+                let half = ((room - 2.0 * OVERVIEW_GAP) / 2.0).floor();
+                let mut state = (&mut *self, change);
+                two_columns(
+                    ui,
+                    half,
+                    2.0 * OVERVIEW_GAP,
+                    &mut state,
+                    |ui, (this, change)| performance(ui, this, change),
+                    |ui, (this, _)| join(ui, this),
+                );
+                let r = ui.min_rect();
+                let x = r.left() + half + OVERVIEW_GAP;
+                ui.painter().vline(x, r.top() + 4.0..=r.bottom() - 4.0, Stroke::new(1.0, c_rule()));
+            } else {
+                performance(ui, self, change);
+                ui.add_space(12.0);
+                rule(ui);
+                ui.add_space(12.0);
+                join(ui, self);
             }
         });
     }
 
-    /// The overview's blocks about files: the backups and the instance's folder.
+    /// "About this instance": its description, the game directory, and its backups.
     fn overview_files(&mut self, ui: &mut Ui, inst: &Instance) {
-        self.backups_card(ui, inst);
-        section_break(ui);
-
-        block_title(ui, "Folder");
-        // the whole path when it is pointed at; cut at the edge otherwise
-        let path = inst.root.display().to_string();
-        ui.add(egui::Label::new(RichText::new(&path).size(FS_META).color(c_muted())).truncate()).on_hover_text(&path);
-        ui.add_space(2.0);
-        ui.horizontal_wrapped(|ui| {
-            if secondary_icon(ui, Icon::Folder, "Open folder").clicked() {
-                self.open_path(&inst.root);
+        let mut edit = false;
+        let mut manage = false;
+        let backups = self.backups_summary(inst);
+        card(ui, |ui| {
+            let mut head = SplitRow::new(ui, egui::Id::unique("overview-about"), BLOCK_TITLE_H);
+            head.left(ui, |ui| {
+                ui.label(RichText::new("About this instance").size(FS_SECTION).semibold());
+            });
+            head.right(ui, |ui| {
+                if ghost(ui, "Edit description").clicked() {
+                    edit = true;
+                }
+            });
+            head.finish_whole(ui);
+            // the description, when it says more than the version and loader in the banner already do (a pack's own
+            // words, or what the player wrote)
+            let desc = inst.file.launcher.description.trim();
+            if !desc.is_empty() && !is_automatic_description(desc, inst) {
+                let format = egui::TextFormat {
+                    font_id: egui::FontId::proportional(FS_BODY),
+                    color: c_muted(),
+                    ..Default::default()
+                };
+                let mut job = egui::text::LayoutJob::single_section(desc.to_string(), format);
+                job.wrap = egui::text::TextWrapping {
+                    max_width: ui.available_width(),
+                    max_rows: 4,
+                    break_anywhere: false,
+                    overflow_character: Some('\u{2026}'),
+                };
+                ui.add(egui::Label::new(job)).on_hover_text(desc);
+            } else {
+                ui.label(RichText::new("No description yet.").size(FS_BODY).color(c_faint()));
             }
-            if secondary(ui, "Open saves").clicked() {
-                // a new instance has no saves folder until its first world
-                let saves = inst.root.join("saves");
-                let _ = std::fs::create_dir_all(&saves);
-                self.open_path(&saves);
-            }
-            #[cfg(feature = "converter")]
-            self.add_bedrock_world_button(ui, inst);
+            ui.add_space(12.0);
+            rule(ui);
+            // the game directory: the whole path when it is pointed at, cut at the edge otherwise
+            let path = inst.root.display().to_string();
+            about_row(ui, Icon::Folder, "Game directory", &path, true, egui::Id::unique("about-dir"), |ui| {
+                if secondary(ui, "Open").clicked() {
+                    self.open_path(&inst.root);
+                }
+                if ghost(ui, "Saves").on_hover_text("Open the folder of its worlds").clicked() {
+                    // a new instance has no saves folder until its first world
+                    let saves = inst.root.join("saves");
+                    let _ = std::fs::create_dir_all(&saves);
+                    self.open_path(&saves);
+                }
+                #[cfg(feature = "converter")]
+                self.add_bedrock_world_button(ui, inst);
+            });
+            rule(ui);
+            about_row(ui, Icon::Package, "Backups", &backups, false, egui::Id::unique("about-backups"), |ui| {
+                if secondary(ui, "Manage").clicked() {
+                    manage = true;
+                }
+            });
         });
+        if edit {
+            self.desc_edit = Some((inst.folder.clone(), inst.file.launcher.description.clone()));
+        }
+        if manage {
+            self.manage_backups(&inst.folder);
+        }
     }
 
     fn tab_logs(&mut self, ui: &mut Ui, inst: &Instance) {
@@ -1248,6 +1214,7 @@ impl App {
         };
         if sessions.len() > 1 {
             ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
                 for k in &sessions {
                     let label = self.games.get(k).map(|g| g.player.clone()).unwrap_or_default();
                     if chip(ui, &label, *k == folder).clicked() {
@@ -1255,36 +1222,51 @@ impl App {
                     }
                 }
             });
+            ui.add_space(6.0);
         }
         let Some(phase) = self.games.get(&folder).map(|g| g.phase) else { return };
         let (mut copy, mut clear) = (false, false);
-        // the status on the left; the filter and the buttons on the right, read from left to right
-        let mut bar = SplitRow::new(ui, egui::Id::unique("instance-log-bar"), 32.0);
-        bar.left(ui, |ui| {
-            let (status, dot) = match phase {
-                Phase::Preparing => ("Getting ready".to_string(), c_accent()),
-                Phase::Running => ("Running".to_string(), c_accent()),
-                Phase::Exited(Some(0)) => ("Closed normally".to_string(), c_faint()),
-                Phase::Exited(Some(c)) => (format!("Closed with code {c}"), c_danger()),
-                Phase::Exited(None) => ("Closed".to_string(), c_faint()),
-                Phase::Failed => ("Couldn't start".to_string(), c_danger()),
-            };
-            if matches!(phase, Phase::Preparing | Phase::Running) {
-                live_dot(ui);
-            } else {
-                let (rect, _) = ui.allocate_exact_size(vec2(8.0, 8.0), Sense::hover());
-                ui.painter().circle_filled(rect.center(), 4.0, dot);
-            }
-            ui.add(egui::Label::new(RichText::new(status).font(super::fonts::medium(FS_BODY))).truncate());
+        let filter = self.log_filter.trim().to_lowercase();
+        let level_id = egui::Id::unique("instance-log-level");
+        let mut level: LogLevels = ui.ctx().data(|d| d.get_temp(level_id)).unwrap_or_default();
+        let mut wrap = self.settings.log_wrap;
+        // the levels on the left; the filter and what can be done with the log on the right
+        let (errors, warnings) = self.games.get(&folder).map_or((0, 0), |g| {
+            let n = |l: Level| g.lines.iter().filter(|x| x.level == l).count();
+            (n(Level::Error), n(Level::Warn))
         });
-        bar.right(ui, |ui| {
-            let mut f = std::mem::take(&mut self.log_filter);
-            search_field(ui, &mut f, "Filter lines", 200.0);
-            self.log_filter = f;
-            copy = secondary(ui, "Copy all").clicked();
-            clear = ghost(ui, "Clear").clicked();
-        });
-        bar.finish(ui);
+        let mut st = (&mut *self, &mut level, &mut wrap, &mut copy, &mut clear);
+        super::instance_menu::split_or_stack(
+            ui,
+            egui::Id::unique("instance-log-bar"),
+            34.0,
+            &mut st,
+            |ui, (_, level, _, _, _)| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                for (which, label) in [
+                    (LogLevels::All, "All".to_string()),
+                    (LogLevels::Errors, format!("Errors ({errors})")),
+                    (LogLevels::Warnings, format!("Warnings ({warnings})")),
+                ] {
+                    let on = **level == which;
+                    if chip(ui, &label, on).clicked() {
+                        **level = if on { LogLevels::All } else { which };
+                    }
+                }
+            },
+            |ui, (this, _, wrap, copy, clear)| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                let mut f = std::mem::take(&mut this.log_filter);
+                search_field(ui, &mut f, "Filter lines", 190.0);
+                this.log_filter = f;
+                if chip(ui, "Wrap", **wrap).on_hover_text("Break long lines instead of scrolling sideways").clicked() {
+                    **wrap = !**wrap;
+                }
+                **copy = secondary(ui, "Copy all").clicked();
+                **clear = ghost(ui, "Clear").clicked();
+            },
+        );
+        ui.ctx().data_mut(|d| d.insert_temp(level_id, level));
         if clear {
             if let Some(g) = self.games.get_mut(&folder) {
                 g.lines.clear();
@@ -1297,48 +1279,47 @@ impl App {
         }
         // the log is read where it is (thousands of lines, redrawn with every new one); only the lines that match
         // the filter and the level are listed, by position
-        let filter = self.log_filter.trim().to_lowercase();
-        let level_id = egui::Id::unique("instance-log-level");
-        let mut level: LogLevels = ui.ctx().data(|d| d.get_temp(level_id)).unwrap_or_default();
         let shown = log_lines_shown(&game.lines, &filter, level);
         let count = shown.as_ref().map_or(game.lines.len(), Vec::len);
-        let errors = game.lines.iter().filter(|l| l.level == Level::Error).count();
-        let warnings = game.lines.iter().filter(|l| l.level == Level::Warn).count();
-        // under it, the levels to show on the left; how many lines that is and the wrapping on the right
-        let mut wrap = self.settings.log_wrap;
-        let mut tools = SplitRow::new(ui, egui::Id::unique("instance-log-tools"), 34.0);
-        tools.left(ui, |ui| {
-            ui.spacing_mut().item_spacing.x = 6.0;
-            for (which, label) in [
-                (LogLevels::All, "All".to_string()),
-                (LogLevels::Errors, format!("Errors  {errors}")),
-                (LogLevels::Warnings, format!("Warnings  {warnings}")),
-            ] {
-                let on = level == which;
-                if chip(ui, &label, on).clicked() {
-                    level = if on { LogLevels::All } else { which };
-                }
-            }
-        });
-        tools.right(ui, |ui| {
-            let total = game.lines.len();
-            let lines = if count == total {
-                if total == 1 { "1 line".to_string() } else { format!("{total} lines") }
-            } else {
-                format!("{count} of {total} lines")
-            };
-            ui.label(RichText::new(lines).size(FS_META).color(c_faint()));
-            if chip(ui, "Wrap lines", wrap).on_hover_text("Break long lines instead of scrolling sideways").clicked() {
-                wrap = !wrap;
-            }
-        });
-        tools.finish(ui);
-        ui.ctx().data_mut(|d| d.insert_temp(level_id, level));
-        ui.add_space(4.0);
+        ui.add_space(10.0);
         log_panel(ui, |ui| {
+            // what the game is doing and how many lines there are, along the top of the panel
+            let (status, dot) = match phase {
+                Phase::Preparing => ("Getting ready".to_string(), c_accent()),
+                Phase::Running => (format!("Running \u{00B7} {}", elapsed_text(game.started.elapsed())), c_accent()),
+                Phase::Exited(Some(0)) => ("Closed normally".to_string(), c_faint()),
+                Phase::Exited(Some(c)) => (format!("Closed with code {c}"), c_danger()),
+                Phase::Exited(None) => ("Closed".to_string(), c_faint()),
+                Phase::Failed => ("Couldn't start".to_string(), c_danger()),
+            };
+            let mut top = SplitRow::new(ui, egui::Id::unique("instance-log-top"), 22.0);
+            top.left(ui, |ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                if matches!(phase, Phase::Preparing | Phase::Running) {
+                    live_dot(ui);
+                } else {
+                    let (rect, _) = ui.allocate_exact_size(vec2(10.0, 10.0), Sense::hover());
+                    ui.painter().circle_filled(rect.center(), 4.0, dot);
+                }
+                ui.add(egui::Label::new(RichText::new(status).font(super::fonts::medium(FS_META))).truncate());
+                ui.label(RichText::new(&game.player).size(FS_META).color(c_faint()));
+            });
+            top.right(ui, |ui| {
+                let total = game.lines.len();
+                let lines = if count == total {
+                    if total == 1 { "1 line".to_string() } else { format!("{total} lines") }
+                } else {
+                    format!("{count} of {total} lines")
+                };
+                ui.label(RichText::new(lines).font(super::fonts::mono(FS_META - 1.0)).color(c_faint()));
+            });
+            top.finish_whole(ui);
+            ui.add_space(6.0);
+            rule(ui);
+            ui.add_space(8.0);
             let height = ui.available_height().max(120.0);
-            ui.spacing_mut().item_spacing.y = 2.0;
-            let row_h = ui.text_style_height(&egui::TextStyle::Monospace);
+            ui.spacing_mut().item_spacing.y = 1.0;
+            let row_h = ui.text_style_height(&egui::TextStyle::Monospace) + 1.0;
             if count == 0 && !game.lines.is_empty() {
                 muted(ui, "No line matches the filter.");
             }
@@ -1353,7 +1334,7 @@ impl App {
                     .stick_to_bottom(true)
                     .show(ui, |ui| {
                         for i in 0..count {
-                            ui.add(egui::Label::new(log_text(line(i))).wrap());
+                            log_row(ui, line(i), true);
                         }
                     });
             } else {
@@ -1364,7 +1345,7 @@ impl App {
                     .stick_to_bottom(true)
                     .show_rows(ui, row_h, count, |ui, range| {
                         for i in range {
-                            ui.add(egui::Label::new(log_text(line(i))).extend());
+                            log_row(ui, line(i), false);
                         }
                     });
             }
@@ -1383,9 +1364,72 @@ impl App {
     }
 }
 
-/// The picture at the top of an instance's page, and the air around the panel it is on.
-const PAGE_ICON: f32 = 64.0;
-const PAGE_PAD: f32 = 20.0;
+/// The space between the cards of an instance's overview.
+const OVERVIEW_GAP: f32 = 14.0;
+
+/// A row of "About this instance": an icon on a tile, a title over a detail (in the monospace face when `mono`, cut
+/// at the edge with the whole of it on hover), and the buttons at the right end.
+fn about_row(
+    ui: &mut Ui,
+    icon: Icon,
+    title: &str,
+    detail: &str,
+    mono: bool,
+    id: egui::Id,
+    buttons: impl FnOnce(&mut Ui),
+) {
+    let mut row = SplitRow::new(ui, id, 62.0);
+    row.left(ui, |ui| {
+        ui.spacing_mut().item_spacing.x = 12.0;
+        let (tile, _) = ui.allocate_exact_size(vec2(34.0, 34.0), Sense::hover());
+        ui.painter().rect_filled(tile, CornerRadius::same(R_CONTROL), c_field());
+        ui.painter().rect_stroke(
+            tile,
+            CornerRadius::same(R_CONTROL),
+            Stroke::new(1.0, c_border()),
+            egui::StrokeKind::Inside,
+        );
+        super::icons::paint(ui.painter(), icon, tile.center(), 15.0, c_muted());
+        // a block of a known height, so the row's centring puts it level with the tile
+        let w = ui.available_width();
+        ui.allocate_ui_with_layout(vec2(w, 36.0), Layout::top_down(Align::Min), |ui| {
+            ui.set_width(w);
+            ui.spacing_mut().item_spacing.y = 2.0;
+            ui.add(egui::Label::new(RichText::new(title).font(super::fonts::medium(FS_BODY))).truncate());
+            let text = if mono {
+                RichText::new(detail).font(super::fonts::mono(FS_META)).color(c_muted())
+            } else {
+                RichText::new(detail).size(FS_META).color(c_muted())
+            };
+            ui.add(egui::Label::new(text).truncate()).on_hover_text(detail);
+        });
+    });
+    row.right(ui, |ui| {
+        ui.spacing_mut().item_spacing.x = 6.0;
+        buttons(ui);
+    });
+    row.finish_whole(ui);
+}
+
+/// One line of a game's log: monospace in the colour of its level, and a warning or an error on a faint band of that
+/// colour with a mark at its start, so they stand out in a long log.
+fn log_row(ui: &mut Ui, line: &crate::launch::LogLine, wrap: bool) {
+    let band = ui.painter().add(egui::Shape::Noop);
+    let label = egui::Label::new(log_text(line));
+    let r = ui.add(if wrap { label.wrap() } else { label.extend() });
+    let tint = match line.level {
+        Level::Error => Some(c_danger()),
+        Level::Warn => Some(c_warn()),
+        _ => None,
+    };
+    if let Some(c) = tint {
+        let right = r.rect.right().max(ui.clip_rect().right());
+        let rect = egui::Rect::from_x_y_ranges(r.rect.left() - 8.0..=right, r.rect.y_range()).expand2(vec2(0.0, 0.5));
+        ui.painter().set(band, egui::Shape::rect_filled(rect, CornerRadius::same(2), c.gamma_multiply(0.08)));
+        let mark = egui::Rect::from_x_y_ranges(rect.left()..=rect.left() + 2.0, rect.y_range());
+        ui.painter().rect_filled(mark, CornerRadius::same(1), c.gamma_multiply(0.7));
+    }
+}
 
 /// What the Library shows: every instance, those of one loader (`Vanilla` for plain Minecraft), the favourites, or
 /// those running.
@@ -2055,29 +2099,6 @@ fn lifted_shadow(t: f32) -> egui::Shadow {
     }
 }
 
-/// The panel at the top of Home and of an instance's page: a card of glass with a soft light of the brand colours
-/// behind the picture at `glow_at` and a fainter one at the far end, under the buttons. While the game runs the light
-/// is a little stronger.
-fn hero_ground(ui: &Ui, rect: egui::Rect, glow_at: egui::Pos2, running: bool) {
-    if !ui.is_rect_visible(rect) {
-        return;
-    }
-    let p = ui.painter();
-    let radius = CornerRadius::same(R_CARD + 4);
-    p.add(card_shadow().as_shape(rect, radius));
-    p.rect_filled(rect, radius, c_card());
-    // the light stays inside the panel
-    let lit = p.with_clip_rect(rect.shrink(2.0));
-    let boost = if running { 1.35 } else { 1.0 };
-    let (a1, a2) = if is_dark() { (58.0, 30.0) } else { (52.0, 30.0) };
-    let reach = rect.height().max(120.0);
-    motion::glow(&lit, glow_at, reach * 1.25, with_alpha(c_accent(), (a1 * boost) as u8));
-    let far = egui::pos2(rect.right() - rect.width() * 0.12, rect.top() + rect.height() * 0.2);
-    motion::glow(&lit, far, reach * 1.5, with_alpha(c_accent2(), (a2 * boost) as u8));
-    p.rect_stroke(rect, radius, Stroke::new(1.0, c_border()), egui::StrokeKind::Inside);
-    glass_edge(p, rect, R_CARD + 4);
-}
-
 /// The green dot of something that is running, with a soft light around it.
 fn live_dot(ui: &mut Ui) {
     let (rect, _) = ui.allocate_exact_size(vec2(10.0, 10.0), Sense::hover());
@@ -2091,37 +2112,6 @@ const INSTANCE_COLUMN: f32 = 1040.0;
 
 /// The widest a form on an instance's page gets.
 pub(super) const FORM_COLUMN: f32 = INSTANCE_COLUMN;
-
-/// How many shortenings [`instance_meta`] has.
-const META_LEVELS: usize = 4;
-
-/// "Minecraft 1.21.1 · Fabric 0.20.0 · 7 mods": what an instance is, with the loader in its own colour. `level` 0 is
-/// all of it; each next level leaves out one more part, from the end (the number of mods, which the facts strip and
-/// the Mods tab show too; then the loader's version; then the loader).
-fn instance_meta(inst: &Instance, level: usize) -> egui::text::LayoutJob {
-    let part = |color: egui::Color32| egui::TextFormat {
-        font_id: egui::FontId::proportional(FS_BODY),
-        color,
-        ..Default::default()
-    };
-    let mut job = egui::text::LayoutJob::default();
-    job.append(&format!("Minecraft {}", inst.mc_version()), 0.0, part(c_muted()));
-    if level >= 3 {
-        return job;
-    }
-    job.append("  \u{00B7}  ", 0.0, part(c_faint()));
-    match inst.loader() {
-        Some((kind, _)) if level >= 2 => job.append(kind, 0.0, part(loader_color(kind))),
-        Some((kind, ver)) => job.append(&format!("{kind} {ver}"), 0.0, part(loader_color(kind))),
-        None => job.append("Vanilla", 0.0, part(c_muted())),
-    }
-    if inst.mod_count > 0 && level == 0 {
-        job.append("  \u{00B7}  ", 0.0, part(c_faint()));
-        let mods = if inst.mod_count == 1 { "1 mod".to_string() } else { format!("{} mods", inst.mod_count) };
-        job.append(&mods, 0.0, part(c_muted()));
-    }
-    job
-}
 
 /// The panel the log is read in: a well a step below the page, so the lines sit in it rather than on a card.
 fn log_panel(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {

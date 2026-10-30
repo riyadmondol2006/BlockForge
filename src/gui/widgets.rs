@@ -408,20 +408,6 @@ pub fn danger_enabled(ui: &mut Ui, text: &str, enabled: bool) -> Response {
     )
 }
 
-pub fn danger_big(ui: &mut Ui, icon: Icon, text: &str) -> Response {
-    styled_button(
-        ui,
-        text,
-        Some(icon),
-        c_danger_bg(),
-        c_danger_hover(),
-        c_danger(),
-        Stroke::new(1.0, c_danger_line()),
-        vec2(120.0, 40.0),
-        true,
-    )
-}
-
 /// A filter or a choice that can be switched on: a pill, tinted with the brand colour when selected.
 pub fn chip(ui: &mut Ui, text: &str, selected: bool) -> Response {
     let galley = ui.painter().layout_no_wrap(text.to_string(), super::fonts::medium(13.0), Color32::PLACEHOLDER);
@@ -1073,7 +1059,7 @@ pub fn play_button_sized(ui: &mut Ui, min: Vec2) -> Response {
     brand_button(ui, "Play", Some(Icon::Play), min, true, true)
 }
 
-/// [`danger_big`] at a size of its own: the Stop that takes the place of [`play_button_sized`] while the game runs.
+/// A danger button at least `min` big: the Stop that takes the place of [`play_button_sized`] while the game runs.
 pub fn danger_sized(ui: &mut Ui, icon: Icon, text: &str, min: Vec2) -> Response {
     styled_button(
         ui,

@@ -143,6 +143,19 @@ impl Instance {
         self.save()
     }
 
+    /// How long this instance has been played, in seconds: the games this launcher started and saw end (kept as
+    /// `playSeconds` in its file, so it is 0 for an instance only played before that was counted).
+    pub fn play_seconds(&self) -> u64 {
+        self.file.launcher.extras.get("playSeconds").and_then(Value::as_u64).unwrap_or(0)
+    }
+
+    /// Add the length of a session that ended to [`Self::play_seconds`], and save.
+    pub fn add_play_time(&mut self, secs: u64) -> Result<()> {
+        let total = self.play_seconds().saturating_add(secs);
+        self.file.launcher.extras.insert("playSeconds".into(), json!(total));
+        self.save()
+    }
+
     /// Count a session on `day` in the instance's own file (kept for the last [`PLAY_DAYS_KEPT`] days), so the play
     /// history stays right when Minecraft's logs are deleted.
     fn record_play_day(&mut self, day: chrono::NaiveDate) {
@@ -475,6 +488,7 @@ pub fn duplicate(dirs: &Dirs, instance: &Instance, new_name: &str) -> Result<Ins
         copy.file.launcher.last_played = None;
         copy.file.launcher.num_plays = None;
         copy.file.launcher.extras.remove("playDays");
+        copy.file.launcher.extras.remove("playSeconds");
         copy.save()?;
         Ok(copy)
     })();
@@ -625,7 +639,11 @@ mod robustness_tests {
         std::fs::create_dir_all(inst.root.join("saves/World")).unwrap();
         std::fs::write(inst.root.join("saves/World/level.dat"), b"lvl").unwrap();
         inst.mark_played().unwrap();
+        inst.add_play_time(90).unwrap();
+        inst.add_play_time(30).unwrap();
+        assert_eq!(load_one(&inst.root).unwrap().play_seconds(), 120);
         let copy = duplicate(&dirs, &inst, "My Pack").unwrap();
+        assert_eq!(copy.play_seconds(), 0);
         assert_ne!(copy.root, inst.root);
         assert_ne!(copy.file.uuid, inst.file.uuid);
         assert_eq!(copy.file.launcher.num_plays, None);
