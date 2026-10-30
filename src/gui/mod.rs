@@ -2630,7 +2630,7 @@ impl App {
                 "packs" | "packs-hover" => self.page = Page::Packs,
                 "packs-loading" | "packs-error" | "technic-loading" => {
                     self.page = Page::Packs;
-                    let state = match name {
+                    let state = match name.trim_end_matches("-light") {
                         "packs-loading" => "atl-loading",
                         "packs-error" => "atl-error",
                         _ => "technic-loading",
@@ -2855,8 +2855,15 @@ impl App {
         // these also hold their page's lists, which take a while to come again: only when their window was opened
         match before {
             "cf-install" => self.cf = curseforge::CfState::default(),
-            "ftb-pack" => self.ftb = ftb::FtbState::default(),
-            "packs-pack" => self.packs = packs::PacksState::default(),
+            // a details window left open would take the next page's press on its own Install
+            "ftb-pack" | "ftb-pack-loading" | "ftb-pack-ready" | "ftb-pack-error" | "ftb-loading" => {
+                self.ftb = ftb::FtbState::default()
+            }
+            "packs-pack" | "packs-loading" | "packs-error" | "technic-loading" => {
+                self.packs = packs::PacksState::default()
+            }
+            // the pages after it show Modrinth unless they say otherwise
+            "explore-worlds" => self.cf.active = false,
             _ => {}
         }
         self.tasks.retain(|t| t.id < SHOT_TASK);
