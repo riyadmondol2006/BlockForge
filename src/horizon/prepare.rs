@@ -165,7 +165,15 @@ pub async fn get_ready(
     install::ensure_game_files(dirs, &version, progress, false).await.context("getting the game files")?;
     let temp = dirs.temp.join("horizon");
     let _ = std::fs::create_dir_all(&temp);
-    let env = tool_env(dirs, &java_home, &temp);
+    let mut env = tool_env(dirs, &java_home, &temp);
+    // its Javas get their memory from horizon-prepare itself; how many run at once is what can be changed
+    let (total, free) = (crate::launch::memory::total_ram_mb(), crate::launch::memory::available_mb());
+    if prepare && super::tune::prepare_isolated(total, free) {
+        env.push(("HORIZON_PREPARE_ISOLATED".to_string(), "1".to_string()));
+        notes.push(format!(
+            "Preparing with one Java at a time ({free} MB of {total} MB free): slower, but it needs much less memory"
+        ));
+    }
 
     if prepare {
         let jar = server_jar(dirs, &version, &lock, progress).await?;

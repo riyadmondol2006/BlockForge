@@ -56,6 +56,8 @@ pub struct Gpu {
     pub default: bool,
     /// The environment variables that make a program use this card.
     pub env: Vec<(String, String)>,
+    /// Its PCI vendor and device ids, when known (Linux).
+    pub pci_ids: Option<(u32, u32)>,
 }
 
 /// What the player chose in Settings.
@@ -199,7 +201,15 @@ pub fn parse_switcherooctl(text: &str) -> Vec<Gpu> {
         .map(|b| {
             let vendor = vendor_from_name(&b.name);
             let id = env_id(&b.env).unwrap_or_else(|| format!("gpu{}", b.index));
-            Gpu { id, name: short_name(&b.name), vendor, discrete: b.discrete, default: b.default, env: b.env }
+            Gpu {
+                id,
+                name: short_name(&b.name),
+                vendor,
+                discrete: b.discrete,
+                default: b.default,
+                env: b.env,
+                pci_ids: None,
+            }
         })
         .collect()
 }
@@ -307,7 +317,7 @@ pub fn from_sysfs(
                 _ => vec![("DRI_PRIME".to_string(), tag.clone())],
             };
             let id = if vendor == Vendor::Nvidia { "nvidia".to_string() } else { tag };
-            Gpu { id, name, vendor, discrete, default, env }
+            Gpu { id, name, vendor, discrete, default, env, pci_ids: Some((c.vendor, c.device)) }
         })
         .collect();
     gpus.sort_by_key(|g| !g.default);
@@ -406,7 +416,54 @@ fn detect_switcheroo() -> Vec<Gpu> {
             }
         }
     }
+    // the ids of each card it names by its PCI address, for picking it out in Vulkan (`vulkan_env`)
+    for g in gpus.iter_mut() {
+        g.pci_ids = env_pci_address(&g.env).and_then(|address| {
+            let dir = std::path::Path::new("/sys/bus/pci/devices").join(address);
+            let hex = |name: &str| {
+                let t = std::fs::read_to_string(dir.join(name)).ok()?;
+                u32::from_str_radix(t.trim().trim_start_matches("0x"), 16).ok()
+            };
+            Some((hex("vendor")?, hex("device")?))
+        });
+    }
     gpus
+}
+
+/// The PCI address (`0000:06:00.0`) in a card's `DRI_PRIME=pci-0000_06_00_0`.
+pub fn env_pci_address(env: &[(String, String)]) -> Option<String> {
+    let tag = env.iter().find(|(k, _)| k == "DRI_PRIME")?.1.strip_prefix("pci-")?;
+    match tag.split('_').collect::<Vec<_>>().as_slice() {
+        [domain, bus, slot, function] => Some(format!("{domain}:{bus}:{slot}.{function}")),
+        _ => None,
+    }
+}
+
+/// The variables that make a Vulkan program see `chosen` only, out of `all` the cards. A program that picks a card
+/// itself (Horizon renders with wgpu, which asks for the fast one) would otherwise pass over the choice, since
+/// `DRI_PRIME` only changes the order of the cards: NVIDIA's Vulkan layer hides every card but NVIDIA's (or every
+/// NVIDIA card when another is chosen), and Mesa's device-select layer keeps just the one with its ids (the `!`).
+pub fn vulkan_env(chosen: &Gpu, all: &[Gpu]) -> Vec<(String, String)> {
+    fn put(env: &mut Vec<(String, String)>, key: &str, value: String) {
+        match env.iter_mut().find(|(k, _)| k == key) {
+            Some(pair) => pair.1 = value,
+            None => env.push((key.to_string(), value)),
+        }
+    }
+    let mut env = chosen.env.clone();
+    if chosen.vendor == Vendor::Nvidia {
+        put(&mut env, "__NV_PRIME_RENDER_OFFLOAD", "1".into());
+        put(&mut env, "__VK_LAYER_NV_optimus", "NVIDIA_only".into());
+        put(&mut env, "__GLX_VENDOR_LIBRARY_NAME", "nvidia".into());
+    } else {
+        if all.iter().any(|g| g.vendor == Vendor::Nvidia) {
+            put(&mut env, "__VK_LAYER_NV_optimus", "non_NVIDIA_only".into());
+        }
+        if let Some((vendor, device)) = chosen.pci_ids {
+            put(&mut env, "MESA_VK_DEVICE_SELECT", format!("{vendor:04x}:{device:04x}!"));
+        }
+    }
+    env
 }
 
 // ---- Windows
@@ -457,6 +514,7 @@ pub fn windows_gpus(names: &[String]) -> Vec<Gpu> {
                 discrete: !integrated,
                 default: integrated,
                 env: Vec::new(),
+                pci_ids: None,
             }
         })
         .collect()
@@ -704,6 +762,44 @@ Device: 1
             Some("/usr/share/glvnd/egl_vendor.d/10_nvidia.json")
         );
         assert_eq!(get(&effect(&Choice::Dedicated, &gpus).env, "__VK_LAYER_NV_optimus"), Some("NVIDIA_only"));
+    }
+
+    #[test]
+    fn a_vulkan_program_sees_only_the_chosen_card() {
+        // switcherooctl's NVIDIA laptop: the AMD card keeps its own variables and gets NVIDIA's cards hidden
+        let mut gpus = two();
+        gpus[0].pci_ids = Some((0x1002, 0x1638));
+        let amd = vulkan_env(&gpus[0], &gpus);
+        assert_eq!(get(&amd, "DRI_PRIME"), Some("pci-0000_06_00_0"));
+        assert_eq!(get(&amd, "VK_LOADER_DRIVERS_SELECT"), Some("*radeon*"));
+        assert_eq!(get(&amd, "__VK_LAYER_NV_optimus"), Some("non_NVIDIA_only"));
+        assert_eq!(get(&amd, "MESA_VK_DEVICE_SELECT"), Some("1002:1638!"));
+        let nvidia = vulkan_env(&gpus[1], &gpus);
+        assert_eq!(get(&nvidia, "__VK_LAYER_NV_optimus"), Some("NVIDIA_only"));
+        assert_eq!(get(&nvidia, "__NV_PRIME_RENDER_OFFLOAD"), Some("1"));
+        assert_eq!(get(&nvidia, "__GLX_VENDOR_LIBRARY_NAME"), Some("nvidia"));
+        assert_eq!(get(&nvidia, "VK_LOADER_DRIVERS_SELECT"), Some("*nvidia*"));
+        assert_eq!(get(&nvidia, "MESA_VK_DEVICE_SELECT"), None);
+
+        // Intel and AMD from sysfs: Mesa's layer picks by ids, and no NVIDIA layer is asked for
+        let cards = [
+            SysCard { pci_address: "0000:00:02.0".into(), vendor: 0x8086, device: 0x9a49, boot_vga: true },
+            SysCard { pci_address: "0000:03:00.0".into(), vendor: 0x1002, device: 0x73ff, boot_vga: false },
+        ];
+        let gpus = from_sysfs(&cards, |_, _| None, None);
+        let intel = vulkan_env(&gpus[0], &gpus);
+        assert_eq!(get(&intel, "MESA_VK_DEVICE_SELECT"), Some("8086:9a49!"));
+        assert_eq!(get(&intel, "DRI_PRIME"), Some("pci-0000_00_02_0"));
+        assert_eq!(get(&intel, "__VK_LAYER_NV_optimus"), None);
+        assert_eq!(get(&vulkan_env(&gpus[1], &gpus), "MESA_VK_DEVICE_SELECT"), Some("1002:73ff!"));
+    }
+
+    #[test]
+    fn a_cards_pci_address_is_read_from_its_variable() {
+        let env = |v: &str| vec![("DRI_PRIME".to_string(), v.to_string())];
+        assert_eq!(env_pci_address(&env("pci-0000_06_00_0")).as_deref(), Some("0000:06:00.0"));
+        assert_eq!(env_pci_address(&env("1")), None);
+        assert_eq!(env_pci_address(&[]), None);
     }
 
     #[test]

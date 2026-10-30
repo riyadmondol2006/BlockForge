@@ -71,16 +71,30 @@ fn horizon_real() {
             access_token: Some("not-a-real-token-for-the-test".into()),
             ..Default::default()
         };
+        // 3.5 GB set for the game: the first start gets render distance 8 in an options.txt of two lines, and a
+        // horizon-graphics.txt of one line, which the game must take and fill in
+        let mut settings = Settings::default();
+        settings.automatic_memory = Some(false);
+        settings.maximum_memory = 3584;
+        // the power-saving card, which Horizon (asking wgpu for the fast one) would pass over on its own
+        settings.gpu = "integrated".into();
+        std::fs::write(inst.root.join("horizon-graphics.txt"), "workers:2\n").unwrap();
         let t = Instant::now();
-        let mut start =
-            prepare(&dirs, &Settings::default(), &inst, &account, &progress, &LaunchOptions::default(), false)
-                .await
-                .expect("preparing to play");
+        let mut start = prepare(&dirs, &settings, &inst, &account, &progress, &LaunchOptions::default(), false)
+            .await
+            .expect("preparing to play");
         eprintln!("ready to play in {:.1} s; notes: {:?}", t.elapsed().as_secs_f32(), start.notes);
+        eprintln!("warnings: {:?}", start.warnings);
+        let options = std::fs::read_to_string(inst.root.join("options.txt")).unwrap_or_default();
+        assert_eq!(options, "renderDistance:8\nsimulationDistance:8\n");
         let shown = start.display();
         eprintln!("command line: {shown}");
         assert!(!shown.contains("not-a-real-token"));
         watch.abort();
+
+        let gpus = crate::gpu::detect();
+        eprintln!("graphics cards: {:?}", gpus.iter().map(|g| (&g.name, g.pci_ids)).collect::<Vec<_>>());
+        eprintln!("environment: {:?}", start.env);
 
         // the control socket lets horizon-ctl see the title screen and quit the game
         let socket = inst.root.join("ctl.sock");
@@ -110,11 +124,25 @@ fn horizon_real() {
             }
             tokio::time::sleep(Duration::from_millis(500)).await;
         }
+        // what the game takes in memory, for the estimate a start warns with (tune::estimate_mb)
+        let rss_mb = |pid: Option<u32>| {
+            let status = std::fs::read_to_string(format!("/proc/{}/status", pid?)).ok()?;
+            let kb: u64 =
+                status.lines().find_map(|l| l.strip_prefix("VmRSS:"))?.split_whitespace().next()?.parse().ok()?;
+            Some(kb / 1024)
+        };
         if title.is_some() {
             tokio::time::sleep(Duration::from_secs(3)).await;
             let shot = inst.root.join("title.png");
             let _ = ctl(&["screenshot", &shot.display().to_string()]);
             eprintln!("screenshot: {} ({})", shot.display(), if shot.is_file() { "saved" } else { "missing" });
+            eprintln!("memory at the title: {:?} MB", rss_mb(running.child.id()));
+            // a new world at render distance 8, once its chunks are in
+            let opened = ctl(&["--timeout", "120", "open", "MemoryTest", "12345"]);
+            let loaded = ctl(&["--timeout", "150", "wait-for", "loaded", "--timeout", "120"]);
+            eprintln!("world: {:?} / {:?}", opened.map(|o| o.0), loaded.map(|o| o.0));
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            eprintln!("memory in the world at render distance 8: {:?} MB", rss_mb(running.child.id()));
             let _ = ctl(&["quit"]);
         }
         let ended = tokio::time::timeout(Duration::from_secs(20), running.child.wait()).await;
@@ -130,11 +158,27 @@ fn horizon_real() {
             eprintln!("  | {line}");
         }
         assert!(!lines.iter().any(|l| l.contains("not-a-real-token")), "the token reached the log");
+        // with two cards, the game drew on the power-saving one it was given
+        if let Some(card) = crate::gpu::resolve(&crate::gpu::Choice::Integrated, &gpus) {
+            let drew = lines.iter().find(|l| l.starts_with("Horizon renderer: ") && l.contains('(')).cloned();
+            eprintln!("chosen card: {}; the game says: {drew:?}", card.name);
+            assert!(drew.is_some_and(|l| l.contains("IntegratedGpu")), "the game didn't use the chosen card");
+        }
         let (at, reply) = title.expect("the game didn't reach its title screen");
         eprintln!("title screen after {:.1} s: {}", at.as_secs_f32(), reply.trim());
         if let Ok(Ok(status)) = ended {
             eprintln!("exit: {:?}", crate::launch::exit_code(&status));
         }
         assert!(crash_report(&lines).is_none(), "the game crashed");
+        // the game kept the first start's settings and filled in the rest itself
+        let options = std::fs::read_to_string(inst.root.join("options.txt")).unwrap_or_default();
+        let graphics = std::fs::read_to_string(inst.root.join("horizon-graphics.txt")).unwrap_or_default();
+        eprintln!(
+            "options.txt: {} lines; horizon-graphics.txt: {} lines",
+            options.lines().count(),
+            graphics.lines().count()
+        );
+        assert_eq!(tune::render_distance_in(&options), Some(8));
+        assert!(graphics.lines().any(|l| l == "workers:2"));
     });
 }

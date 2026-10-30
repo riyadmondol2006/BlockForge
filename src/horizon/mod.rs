@@ -21,6 +21,9 @@ pub mod policy;
 mod prepare;
 pub mod release;
 mod start;
+pub mod tune;
+
+pub use tune::memory_budget_mb;
 
 #[cfg(test)]
 mod real_test;
@@ -150,6 +153,8 @@ pub async fn create_instance(dirs: &Dirs, name: &str, progress: &Arc<Progress>) 
 pub struct Start {
     /// What was decided on the way, for the log.
     pub notes: Vec<String>,
+    /// What the player should hear about before playing (little memory free), for a toast. Also in `notes`.
+    pub warnings: Vec<String>,
     /// The build it plays (`v0.2.97`).
     pub tag: String,
     pub program: PathBuf,
@@ -266,14 +271,53 @@ pub async fn prepare(
     let (args, handover, left_out) = start::command_line(&listed, &wanted)?;
     notes.extend(left_out);
 
-    let mut env = vec![("HORIZON_HOME".to_string(), inst.root.display().to_string())];
-    if !crate::privacy::Privacy::from_settings(settings).analytics_allowed() {
-        env.push(("HORIZON_TELEMETRY_URL".to_string(), "off".to_string()));
+    // the player's own variables first: nothing below replaces them
+    if !ls.environment_variables.is_empty() {
+        notes.push(format!("Injecting environment variables: {:?}", ls.environment_variables));
     }
+    let mut env: Vec<(String, String)> = ls.environment_variables.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+    let mut ours = vec![("HORIZON_HOME".to_string(), inst.root.display().to_string())];
+    if !crate::privacy::Privacy::from_settings(settings).analytics_allowed() {
+        ours.push(("HORIZON_TELEMETRY_URL".to_string(), "off".to_string()));
+    }
+    for (k, v) in ours {
+        if !env.iter().any(|(have, _)| *have == k) {
+            env.push((k, v));
+        }
+    }
+    // the graphics card chosen in Settings, for computers with two
+    let program = release::program(&build, "horizon-client");
+    let gpu_choice = crate::gpu::Choice::parse(&ls.gpu);
+    #[cfg(target_os = "linux")]
+    tune::gpu_env(&gpu_choice, &mut env, &mut notes).await;
+    #[cfg(windows)]
+    {
+        if gpu_choice != crate::gpu::Choice::Auto {
+            let gpus = tokio::task::spawn_blocking(crate::gpu::detect).await.unwrap_or_default();
+            let effect = crate::gpu::effect(&gpu_choice, &gpus);
+            notes.extend(effect.gpu.map(|name| format!("Graphics card: {name}")).into_iter().chain(effect.note));
+        }
+        crate::gpu::apply_windows_preference(dirs, &program, &gpu_choice);
+    }
+    #[cfg(not(any(target_os = "linux", windows)))]
+    let _ = &gpu_choice;
+
+    // memory: the instance's first start gets settings that fit it, every start a word when little is free
+    let (budget, automatic) = memory_budget_mb(settings, inst);
+    let low_memory = crate::launch::memory::is_low_memory_computer(crate::launch::memory::total_ram_mb());
+    notes.push(format!(
+        "Memory for the game: {budget} MB ({})",
+        if automatic { "what this computer can spare" } else { "set for this instance" }
+    ));
+    notes.extend(tune::first_start(&inst.root, budget, crate::launch::memory::cores(), low_memory));
+    let warnings: Vec<String> =
+        tune::memory_warning(&inst.root, crate::launch::memory::available_mb()).into_iter().collect();
+    notes.extend(warnings.iter().cloned());
     Ok(Start {
         notes,
+        warnings,
         tag,
-        program: release::program(&build, "horizon-client"),
+        program,
         args,
         cwd: inst.root.clone(),
         env,
