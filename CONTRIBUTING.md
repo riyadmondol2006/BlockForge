@@ -8,7 +8,7 @@ doesn't go to waste. Follow the [code of conduct](CODE_OF_CONDUCT.md). Security 
 
 ## Building
 
-You need the stable [Rust toolchain](https://rustup.rs) (1.88 or newer). Nothing else is needed on Windows and macOS. On
+You need the stable [Rust toolchain](https://rustup.rs) (1.89 or newer). Nothing else is needed on Windows and macOS. On
 Linux, a C compiler (`gcc` or `clang`) is enough to build; the window needs OpenGL and either Wayland or X11 at run
 time, which any desktop has.
 

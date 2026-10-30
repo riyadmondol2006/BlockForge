@@ -427,7 +427,13 @@ async fn run(cmd: Cmd, dirs: Dirs) -> Result<()> {
                 let progress = Progress::new();
                 let printer = show_progress(progress.clone());
                 let options = launch::LaunchOptions { server, world };
-                let prepared = horizon::prepare(&dirs, &settings, &inst, &acc, &progress, &options, false).await;
+                // another process may be playing from an older build: it is kept (see `horizon::lock`), and a dry run
+                // changes no build at all
+                let prepared = if dry_run {
+                    horizon::prepare_dry_run(&dirs, &settings, &inst, &acc, &progress, &options).await
+                } else {
+                    horizon::prepare(&dirs, &settings, &inst, &acc, &progress, &options, false).await
+                };
                 printer.abort();
                 print_notes(&progress);
                 let start = prepared?;

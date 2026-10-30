@@ -17,6 +17,7 @@ use std::sync::atomic::Ordering;
 
 use anyhow::Result;
 
+mod lock;
 pub mod policy;
 mod prepare;
 pub mod release;
@@ -87,8 +88,9 @@ pub fn account_problem(account: &Account) -> Option<String> {
     }
 }
 
-/// Only one install or preparation of Horizon at a time: two at once (a Create and a Play, two Plays) would unpack
-/// the same build or prepare into the same folder.
+/// Only one install or preparation of Horizon at a time in this process: two at once (a Create and a Play, two Plays)
+/// would unpack the same build or prepare into the same folder. Other BlockForge processes (the app and the command
+/// line) are kept off by `lock::exclusive`, which is taken after this.
 static BUSY: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// A Horizon build installed in BlockForge's data folder.
@@ -121,12 +123,13 @@ fn unsupported() -> anyhow::Error {
 ///
 /// Once the instance is written it is kept and returned whatever happens next: when preparing fails or is
 /// cancelled, `progress` gets a note saying so, and Play prepares what isn't prepared yet. Builds are never moved or
-/// removed here (a Horizon game may be running from one); Play does that.
+/// removed here; Play does that, for the builds no game plays from.
 pub async fn create_instance(dirs: &Dirs, name: &str, progress: &Arc<Progress>) -> Result<Instance> {
     if !supported() {
         return Err(unsupported());
     }
     let _busy = BUSY.lock().await;
+    let _exclusive = lock::exclusive(dirs, progress).await?;
     let mut notes = Vec::new();
     let build = release::ensure_newest(dirs, progress, &mut notes).await?;
     let lock = prepare::read_lock(&build)?;
@@ -165,6 +168,8 @@ pub struct Start {
     session: Vec<u8>,
     handover: start::Handover,
     token: String,
+    /// Marks the build as played from in every BlockForge process, until this is dropped after the game is over.
+    _lease: lock::Held,
 }
 
 impl Start {
@@ -209,7 +214,9 @@ pub fn crash_report<S: AsRef<str>>(lines: impl IntoIterator<Item = S>) -> Option
 }
 
 /// Get `inst` ready to play as `account` (already renewed): the build installed and up to date, its resources
-/// prepared. `others_running` is true while another Horizon game runs, which keeps the builds in use where they are.
+/// prepared. `others_running` is true while another Horizon game runs: a hint that spares looking at the older builds.
+/// The builds a game plays from stay where they are in any case (see `lock`), also for a game of another BlockForge
+/// process. The result holds the build as in use until it is dropped, which is after the game is over.
 pub async fn prepare(
     dirs: &Dirs,
     settings: &Settings,
@@ -219,6 +226,31 @@ pub async fn prepare(
     options: &LaunchOptions,
     others_running: bool,
 ) -> Result<Start> {
+    prepare_with(dirs, settings, inst, account, progress, options, !others_running).await
+}
+
+/// The same for a start that only shows its command line (`launch --dry-run`): no build is moved or removed.
+pub async fn prepare_dry_run(
+    dirs: &Dirs,
+    settings: &Settings,
+    inst: &Instance,
+    account: &Account,
+    progress: &Arc<Progress>,
+    options: &LaunchOptions,
+) -> Result<Start> {
+    prepare_with(dirs, settings, inst, account, progress, options, false).await
+}
+
+/// `tidy`: take the resources of an older build and remove the old builds, where no game plays from them.
+async fn prepare_with(
+    dirs: &Dirs,
+    settings: &Settings,
+    inst: &Instance,
+    account: &Account,
+    progress: &Arc<Progress>,
+    options: &LaunchOptions,
+    tidy: bool,
+) -> Result<Start> {
     if let Some(problem) = account_problem(account) {
         anyhow::bail!(problem);
     }
@@ -226,15 +258,12 @@ pub async fn prepare(
         return Err(unsupported());
     }
     let mut notes = Vec::new();
-    let (build, lock) = {
+    let (build, lock, lease) = {
         let _busy = BUSY.lock().await;
+        let _exclusive = lock::exclusive(dirs, progress).await?;
         let build = release::ensure_newest(dirs, progress, &mut notes).await?;
-        // a running game may be playing from an older build: its resources and its folder stay where they are
-        let lock = prepare::get_ready(dirs, &build, progress, !others_running, &mut notes).await?;
-        if !others_running {
-            prepare::prune(dirs, &build);
-        }
-        (build, lock)
+        let (lock, lease) = ready_build(dirs, &build, progress, tidy, &mut notes).await?;
+        (build, lock, lease)
     };
     let tag = build.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
     notes.push(format!("{NAME} {tag}, playing Minecraft {}", lock.version));
@@ -326,7 +355,26 @@ pub async fn prepare(
         session: start::session(account),
         handover,
         token: account.access_token.clone().unwrap_or_default(),
+        _lease: lease,
     })
+}
+
+/// Get the chosen `build` ready, with the locks held: it is marked as played from before they are let go, so no other
+/// start moves or removes it from then on. A running game may be playing from an older build: its resources and its
+/// folder stay where they are.
+async fn ready_build(
+    dirs: &Dirs,
+    build: &std::path::Path,
+    progress: &Arc<Progress>,
+    tidy: bool,
+    notes: &mut Vec<String>,
+) -> Result<(prepare::Lock, lock::Held)> {
+    let lease = lock::use_build(build);
+    let lock = prepare::get_ready(dirs, build, progress, tidy, notes).await?;
+    if tidy {
+        prepare::prune(dirs, build);
+    }
+    Ok((lock, lease))
 }
 
 /// Write the Minecraft version a newer build plays into the instance, so it says what it plays.

@@ -9,7 +9,7 @@ readme = "README.md"
 authors = ["BlockForge contributors", "ATLauncher contributors"]
 keywords = ["minecraft", "launcher", "modpack"]
 categories = ["games"]
-rust-version = "1.88"
+rust-version = "1.89"
 edition = "2024"
 
 [dependencies]

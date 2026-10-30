@@ -870,10 +870,16 @@ impl App {
                             .map(edition::Start::Java)
                     }
                 };
+                tokio::pin!(getting_ready);
                 let prepared = tokio::select! {
-                    prepared = getting_ready => prepared?,
+                    prepared = &mut getting_ready => prepared?,
                     _ = &mut kill_rx => {
                         progress.cancelled.store(true, std::sync::atomic::Ordering::Relaxed);
+                        if horizon {
+                            // Horizon's tools are still running: wait for them to be ended and the locks let go,
+                            // so the next Play doesn't prepare next to what is left (dropped, it ends them anyway)
+                            let _ = tokio::time::timeout(Duration::from_secs(10), &mut getting_ready).await;
+                        }
                         n.send(Msg::GameExit(folder_s.clone(), None));
                         return Ok(());
                     }

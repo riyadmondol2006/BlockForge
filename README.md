@@ -264,7 +264,7 @@ import screen, which is what double-clicking a `.mrpack` does.
 
 ## Building from source
 
-You need the stable [Rust toolchain](https://rustup.rs) (1.88 or newer).
+You need the stable [Rust toolchain](https://rustup.rs) (1.89 or newer).
 
 ```sh
 git clone https://github.com/riyadmondol2006/BlockForge

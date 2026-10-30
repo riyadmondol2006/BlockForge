@@ -6,14 +6,15 @@
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
+use super::lock;
 use super::release::{self, program};
 use crate::install::{self, Job, Progress};
 use crate::paths::Dirs;
@@ -79,16 +80,20 @@ pub fn has_sounds(build: &Path) -> bool {
     read_lock(build).is_ok_and(|l| resources(build, &l.version).join("assets/minecraft/sounds.json").is_file())
 }
 
-/// The newest other installed build whose prepared resources `build` can take.
+/// The newest other installed build whose prepared resources `build` can take: one a game plays from keeps them.
 pub fn reusable(dirs: &Dirs, build: &Path) -> Option<PathBuf> {
     release::installed(dirs)
         .into_iter()
         .map(|(_, dir)| dir)
-        .find(|dir| dir != build && is_prepared(dir) && compatible(dir, build))
+        .find(|dir| dir != build && is_prepared(dir) && compatible(dir, build) && lock::claim_unused(dir).is_some())
 }
 
-/// Move the prepared resources of `from` into `to`. What a preparation of `to` left half done is dropped first.
+/// Move the prepared resources of `from` into `to`, unless a game plays from `from`. What a preparation of `to` left
+/// half done is dropped first.
 pub fn move_resources(from: &Path, to: &Path) -> Result<()> {
+    let Some(_claim) = lock::claim_unused(from) else {
+        bail!("a game is playing from it");
+    };
     let target = to.join(".local");
     if target.exists() {
         std::fs::remove_dir_all(&target).with_context(|| format!("clearing {}", target.display()))?;
@@ -97,13 +102,17 @@ pub fn move_resources(from: &Path, to: &Path) -> Result<()> {
 }
 
 /// Remove everything in `horizon/` that playing `keep` doesn't need: the other builds, half-unpacked ones, old
-/// downloads and the server jars of other Minecraft versions. Only while no Horizon game runs (one may be playing
-/// from an older build).
+/// downloads and the server jars of other Minecraft versions. A build a Horizon game plays from (in this or another
+/// BlockForge process) stays.
 pub fn prune(dirs: &Dirs, keep: &Path) {
     if let Ok(rd) = std::fs::read_dir(release::builds_dir(dirs)) {
         for e in rd.flatten() {
             let path = e.path();
             if path != keep && path.is_dir() {
+                let Some(_claim) = lock::claim_unused(&path) else {
+                    crate::logs::info(format!("Horizon: kept {}, a game plays from it", path.display()));
+                    continue;
+                };
                 match std::fs::remove_dir_all(&path) {
                     Ok(()) => crate::logs::info(format!("Horizon: removed the old build {}", path.display())),
                     Err(e) => crate::logs::warn(format!("Horizon: couldn't remove {}: {e}", path.display())),
@@ -122,9 +131,35 @@ pub fn prune(dirs: &Dirs, keep: &Path) {
     }
 }
 
-/// Builds whose sounds couldn't be copied in this run of BlockForge: not tried again on every Play (a Minecraft
-/// install without them fails the same way each time).
-static SOUNDS_FAILED: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+/// How long after the sounds couldn't be copied they are tried again (a Minecraft install without them fails the
+/// same way each time, so not on every Play).
+const SOUNDS_RETRY: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// The marker in the build's `.local/` that its sounds couldn't be copied, with the time (seconds since 1970).
+fn sounds_marker(build: &Path) -> PathBuf {
+    build.join(".local").join("sounds-failed")
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+}
+
+/// Whether the sounds are worth trying again: they never failed, or not within the last day (a time in the future
+/// is a clock that was wrong, not a reason to wait).
+fn sounds_due(build: &Path, now: u64) -> bool {
+    let failed = std::fs::read_to_string(sounds_marker(build)).ok().and_then(|t| t.trim().parse::<u64>().ok());
+    failed.is_none_or(|at| at > now || now - at >= SOUNDS_RETRY.as_secs())
+}
+
+/// Remember that the sounds couldn't be copied.
+fn sounds_failed(build: &Path, notes: &mut Vec<String>, why: Option<String>) {
+    let marker = sounds_marker(build);
+    let _ = std::fs::create_dir_all(build.join(".local"));
+    let _ = std::fs::write(&marker, now_secs().to_string());
+    let why = why.map(|w| format!(" ({w})")).unwrap_or_default();
+    // the game plays without them, silently
+    notes.push(format!("{} will be silent: its sounds couldn't be copied{why}", super::NAME));
+}
 
 /// Get `build`'s resources ready: taken from an older build when `reuse` allows it and one fits, else prepared
 /// (with Mojang's files for the pinned version and its Java, and the server jar), then the sounds. Returns the lock.
@@ -146,43 +181,38 @@ pub async fn get_ready(
         }
     }
     let prepare = !is_prepared(build);
-    let sounds =
-        !has_sounds(build) && !SOUNDS_FAILED.lock().unwrap_or_else(|e| e.into_inner()).contains(&build.to_path_buf());
-    if !prepare && !sounds {
-        return Ok(lock);
-    }
-
-    // Mojang's files for the pinned version, which preparing and the sounds read, and the Java it pins
-    progress.stage(format!("Reading Minecraft {}", lock.version));
-    let version = install::vanilla_json(dirs, &lock.version).await?;
-    let component = version
-        .java_version
-        .as_ref()
-        .map(|j| j.component.clone())
-        .filter(|c| !c.is_empty())
-        .with_context(|| format!("Minecraft {} names no Java", lock.version))?;
-    let java_home = crate::java::ensure_runtime(dirs, &component, progress).await.context("getting Java")?;
-    install::ensure_game_files(dirs, &version, progress, false).await.context("getting the game files")?;
     let temp = dirs.temp.join("horizon");
-    let _ = std::fs::create_dir_all(&temp);
-    let mut env = tool_env(dirs, &java_home, &temp);
-    // its Javas get their memory from horizon-prepare itself; how many run at once is what can be changed
-    let (total, free) = (crate::launch::memory::total_ram_mb(), crate::launch::memory::available_mb());
-    if prepare && super::tune::prepare_isolated(total, free) {
-        env.push(("HORIZON_PREPARE_ISOLATED".to_string(), "1".to_string()));
-        notes.push(format!(
-            "Preparing with one Java at a time ({free} MB of {total} MB free): slower, but it needs much less memory"
-        ));
-    }
-
+    let mut env = None;
     if prepare {
+        // Mojang's files for the pinned version, which preparing reads, and the Java it pins
+        progress.stage(format!("Reading Minecraft {}", lock.version));
+        let version = install::vanilla_json(dirs, &lock.version).await?;
+        let component = version
+            .java_version
+            .as_ref()
+            .map(|j| j.component.clone())
+            .filter(|c| !c.is_empty())
+            .with_context(|| format!("Minecraft {} names no Java", lock.version))?;
+        let java_home = crate::java::ensure_runtime(dirs, &component, progress).await.context("getting Java")?;
+        install::ensure_game_files(dirs, &version, progress, false).await.context("getting the game files")?;
+        let _ = std::fs::create_dir_all(&temp);
+        let mut vars = tool_env(dirs, Some(&java_home), &temp);
+        // its Javas get their memory from horizon-prepare itself; how many run at once is what can be changed
+        let (total, free) = (crate::launch::memory::total_ram_mb(), crate::launch::memory::available_mb());
+        if super::tune::prepare_isolated(total, free) {
+            vars.push(("HORIZON_PREPARE_ISOLATED".to_string(), "1".to_string()));
+            notes.push(format!(
+                "Preparing with one Java at a time ({free} MB of {total} MB free): slower, but it needs much less memory"
+            ));
+        }
+
         let jar = server_jar(dirs, &version, &lock, progress).await?;
         idle_counts(progress);
         progress.stage(format!("Preparing {}'s resources (about a minute)", super::NAME));
         let mut args = vec!["--prepare".into(), "--server-jar".into(), jar.display().to_string()];
         args.extend(["--minecraft-dir".into(), dirs.base.display().to_string()]);
         args.extend(["--root".into(), build.display().to_string()]);
-        let ran = run_tool(&program(build, "horizon-prepare"), &args, build, &env, progress).await;
+        let ran = run_tool(&program(build, "horizon-prepare"), &args, build, &vars, progress).await;
         let _ = std::fs::remove_dir_all(&temp);
         ran.context("preparing Horizon's resources")?;
         if !is_prepared(build) {
@@ -191,11 +221,15 @@ pub async fn get_ready(
                 resources(build, &lock.version).display()
             );
         }
+        env = Some(vars);
     }
-    if sounds && !has_sounds(build) && !progress.cancelled.load(Ordering::Relaxed) {
+    // The sounds are optional: the prepared game needs neither Java nor Mojang's files to play, so when they are all
+    // that is missing nothing is fetched or checked for them, and whatever goes wrong only makes the game silent.
+    if !has_sounds(build) && (prepare || sounds_due(build, now_secs())) && !progress.cancelled.load(Ordering::Relaxed) {
         let _ = std::fs::create_dir_all(&temp);
         idle_counts(progress);
         progress.stage("Copying the sounds from Minecraft's files");
+        let vars = env.unwrap_or_else(|| tool_env(dirs, None, &temp));
         let args = vec![
             "sounds".into(),
             "--minecraft-dir".into(),
@@ -203,34 +237,30 @@ pub async fn get_ready(
             "--root".into(),
             build.display().to_string(),
         ];
-        let ran = run_tool(&program(build, "horizon-prepare"), &args, build, &env, progress).await;
+        let ran = run_tool(&program(build, "horizon-prepare"), &args, build, &vars, progress).await;
         let _ = std::fs::remove_dir_all(&temp);
         match ran {
             Err(e) if progress.cancelled.load(Ordering::Relaxed) => return Err(e),
-            // the game plays without them, silently
-            Err(e) => {
-                SOUNDS_FAILED.lock().unwrap_or_else(|e| e.into_inner()).push(build.to_path_buf());
-                notes.push(format!("{} will be silent: its sounds couldn't be copied ({e:#})", super::NAME));
+            Err(e) => sounds_failed(build, notes, Some(format!("{e:#}"))),
+            Ok(()) if !has_sounds(build) => sounds_failed(build, notes, None),
+            Ok(()) => {
+                let _ = std::fs::remove_file(sounds_marker(build));
             }
-            Ok(()) if !has_sounds(build) => {
-                SOUNDS_FAILED.lock().unwrap_or_else(|e| e.into_inner()).push(build.to_path_buf());
-                notes.push(format!("{} will be silent: its sounds couldn't be copied", super::NAME));
-            }
-            Ok(()) => {}
         }
     }
     Ok(lock)
 }
 
-/// The environment horizon-prepare runs in: the pinned Java first, BlockForge's data folder as the Minecraft folder
-/// (also when a version of it doesn't take `--minecraft-dir`), and its temporary files in BlockForge's temp folder.
-fn tool_env(dirs: &Dirs, java_home: &Path, temp: &Path) -> Vec<(String, String)> {
-    let mut path = vec![java_home.join("bin")];
+/// The environment horizon-prepare runs in: the pinned Java first (the sounds don't need it), BlockForge's data
+/// folder as the Minecraft folder (also when a version of it doesn't take `--minecraft-dir`), and its temporary files
+/// in BlockForge's temp folder.
+fn tool_env(dirs: &Dirs, java_home: Option<&Path>, temp: &Path) -> Vec<(String, String)> {
+    let mut path: Vec<PathBuf> = java_home.iter().map(|h| h.join("bin")).collect();
     path.extend(std::env::var_os("PATH").iter().flat_map(std::env::split_paths));
-    let mut env = vec![
-        ("JAVA_HOME".to_string(), java_home.display().to_string()),
-        ("HORIZON_MINECRAFT_DIR".to_string(), dirs.base.display().to_string()),
-    ];
+    let mut env = vec![("HORIZON_MINECRAFT_DIR".to_string(), dirs.base.display().to_string())];
+    if let Some(home) = java_home {
+        env.push(("JAVA_HOME".to_string(), home.display().to_string()));
+    }
     if let Ok(joined) = std::env::join_paths(path) {
         env.push(("PATH".to_string(), joined.to_string_lossy().to_string()));
     }
@@ -293,6 +323,8 @@ pub(crate) async fn run_tool(
         cmd.env(k, v);
     }
     let mut child = cmd.spawn().with_context(|| format!("starting {}", program.display()))?;
+    // dropping this future (the player pressed Stop) ends the whole tree, not only the tool
+    let mut tree = Tree(child.id());
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
     for stream in [
         child.stdout.take().map(|s| Box::new(s) as Box<dyn tokio::io::AsyncRead + Unpin + Send>),
@@ -335,12 +367,15 @@ pub(crate) async fn run_tool(
             status = child.wait() => break status?,
             _ = tick.tick() => {
                 if progress.cancelled.load(Ordering::Relaxed) {
-                    kill_group(&mut child).await;
+                    tree.kill();
+                    let _ = child.kill().await;
                     bail!("cancelled");
                 }
             }
         }
     };
+    // it is gone and reaped: its number may be another process's by now
+    tree.0 = None;
     // what it printed last, which says why it stopped (a helper it started may hold the pipe a little longer)
     while let Ok(Some(line)) = tokio::time::timeout(Duration::from_secs(2), rx.recv()).await {
         seen(line, &mut last);
@@ -353,18 +388,29 @@ pub(crate) async fn run_tool(
     bail!("{name} stopped{code}: {}", said.join(" / "))
 }
 
-async fn kill_group(child: &mut tokio::process::Child) {
-    if let Some(pid) = child.id() {
-        #[cfg(unix)]
-        {
-            let _ = crate::platform::command("kill").args(["-KILL", "--", &format!("-{pid}")]).status();
-        }
-        #[cfg(windows)]
-        {
-            let _ = crate::platform::command("taskkill").args(["/T", "/F", "/PID", &pid.to_string()]).status();
+/// A running tool and everything it started (the Java exporters): ended when this is dropped, so a future dropped
+/// mid-run leaves nothing behind. Holds the tool's process id while it can still be the group's.
+struct Tree(Option<u32>);
+
+impl Tree {
+    fn kill(&mut self) {
+        if let Some(pid) = self.0.take() {
+            #[cfg(unix)]
+            {
+                let _ = crate::platform::command("kill").args(["-KILL", "--", &format!("-{pid}")]).status();
+            }
+            #[cfg(windows)]
+            {
+                let _ = crate::platform::command("taskkill").args(["/T", "/F", "/PID", &pid.to_string()]).status();
+            }
         }
     }
-    let _ = child.kill().await;
+}
+
+impl Drop for Tree {
+    fn drop(&mut self) {
+        self.kill();
+    }
 }
 
 #[cfg(test)]
@@ -493,6 +539,159 @@ mod tests {
             assert!(format!("{e}").contains("cancelled"));
             assert!(started.elapsed() < Duration::from_secs(10));
             assert_eq!(progress.stage_text(), "working");
+        });
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    fn with_sounds(dir: &Path, mc: &str) {
+        std::fs::write(resources(dir, mc).join("assets/minecraft/sounds.json"), b"{}").unwrap();
+    }
+
+    #[test]
+    fn a_build_a_game_plays_from_keeps_its_resources_and_its_folder() {
+        let base = scratch("hz-in-use");
+        let dirs = Dirs::at(&base);
+        let at = |t: &str| release::build_dir(&dirs, t);
+        build(&at("v0.2.95"), "26.3", "c1", "s1", Some(2));
+        build(&at("v0.2.97"), "26.3", "c1", "s1", Some(2));
+        prepared(&at("v0.2.95"), "26.3");
+        let game = lock::use_build(&at("v0.2.95"));
+        assert_eq!(reusable(&dirs, &at("v0.2.97")), None);
+        let e = move_resources(&at("v0.2.95"), &at("v0.2.97")).unwrap_err();
+        assert!(format!("{e:#}").contains("playing"), "{e:#}");
+        assert!(is_prepared(&at("v0.2.95")) && !is_prepared(&at("v0.2.97")));
+        prune(&dirs, &at("v0.2.97"));
+        assert!(at("v0.2.95").join("research-lock.json").is_file());
+        assert!(is_prepared(&at("v0.2.95")));
+        // the game is over
+        drop(game);
+        assert!(lock::tests::claim_unused_soon(&at("v0.2.95")).is_some());
+        assert_eq!(reusable(&dirs, &at("v0.2.97")), Some(at("v0.2.95")));
+        prune(&dirs, &at("v0.2.97"));
+        assert!(!at("v0.2.95").exists());
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn a_dry_run_changes_no_build_and_a_start_marks_its_build_as_played_from() {
+        let base = scratch("hz-tidy");
+        let dirs = Dirs::at(&base);
+        let at = |t: &str| release::build_dir(&dirs, t);
+        for tag in ["v0.2.95", "v0.2.97"] {
+            build(&at(tag), "26.3", "c1", "s1", Some(2));
+            prepared(&at(tag), "26.3");
+            with_sounds(&at(tag), "26.3");
+        }
+        let rt = crate::testutil::runtime();
+        rt.block_on(async {
+            let progress = Progress::new();
+            let mut notes = Vec::new();
+            let (_, lease) =
+                super::super::ready_build(&dirs, &at("v0.2.97"), &progress, false, &mut notes).await.unwrap();
+            assert!(at("v0.2.95").join("research-lock.json").is_file(), "{notes:?}");
+            assert!(lock::claim_unused(&at("v0.2.97")).is_none());
+            drop(lease);
+            assert!(lock::tests::claim_unused_soon(&at("v0.2.97")).is_some());
+            // a start that tidies removes the old build
+            let (_, _lease) =
+                super::super::ready_build(&dirs, &at("v0.2.97"), &progress, true, &mut notes).await.unwrap();
+            assert!(!at("v0.2.95").exists());
+        });
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn missing_sounds_never_stop_a_prepared_game_and_are_tried_again_only_after_a_day() {
+        // no Java, no Minecraft files and no preparer to run in this data folder
+        let base = scratch("hz-sounds");
+        let dirs = Dirs::at(&base);
+        let at = release::build_dir(&dirs, "v0.2.97");
+        build(&at, "26.3", "c1", "s1", Some(2));
+        prepared(&at, "26.3");
+        assert!(!has_sounds(&at) && sounds_due(&at, now_secs()));
+        let rt = crate::testutil::runtime();
+        rt.block_on(async {
+            let progress = Progress::new();
+            let mut notes = Vec::new();
+            let lock = get_ready(&dirs, &at, &progress, true, &mut notes).await.expect("the game is still ready");
+            assert_eq!(lock.version, "26.3");
+            assert!(notes.iter().any(|n| n.contains("will be silent")), "{notes:?}");
+            assert!(sounds_marker(&at).is_file());
+            assert!(!sounds_due(&at, now_secs()));
+            // not again on the next Play
+            let mut notes = Vec::new();
+            get_ready(&dirs, &at, &progress, true, &mut notes).await.unwrap();
+            assert!(notes.is_empty(), "{notes:?}");
+            // a day later it is
+            std::fs::write(sounds_marker(&at), (now_secs() - 25 * 3600).to_string()).unwrap();
+            let mut notes = Vec::new();
+            get_ready(&dirs, &at, &progress, true, &mut notes).await.unwrap();
+            assert!(notes.iter().any(|n| n.contains("will be silent")), "{notes:?}");
+            // a cancelled start still says so
+            std::fs::remove_file(sounds_marker(&at)).unwrap();
+            progress.cancelled.store(true, Ordering::Relaxed);
+            let mut notes = Vec::new();
+            assert!(get_ready(&dirs, &at, &progress, true, &mut notes).await.is_ok());
+            assert!(!sounds_marker(&at).exists(), "a cancelled try isn't a failure");
+        });
+        assert!(sounds_due(&at, now_secs() + 3600 * 24 * 2) && sounds_due(&at, 0));
+        std::fs::write(sounds_marker(&at), (now_secs() + 3600).to_string()).unwrap();
+        assert!(sounds_due(&at, now_secs()), "a time in the future is a wrong clock");
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[cfg(unix)]
+    fn gone(pid: u32) -> bool {
+        // a process whose parent is not waiting for it yet stays as a zombie, which is not running either
+        match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+            Ok(stat) => stat.rsplit(") ").next().is_some_and(|rest| rest.starts_with('Z')),
+            Err(_) => {
+                !crate::platform::command("kill").args(["-0", &pid.to_string()]).status().is_ok_and(|s| s.success())
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dropping_a_running_tool_ends_what_it_started() {
+        let base = scratch("hz-tree");
+        let script = base.join("fake-prepare.sh");
+        // like horizon-prepare: a long-lived helper (its Java), whose process ids are written down
+        std::fs::write(&script, "#!/bin/sh\nsleep 300 &\necho $$ > tool.pid\necho $! > helper.pid\nwait\n").unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let rt = crate::testutil::runtime();
+        rt.block_on(async {
+            let progress = Progress::new();
+            let pid =
+                |name: &str| std::fs::read_to_string(base.join(name)).ok().and_then(|t| t.trim().parse::<u32>().ok());
+            {
+                let run = run_tool(&script, &[], &base, &[], &progress);
+                let ran = tokio::time::timeout(Duration::from_secs(10), async {
+                    tokio::pin!(run);
+                    loop {
+                        tokio::select! {
+                            _ = &mut run => break,
+                            _ = tokio::time::sleep(Duration::from_millis(50)) => {
+                                if pid("tool.pid").is_some() && pid("helper.pid").is_some() {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                })
+                .await;
+                // the future is dropped here, as the app's Stop does
+                assert!(ran.is_ok(), "the tool never started its helper");
+            }
+            let (tool, helper) = (pid("tool.pid").unwrap(), pid("helper.pid").unwrap());
+            let began = std::time::Instant::now();
+            while !(gone(tool) && gone(helper)) && began.elapsed() < Duration::from_secs(3) {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            let _ = crate::platform::command("kill").args(["-KILL", &helper.to_string()]).status();
+            assert!(gone(tool), "the tool is still running");
+            assert!(gone(helper), "the helper it started is still running");
         });
         let _ = std::fs::remove_dir_all(base);
     }
