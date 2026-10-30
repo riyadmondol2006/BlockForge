@@ -40,6 +40,7 @@ pub mod export;
 pub mod ftb;
 pub mod github;
 pub mod gpu;
+pub mod horizon;
 pub mod http;
 pub mod i18n;
 pub mod imports;
