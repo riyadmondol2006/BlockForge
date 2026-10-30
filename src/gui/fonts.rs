@@ -54,7 +54,6 @@ pub fn medium(size: f32) -> FontId {
 }
 
 /// The monospace face at `size` points: versions, paths, logs and other technical facts.
-#[allow(dead_code)]
 pub fn mono(size: f32) -> FontId {
     FontId::monospace(size)
 }

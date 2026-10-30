@@ -3,9 +3,6 @@
 //!
 //! Account, Settings and About sit with the account at the bottom of the sidebar, outside the five.
 
-// the pages take up the covers as they are rebuilt for 5.0
-#![allow(dead_code)]
-
 use egui::{Rect, TextureHandle, Ui, vec2};
 
 use super::covers::{CoverSpec, CoverTheme};
@@ -53,18 +50,6 @@ impl Section {
             Section::Workshop => "Workshop",
             Section::Utilities => "Utilities",
             Section::Account => "Account",
-        }
-    }
-
-    /// What the place holds, in a line.
-    pub fn hint(self) -> &'static str {
-        match self {
-            Section::Home => "Play and recent activity",
-            Section::Library => "Instances and backups",
-            Section::Explore => "Mods and modpacks",
-            Section::Workshop => "Crafting and world conversion",
-            Section::Utilities => "Servers and diagnostics",
-            Section::Account => "Accounts, settings and about",
         }
     }
 

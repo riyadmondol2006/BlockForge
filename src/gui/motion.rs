@@ -199,7 +199,6 @@ const PATTERN_TILE: f32 = 128.0;
 static PATTERN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 
 /// Settings: "Show background artwork".
-#[allow(dead_code)]
 pub fn set_pattern(on: bool) {
     PATTERN.store(on, std::sync::atomic::Ordering::Relaxed);
 }

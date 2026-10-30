@@ -109,12 +109,10 @@ pub fn c_accent_soft() -> Color32 {
     pick(0x0D2E29, 0xD3F4EA)
 }
 /// The warm secondary: a favourite's star, an update waiting, a highlight that is not the main action.
-#[allow(dead_code)]
 pub fn c_secondary() -> Color32 {
     pick(0xF3B56B, 0x9A5A06)
 }
 /// The tint behind something marked in the secondary colour.
-#[allow(dead_code)]
 pub fn c_secondary_soft() -> Color32 {
     pick(0x2C2316, 0xFCEFD9)
 }

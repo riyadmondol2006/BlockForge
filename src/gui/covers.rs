@@ -9,9 +9,6 @@
 //! asked, a dark fade on the left so white text stays readable there. The mod loader shows as a small banner and a
 //! few ores in its colour.
 
-// pages adopt the covers next (the Home banner, Library tiles, the instance header and the launch transition)
-#![allow(dead_code)]
-
 use std::collections::HashMap;
 
 use egui::{Color32, ColorImage, Context, TextureHandle, TextureOptions};
@@ -177,15 +174,6 @@ impl Covers {
         let tex = ctx.load_texture(name, render(spec, w, h), TextureOptions::NEAREST);
         self.textures.insert(key, tex.clone());
         tex
-    }
-
-    /// Drop every cover of this seed (its instance was changed or removed).
-    pub fn forget(&mut self, seed: u64) {
-        self.textures.retain(|(spec, _, _), _| spec.seed != seed);
-    }
-
-    pub fn clear(&mut self) {
-        self.textures.clear();
     }
 }
 
