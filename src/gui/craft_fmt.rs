@@ -10,6 +10,18 @@ use crate::craft::MAX_QUANTITY;
 
 pub use crate::craft::saved::thousands;
 
+/// How many of the leading items of widths `widths` fit side by side in `room`, with `gap` between two.
+pub fn fit_count(widths: &[f32], gap: f32, room: f32) -> usize {
+    let mut used = 0.0;
+    for (k, w) in widths.iter().enumerate() {
+        used += w + if k > 0 { gap } else { 0.0 };
+        if used > room {
+            return k;
+        }
+    }
+    widths.len()
+}
+
 /// `2500` of a 64-stack -> `39 stacks + 4`; empty when the amount is less than a stack or items don't stack.
 pub fn stack_note(n: u64, stack: u32) -> String {
     let st = u64::from(stack);
@@ -239,6 +251,14 @@ pub fn note_box<R>(ui: &mut Ui, kind: NoticeKind, add: impl FnOnce(&mut Ui) -> R
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn as_many_figures_as_fit_are_shown() {
+        assert_eq!(fit_count(&[50.0, 50.0, 50.0], 10.0, 170.0), 3);
+        assert_eq!(fit_count(&[50.0, 50.0, 50.0], 10.0, 169.0), 2);
+        assert_eq!(fit_count(&[50.0, 50.0], 10.0, 49.0), 0);
+        assert_eq!(fit_count(&[], 10.0, 0.0), 0);
+    }
 
     #[test]
     fn numbers_read_well() {

@@ -188,46 +188,38 @@ impl CraftState {
         resp.on_hover_text(short).on_hover_cursor(egui::CursorIcon::PointingHand).clicked()
     }
 
-    /// What was picked and how many of it: the item's slot, name and how it stacks, then "How many?" with the quick
-    /// amounts, the field and, for what stacks, whole stacks and chests. `change` offers to pick another item (the
-    /// one-column page folds the list away once something is picked).
+    /// What was picked and how many of it, in three short lines so the band at the head of the plan stays low: the
+    /// item's slot, name and how it stacks; the amount with the quick amounts and, for what stacks, a menu of whole
+    /// stacks and chests; and what the player's own items change (or what is wrong with the amount). `change` offers
+    /// to pick another item (the one-column page folds the list away once something is picked).
     pub(super) fn quantity_block(&mut self, ui: &mut Ui, book: &Arc<Book>, change: bool) {
         let Some(target) = self.target.clone() else { return };
         let item = book.ds.item(&target);
         let name = item.map_or_else(|| book.ds.name(&target), |i| i.name.clone());
         let stack = item.map_or(64, |i| i.stack);
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 14.0;
-            self.slot_icon(ui, &target, &name, 60.0);
-            ui.vertical(|ui| {
-                ui.spacing_mut().item_spacing.y = 3.0;
-                ui.add_space(4.0);
-                // the game's id is there for whoever looks for it, under the pointer
-                ui.add(egui::Label::new(RichText::new(&name).size(FS_FIGURE).semibold()).truncate())
-                    .on_hover_text(RichText::new(&target).font(super::fonts::mono(FS_META)));
-                small_muted(ui, if stack > 1 { format!("Stacks of {stack}") } else { "Does not stack".to_string() });
-            });
-            if change {
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if secondary(ui, "Change item").clicked() {
-                        self.picking = true;
-                    }
-                });
-            }
-        });
-        ui.add_space(4.0);
         let parsed = parse_qty(&self.qty_text);
         let current = parsed.as_ref().ok().copied();
-        ui.label(RichText::new("How many?").font(super::fonts::medium(FS_BODY)));
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing = vec2(6.0, 8.0);
-            for v in QUICK_AMOUNTS {
-                if amount_chip(ui, &v.to_string(), current == Some(v)).clicked() {
-                    self.qty_text = thousands(v);
-                    self.touch_plan();
-                }
+        ui.horizontal(|ui| {
+            ui.set_height(28.0);
+            ui.spacing_mut().item_spacing.x = 10.0;
+            self.slot_icon(ui, &target, &name, 28.0);
+            if change {
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    let ink = if is_dark() { c_accent() } else { c_accent_hover() };
+                    if link_text(ui, "Change item", ink).on_hover_text("Pick another item").clicked() {
+                        self.picking = true;
+                    }
+                    ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                        self.item_title(ui, &target, &name, stack)
+                    });
+                });
+            } else {
+                self.item_title(ui, &target, &name, stack);
             }
-            ui.add_space(4.0);
+        });
+        ui.horizontal(|ui| {
+            ui.set_height(32.0);
+            ui.spacing_mut().item_spacing.x = 4.0;
             let mut edit = egui::TextEdit::singleline(&mut self.qty_text)
                 .id(egui::Id::unique("craft-qty"))
                 .font(super::fonts::mono(FS_BODY))
@@ -236,117 +228,194 @@ impl CraftState {
             if parsed.is_err() {
                 edit = edit.text_color(c_danger());
             }
-            let r = ui.add_sized([96.0, 32.0], edit).on_hover_text("Any whole number, such as 250 or 3,000");
+            let note = current.map(|q| stack_note(q, stack)).filter(|n| !n.is_empty());
+            let tip = match &note {
+                Some(n) => format!("How many to make: {n}"),
+                None => "How many to make: any whole number, such as 250 or 3,000".to_string(),
+            };
+            // the hint names the field for a screen reader too, and shows when it is empty
+            let r = ui.add_sized([80.0, 32.0], edit.hint_text("How many?")).on_hover_text(tip);
             if r.changed() {
                 self.touch_plan();
             }
-        });
-        if let Err(e) = &parsed {
-            ui.label(RichText::new(e).color(c_danger()).size(FS_META));
-        }
-        if stack > 1 {
-            // whole stacks and chests, for building in bulk
-            let st = u64::from(stack);
-            ui.horizontal_wrapped(|ui| {
-                ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
-                for (label, v, tip) in [
-                    ("1 stack", st, "One stack"),
-                    ("27 stacks", 27 * st, "Fills a chest"),
-                    ("54 stacks", 54 * st, "Fills a double chest"),
-                ] {
-                    let r = amount_chip(ui, label, current == Some(v));
-                    if r.on_hover_text(format!("{tip}: {}", thousands(v))).clicked() {
-                        self.qty_text = thousands(v);
-                        self.touch_plan();
-                    }
-                }
-                if let Some(q) = current.filter(|q| *q >= st) {
-                    small_faint(ui, stack_note(q, stack));
-                }
-            });
-        }
-    }
-
-    /// The card with what the player already has.
-    pub(super) fn left_stock(&mut self, ui: &mut Ui, book: &Arc<Book>) {
-        let version = self.version.clone().unwrap_or_default();
-        panel(ui, |ui| {
-            let count = self.stock().map_or(0, |s| s.len());
-            ui.horizontal(|ui| {
-                card_title(ui, "Items I already have");
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if count > 0 && secondary(ui, "Clear").clicked() {
-                        self.dialog = Some(Dialog::ClearStock);
-                    }
-                });
-            });
-            small_muted(ui, format!("Kept for Minecraft {version} and taken off the list."));
             ui.add_space(2.0);
-            ui.horizontal(|ui| {
-                ui.set_min_height(32.0);
-                ui.label("Use my items in the plan");
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    let mut on = self.use_stock;
-                    if toggle(ui, &mut on).changed() {
-                        self.use_stock = on;
-                        self.touch_plan();
-                    }
-                });
-            });
-            ui.add_space(2.0);
-            // the rows
-            let ids: Vec<ItemId> = self.stock().map(|s| s.keys().cloned().collect()).unwrap_or_default();
-            let mut remove: Option<ItemId> = None;
-            for id in &ids {
-                let name = book.ds.name(id);
-                let value = self.stock().and_then(|s| s.get(id)).copied().unwrap_or(0);
-                ui.horizontal(|ui| {
-                    self.slot_icon(ui, id, &name, 32.0);
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if x_button(ui, "Remove") {
-                            remove = Some(id.clone());
-                        }
-                        let buf = self.stock_bufs.entry(id.clone()).or_insert_with(|| value.to_string());
-                        let bad = parse_qty(buf).is_err();
-                        let mut edit = egui::TextEdit::singleline(buf)
-                            .margin(egui::Margin::symmetric(8, 5))
-                            .background_color(c_field());
-                        if bad {
-                            edit = edit.text_color(c_danger());
-                        }
-                        let r = ui.add_sized([88.0, 30.0], edit);
-                        let typed = parse_qty(buf);
-                        if r.changed() {
-                            if let Ok(q) = typed {
-                                self.set_stock(id, q);
-                                self.touch_store();
-                                if self.use_stock {
-                                    self.touch_plan();
-                                }
-                            }
-                        } else if !r.has_focus() {
-                            *self.stock_bufs.entry(id.clone()).or_default() = value.to_string();
-                        }
-                        ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                            ui.add(egui::Label::new(name.as_str()).truncate());
-                        });
-                    });
-                });
-            }
-            if let Some(id) = remove {
-                self.set_stock(&id, 0);
-                self.stock_bufs.remove(&id);
-                self.touch_store();
-                if self.use_stock {
+            for v in QUICK_AMOUNTS {
+                if amount_chip(ui, &v.to_string(), current == Some(v)).clicked() {
+                    self.qty_text = thousands(v);
                     self.touch_plan();
                 }
             }
-            if ids.is_empty() {
-                small_muted(ui, "Nothing yet. Add what is already in your chests.");
+            if stack > 1 {
+                // whole stacks and chests, for building in bulk
+                let st = u64::from(stack);
+                let bulk = [
+                    ("1 stack", st, "one stack"),
+                    ("27 stacks", 27 * st, "fills a chest"),
+                    ("54 stacks", 54 * st, "fills a double chest"),
+                ];
+                let on = bulk.iter().any(|(_, v, _)| current == Some(*v));
+                let r = amount_chip(ui, "Stacks \u{25BE}", on).on_hover_text("Whole stacks and chests");
+                egui::Popup::menu(&r).show(|ui| {
+                    ui.set_min_width(220.0);
+                    for (label, v, tip) in bulk {
+                        let text = format!("{label} \u{00B7} {tip} \u{00B7} {}", thousands(v));
+                        if ui.selectable_label(current == Some(v), text).clicked() {
+                            self.qty_text = thousands(v);
+                            self.touch_plan();
+                            ui.close();
+                        }
+                    }
+                });
             }
-            ui.add_space(4.0);
-            self.stock_adder(ui, book);
         });
+        ui.horizontal(|ui| {
+            ui.set_height(18.0);
+            match &parsed {
+                Err(e) => {
+                    ui.add(egui::Label::new(RichText::new(e).color(c_danger()).size(FS_META)).truncate());
+                }
+                Ok(_) => self.stock_line(ui),
+            }
+        });
+    }
+
+    /// The item's name and how it stacks, on one line; the game's id is there for whoever looks for it, under the
+    /// pointer.
+    fn item_title(&mut self, ui: &mut Ui, target: &str, name: &str, stack: u32) {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        let stacks = if stack > 1 { format!("Stacks of {stack}") } else { "Does not stack".to_string() };
+        let w = ui.painter().layout_no_wrap(stacks.clone(), FontId::proportional(FS_META), c_muted()).size().x;
+        ui.scope(|ui| {
+            ui.set_max_width((ui.available_width() - w - 8.0).max(60.0));
+            ui.add(egui::Label::new(RichText::new(name).size(FS_SECTION).semibold()).truncate())
+                .on_hover_text(RichText::new(target).font(super::fonts::mono(FS_META)));
+        });
+        small_muted(ui, stacks);
+    }
+
+    /// What the player's own items do to the plan, and the way to them: "Your items · 52 applied · Edit". With
+    /// nothing in them, only the way to add some.
+    fn stock_line(&mut self, ui: &mut Ui) {
+        ui.spacing_mut().item_spacing.x = 6.0;
+        let kinds = self.stock().map_or(0, |s| s.len());
+        let applied = self.applied_from_stock();
+        let (text, tip) = if kinds == 0 {
+            (None, "Say what is already in your chests, and the plan takes it off what to gather and make".to_string())
+        } else if !self.use_stock {
+            (
+                Some("not used in the plan".to_string()),
+                "Your items are kept, but the plan is worked out without them".to_string(),
+            )
+        } else if applied == 0 {
+            (Some("none needed here".to_string()), "None of your items are needed for this plan".to_string())
+        } else {
+            (
+                Some(format!("{} applied", thousands(applied))),
+                format!(
+                    "{} of your items are taken off the plan: the lists show what is still needed",
+                    thousands(applied)
+                ),
+            )
+        };
+        let ink = if is_dark() { c_accent() } else { c_accent_hover() };
+        match text {
+            None => {
+                if link_text(ui, "+ Items you already have", ink).on_hover_text(tip).clicked() {
+                    self.dialog = Some(Dialog::Stock);
+                }
+            }
+            Some(t) => {
+                let on = self.use_stock && applied > 0;
+                ui.label(RichText::new("Your items").size(FS_META).color(if on { c_text() } else { c_muted() }));
+                ui.label(RichText::new("\u{00B7}").size(FS_META).color(c_faint()));
+                ui.label(RichText::new(t).font(super::fonts::medium(FS_META)).color(if on { ink } else { c_muted() }))
+                    .on_hover_text(tip);
+                ui.label(RichText::new("\u{00B7}").size(FS_META).color(c_faint()));
+                if link_text(ui, "Edit", ink).on_hover_text("Edit the items you already have").clicked() {
+                    self.dialog = Some(Dialog::Stock);
+                }
+            }
+        }
+    }
+
+    /// How many items the plan takes from the player's own, over all of them.
+    pub(super) fn applied_from_stock(&self) -> u64 {
+        match &self.plan {
+            Some(Ok(v)) if self.use_stock => v.plan.ledger.iter().map(|r| r.from_stock).sum(),
+            _ => 0,
+        }
+    }
+
+    /// What the player already has, to edit: whether the plan uses it, a line per item and a form to add one. It is
+    /// the body of the "Your items" window.
+    pub(super) fn stock_editor(&mut self, ui: &mut Ui, book: &Arc<Book>) {
+        let version = self.version.clone().unwrap_or_default();
+        small_muted(ui, format!("Kept for Minecraft {version} and taken off what the plan asks for."));
+        ui.add_space(2.0);
+        ui.horizontal(|ui| {
+            ui.set_min_height(32.0);
+            ui.label("Use my items in the plan");
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                let mut on = self.use_stock;
+                if toggle_named(ui, &mut on, "Use my items in the plan").changed() {
+                    self.use_stock = on;
+                    self.touch_plan();
+                }
+            });
+        });
+        ui.add_space(2.0);
+        // the rows
+        let ids: Vec<ItemId> = self.stock().map(|s| s.keys().cloned().collect()).unwrap_or_default();
+        let mut remove: Option<ItemId> = None;
+        for id in &ids {
+            let name = book.ds.name(id);
+            let value = self.stock().and_then(|s| s.get(id)).copied().unwrap_or(0);
+            ui.horizontal(|ui| {
+                self.slot_icon(ui, id, &name, 32.0);
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if x_button(ui, "Remove") {
+                        remove = Some(id.clone());
+                    }
+                    let buf = self.stock_bufs.entry(id.clone()).or_insert_with(|| value.to_string());
+                    let bad = parse_qty(buf).is_err();
+                    let mut edit = egui::TextEdit::singleline(buf)
+                        .margin(egui::Margin::symmetric(8, 5))
+                        .background_color(c_field());
+                    if bad {
+                        edit = edit.text_color(c_danger());
+                    }
+                    let r = ui.add_sized([88.0, 30.0], edit);
+                    let typed = parse_qty(buf);
+                    if r.changed() {
+                        if let Ok(q) = typed {
+                            self.set_stock(id, q);
+                            self.touch_store();
+                            if self.use_stock {
+                                self.touch_plan();
+                            }
+                        }
+                    } else if !r.has_focus() {
+                        *self.stock_bufs.entry(id.clone()).or_default() = value.to_string();
+                    }
+                    ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                        ui.add(egui::Label::new(name.as_str()).truncate());
+                    });
+                });
+            });
+        }
+        if let Some(id) = remove {
+            self.set_stock(&id, 0);
+            self.stock_bufs.remove(&id);
+            self.touch_store();
+            if self.use_stock {
+                self.touch_plan();
+            }
+        }
+        if ids.is_empty() {
+            small_muted(ui, "Nothing yet. Add what is already in your chests.");
+        }
+        ui.add_space(4.0);
+        self.stock_adder(ui, book);
     }
 
     /// The small form that adds an item to the stock.
@@ -508,7 +577,7 @@ fn search_line(ui: &mut Ui, text: &mut String) -> egui::Response {
 fn amount_chip(ui: &mut Ui, text: &str, selected: bool) -> egui::Response {
     let font = super::fonts::mono(FS_BODY - 1.0);
     let galley = ui.painter().layout_no_wrap(text.to_string(), font, egui::Color32::PLACEHOLDER);
-    let (rect, resp) = ui.allocate_exact_size(vec2((galley.size().x + 22.0).max(40.0), 32.0), Sense::click());
+    let (rect, resp) = ui.allocate_exact_size(vec2((galley.size().x + 18.0).max(34.0), 32.0), Sense::click());
     let t = super::motion::hover(ui, resp.id, resp.hovered());
     let s = super::motion::toward(ui.ctx(), resp.id.with("on"), selected, super::motion::FAST);
     let bg = super::motion::mix(super::motion::mix(c_field(), c_field_hover(), t), c_accent_soft(), s);
@@ -519,5 +588,21 @@ fn amount_chip(ui: &mut Ui, text: &str, selected: bool) -> egui::Response {
     ui.painter().galley(rect.center() - galley.size() / 2.0, galley, fg);
     focus_ring(ui, &resp, rect, R_CONTROL);
     resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, text));
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+/// A small text that acts like a link: underlined under the pointer, focusable, with the pointing hand.
+fn link_text(ui: &mut Ui, text: &str, color: egui::Color32) -> egui::Response {
+    let font = super::fonts::medium(FS_META);
+    let galley = ui.painter().layout_no_wrap(text.to_string(), font, color);
+    let (rect, resp) = ui.allocate_exact_size(galley.size() + vec2(0.0, 2.0), Sense::click());
+    let at = egui::pos2(rect.left(), rect.center().y - galley.size().y / 2.0);
+    if resp.hovered() || resp.has_focus() {
+        let y = at.y + galley.size().y;
+        ui.painter().hline(rect.left()..=rect.right(), y, Stroke::new(1.0, color));
+    }
+    ui.painter().galley(at, galley, color);
+    focus_ring(ui, &resp, rect.expand(2.0), R_TAG);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Link, true, text));
     resp.on_hover_cursor(egui::CursorIcon::PointingHand)
 }

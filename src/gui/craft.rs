@@ -147,6 +147,8 @@ pub(super) enum Dialog {
     Delete(u64),
     ClearStock,
     GetVersion,
+    /// The items the player already has, to edit.
+    Stock,
 }
 
 /// A plan with what the page derives from it once, when it is made.
@@ -485,6 +487,7 @@ impl CraftState {
             Some("get") => Some(Dialog::GetVersion),
             Some("saved") => Some(Dialog::Saved),
             Some("save") => Some(Dialog::Save("My plan".into())),
+            Some("stock") => Some(Dialog::Stock),
             _ => None,
         };
         self.dirty = true;
@@ -862,28 +865,47 @@ impl CraftState {
         let page_w = (ui.available_width() - 12.0).min(LEFT_W + 16.0 + super::craft_view::PLAN_WIDTH);
         ui.scope(|ui| {
             ui.set_max_width(page_w);
-            PageHeader::new("Crafting calculator")
-                .subtitle("Plan what you want to make. BlockForge works out what to gather, craft and smelt.")
-                .show(ui, |ui| {
-                    self.version_combo(ui, acts);
+            // one line: the title, what the page does beside it and the version at the right, so the answer under it
+            // starts high. The line about the page is cut short rather than wrapped when the window is narrow.
+            ui.horizontal(|ui| {
+                ui.set_min_height(34.0);
+                ui.spacing_mut().item_spacing.x = 14.0;
+                heading(ui, "Crafting calculator");
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    ui.spacing_mut().item_spacing.x = 8.0;
+                    self.version_combo(ui, status.as_deref(), acts);
                     // the plans saved earlier, also when no plan is open (after a restart, or a version that failed)
                     let n = self.store.plans.len();
                     if n > 0 && self.target.is_none() && ghost(ui, &format!("Saved plans ({n})")).clicked() {
                         self.dialog = Some(Dialog::Saved);
                     }
-                    if let Some(s) = &status {
-                        ui.label(RichText::new(s).font(super::fonts::mono(FS_META)).color(c_faint()));
+                    if self.target.is_none() && self.load == Load::Ready {
+                        // with no item picked there is no plan to show your items beside: they are opened from here
+                        let n = self.stock().map_or(0, |s| s.len());
+                        let label = if n > 0 { format!("Your items ({n})") } else { "Your items".to_string() };
+                        if ghost(ui, &label).clicked() {
+                            self.dialog = Some(Dialog::Stock);
+                        }
                     }
+                    ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                        ui.add_space(0.0);
+                        ui.add(
+                            egui::Label::new(RichText::new("See what to gather, craft and smelt.").color(c_muted()))
+                                .truncate(),
+                        );
+                    });
                 });
+            });
         });
+        ui.add_space(4.0);
         let _ = env;
     }
 
-    fn version_combo(&mut self, ui: &mut Ui, acts: &mut Vec<Act>) {
+    fn version_combo(&mut self, ui: &mut Ui, status: Option<&str>, acts: &mut Vec<Act>) {
         let Some(list) = self.versions.clone().filter(|l| !l.is_empty()) else { return };
         let shown = self.version.clone().unwrap_or_else(|| "Choose".into());
         let mut pick: Option<String> = None;
-        egui::ComboBox::from_id_salt("craft-version").selected_text(shown).width(110.0).show_ui(ui, |ui| {
+        let combo = egui::ComboBox::from_id_salt("craft-version").selected_text(shown).width(110.0).show_ui(ui, |ui| {
             ui.set_min_width(190.0);
             for v in &list {
                 let on = self.version.as_deref() == Some(v.version.as_str());
@@ -897,6 +919,10 @@ impl CraftState {
                 ui.close();
             }
         });
+        // how many items and recipes the version has: there for whoever wants it, under the pointer
+        if let Some(s) = status {
+            combo.response.on_hover_text(RichText::new(s).font(super::fonts::mono(FS_META)));
+        }
         muted(ui, "Version");
         if let Some(v) = pick {
             self.begin_load(&v, acts);
@@ -1220,13 +1246,15 @@ impl App {
             "craft-storage" => Some(spec(Some(("minecraft:cookie", 10_000)), Tab::Storage)),
             "craft-cookies" => Some(spec(Some(("minecraft:cookie", 10_000)), Tab::Materials)),
             "craft-furnace" => Some(spec(Some(("minecraft:iron_ingot", 2_000)), Tab::Materials)),
-            "craft-stock" => Some(ShotSpec {
+            "craft-stock" | "craft-stock-edit" => Some(ShotSpec {
                 stock: vec![
                     ("minecraft:diamond", 12),
                     ("minecraft:stick", 40),
                     ("minecraft:iron_ingot", 200),
                     ("minecraft:oak_planks", 640),
                 ],
+                // the editor as Edit beside the amount opens it
+                dialog: (variant == "craft-stock-edit").then_some("stock"),
                 ..spec(Some(("minecraft:diamond_pickaxe", 64)), Tab::Materials)
             }),
             "craft-get" => Some(ShotSpec { dialog: Some("get"), ..spec(None, Tab::Materials) }),

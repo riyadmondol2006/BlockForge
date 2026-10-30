@@ -16,9 +16,19 @@ use crate::craft::{self, ItemId, Kind, Node, Recipe, Stop, Storage};
 /// How wide the plan gets on a wide window: past this the amounts are too far from their names.
 pub(super) const PLAN_WIDTH: f32 = 860.0;
 /// The width of the card with the recipe's grid, beside the item at the head of the plan.
-const RECIPE_CARD_W: f32 = 250.0;
+const RECIPE_CARD_W: f32 = 228.0;
 /// The least room for the item and the recipe's grid side by side; with less the grid goes under the item.
 const GRID_BESIDE: f32 = 540.0;
+/// The height of the band at the head of the plan: a full 3 x 3 grid of the recipe and a little room above and below
+/// it, so the plan's answer starts high on the page.
+const BAND_H: f32 = 112.0;
+/// The side of a slot of the recipe's grid, and the room between two.
+const SLOT: f32 = 32.0;
+const SLOT_GAP: f32 = 4.0;
+/// The height of the line of the plan's state, totals and actions over its tabs.
+const TOOLBAR_H: f32 = 34.0;
+/// With a plan at least this wide, Saved plans and Export are buttons of their own; narrower, they are in a menu.
+const TOOLS_APART: f32 = 760.0;
 /// How far each level of the tree is indented, and the height of its rows.
 const TREE_INDENT: f32 = 26.0;
 const TREE_ROW_H: f32 = 40.0;
@@ -36,8 +46,8 @@ impl CraftState {
         let h = ui.available_height();
         if total_w >= TWO_COLUMNS {
             let right_w = total_w - LEFT_W - 16.0;
-            // the list takes the height of the page, less its search and the top of the card of your items under it
-            let list_h = (h - 150.0).max(220.0);
+            // the list takes the height of the page, less its search and the line under it
+            let list_h = (h - 118.0).max(220.0);
             ui.horizontal_top(|ui| {
                 ui.spacing_mut().item_spacing.x = 16.0;
                 ui.allocate_ui_with_layout(vec2(LEFT_W, h), Layout::top_down(Align::Min), |ui| {
@@ -45,7 +55,6 @@ impl CraftState {
                         ui.set_max_width(ui.available_width() - 12.0);
                         ui.spacing_mut().item_spacing.y = 12.0;
                         self.left_pick(ui, &book, list_h);
-                        self.left_stock(ui, &book);
                         self.left_supplied(ui, &book);
                         ui.add_space(8.0);
                     });
@@ -54,8 +63,9 @@ impl CraftState {
                     egui::ScrollArea::vertical().id_salt("craft-right").auto_shrink([false, false]).show(ui, |ui| {
                         ui.set_max_width((ui.available_width() - 12.0).min(PLAN_WIDTH));
                         ui.spacing_mut().item_spacing.y = 12.0;
+                        ui.spacing_mut().item_spacing.y = 8.0;
                         self.item_band(ui, &book, false);
-                        self.right(ui, &book, acts);
+                        self.right(ui, &book, acts, false);
                         ui.add_space(8.0);
                     });
                 });
@@ -64,61 +74,44 @@ impl CraftState {
             egui::ScrollArea::vertical().id_salt("craft-one").auto_shrink([false, false]).show(ui, |ui| {
                 ui.set_max_width(ui.available_width() - 12.0);
                 ui.spacing_mut().item_spacing.y = 12.0;
-                if self.target.is_some() && !self.picking {
+                let picked = self.target.is_some() && !self.picking;
+                if picked {
+                    ui.spacing_mut().item_spacing.y = 8.0;
                     self.item_band(ui, &book, true);
                 } else {
                     self.left_pick(ui, &book, 260.0);
                 }
-                self.right(ui, &book, acts);
-                self.left_stock(ui, &book);
+                // the line of the plan's state and actions joins its tabs here, so the answer starts as high
+                self.right(ui, &book, acts, picked);
+                ui.spacing_mut().item_spacing.y = 12.0;
                 self.left_supplied(ui, &book);
                 ui.add_space(8.0);
             });
         }
     }
 
-    /// The head of the plan: the item and how many of it on the left, the recipe that makes it on the right (under
-    /// it when there is no room beside it). `change` offers to pick another item (the one-column page folds the list
-    /// away once something is picked). Nothing until an item is picked.
+    /// The head of the plan, one low band: the item and how many of it on the left, the recipe that makes it on the
+    /// right (under it when there is no room beside it). `change` offers to pick another item (the one-column page
+    /// folds the list away once something is picked). Nothing until an item is picked.
     fn item_band(&mut self, ui: &mut Ui, book: &Arc<Book>, change: bool) {
         let Some(target) = self.target.clone() else { return };
         if ui.available_width() < GRID_BESIDE {
-            panel(ui, |ui| self.quantity_block(ui, book, change));
-            self.recipe_card(ui, book, &target, 0.0);
+            let w = ui.available_width();
+            band_card(ui, w, egui::Margin::symmetric(12, 10), |ui| self.quantity_block(ui, book, change));
+            band_card(ui, w, egui::Margin::symmetric(12, 4), |ui| self.recipe_card(ui, book, &target));
             return;
         }
-        // both cards as tall as the taller one, so the band has one bottom edge: each says how tall its own
-        // content is, and the next frame gives both the larger
-        let key = ui.scope_id().with("craft-band-h");
-        let h = ui.data(|d| d.get_temp::<f32>(key)).unwrap_or(0.0);
-        let mut natural = [0.0f32; 2];
         ui.horizontal_top(|ui| {
             ui.spacing_mut().item_spacing.x = 12.0;
             let left_w = ui.available_width() - RECIPE_CARD_W - 12.0;
-            ui.allocate_ui_with_layout(vec2(left_w, 0.0), Layout::top_down(Align::Min), |ui| {
-                ui.set_width(left_w);
-                panel(ui, |ui| {
-                    let top = ui.cursor().top();
-                    self.quantity_block(ui, book, change);
-                    natural[0] = ui.cursor().top() - top;
-                    ui.add_space((h - natural[0]).max(0.0));
-                });
-            });
-            ui.allocate_ui_with_layout(vec2(RECIPE_CARD_W, 0.0), Layout::top_down(Align::Min), |ui| {
-                ui.set_width(RECIPE_CARD_W);
-                natural[1] = self.recipe_card(ui, book, &target, h);
-            });
+            band_card(ui, left_w, egui::Margin::symmetric(12, 10), |ui| self.quantity_block(ui, book, change));
+            band_card(ui, RECIPE_CARD_W, egui::Margin::symmetric(12, 4), |ui| self.recipe_card(ui, book, &target));
         });
-        let want = natural[0].max(natural[1]);
-        if (want - h).abs() > 0.5 {
-            ui.data_mut(|d| d.insert_temp(key, want));
-            ui.ctx().request_discard("the head of the crafting plan changed its height");
-        }
     }
 
-    /// The recipe that makes the picked item, as the game shows it, in a card at least `min_h` tall inside. Returns
-    /// how tall its content is.
-    fn recipe_card(&mut self, ui: &mut Ui, book: &Arc<Book>, target: &str, min_h: f32) -> f32 {
+    /// The recipe that makes the picked item, as the game shows it: the grid at the left, and beside it the station
+    /// over the arrow and the result, with how many other ways there are under them.
+    fn recipe_card(&mut self, ui: &mut Ui, book: &Arc<Book>, target: &str) {
         // the recipe the plan uses (the player's choice, else the default), with the ingredients it picked
         let plan = self.plan.as_ref().and_then(|p| p.as_ref().ok()).cloned();
         let recipe_id = plan
@@ -133,54 +126,32 @@ impl CraftState {
             .map(|s| s.choices.clone())
             .unwrap_or_default();
         let ways = book.ds.recipes_for(target).count();
-        let mut natural = 0.0;
-        panel(ui, |ui| {
-            let top = ui.cursor().top();
-            match recipe {
-                None => {
-                    card_title(ui, "Recipe");
-                    small_muted(ui, "Gathered, not made: there is no recipe for it.");
-                }
-                Some(r) => {
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new(r.kind.station()).font(super::fonts::medium(FS_BODY)));
-                        if ways > 1 {
-                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                ui.label(
-                                    RichText::new(format!("1 of {ways}"))
-                                        .font(super::fonts::mono(FS_META))
-                                        .color(c_faint()),
-                                )
-                                .on_hover_text("There are other ways to make it: choose one in the Steps or Tree tab");
-                            });
-                        }
-                    });
-                    ui.add_space(2.0);
-                    self.paint_grid(ui, book, &recipe_grid(&r, &choices), &r);
-                }
+        match recipe {
+            None => {
+                ui.add_space(8.0);
+                card_title(ui, "Recipe");
+                small_muted(ui, "Gathered, not made: there is no recipe for it.");
             }
-            natural = ui.cursor().top() - top;
-            ui.add_space((min_h - natural).max(0.0));
-        });
-        natural
+            Some(r) => self.paint_grid(ui, book, &recipe_grid(&r, &choices), &r, ways),
+        }
     }
 
-    /// The slots of a recipe, an arrow and the slot of what it makes, with the counts in the corners like the game.
-    fn paint_grid(&mut self, ui: &mut Ui, book: &Arc<Book>, grid: &Grid, r: &Recipe) {
-        const SLOT: f32 = 38.0;
-        const GAP: f32 = 4.0;
+    /// The slots of a recipe, an arrow and the slot of what it makes, with the counts in the corners like the game;
+    /// the station over the arrow and, when there are other recipes, "1 of n" under it. Takes the whole height of
+    /// the band.
+    fn paint_grid(&mut self, ui: &mut Ui, book: &Arc<Book>, grid: &Grid, r: &Recipe, ways: usize) {
         let rows = grid.cells.len().div_ceil(grid.cols.max(1));
-        let grid_w = grid.cols as f32 * SLOT + (grid.cols as f32 - 1.0) * GAP;
-        let grid_h = rows as f32 * SLOT + (rows as f32 - 1.0) * GAP;
-        let width = grid_w + 40.0 + SLOT + 4.0;
-        let height = grid_h.max(SLOT + 18.0);
-        let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), height), egui::Sense::hover());
-        let left = rect.left() + ((rect.width() - width) / 2.0).max(0.0).floor();
-        let top = rect.top() + (height - grid_h) / 2.0;
+        let grid_w = grid.cols as f32 * SLOT + (grid.cols as f32 - 1.0) * SLOT_GAP;
+        let grid_h = rows as f32 * SLOT + (rows as f32 - 1.0) * SLOT_GAP;
+        let (rect, _) = ui.allocate_exact_size(ui.available_size(), egui::Sense::hover());
+        // the grid's column is as wide as a full grid, so the arrow does not move between recipes
+        let full = 3.0 * SLOT + 2.0 * SLOT_GAP;
+        let left = rect.left() + ((full - grid_w) / 2.0).floor();
+        let top = rect.center().y - grid_h / 2.0;
         for (k, cell) in grid.cells.iter().enumerate() {
             let (col, row) = ((k % grid.cols) as f32, (k / grid.cols) as f32);
             let at = egui::Rect::from_min_size(
-                egui::pos2(left + col * (SLOT + GAP), top + row * (SLOT + GAP)),
+                egui::pos2(left + col * (SLOT + SLOT_GAP), top + row * (SLOT + SLOT_GAP)),
                 vec2(SLOT, SLOT),
             );
             match cell {
@@ -203,14 +174,24 @@ impl CraftState {
                 }
             }
         }
-        // the arrow, then the result
-        let mid = top + grid_h / 2.0;
-        let ax = left + grid_w + 8.0;
+        // beside the grid: the station over the arrow and the result, the other ways under them
+        let side = egui::Rect::from_min_max(egui::pos2(rect.left() + full + 10.0, rect.top()), rect.max);
+        let mid = rect.center().y;
+        let station = egui::text::LayoutJob::simple_singleline(
+            r.kind.station().to_string(),
+            super::fonts::medium(FS_META),
+            c_muted(),
+        );
+        let mut station = station;
+        station.wrap = egui::text::TextWrapping::truncate_at_width(side.width());
+        let galley = ui.painter().layout_job(station);
+        ui.painter().galley(egui::pos2(side.left(), side.top() + 4.0), galley, c_muted());
+        let ax = side.left();
         let stroke = egui::Stroke::new(1.8, c_muted());
-        ui.painter().line_segment([egui::pos2(ax, mid), egui::pos2(ax + 22.0, mid)], stroke);
-        ui.painter().line_segment([egui::pos2(ax + 16.0, mid - 6.0), egui::pos2(ax + 22.0, mid)], stroke);
-        ui.painter().line_segment([egui::pos2(ax + 16.0, mid + 6.0), egui::pos2(ax + 22.0, mid)], stroke);
-        let out = egui::Rect::from_min_size(egui::pos2(ax + 32.0, mid - SLOT / 2.0), vec2(SLOT, SLOT));
+        ui.painter().line_segment([egui::pos2(ax, mid), egui::pos2(ax + 20.0, mid)], stroke);
+        ui.painter().line_segment([egui::pos2(ax + 14.0, mid - 5.0), egui::pos2(ax + 20.0, mid)], stroke);
+        ui.painter().line_segment([egui::pos2(ax + 14.0, mid + 5.0), egui::pos2(ax + 20.0, mid)], stroke);
+        let out = egui::Rect::from_min_size(egui::pos2(ax + 30.0, mid - SLOT / 2.0), vec2(SLOT, SLOT));
         let name = book.ds.name(&r.output);
         // the result's slot is lit in the brand tint
         ui.painter().rect(
@@ -224,11 +205,28 @@ impl CraftState {
         if r.count > 1 {
             corner_count(ui, out, u64::from(r.count));
         }
-        ui.interact(out, ui.scope_id().with("craft-grid-out"), egui::Sense::hover())
-            .on_hover_text(format!("{} {}", r.count, name));
+        ui.interact(out, ui.scope_id().with("craft-grid-out"), egui::Sense::hover()).on_hover_text(format!(
+            "{} {} \u{00B7} {}",
+            r.count,
+            name,
+            r.kind.station()
+        ));
+        if ways > 1 {
+            let text = format!("1 of {ways}");
+            let galley = ui.painter().layout_no_wrap(text, super::fonts::mono(FS_META), c_faint());
+            let at = egui::Rect::from_min_size(
+                egui::pos2(side.left(), side.bottom() - galley.size().y - 4.0),
+                galley.size(),
+            );
+            ui.painter().galley(at.min, galley, c_faint());
+            ui.interact(at, ui.scope_id().with("craft-grid-ways"), egui::Sense::hover())
+                .on_hover_text("There are other ways to make it: choose one in the Steps or Tree tab");
+        }
     }
 
-    fn right(&mut self, ui: &mut Ui, book: &Arc<Book>, acts: &mut Vec<Act>) {
+    /// The plan under the band: its state and actions, its tabs and the open tab. `merged` puts the state and the
+    /// actions on the line of the tabs (the one-column page, where height is short).
+    fn right(&mut self, ui: &mut Ui, book: &Arc<Book>, acts: &mut Vec<Act>, merged: bool) {
         match self.plan.clone() {
             None => {
                 let bad = self.target.is_some() && parse_qty(&self.qty_text).is_err();
@@ -279,12 +277,14 @@ impl CraftState {
                     self.touch_plan();
                 }
             }
-            Some(Ok(view)) => self.result(ui, book, &view, acts),
+            Some(Ok(view)) => self.result(ui, book, &view, acts, merged),
         }
     }
 
-    fn result(&mut self, ui: &mut Ui, book: &Arc<Book>, v: &Arc<PlanView>, acts: &mut Vec<Act>) {
-        self.result_header(ui, book, v, acts);
+    fn result(&mut self, ui: &mut Ui, book: &Arc<Book>, v: &Arc<PlanView>, acts: &mut Vec<Act>, merged: bool) {
+        if !merged {
+            self.toolbar(ui, book, v, acts);
+        }
         if !v.plan.warnings.is_empty() || !v.plan.complete {
             note_box(ui, NoticeKind::Warn, |ui| {
                 ui.label(RichText::new("Worth a look").semibold().color(c_warn()));
@@ -296,6 +296,7 @@ impl CraftState {
                 }
             });
         }
+        let mut pill_shown = !merged;
         tab_bar(ui, |ui| {
             for (tab_id, label) in
                 [(Tab::Materials, "Materials"), (Tab::Steps, "Steps"), (Tab::Tree, "Tree"), (Tab::Storage, "Storage")]
@@ -304,7 +305,28 @@ impl CraftState {
                     self.tab = tab_id;
                 }
             }
+            if merged {
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    self.plan_actions(ui, book, v, acts, false);
+                    let (good, text) = plan_state(v);
+                    if ui.available_width() >= status_width(ui, text) + 12.0 {
+                        status_text(ui, good, text);
+                        pill_shown = true;
+                    }
+                });
+            }
         });
+        if merged {
+            ui.horizontal(|ui| {
+                if !pill_shown {
+                    let (good, text) = plan_state(v);
+                    status_text(ui, good, text);
+                }
+                self.figures(ui, v);
+            });
+        }
+        ui.spacing_mut().item_spacing.y = 12.0;
         match self.tab {
             Tab::Materials => self.tab_materials(ui, book, v, acts),
             Tab::Steps => self.tab_steps(ui, book, v),
@@ -313,94 +335,161 @@ impl CraftState {
         }
     }
 
-    /// How the plan stands and what can be done with it on one line, the totals in a quiet line under it. (The item
-    /// and the amount are in the band above.)
-    fn result_header(&mut self, ui: &mut Ui, book: &Arc<Book>, v: &Arc<PlanView>, acts: &mut Vec<Act>) {
-        let plan = &v.plan;
-        let name = book.ds.name(&plan.request.item);
-        let gather: u64 = plan.materials.iter().map(|(_, n)| *n).sum();
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 8.0;
-            let good = plan.complete && plan.warnings.is_empty();
-            status_text(ui, good, if good { "Complete plan" } else { "Needs a look" });
-            if let Some(p) = self.active.and_then(|id| self.store.get(id)) {
-                let text = format!("Saved as \u{201C}{}\u{201D}{}", clip(&p.name, 20), if self.unsaved { ", changed since" } else { "" });
-                small_muted(ui, text);
-            }
+    /// One line over the tabs: how the plan stands, its totals (those that fit) and what can be done with it. (The
+    /// item, the amount and what your items change are in the band above.)
+    fn toolbar(&mut self, ui: &mut Ui, book: &Arc<Book>, v: &Arc<PlanView>, acts: &mut Vec<Act>) {
+        let apart = ui.available_width() >= TOOLS_APART;
+        let w = ui.available_width();
+        ui.allocate_ui_with_layout(vec2(w, TOOLBAR_H), Layout::left_to_right(Align::Center), |ui| {
+            ui.set_min_size(vec2(w, TOOLBAR_H));
+            ui.spacing_mut().item_spacing.x = 12.0;
+            let (good, text) = plan_state(v);
+            status_text(ui, good, text);
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
-                let export = secondary(ui, "Export");
-                let slug = file_name(&name, plan.request.quantity);
-                egui::Popup::menu(&export).show(|ui| {
-                    ui.set_min_width(200.0);
-                    if ui.button("Copy the shopping list").clicked() {
-                        acts.push(Act::Copy(saved::clipboard_list(&book.ds, plan)));
-                        ui.close();
-                    }
-                    ui.separator();
-                    if ui.button("Text file (.txt)").clicked() {
-                        acts.push(Act::Export {
-                            name: format!("{slug}.txt"),
-                            content: saved::to_text(&book.ds, plan),
-                            ext: "txt",
-                        });
-                        ui.close();
-                    }
-                    if ui
-                        .button("JSON data (.json)")
-                        .on_hover_text(
-                            "For spreadsheets and scripts. To open this plan again later, save it, then use Saved plans > Export.",
-                        )
-                        .clicked()
-                    {
-                        acts.push(Act::Export {
-                            name: format!("{slug}.json"),
-                            content: saved::to_json(&book.ds, plan),
-                            ext: "json",
-                        });
-                        ui.close();
-                    }
-                    if !self.recipe_choices.is_empty() || !self.ingredient_choices.is_empty() {
-                        ui.separator();
-                        if ui.button("Reset my recipe choices").clicked() {
-                            self.recipe_choices.clear();
-                            self.ingredient_choices.clear();
-                            self.touch_plan();
-                            ui.close();
-                        }
-                    }
-                });
-                let n = self.store.plans.len();
-                if secondary(ui, &if n > 0 { format!("Saved plans ({n})") } else { "Saved plans".to_string() })
-                    .clicked()
-                {
-                    self.dialog = Some(Dialog::Saved);
-                }
-                let label = if self.active.is_some() { "Update plan" } else { "Save plan" };
-                if primary(ui, label).clicked() {
-                    let fallback = format!("{} \u{00D7} {}", thousands(plan.request.quantity), name);
-                    let current = self.active.and_then(|id| self.store.get(id)).map(|p| p.name.clone());
-                    self.dialog = Some(Dialog::Save(current.unwrap_or(fallback)));
-                }
+                self.plan_actions(ui, book, v, acts, apart);
+                ui.with_layout(Layout::left_to_right(Align::Center), |ui| self.figures(ui, v));
             });
         });
-        // the totals, as figures in the monospace face
-        let figures = [
-            (plan.operations, "operations", "operation"),
+    }
+
+    /// Save, and the plans saved before and the ways to export: buttons of their own when `apart`, else in a menu.
+    /// Laid out right to left.
+    fn plan_actions(&mut self, ui: &mut Ui, book: &Arc<Book>, v: &Arc<PlanView>, acts: &mut Vec<Act>, apart: bool) {
+        let plan = &v.plan;
+        let name = book.ds.name(&plan.request.item);
+        let n = self.store.plans.len();
+        let saved_label = if n > 0 { format!("Saved plans ({n})") } else { "Saved plans".to_string() };
+        if apart {
+            let export = secondary(ui, "Export");
+            egui::Popup::menu(&export).show(|ui| {
+                ui.set_min_width(200.0);
+                self.export_items(ui, book, plan, acts);
+            });
+            if secondary(ui, &saved_label).clicked() {
+                self.dialog = Some(Dialog::Saved);
+            }
+        } else {
+            let more = more_button(ui);
+            egui::Popup::menu(&more).show(|ui| {
+                ui.set_min_width(220.0);
+                if ui.button(format!("{saved_label}\u{2026}")).clicked() {
+                    self.dialog = Some(Dialog::Saved);
+                    ui.close();
+                }
+                ui.separator();
+                small_faint(ui, "Export");
+                self.export_items(ui, book, plan, acts);
+            });
+        }
+        let label = if self.active.is_some() { "Update plan" } else { "Save plan" };
+        let mut save = primary(ui, label);
+        if let Some(p) = self.active.and_then(|id| self.store.get(id)) {
+            let note =
+                format!("Saved as \u{201C}{}\u{201D}{}", p.name, if self.unsaved { ", changed since" } else { "" });
+            save = save.on_hover_text(note);
+        }
+        if save.clicked() {
+            let fallback = format!("{} \u{00D7} {}", thousands(plan.request.quantity), name);
+            let current = self.active.and_then(|id| self.store.get(id)).map(|p| p.name.clone());
+            self.dialog = Some(Dialog::Save(current.unwrap_or(fallback)));
+        }
+    }
+
+    /// The entries of the Export menu: the shopping list to copy, the plan as a file, and the way back from the
+    /// player's recipe choices.
+    fn export_items(&mut self, ui: &mut Ui, book: &Arc<Book>, plan: &crate::craft::Plan, acts: &mut Vec<Act>) {
+        let name = book.ds.name(&plan.request.item);
+        let slug = file_name(&name, plan.request.quantity);
+        if ui.button("Copy the shopping list").clicked() {
+            acts.push(Act::Copy(saved::clipboard_list(&book.ds, plan)));
+            ui.close();
+        }
+        ui.separator();
+        if ui.button("Text file (.txt)").clicked() {
+            acts.push(Act::Export { name: format!("{slug}.txt"), content: saved::to_text(&book.ds, plan), ext: "txt" });
+            ui.close();
+        }
+        if ui
+            .button("JSON data (.json)")
+            .on_hover_text(
+                "For spreadsheets and scripts. To open this plan again later, save it, then use Saved plans > Export.",
+            )
+            .clicked()
+        {
+            acts.push(Act::Export {
+                name: format!("{slug}.json"),
+                content: saved::to_json(&book.ds, plan),
+                ext: "json",
+            });
+            ui.close();
+        }
+        if !self.recipe_choices.is_empty() || !self.ingredient_choices.is_empty() {
+            ui.separator();
+            if ui.button("Reset my recipe choices").clicked() {
+                self.recipe_choices.clear();
+                self.ingredient_choices.clear();
+                self.touch_plan();
+                ui.close();
+            }
+        }
+    }
+
+    /// The plan's totals as figures in the monospace face, as many as fit on the line, the most useful first; all of
+    /// them are under the pointer. The name of an open saved plan comes first.
+    fn figures(&mut self, ui: &mut Ui, v: &Arc<PlanView>) {
+        let plan = &v.plan;
+        let gather: u64 = plan.materials.iter().map(|(_, n)| *n).sum();
+        let mut items: Vec<(String, String)> = Vec::new();
+        if let Some(p) = self.active.and_then(|id| self.store.get(id)) {
+            let note = format!(
+                "Saved as \u{201C}{}\u{201D}{}",
+                clip(&p.name, 20),
+                if self.unsaved { ", changed" } else { "" }
+            );
+            items.push((String::new(), note));
+        }
+        for (n, many, one) in [
             (gather, "items to gather", "item to gather"),
             (plan.steps.len() as u64, "steps", "step"),
+            (plan.operations, "operations", "operation"),
             (v.storage[0].slots, "storage slots", "storage slot"),
-        ];
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing.x = 14.0;
-            for (n, many, one) in figures {
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 5.0;
-                    ui.label(RichText::new(thousands(n)).font(super::fonts::mono(FS_BODY)).color(c_text()));
-                    ui.label(RichText::new(if n == 1 { one } else { many }).color(c_muted()).size(FS_META));
-                });
-            }
-        });
+        ] {
+            items.push((thousands(n), (if n == 1 { one } else { many }).to_string()));
+        }
+        const GAP: f32 = 14.0;
+        let widths: Vec<f32> = items
+            .iter()
+            .map(|(n, label)| {
+                let a = if n.is_empty() {
+                    0.0
+                } else {
+                    ui.painter().layout_no_wrap(n.clone(), super::fonts::mono(FS_BODY), c_text()).size().x + 5.0
+                };
+                a + ui.painter().layout_no_wrap(label.clone(), egui::FontId::proportional(FS_META), c_muted()).size().x
+            })
+            .collect();
+        let shown = fit_count(&widths, GAP, ui.available_width() - 4.0);
+        let all =
+            items.iter().map(|(n, l)| if n.is_empty() { l.clone() } else { format!("{n} {l}") }).collect::<Vec<_>>();
+        let r = ui
+            .horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = GAP;
+                for (n, label) in items.iter().take(shown) {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 5.0;
+                        if !n.is_empty() {
+                            ui.label(RichText::new(n).font(super::fonts::mono(FS_BODY)).color(c_text()));
+                        }
+                        ui.label(RichText::new(label).color(c_muted()).size(FS_META));
+                    });
+                }
+            })
+            .response;
+        if shown > 0 {
+            ui.interact(r.rect, ui.scope_id().with("craft-figures"), egui::Sense::hover())
+                .on_hover_text(all.join("\n"));
+        }
     }
 
     // ----------------------------------------------------------------------------------------------------
@@ -471,6 +560,30 @@ impl CraftState {
                 }
             }
         });
+        // what comes out of the player's own items: why the lists are shorter than the recipe says
+        let owned: Vec<(&str, u64)> =
+            plan.ledger.iter().filter(|r| r.from_stock > 0).map(|r| (r.item.as_str(), r.from_stock)).collect();
+        if !owned.is_empty() {
+            panel(ui, |ui| {
+                ui.horizontal(|ui| {
+                    card_title(ui, "Taken from your items");
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if secondary(ui, "Edit").on_hover_text("Edit the items you already have").clicked() {
+                            self.dialog = Some(Dialog::Stock);
+                        }
+                    });
+                });
+                small_muted(ui, "Already in your chests, so not gathered or made again.");
+                ui.add_space(4.0);
+                let total = owned.len();
+                for (k, (id, used)) in owned.into_iter().enumerate() {
+                    let have = self.stock().and_then(|s| s.get(id)).copied().unwrap_or(used);
+                    self.list_row(ui, book, id, used, None::<&mut bool>, false, k + 1 == total, |ui| {
+                        small_faint(ui, format!("you have {}", thousands(have)));
+                    });
+                }
+            });
+        }
         // what is made on the way
         if !plan.intermediates.is_empty() {
             panel(ui, |ui| {
@@ -1079,6 +1192,7 @@ impl CraftState {
         let keep = match d {
             Dialog::GetVersion => self.get_dialog(ctx, env, acts).then_some(Dialog::GetVersion),
             Dialog::Saved => self.saved_dialog(ctx, acts).then_some(Dialog::Saved),
+            Dialog::Stock => self.stock_dialog(ctx).then_some(Dialog::Stock),
             Dialog::Save(mut name) => self.save_dialog(ctx, &mut name).then_some(Dialog::Save(name)),
             Dialog::Rename(id, mut name) => self.rename_dialog(ctx, id, &mut name).then_some(Dialog::Rename(id, name)),
             Dialog::Delete(id) => {
@@ -1110,7 +1224,7 @@ impl CraftState {
                     ctx,
                     "craft-clear",
                     "Clear your items?",
-                    "Everything in \"Items I already have\" for this version is removed.",
+                    "Everything in \"Your items\" for this version is removed.",
                     "Clear",
                     true,
                 ) {
@@ -1119,9 +1233,9 @@ impl CraftState {
                         self.stock_bufs.clear();
                         self.touch_store();
                         self.touch_plan();
-                        None
+                        Some(Dialog::Stock)
                     }
-                    Some(false) => None,
+                    Some(false) => Some(Dialog::Stock),
                     None => Some(Dialog::ClearStock),
                 }
             }
@@ -1221,6 +1335,36 @@ impl CraftState {
             self.touch_store();
             return false;
         }
+        open && !m.should_close()
+    }
+
+    /// "Your items": what the player already has, which the plan takes off what to gather and make. It opens from
+    /// the line under the amount, so it is reached without scrolling the item list. Returns whether it stays open.
+    fn stock_dialog(&mut self, ctx: &egui::Context) -> bool {
+        let Some(book) = self.book.clone() else { return false };
+        let mut open = true;
+        let m = egui::Modal::new(egui::Id::unique("craft-stock")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
+            ui.set_width(modal_width(ctx, 420.0));
+            ui.spacing_mut().item_spacing.y = 6.0;
+            ui.label(RichText::new("Your items").size(FS_SECTION).semibold());
+            egui::ScrollArea::vertical()
+                .max_height(modal_scroll_height(ctx, 420.0, 200.0))
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
+                    ui.set_max_width(ui.available_width() - 8.0);
+                    self.stock_editor(ui, &book);
+                });
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                if primary(ui, "Done").clicked() {
+                    open = false;
+                }
+                let count = self.stock().map_or(0, |s| s.len());
+                if count > 0 && ghost(ui, "Clear all").clicked() {
+                    self.dialog = Some(Dialog::ClearStock);
+                }
+            });
+        });
         open && !m.should_close()
     }
 
@@ -1474,6 +1618,60 @@ fn file_name(name: &str, quantity: u64) -> String {
     let s = s.trim_matches('-').to_string();
     let s = if s.is_empty() { "crafting-plan".to_string() } else { s };
     if quantity > 0 { format!("{s}-{quantity}") } else { s }
+}
+
+/// How the plan stands, for its pill: whether every recipe on the way was found. It says nothing of the player's
+/// own progress, which the ticks of the lists keep.
+fn plan_state(v: &PlanView) -> (bool, &'static str) {
+    let good = v.plan.complete && v.plan.warnings.is_empty();
+    (good, if good { "All recipes found" } else { "Needs a look" })
+}
+
+/// The width [`status_text`] takes for `text`.
+fn status_width(ui: &Ui, text: &str) -> f32 {
+    ui.painter().layout_no_wrap(text.to_string(), super::fonts::medium(FS_META), c_text()).size().x + 30.0
+}
+
+/// A square button with three dots that opens a menu, as tall as the buttons beside it.
+fn more_button(ui: &mut Ui) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(vec2(34.0, 34.0), egui::Sense::click());
+    let open = egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&resp));
+    let t = super::motion::hover(ui, resp.id, resp.hovered() || open);
+    let fill = super::motion::mix(c_field(), c_field_hover(), t);
+    ui.painter().rect(
+        rect,
+        egui::CornerRadius::same(R_CONTROL),
+        fill,
+        egui::Stroke::new(1.0, c_border()),
+        egui::StrokeKind::Inside,
+    );
+    super::icons::paint(
+        ui.painter(),
+        super::icons::Icon::Kebab,
+        rect.center(),
+        16.0,
+        super::motion::mix(c_muted(), c_text(), t),
+    );
+    focus_ring(ui, &resp, rect, R_CONTROL);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "More"));
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text("Saved plans and export")
+}
+
+/// A card of the band at the head of the plan: `w` wide and exactly [`BAND_H`] tall, with `margin` inside.
+fn band_card(ui: &mut Ui, w: f32, margin: egui::Margin, add: impl FnOnce(&mut Ui)) {
+    let out = card_frame().inner_margin(margin).show(ui, |ui| {
+        let inner = vec2(w - margin.sum().x - 2.0, BAND_H - margin.sum().y - 2.0);
+        ui.set_min_size(inner);
+        ui.set_max_size(inner);
+        // its lines go down the card, whatever way the band lays out the cards
+        ui.with_layout(Layout::top_down(Align::Min), |ui| {
+            ui.spacing_mut().item_spacing.y = 6.0;
+            // the lines are as tall as what is in them, not the page's taller rows of controls
+            ui.spacing_mut().interact_size.y = 16.0;
+            add(ui);
+        });
+    });
+    glass_edge(ui.painter(), out.response.rect, R_CARD);
 }
 
 #[cfg(test)]

@@ -2330,7 +2330,7 @@ struct Shot {
 /// The ids of the jobs the tour makes up to show the sidebar busy; no real job gets ids this high.
 const SHOT_TASK: u64 = u64::MAX - 8;
 
-const SHOT_PAGES: [&str; 57] = [
+const SHOT_PAGES: [&str; 61] = [
     "home",
     "library",
     "instance",
@@ -2359,6 +2359,7 @@ const SHOT_PAGES: [&str; 57] = [
     "craft-tree",
     "craft-storage",
     "craft-stock",
+    "craft-stock-edit",
     "craft-get-light",
     "convert",
     "convert-progress",
@@ -2368,6 +2369,9 @@ const SHOT_PAGES: [&str; 57] = [
     "convert-instance-done",
     "convert-options",
     "convert-save",
+    "convert-done-warnings",
+    "convert-done-unmatched",
+    "convert-done-clean",
     "packs",
     "ftb",
     "about",
