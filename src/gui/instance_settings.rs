@@ -343,7 +343,9 @@ const TRI_W: f32 = 210.0;
 /// A titled group of a settings tab, compact: a small icon, its name and one quiet line about it on one line, above
 /// one glass card holding its rows, divided by hairlines.
 fn group(ui: &mut Ui, icon: Icon, title: &str, hint: &str, add: impl FnOnce(&mut Ui, &mut Rows)) {
-    ui.add_space(18.0);
+    // the first group of a tab sits close under the bar above it (nothing is laid out in the form yet); the others
+    // have room between them
+    ui.add_space(if ui.min_rect().height() < 1.0 { 6.0 } else { 18.0 });
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 8.0;
         let (r, _) = ui.allocate_exact_size(egui::vec2(16.0, 18.0), egui::Sense::hover());
@@ -384,6 +386,19 @@ fn warning(ui: &mut Ui, text: &str) {
             ui.set_width(ui.available_width());
             ui.add(egui::Label::new(RichText::new(text).size(FS_META).color(c_warn())).wrap());
         });
+}
+
+/// How the settings are kept, said where they are: "Changes above apply with Save" under the last card saved with
+/// Save, and in the Cover card that a cover is kept the moment it is picked (the Performance card says it applies
+/// right away in its own line).
+fn save_note(ui: &mut Ui, text: &str) {
+    ui.add_space(8.0);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 6.0;
+        let (r, _) = ui.allocate_exact_size(egui::vec2(14.0, 16.0), egui::Sense::hover());
+        super::icons::paint(ui.painter(), Icon::Info, r.center(), 13.0, c_faint());
+        ui.label(RichText::new(text).size(FS_META).color(c_muted()));
+    });
 }
 
 /// A small status beside Save: a dot of its colour and a word.
@@ -554,11 +569,6 @@ impl App {
             ui.spacing_mut().item_spacing.y = 4.0;
             match d.tab {
                 0 => {
-                    group(ui, Icon::Layers, "Cover", "The picture of this instance on Home, in the Library and on this page", |ui, _| {
-                        small_muted(ui, "Auto picks a landscape from the instance itself. The loader and the version always show in it.");
-                        ui.add_space(10.0);
-                        self.cover_picker(ui, inst);
-                    });
                     group(ui, Icon::User, "Account", "Who plays this instance", |ui, r| {
                         let reset = d.account.is_some().then_some("Use launcher default");
                         let hint = "The account used to start this instance. The launcher default is whichever account is selected in the launcher";
@@ -620,6 +630,7 @@ impl App {
                             QuickKind::Disabled => {}
                         }
                     });
+                    save_note(ui, "Changes above apply with Save");
                     group(ui, Icon::Sliders, "Performance", "These apply right away, from the next start of the game", |ui, r| {
                         helper_change = self.instance_performance_rows(ui, inst, r);
                     });
@@ -634,6 +645,13 @@ impl App {
                                 delete = true;
                             }
                         });
+                    });
+                    // the cover is kept the moment one is picked, unlike the drafted settings above
+                    group(ui, Icon::Layers, "Cover", "The picture of this instance on Home, in the Library and on this page", |ui, _| {
+                        small_muted(ui, "Auto picks a landscape from the instance itself. The loader and the version always show in it.");
+                        ui.add_space(10.0);
+                        self.cover_picker(ui, inst);
+                        save_note(ui, "Cover changes save immediately");
                     });
                 }
                 1 => {
@@ -747,6 +765,7 @@ impl App {
                         row(ui, r, "Use system GLFW", "Use the GLFW library installed on this computer instead of Minecraft's own", TRI_W, None, |ui| tri(ui, "glfw", &mut d.system_glfw));
                         row(ui, r, "Use system OpenAL", "Use the OpenAL sound library installed on this computer instead of Minecraft's own", TRI_W, None, |ui| tri(ui, "openal", &mut d.system_openal));
                     });
+                    save_note(ui, "Changes above apply with Save");
                 }
                 _ => {
                     group(ui, Icon::Server, "Commands", "Run your own commands around the game", |ui, r| {
@@ -789,6 +808,7 @@ impl App {
                             });
                         }
                     });
+                    save_note(ui, "Changes above apply with Save");
                 }
             }
             ui.add_space(12.0);

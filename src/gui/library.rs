@@ -130,10 +130,12 @@ impl App {
 
     /// What sits over the cover of Home's banner: a small label, the name, what the instance is, the big Play (Stop
     /// while it runs), the menu of the other ways to play, when it was played, and the strip of the days it was.
-    fn hero_title(&self, ui: &mut Ui, h: &Instance, action: &mut Option<Act>) {
+    /// `compact` in a low banner (a short window): the name a little smaller and the gaps closer.
+    fn hero_title(&self, ui: &mut Ui, h: &Instance, compact: bool, action: &mut Option<Act>) {
         let folder = h.folder.clone();
         let playing = self.is_playing(&folder);
         let wide = ui.available_width() >= 520.0;
+        let gap = |roomy: f32| if compact { roomy * 0.6 } else { roomy };
         ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
         let label = if playing {
             "Now playing"
@@ -144,7 +146,7 @@ impl App {
         };
         ui.label(RichText::new(label).font(super::fonts::semibold(13.0)).color(COVER_ACCENT));
         ui.add_space(4.0);
-        let name_size = if wide { 34.0 } else { 28.0 };
+        let name_size = if wide && !compact { 34.0 } else { 28.0 };
         ui.scope(|ui| {
             ui.set_max_width(ui.available_width().min(640.0));
             ui.add(
@@ -160,7 +162,7 @@ impl App {
             .find(|job| ui.painter().layout_job(job.clone()).size().x <= room)
             .unwrap_or_else(|| banner_meta(h, BANNER_META_LEVELS - 1));
         ui.add(egui::Label::new(job).truncate());
-        ui.add_space(20.0);
+        ui.add_space(gap(20.0));
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 10.0;
             // Stop takes Play's place at Play's size, so nothing beside it moves when the game starts
@@ -220,7 +222,7 @@ impl App {
                 ui.label(RichText::new(value).font(super::fonts::semibold(FS_BODY)).color(ON_COVER));
             });
         });
-        ui.add_space(18.0);
+        ui.add_space(gap(18.0));
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 12.0;
             // four weeks of days, or two in a narrow window: the strip gives up its oldest days before its words go
@@ -268,7 +270,7 @@ impl App {
                 Some(h) => self.home_banner(ui, h, &mut action),
                 None => self.home_empty(ui),
             }
-            ui.add_space(26.0);
+            ui.add_space(HOME_SECTION_GAP);
             // in a wide window the news sits beside the instances instead of under them
             let news = self.settings.home_news;
             let room = ui.available_width();
@@ -288,7 +290,7 @@ impl App {
                 }
                 if news {
                     if hero.is_some() {
-                        ui.add_space(26.0);
+                        ui.add_space(HOME_SECTION_GAP);
                     }
                     self.news_section(ui);
                 }
@@ -310,10 +312,11 @@ impl App {
 
     /// The banner at the top of Home: the cover of the instance played last fills the panel, and over its darker left
     /// side are what it is, Play and when it was played (see [`Self::hero_title`]). It is as tall as the window's width
-    /// allows, between a low and a high limit, and what is on it is centred in it.
+    /// allows, between a low and a high limit (lower in a short window, so the instances and the news show under it),
+    /// and what is on it is centred in it.
     fn home_banner(&mut self, ui: &mut Ui, h: usize, action: &mut Option<Act>) {
         let w = ui.available_width();
-        let height = (w * 0.31).clamp(BANNER_MIN_H, BANNER_MAX_H).round();
+        let height = hero_height(w, ui.ctx().content_rect().height());
         let (rect, _) = ui.allocate_exact_size(vec2(w, height), Sense::hover());
         let cover = self.cover_at(h, rect.size(), true);
         let inst = &self.instances[h];
@@ -333,13 +336,14 @@ impl App {
         );
         self.picture_badge(ui, inst, badge);
         let pad = if w < 720.0 { 24.0 } else { 36.0 };
+        let compact = height < 230.0;
         let content_id = egui::Id::unique("home-banner-content");
         let content_h = remembered_width(ui, content_id, 200.0);
-        let top = rect.top() + ((height - content_h) / 2.0).max(pad * 0.6);
+        let top = rect.top() + ((height - content_h) / 2.0).max(if compact { 16.0 } else { pad * 0.6 });
         let column = egui::Rect::from_min_max(egui::pos2(rect.left() + pad, top), rect.right_bottom() - vec2(pad, 0.0));
         let mut info = ui.new_child(UiBuilder::new().max_rect(column).layout(Layout::top_down(Align::Min)));
         info.set_clip_rect(rect.intersect(ui.clip_rect()));
-        self.hero_title(&mut info, inst, action);
+        self.hero_title(&mut info, inst, compact, action);
         remember_width(ui, content_id, info.min_rect().height().ceil());
     }
 
@@ -974,29 +978,26 @@ impl App {
         }
     }
 
-    /// The breadcrumb (with the search and Add of the Mods and Resource packs tabs at its right end), the cover banner
-    /// with Play and the menus, and the tabs of an instance's page.
+    /// The breadcrumb, the cover banner with Play and the menus, and the tabs of an instance's page, with the search
+    /// and Add of the Mods and Resource packs tabs at the right end of the tabs. In a short window the breadcrumb is
+    /// left out (the banner names the instance, and Library in the sidebar goes back), so the lists start higher.
     fn instance_header(&mut self, ui: &mut Ui, inst: &Instance, action: &mut Option<Act>) {
         let lists = matches!(self.tab, InstTab::Mods | InstTab::ResourcePacks);
-        let mut crumb = SplitRow::new(ui, egui::Id::unique("instance-crumb"), 36.0);
-        crumb.left(ui, |ui| {
-            ui.spacing_mut().item_spacing.x = 2.0;
-            if back_link(ui, "Library").clicked() {
-                self.page = Page::Library;
-            }
-            ui.label(RichText::new("\u{203A}").size(FS_BODY).color(c_faint()));
-            ui.add_space(6.0);
-            ui.add(egui::Label::new(RichText::new(inst.name()).font(super::fonts::medium(13.0))).truncate());
-        });
-        crumb.right(ui, |ui| {
-            if lists {
-                self.mods_header_tools(ui, inst);
-            }
-        });
-        crumb.finish_whole(ui);
-        ui.add_space(8.0);
+        if ui.ctx().content_rect().height() >= CRUMB_WINDOW_H {
+            ui.horizontal(|ui| {
+                ui.set_height(32.0);
+                ui.spacing_mut().item_spacing.x = 2.0;
+                if back_link(ui, "Library").clicked() {
+                    self.page = Page::Library;
+                }
+                ui.label(RichText::new("\u{203A}").size(FS_BODY).color(c_faint()));
+                ui.add_space(6.0);
+                ui.add(egui::Label::new(RichText::new(inst.name()).font(super::fonts::medium(13.0))).truncate());
+            });
+            ui.add_space(6.0 - ui.spacing().item_spacing.y);
+        }
         self.instance_banner(ui, inst, action);
-        ui.add_space(6.0);
+        ui.add_space(6.0 - ui.spacing().item_spacing.y);
         // a dot on Settings while changes there weren't saved
         let unsaved = self.unsaved_draft(&inst.folder);
         tab_bar(ui, |ui| {
@@ -1011,15 +1012,26 @@ impl App {
                 let r = tab_marked(ui, label, self.tab == t, mark);
                 let r = if mark == Some(true) { r.on_hover_text("Changes here aren't saved yet") } else { r };
                 if r.clicked() {
+                    if self.tab != t && !r.clicked_by(egui::PointerButton::Primary) {
+                        // picked from the keyboard: the banner changes at once, not under a moving focus
+                        super::workspace::snap_banner(ui.ctx());
+                    }
                     self.tab = t;
                     if t == InstTab::Mods {
                         self.mods_cache = None;
                     }
                 }
             }
+            if lists {
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    ui.spacing_mut().item_spacing.x = 8.0;
+                    self.mods_header_tools(ui, inst);
+                });
+            }
         });
-        // the page's own gap under the tabs is 16: this one and the spacing the scope gets after it
-        ui.add_space(8.0);
+        // under the tabs the Overview has room to breathe; the other tabs start their toolbar close under them
+        let gap = if self.tab == InstTab::Overview { 16.0 } else { 10.0 };
+        ui.add_space(gap - 2.0 * ui.spacing().item_spacing.y);
     }
 
     fn tab_overview(&mut self, ui: &mut Ui, inst: &Instance) {
@@ -1040,13 +1052,28 @@ impl App {
                 }
                 ui.add_space(12.0);
             }
-            // what this instance is, on four small cards; the days it was played; then what it is about, where its
-            // files are, and what happens when it is played
+            // what this instance is, on four small cards. In a wide window what it is about (with its folder and
+            // backups at the top) sits beside the days it was played; in a narrower one the folder and the backups
+            // get a row of their own under the cards, so they are there without scrolling, then the days, then the rest
             self.overview_stats(ui, inst);
             ui.add_space(OVERVIEW_GAP);
-            self.overview_history(ui, inst);
-            ui.add_space(OVERVIEW_GAP);
-            self.overview_files(ui, inst);
+            if ui.ctx().content_rect().width() >= OVERVIEW_WIDE {
+                let half = ((ui.available_width() - OVERVIEW_GAP) / 2.0).floor();
+                two_columns(
+                    ui,
+                    half,
+                    OVERVIEW_GAP,
+                    self,
+                    |ui, this| this.overview_files(ui, inst),
+                    |ui, this| this.overview_history(ui, inst),
+                );
+            } else {
+                self.overview_quick_actions(ui, inst);
+                ui.add_space(OVERVIEW_GAP);
+                self.overview_history(ui, inst);
+                ui.add_space(OVERVIEW_GAP);
+                self.overview_files(ui, inst);
+            }
             ui.add_space(OVERVIEW_GAP);
             self.overview_play(ui, inst, &mut change);
             ui.add_space(16.0);
@@ -1121,7 +1148,31 @@ impl App {
         });
     }
 
-    /// "About this instance": its description, the game directory, and its backups.
+    /// The row of a narrow Overview right under the stat cards: the instance's folder and its backups, the things
+    /// most often opened from here, with what the backups are at the end.
+    fn overview_quick_actions(&mut self, ui: &mut Ui, inst: &Instance) {
+        let backups = self.backups_summary(inst);
+        let mut manage = false;
+        ui.horizontal(|ui| {
+            ui.set_height(34.0);
+            ui.spacing_mut().item_spacing.x = 8.0;
+            if secondary_icon(ui, Icon::Folder, "Open folder").on_hover_text(inst.root.display().to_string()).clicked()
+            {
+                self.open_path(&inst.root);
+            }
+            if secondary_icon(ui, Icon::Package, "Manage backups").clicked() {
+                manage = true;
+            }
+            ui.add_space(4.0);
+            ui.add(egui::Label::new(RichText::new(&backups).size(FS_META).color(c_muted())).truncate());
+        });
+        if manage {
+            self.manage_backups(&inst.folder);
+        }
+    }
+
+    /// "About this instance": the game directory and its backups first (so their buttons are near the top of the
+    /// card), then its description.
     fn overview_files(&mut self, ui: &mut Ui, inst: &Instance) {
         let mut edit = false;
         let mut manage = false;
@@ -1137,28 +1188,6 @@ impl App {
                 }
             });
             head.finish_whole(ui);
-            // the description, when it says more than the version and loader in the banner already do (a pack's own
-            // words, or what the player wrote)
-            let desc = inst.file.launcher.description.trim();
-            if !desc.is_empty() && !is_automatic_description(desc, inst) {
-                let format = egui::TextFormat {
-                    font_id: egui::FontId::proportional(FS_BODY),
-                    color: c_muted(),
-                    ..Default::default()
-                };
-                let mut job = egui::text::LayoutJob::single_section(desc.to_string(), format);
-                job.wrap = egui::text::TextWrapping {
-                    max_width: ui.available_width(),
-                    max_rows: 4,
-                    break_anywhere: false,
-                    overflow_character: Some('\u{2026}'),
-                };
-                ui.add(egui::Label::new(job)).on_hover_text(desc);
-            } else {
-                ui.label(RichText::new("No description yet.").size(FS_BODY).color(c_faint()));
-            }
-            ui.add_space(12.0);
-            rule(ui);
             // the game directory: the whole path when it is pointed at, cut at the edge otherwise
             let path = inst.root.display().to_string();
             about_row(ui, Icon::Folder, "Game directory", &path, true, egui::Id::unique("about-dir"), |ui| {
@@ -1180,6 +1209,28 @@ impl App {
                     manage = true;
                 }
             });
+            rule(ui);
+            ui.add_space(12.0);
+            // the description, when it says more than the version and loader in the banner already do (a pack's own
+            // words, or what the player wrote)
+            let desc = inst.file.launcher.description.trim();
+            if !desc.is_empty() && !is_automatic_description(desc, inst) {
+                let format = egui::TextFormat {
+                    font_id: egui::FontId::proportional(FS_BODY),
+                    color: c_muted(),
+                    ..Default::default()
+                };
+                let mut job = egui::text::LayoutJob::single_section(desc.to_string(), format);
+                job.wrap = egui::text::TextWrapping {
+                    max_width: ui.available_width(),
+                    max_rows: 4,
+                    break_anywhere: false,
+                    overflow_character: Some('\u{2026}'),
+                };
+                ui.add(egui::Label::new(job)).on_hover_text(desc);
+            } else {
+                ui.label(RichText::new("No description yet.").size(FS_BODY).color(c_faint()));
+            }
         });
         if edit {
             self.desc_edit = Some((inst.folder.clone(), inst.file.launcher.description.clone()));
@@ -1366,9 +1417,14 @@ impl App {
 
 /// The space between the cards of an instance's overview.
 const OVERVIEW_GAP: f32 = 14.0;
+/// From this height of the window on, an instance's page has its breadcrumb over the banner.
+const CRUMB_WINDOW_H: f32 = 660.0;
+/// From this width of the window on, "About this instance" sits beside the play history.
+const OVERVIEW_WIDE: f32 = 1100.0;
 
 /// A row of "About this instance": an icon on a tile, a title over a detail (in the monospace face when `mono`, cut
-/// at the edge with the whole of it on hover), and the buttons at the right end.
+/// at the edge with the whole of it on hover), and the buttons at the right end, or under the title when the card is
+/// too narrow for both on one line.
 fn about_row(
     ui: &mut Ui,
     icon: Icon,
@@ -1378,8 +1434,7 @@ fn about_row(
     id: egui::Id,
     buttons: impl FnOnce(&mut Ui),
 ) {
-    let mut row = SplitRow::new(ui, id, 62.0);
-    row.left(ui, |ui| {
+    let text = |ui: &mut Ui| {
         ui.spacing_mut().item_spacing.x = 12.0;
         let (tile, _) = ui.allocate_exact_size(vec2(34.0, 34.0), Sense::hover());
         ui.painter().rect_filled(tile, CornerRadius::same(R_CONTROL), c_field());
@@ -1403,13 +1458,39 @@ fn about_row(
             };
             ui.add(egui::Label::new(text).truncate()).on_hover_text(detail);
         });
-    });
-    row.right(ui, |ui| {
-        ui.spacing_mut().item_spacing.x = 6.0;
-        buttons(ui);
-    });
-    row.finish_whole(ui);
+    };
+    // the buttons' width is remembered from the last frame, as a SplitRow does
+    if ui.available_width() >= remembered_width(ui, id, 240.0) + 16.0 + ABOUT_TEXT_MIN {
+        let mut row = SplitRow::new(ui, id, 62.0);
+        row.left(ui, text);
+        row.right(ui, |ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            buttons(ui);
+        });
+        row.finish_whole(ui);
+    } else {
+        ui.add_space(12.0);
+        ui.horizontal(|ui| {
+            ui.set_height(36.0);
+            text(ui);
+        });
+        ui.add_space(6.0);
+        let used = ui
+            .horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                ui.add_space(46.0);
+                let left = ui.cursor().left();
+                buttons(ui);
+                ui.min_rect().right() - left
+            })
+            .inner;
+        remember_width(ui, id, used);
+        ui.add_space(12.0);
+    }
 }
+
+/// The least room the title and the detail of a row of "About this instance" keep beside its buttons.
+const ABOUT_TEXT_MIN: f32 = 200.0;
 
 /// One line of a game's log: monospace in the colour of its level, and a warning or an error on a faint band of that
 /// colour with a mark at its start, so they stand out in a long log.
@@ -1875,9 +1956,16 @@ fn paint_cover_tex(ui: &Ui, tex: &egui::TextureHandle, rect: egui::Rect, radius:
         .paint_at(ui, rect);
 }
 
-/// The height of the cover on a Home tile `width` wide.
-fn tile_cover_h(width: f32) -> f32 {
-    (width * 0.52).round().clamp(92.0, 150.0)
+/// The height of the cover on a Home tile: low, so the tiles' names and the news under them show in a short window.
+fn tile_cover_h(_width: f32) -> f32 {
+    96.0
+}
+
+/// The height of Home's banner `width` wide in a window `window_h` high: a third of its width, but never more than
+/// 208 in a window 600 high, 248 in one 700 high, and [`BANNER_MAX_H`] in a tall one.
+fn hero_height(width: f32, window_h: f32) -> f32 {
+    let cap = (208.0 + 0.4 * (window_h - 600.0)).clamp(208.0, BANNER_MAX_H);
+    (width * 0.31).clamp(BANNER_MIN_H, cap).round()
 }
 
 /// The grid or list switch of the Library: two small squares with a picture each, the chosen one raised. Returns
@@ -2034,7 +2122,7 @@ const ON_COVER: Color32 = Color32::from_rgb(0xF4, 0xF7, 0xFA);
 /// The brand colour over a cover: the bright one of the dark look, in both looks.
 const COVER_ACCENT: Color32 = Color32::from_rgb(0x2D, 0xD4, 0xAA);
 /// How tall Home's banner gets, from a narrow window to a wide one.
-const BANNER_MIN_H: f32 = 252.0;
+const BANNER_MIN_H: f32 = 200.0;
 const BANNER_MAX_H: f32 = 330.0;
 /// The instance's own picture over the corner of the banner, a Home tile, a Library card and a list row.
 const BANNER_BADGE: f32 = 52.0;
@@ -2055,6 +2143,8 @@ const LIB_CARD_GAP: f32 = 16.0;
 const HOME_SPLIT: f32 = 1100.0;
 /// The gap between the columns of Home and of an instance's overview.
 const HOME_GAP: f32 = 28.0;
+/// The space between the banner, the instances and the news of Home.
+const HOME_SECTION_GAP: f32 = 24.0;
 /// From this width on, an instance's overview is in two columns.
 const OVERVIEW_SPLIT: f32 = 860.0;
 
@@ -2328,6 +2418,20 @@ mod tests {
         assert!(!written.contains("\"favorite\""), "{written}");
         assert!(!is_favorite(&crate::instances::load_one(&root).unwrap()));
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn homes_banner_leaves_room_under_it_in_a_short_window() {
+        // the page of a 1200 x 700 window is about 910 wide, of a 900 x 600 one about 770
+        assert_eq!(hero_height(910.0, 700.0), 248.0);
+        assert_eq!(hero_height(770.0, 600.0), 208.0);
+        assert_eq!(hero_height(770.0, 560.0), 208.0);
+        // a tall, wide window gets the whole banner, a narrow one the lowest
+        assert_eq!(hero_height(1400.0, 1000.0), BANNER_MAX_H);
+        assert_eq!(hero_height(500.0, 900.0), BANNER_MIN_H);
+        for (w, h) in [(600.0, 600.0), (900.0, 650.0), (1200.0, 700.0)] {
+            assert!(hero_height(w, h) <= 248.0, "{w} x {h}");
+        }
     }
 
     #[test]

@@ -41,7 +41,7 @@ const FACT_W: f32 = 84.0;
 const META_SEP: &str = " \u{00B7} ";
 
 /// Which items the list shows.
-#[derive(Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
 enum Show {
     #[default]
     All,
@@ -137,14 +137,37 @@ fn show_counts(entries: &[ModEntry], has_update: impl Fn(&ModEntry) -> bool) -> 
     }
 }
 
-/// The filter chips over the list: All, Enabled, Disabled and Updates, each with how many it would show.
+/// The filter chips worth showing: none while everything is switched on and nothing has an update (each would show
+/// the whole list); otherwise All, Enabled and Disabled when something is off, and Updates when there are some.
+fn useful_chips(counts: &ShowCounts) -> Vec<Show> {
+    if counts.off == 0 && counts.updates == 0 {
+        return Vec::new();
+    }
+    let mut chips = vec![Show::All];
+    if counts.off > 0 {
+        chips.extend([Show::On, Show::Off]);
+    }
+    if counts.updates > 0 {
+        chips.push(Show::Updates);
+    }
+    chips
+}
+
+/// The filter of the list, back to All when its chip is no longer shown (the last disabled pack switched on, the last
+/// update done), so a hidden filter never leaves the list empty.
+fn keep_shown(show: Show, chips: &[Show]) -> Show {
+    if chips.contains(&show) { show } else { Show::All }
+}
+
+/// The filter chips over the list (see [`useful_chips`]), each with how many it would show.
 fn show_chips(ui: &mut Ui, show: &mut Show, counts: &ShowCounts) {
-    for (which, label, n) in [
-        (Show::All, "All", counts.all),
-        (Show::On, "Enabled", counts.on),
-        (Show::Off, "Disabled", counts.off),
-        (Show::Updates, "Updates", counts.updates),
-    ] {
+    for which in useful_chips(counts) {
+        let (label, n) = match which {
+            Show::All => ("All", counts.all),
+            Show::On => ("Enabled", counts.on),
+            Show::Off => ("Disabled", counts.off),
+            Show::Updates => ("Updates", counts.updates),
+        };
         if chip(ui, &format!("{label} ({n})"), *show == which).clicked() {
             *show = which;
         }
@@ -1123,15 +1146,21 @@ impl App {
             .clone()
             .unwrap_or_else(|| crate::mods::InstanceTarget::of(inst, &crate::mods::RemoteConfig::load(&self.dirs)));
 
-        // the filters on the left (on Resource packs after the choice of packs or shaders); checking for updates, the
-        // order, the folder and the rest on the right. One line when they fit, the right part under the left one
-        // otherwise. The search and Add are at the end of the breadcrumb above.
+        // one toolbar: the filters on the left (on Resource packs after the choice of packs or shaders); checking for
+        // updates, the order, the folder and the rest on the right. When the line is too short for all of it, Check
+        // for updates and Open folder go into the "..." menu; only in a very narrow window does the right part go
+        // under the left one. The search and Add are at the end of the breadcrumb above.
         let total = self.mods.entries.get(&kind).map_or(0, Vec::len);
         let offers_n = self.mods.updates.values().filter(|o| o.kind == kind).count();
         let counts = show_counts(self.mods.entries.get(&kind).map_or(&[][..], Vec::as_slice), |e| {
             self.mods.updates.contains_key(&e.key())
         });
+        self.mods.show = keep_shown(self.mods.show, &useful_chips(&counts));
         let tools_id = ui.scope_id().with("mods-tools");
+        // the width the right part takes with every button out, remembered from when it last had them
+        let full_id = tools_id.with("full");
+        let full_w = remembered_width(ui, full_id, 560.0);
+        let compact = ui.available_width() < remembered_width(ui, tools_id.with("left"), 0.0) + full_w + 24.0;
         let mut st = (&mut *self, &mut acts);
         split_or_stack(
             ui,
@@ -1153,6 +1182,10 @@ impl App {
                     if let Some(i) = segmented(ui, &labels, at) {
                         acts.push(Act::Kind(if i == 0 { ContentKind::ResourcePacks } else { ContentKind::Shaders }));
                     }
+                    if total > 0 {
+                        ui.add_space(6.0);
+                        show_chips(ui, &mut this.mods.show, &counts);
+                    }
                 }
             },
             |ui, (this, acts)| {
@@ -1167,7 +1200,7 @@ impl App {
                         ui.label(RichText::new("Couldn't check").size(FS_META).color(c_warn()))
                             .on_hover_text(format!("The last update check failed: {e}"));
                     }
-                    if secondary(ui, "Check for updates").clicked() {
+                    if !compact && secondary(ui, "Check for updates").clicked() {
                         acts.push(Act::CheckUpdates);
                     }
                 }
@@ -1183,15 +1216,28 @@ impl App {
                     }
                 }
                 this.mods_order_dropdown(ui, kind);
-                if secondary_icon(ui, Icon::Folder, "Open folder")
-                    .on_hover_text(format!("Open the {} folder", kind.folder()))
-                    .clicked()
+                if !compact
+                    && secondary_icon(ui, Icon::Folder, "Open folder")
+                        .on_hover_text(format!("Open the {} folder", kind.folder()))
+                        .clicked()
                 {
                     acts.push(Act::OpenFolder);
                 }
                 kebab_menu(ui, |ui| {
                     menu_items(ui);
                     ui.set_min_width(240.0);
+                    if compact {
+                        // the buttons the toolbar had no room for
+                        if ui.add_enabled(!this.mods.checking, egui::Button::new("Check for updates")).clicked() {
+                            acts.push(Act::CheckUpdates);
+                            ui.close();
+                        }
+                        if ui.button(format!("Open the {} folder", kind.folder())).clicked() {
+                            acts.push(Act::OpenFolder);
+                            ui.close();
+                        }
+                        ui.separator();
+                    }
                     let select = if this.mods.select_mode { "Stop selecting" } else { "Select several\u{2026}" };
                     if ui.button(select).clicked() {
                         this.mods.select_mode = !this.mods.select_mode;
@@ -1237,16 +1283,12 @@ impl App {
                         }
                     }
                 });
+                if !compact {
+                    remember_width(ui, full_id, ui.min_rect().width());
+                }
             },
         );
 
-        if kind != ContentKind::Mods && total > 0 {
-            ui.add_space(10.0);
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 6.0;
-                show_chips(ui, &mut self.mods.show, &counts);
-            });
-        }
         if self.mods.select_mode {
             let chosen: Vec<ModKey> = self.mods.selected.iter().cloned().collect();
             let shown: Vec<ModKey> = self.mods_rows(kind).iter().map(|e| e.key()).collect();
@@ -1310,7 +1352,7 @@ impl App {
                 self.mods.selected.clear();
             }
         }
-        ui.add_space(12.0);
+        ui.add_space(10.0 - ui.spacing().item_spacing.y);
 
         // things worth knowing before the list
         self.mods_banners(ui, inst, &target, kind, &mut acts);
@@ -1451,27 +1493,33 @@ impl App {
         }
     }
 
-    /// The search of the list and the way to add to it, at the right end of the breadcrumb of the Mods and Resource
-    /// packs tabs: "Add mods", or "Find resource packs" and "Find shaders", which open Explore on that kind.
+    /// The search of the list and the way to add to it, at the right end of the tabs of the Mods and Resource packs
+    /// pages (laid out from the right): "Add mods", or "Find resource packs" and "Find shaders", which open Explore on
+    /// that kind, and the search left of it, as wide as the room beside the tabs allows.
     pub(super) fn mods_header_tools(&mut self, ui: &mut Ui, inst: &Instance) {
         let kind = self.mods.kind();
         ui.spacing_mut().item_spacing.x = 8.0;
-        let mut f = std::mem::take(&mut self.mods.filter);
-        let what = match kind {
-            ContentKind::Mods => "Search mods\u{2026}",
-            ContentKind::ResourcePacks => "Search resource packs\u{2026}",
-            ContentKind::Shaders => "Search shaders\u{2026}",
-        };
-        filter_field(ui, &mut f, what, 220.0);
-        self.mods.filter = f;
+        // beside the tabs of a narrow page (a large interface size) the longest label is shortened
+        let short = ui.available_width() < 340.0;
         let pressed = match kind {
             ContentKind::Mods => primary_icon(ui, Icon::Plus, "Add mods"),
+            ContentKind::ResourcePacks if short => {
+                primary_icon(ui, Icon::Search, "Find packs").on_hover_text("Find resource packs in Explore")
+            }
             ContentKind::ResourcePacks => primary_icon(ui, Icon::Search, "Find resource packs"),
             ContentKind::Shaders => primary_icon(ui, Icon::Search, "Find shaders"),
         };
         if pressed.clicked() {
             self.mods_apply(inst, Act::Add);
         }
+        let mut f = std::mem::take(&mut self.mods.filter);
+        let what = match kind {
+            ContentKind::Mods => "Search mods\u{2026}",
+            ContentKind::ResourcePacks => "Search packs\u{2026}",
+            ContentKind::Shaders => "Search shaders\u{2026}",
+        };
+        filter_field(ui, &mut f, what, (ui.available_width() - 16.0).clamp(100.0, 220.0));
+        self.mods.filter = f;
     }
 
     /// Show the kind the open tab is about: Mods the mods; Resource packs the packs or the shaders, whichever was open
@@ -1621,7 +1669,7 @@ impl App {
         let switch = egui::Rect::from_center_size(egui::pos2(right - 20.0, rect.center().y), egui::vec2(40.0, 28.0));
         right = switch.left() - 10.0;
         let mut on = !off;
-        let switched = toggle(&mut ui.new_child(egui::UiBuilder::new().max_rect(switch)), &mut on);
+        let switched = toggle_named(&mut ui.new_child(egui::UiBuilder::new().max_rect(switch)), &mut on, &name);
         if switched.on_hover_text(if on { "Switched on" } else { "Switched off" }).changed() {
             acts.push(Act::Toggle(key.clone(), on));
         }
@@ -2271,6 +2319,21 @@ mod tests {
         let counts = show_counts(&list, |e| e.record.file == "b.jar");
         assert_eq!(counts, ShowCounts { all: 3, on: 2, off: 1, updates: 1 });
         assert_eq!(show_counts(&[], |_| true), ShowCounts::default());
+    }
+
+    #[test]
+    fn the_filter_chips_show_only_when_they_would_narrow_the_list() {
+        let counts = |off, updates| ShowCounts { all: 4, on: 4 - off, off, updates };
+        // everything on and up to date: every chip would show the whole list
+        assert!(useful_chips(&counts(0, 0)).is_empty());
+        assert_eq!(useful_chips(&counts(1, 0)), vec![Show::All, Show::On, Show::Off]);
+        assert_eq!(useful_chips(&counts(0, 2)), vec![Show::All, Show::Updates]);
+        assert_eq!(useful_chips(&counts(1, 2)), vec![Show::All, Show::On, Show::Off, Show::Updates]);
+        // the last disabled pack switched on: Disabled goes, and the list goes back to All instead of showing nothing
+        assert_eq!(keep_shown(Show::Off, &useful_chips(&counts(0, 0))), Show::All);
+        assert_eq!(keep_shown(Show::Off, &useful_chips(&counts(0, 1))), Show::All);
+        assert_eq!(keep_shown(Show::Updates, &useful_chips(&counts(0, 1))), Show::Updates);
+        assert_eq!(keep_shown(Show::On, &useful_chips(&counts(2, 0))), Show::On);
     }
 
     #[test]

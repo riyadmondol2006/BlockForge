@@ -6,7 +6,7 @@ use egui::{Align, Color32, CornerRadius, Layout, Rect, Response, RichText, Sense
 
 use super::covers::CoverTheme;
 use super::icons::{self, Icon};
-use super::instance_menu::{Act, menu_items};
+use super::instance_menu::{Act, SplitRow, menu_items};
 use super::motion;
 use super::theme::*;
 use super::widgets::*;
@@ -15,11 +15,19 @@ use crate::instances::Instance;
 
 /// The banner's height on the Overview, and on the other tabs, where the lists under it want the room.
 const BANNER_TALL: f32 = 196.0;
-const BANNER_SHORT: f32 = 92.0;
-/// The air inside the banner.
+const BANNER_SHORT: f32 = 64.0;
+/// The air inside the banner, left of the name.
 const BANNER_PAD: f32 = 22.0;
-/// From this width on, the short banner has room for the performance switches beside Play.
-const SHORT_ROOMY: f32 = 760.0;
+/// Play, Performance and the menu sit in the banner's top right corner, this far in from its right edge and its top,
+/// on every tab: the banner grows and shrinks under them, and Play never moves when the tab changes.
+const ACTIONS_RIGHT: f32 = 16.0;
+const ACTIONS_TOP: f32 = 10.0;
+/// The height of those buttons.
+const ACTION_H: f32 = 44.0;
+/// From this width of the banner on, Performance has a button of its own beside Play (it is in the menu as well).
+const PERFORMANCE_ROOM: f32 = 600.0;
+/// How long the banner takes to grow or shrink when the tab changes.
+const BANNER_GLIDE: f32 = 0.18;
 /// The part of the Play button that opens its menu.
 const MENU_PART: f32 = 38.0;
 
@@ -82,7 +90,8 @@ fn split_play(ui: &mut Ui, stop: bool, height: f32) -> (Response, Response) {
     let (text, icon) = if stop { ("Stop", Icon::Stop) } else { ("Play", Icon::Play) };
     let font = super::fonts::semibold(15.0);
     let galley = ui.painter().layout_no_wrap(text.to_string(), font.clone(), Color32::PLACEHOLDER);
-    let main_w = (galley.size().x + 22.0 + 40.0).max(if stop { 96.0 } else { 112.0 });
+    // Stop as wide as Play, so the buttons beside it keep their places when the game starts
+    let main_w = (galley.size().x + 22.0 + 40.0).max(112.0);
     let (rect, _) = ui.allocate_exact_size(vec2(main_w + MENU_PART, height), Sense::hover());
     let main = Rect::from_min_max(rect.min, pos2(rect.left() + main_w, rect.bottom()));
     let more = Rect::from_min_max(pos2(main.right(), rect.top()), rect.max);
@@ -184,109 +193,123 @@ fn status_pill(ui: &mut Ui, text: &str, live: bool) {
     ui.painter().galley(pos2(rect.left() + 24.0, rect.center().y - galley.size().y / 2.0), galley, on_cover(235));
 }
 
-/// A darker band along the bottom of the banner, so the buttons sit on a calm ground whatever the picture shows.
-fn shade_bottom(painter: &egui::Painter, rect: Rect, strength: u8) {
-    let mut mesh = egui::Mesh::default();
+fn banner_snap_id() -> egui::Id {
+    egui::Id::unique("instance-banner-snap")
+}
+
+/// The banner takes its new height at once instead of gliding to it: the tab was changed from the keyboard.
+pub(super) fn snap_banner(ctx: &egui::Context) {
+    ctx.data_mut(|d| d.insert_temp(banner_snap_id(), true));
+}
+
+/// A darker band along the bottom of the banner, so the name sits on a calm ground whatever the picture shows. It
+/// follows the banner's rounded bottom corners (`radius`), so no square of shade shows past them.
+fn shade_bottom(painter: &egui::Painter, rect: Rect, radius: f32, strength: u8) {
+    painter.add(bottom_shade_mesh(rect, radius, strength));
+}
+
+/// The band of [`shade_bottom`]: the lower part of `rect` from a third of the way down, its outline the rounded
+/// rectangle's (corners of `radius`), clear at its top and `strength` dark at the bottom. That part of a rounded
+/// rectangle is convex, so it is a fan of triangles from its middle; the shade changes evenly from top to bottom, so
+/// each corner of a triangle can carry its own and the triangles fill in between exactly.
+fn bottom_shade_mesh(rect: Rect, radius: f32, strength: u8) -> egui::Mesh {
     let top = rect.top() + rect.height() * 0.35;
-    let clear = Color32::TRANSPARENT;
-    let dark = Color32::from_black_alpha(strength);
-    mesh.colored_vertex(pos2(rect.left(), top), clear);
-    mesh.colored_vertex(pos2(rect.right(), top), clear);
-    mesh.colored_vertex(pos2(rect.right(), rect.bottom()), dark);
-    mesh.colored_vertex(pos2(rect.left(), rect.bottom()), dark);
-    mesh.add_triangle(0, 1, 2);
-    mesh.add_triangle(0, 2, 3);
-    painter.add(mesh);
+    let r = radius.min(rect.bottom() - top).min(rect.width() / 2.0).max(0.0);
+    let shade = |y: f32| {
+        let t = ((y - top) / (rect.bottom() - top).max(1.0)).clamp(0.0, 1.0);
+        Color32::from_black_alpha((f32::from(strength) * t).round() as u8)
+    };
+    let mut outline = vec![pos2(rect.left(), top), pos2(rect.right(), top)];
+    const STEPS: usize = 8;
+    // down the right edge and round its corner, along the bottom, round the left corner and up
+    for (cx, from) in [(rect.right() - r, 0.0), (rect.left() + r, std::f32::consts::FRAC_PI_2)] {
+        for i in 0..=STEPS {
+            let a = from + std::f32::consts::FRAC_PI_2 * i as f32 / STEPS as f32;
+            outline.push(pos2(cx + r * a.cos(), rect.bottom() - r + r * a.sin()));
+        }
+    }
+    let mut mesh = egui::Mesh::default();
+    let middle = pos2(rect.center().x, (top + rect.bottom()) / 2.0);
+    mesh.colored_vertex(middle, shade(middle.y));
+    for p in &outline {
+        mesh.colored_vertex(*p, shade(p.y));
+    }
+    let n = outline.len() as u32;
+    for i in 0..n {
+        mesh.add_triangle(0, 1 + i, 1 + (i + 1) % n);
+    }
+    mesh
 }
 
 impl App {
     /// The cover of the instance across the page with its picture, name and what it is, and Play, Play as, the
     /// performance switches and the menu over it. The Overview has the tall banner; the other tabs a short one, and
-    /// the height glides between the two when the tab changes.
+    /// the height glides between the two when the tab changes (at once for a tab picked from the keyboard). The
+    /// buttons keep to the banner's top right corner whatever its height, so Play never moves.
     pub(super) fn instance_banner(&mut self, ui: &mut Ui, inst: &Instance, action: &mut Option<Act>) {
         let tall = self.tab == InstTab::Overview;
         let target = if tall { BANNER_TALL } else { BANNER_SHORT };
-        let h = motion::glide(ui.ctx(), egui::Id::unique("instance-banner-height"), target, motion::MEDIUM);
+        let snap = ui.ctx().data_mut(|d| d.remove_temp::<bool>(banner_snap_id())).unwrap_or(false);
+        let pace = if snap { 0.0 } else { BANNER_GLIDE };
+        let h = motion::glide(ui.ctx(), egui::Id::unique("instance-banner-height"), target, pace);
         let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), h), Sense::hover());
         let radius = R_CARD + 4;
         ui.painter().add(card_shadow().as_shape(rect, CornerRadius::same(radius)));
         self.paint_cover(ui, inst, rect, radius, true);
-        // the shade is clipped to the banner's rounded corners by drawing it a little inside them
-        shade_bottom(&ui.painter().with_clip_rect(rect.shrink2(vec2(0.0, 1.0))), rect, if tall { 120 } else { 90 });
+        shade_bottom(ui.painter(), rect, f32::from(radius), if tall { 120 } else { 90 });
         ui.painter().rect_stroke(
             rect,
             CornerRadius::same(radius),
             Stroke::new(1.0, Color32::from_white_alpha(22)),
             egui::StrokeKind::Inside,
         );
-        let area = rect.shrink(if tall { BANNER_PAD } else { 18.0 });
-        let mut inner = ui.new_child(UiBuilder::new().max_rect(area).layout(Layout::left_to_right(Align::Center)));
-        inner.set_clip_rect(ui.clip_rect().intersect(rect));
-        // the text is laid out for the banner it is going to (the height glides, the layout does not)
-        if tall {
-            self.banner_tall(&mut inner, inst, action);
-        } else {
-            self.banner_short(&mut inner, inst, action);
-        }
-    }
-
-    /// The Overview's banner: the picture, then the name, what it is and the buttons in a column beside it.
-    fn banner_tall(&mut self, ui: &mut Ui, inst: &Instance, action: &mut Option<Act>) {
-        let room = ui.available_width();
-        // the picture gives way first in a narrow window
-        let picture = (ui.available_height()).min(124.0);
-        // the cover is the instance's picture; a picture of its own (instance.png) sits on it, the stand-in block
-        // would only cover it up
-        let own = self.local_picture(inst.root.join("instance.png")).is_some();
-        if room >= 520.0 && own {
-            self.instance_icon(ui, inst, picture);
-            ui.add_space(22.0);
-        }
-        ui.vertical(|ui| {
-            ui.spacing_mut().item_spacing.y = 4.0;
-            let content = 34.0 + 18.0 + 16.0 + 44.0;
-            ui.add_space(((ui.available_height() - content) / 2.0).max(0.0));
-            self.banner_title(ui, inst, FS_TITLE + 2.0);
-            ui.add_space(14.0);
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 10.0;
-                let roomy = ui.available_width() >= 430.0;
-                self.banner_play(ui, inst, 44.0, action);
-                self.banner_extras(ui, inst, roomy, action);
-            });
-        });
-    }
-
-    /// The short banner of the other tabs: the picture, the name and what it is, and the buttons at the right end.
-    fn banner_short(&mut self, ui: &mut Ui, inst: &Instance, action: &mut Option<Act>) {
-        let room = ui.available_width();
-        let id = egui::Id::unique("instance-banner-buttons");
-        let buttons_w = remembered_width(ui, id, 220.0);
-        // Performance stays in a wide banner; decided by the banner's width alone, not by the buttons' (which it
-        // changes), so the row doesn't flip between the two
-        let roomy = room >= SHORT_ROOMY;
-        if room >= 480.0 && self.local_picture(inst.root.join("instance.png")).is_some() {
-            let side = ui.available_height().min(56.0);
-            self.instance_icon(ui, inst, side);
-            ui.add_space(16.0);
-        }
-        let text_w = (ui.available_width() - buttons_w - 16.0).max(80.0);
-        ui.allocate_ui_with_layout(vec2(text_w, ui.available_height()), Layout::top_down(Align::Min), |ui| {
-            ui.set_width(text_w);
-            ui.spacing_mut().item_spacing.y = 2.0;
-            ui.add_space(((ui.available_height() - 44.0) / 2.0).max(0.0));
-            self.banner_title(ui, inst, FS_FIGURE + 2.0);
-        });
-        // the buttons at the right end, read from left to right: what the game is doing, the performance switches,
-        // Play and the menu
-        let area = ui.max_rect();
-        let rect = Rect::from_min_max(pos2(area.right() - buttons_w, area.top()), area.max);
-        let mut right = ui.new_child(UiBuilder::new().max_rect(rect).layout(Layout::left_to_right(Align::Center)));
+        let clip = ui.clip_rect().intersect(rect);
+        // the buttons first, from the right edge leftwards
+        let actions = Rect::from_min_max(
+            pos2(rect.left() + BANNER_PAD, rect.top() + ACTIONS_TOP),
+            pos2(rect.right() - ACTIONS_RIGHT, rect.top() + ACTIONS_TOP + ACTION_H),
+        );
+        let mut right = ui.new_child(UiBuilder::new().max_rect(actions).layout(Layout::right_to_left(Align::Center)));
+        right.set_clip_rect(clip);
         right.spacing_mut().item_spacing.x = 8.0;
-        self.banner_extras(&mut right, inst, roomy, action);
-        self.banner_play(&mut right, inst, 40.0, action);
-        let used = right.min_rect().width();
-        remember_width(ui, id, used);
+        self.banner_actions(&mut right, inst, tall, action);
+        // then the picture and the name: along the bottom of the tall banner, under the buttons; in the middle of the
+        // short one, left of them
+        let area = if tall {
+            Rect::from_min_max(
+                pos2(rect.left() + BANNER_PAD, actions.bottom() + 8.0),
+                pos2(rect.right() - BANNER_PAD, rect.bottom() - BANNER_PAD + 2.0),
+            )
+        } else {
+            let end = (right.min_rect().left() - 16.0).max(rect.left() + BANNER_PAD + 60.0);
+            Rect::from_min_max(pos2(rect.left() + 18.0, rect.top() + 6.0), pos2(end, rect.bottom() - 6.0))
+        };
+        self.banner_identity(ui, inst, area, tall, clip);
+    }
+
+    /// The instance's own picture (when it has one) and its name with what it is, at the bottom of `area` in the tall
+    /// banner and in its middle in the short one.
+    fn banner_identity(&mut self, ui: &mut Ui, inst: &Instance, area: Rect, tall: bool, clip: Rect) {
+        let id = egui::Id::unique(if tall { "instance-banner-name-tall" } else { "instance-banner-name-short" });
+        let h = remembered_width(ui, id, if tall { 64.0 } else { 44.0 });
+        let top = if tall { area.bottom() - h } else { area.center().y - h / 2.0 };
+        let block = Rect::from_min_max(pos2(area.left(), top), pos2(area.right(), top + h));
+        let mut row = ui.new_child(UiBuilder::new().max_rect(block).layout(Layout::left_to_right(Align::Center)));
+        row.set_clip_rect(clip);
+        // the cover is the instance's picture; a picture of its own (instance.png) sits on it, the stand-in block would
+        // only cover it up. The picture gives way first in a narrow window
+        let own = self.local_picture(inst.root.join("instance.png")).is_some();
+        if own && area.width() >= if tall { 420.0 } else { 320.0 } {
+            self.instance_icon(&mut row, inst, if tall { 72.0 } else { 44.0 });
+            row.add_space(if tall { 18.0 } else { 14.0 });
+        }
+        let w = row.available_width();
+        row.vertical(|ui| {
+            ui.set_max_width(w);
+            ui.spacing_mut().item_spacing.y = if tall { 4.0 } else { 2.0 };
+            self.banner_title(ui, inst, if tall { FS_TITLE + 2.0 } else { FS_FIGURE + 2.0 });
+        });
+        remember_width(ui, id, row.min_rect().height().ceil());
     }
 
     /// The name of the instance and the line of what it is, shortened a whole part at a time to fit.
@@ -301,11 +324,28 @@ impl App {
         ui.add(egui::Label::new(job).truncate());
     }
 
-    /// Play (Stop while the game runs) with its Play as part, and the menu of the instance.
-    fn banner_play(&mut self, ui: &mut Ui, inst: &Instance, height: f32, action: &mut Option<Act>) {
+    /// The buttons of the banner, laid out from its right edge leftwards so each keeps its place: the menu,
+    /// Performance (when the banner has room for it), Play (Stop while the game runs) with its Play as part, and left
+    /// of Play what the game is doing, where its changing words can't push Play along.
+    fn banner_actions(&mut self, ui: &mut Ui, inst: &Instance, tall: bool, action: &mut Option<Act>) {
         let folder = inst.folder.clone();
+        let width = ui.max_rect().width();
+        let kebab = cover_button(ui, Icon::Kebab, ACTION_H);
+        let picked = egui::Popup::menu(&kebab).gap(6.0).show(|ui| {
+            menu_items(ui);
+            self.instance_menu(ui, inst)
+        });
+        if let Some(a) = picked.and_then(|r| r.inner) {
+            *action = Some(a);
+        }
+        // decided by the banner's width alone, the same on every tab (it is under Performance in the menu as well)
+        if width >= PERFORMANCE_ROOM - ACTIONS_RIGHT - BANNER_PAD {
+            if let Some(a) = self.performance_button(ui, inst, ACTION_H) {
+                *action = Some(a);
+            }
+        }
         let playing = self.is_playing(&folder);
-        let (main, more) = split_play(ui, playing, height);
+        let (main, more) = split_play(ui, playing, ACTION_H);
         if main.clicked() {
             *action = Some(if playing { Act::Stop(folder.clone()) } else { Act::Play(folder.clone()) });
         }
@@ -316,35 +356,18 @@ impl App {
         if let Some(a) = picked.and_then(|r| r.inner) {
             *action = Some(a);
         }
-        let kebab = cover_button(ui, Icon::Kebab, height);
-        let picked = egui::Popup::menu(&kebab).gap(6.0).show(|ui| {
-            menu_items(ui);
-            self.instance_menu(ui, inst)
-        });
-        if let Some(a) = picked.and_then(|r| r.inner) {
-            *action = Some(a);
-        }
-    }
-
-    /// What the game is doing, and when there is room the performance switches (they are in the menu too, under
-    /// Performance).
-    fn banner_extras(&mut self, ui: &mut Ui, inst: &Instance, roomy: bool, action: &mut Option<Act>) {
-        let folder = inst.folder.clone();
+        // the name of the short banner keeps at least this much room beside the status
+        let left = ui.available_width() - if tall { 0.0 } else { 240.0 };
         let sessions = self.sessions_of(&folder);
         let game = sessions.iter().filter_map(|k| self.games.get(k)).find(|g| g.active());
         match game.map(|g| (g.phase, g.started)) {
-            Some((Phase::Preparing, _)) => status_pill(ui, "Getting ready", true),
-            Some((Phase::Running, started)) if roomy => {
+            Some((Phase::Preparing, _)) if left >= 150.0 => status_pill(ui, "Getting ready", true),
+            Some((Phase::Running, started)) if left >= 170.0 => {
                 status_pill(ui, &format!("Running \u{00B7} {}", running_for(started.elapsed())), true);
                 ui.ctx().request_repaint_after(std::time::Duration::from_secs(20));
             }
-            Some((Phase::Running, _)) => status_pill(ui, "Running", true),
+            Some((Phase::Running, _)) if left >= 110.0 => status_pill(ui, "Running", true),
             _ => {}
-        }
-        if roomy {
-            if let Some(a) = self.performance_button(ui, inst) {
-                *action = Some(a);
-            }
         }
     }
 
@@ -388,24 +411,26 @@ impl App {
         );
     }
 
-    /// The days the instance was played over the last weeks, as a strip of bars under a title.
+    /// The days the instance was played over the last weeks, as a strip of bars under a title that says what a bar
+    /// measures, with the first and the last day under the strip.
     pub(super) fn overview_history(&mut self, ui: &mut Ui, inst: &Instance) {
         card(ui, |ui| {
             let n = history_span(ui.available_width());
             let days = self.play_days(inst, n);
             let played = days.iter().filter(|d| **d > 0).count();
-            ui.horizontal(|ui| {
+            let mut head = SplitRow::new(ui, egui::Id::unique("overview-history-head"), 22.0);
+            head.left(ui, |ui| {
                 ui.label(RichText::new("Play history").size(FS_SECTION).semibold());
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    ui.label(
-                        RichText::new(format!("{} weeks", n / 7)).font(super::fonts::mono(FS_META)).color(c_faint()),
-                    );
-                });
             });
-            ui.add_space(10.0);
-            history_bars(ui, &days, Self::strip_hue(inst));
+            head.right(ui, |ui| {
+                ui.add(egui::Label::new(RichText::new(HISTORY_UNIT).size(FS_META).color(c_muted())).truncate());
+            });
+            head.finish_whole(ui);
             ui.add_space(8.0);
-            small_muted(ui, super::strip::caption(played, n));
+            history_bars(ui, &days, Self::strip_hue(inst));
+            ui.add_space(6.0);
+            let today = chrono::Local::now().date_naive();
+            history_dates(ui, &history_ends(today, n), &super::strip::caption(played, n));
         });
     }
 
@@ -553,15 +578,85 @@ fn bar_height(sessions: u8, full: f32) -> f32 {
     if sessions == 0 { 4.0 } else { full * (0.4 + 0.15 * f32::from(sessions.min(4))) }
 }
 
+/// What the bars of the play history measure, said under its title.
+const HISTORY_UNIT: &str = "Sessions per day \u{00B7} height capped at 4";
+
+/// The first day of a play history `n` days long ending `today`, and the last, as they are written under the strip.
+fn history_ends(today: chrono::NaiveDate, n: usize) -> (String, String) {
+    let first = today - chrono::Duration::days(n.saturating_sub(1) as i64);
+    (first.format("%-d %b").to_string(), "Today".to_string())
+}
+
+/// What one day of the play history was: "Wed 21 Oct: 5 sessions". The real count, also for a day whose bar is
+/// capped.
+fn day_detail(day: chrono::NaiveDate, sessions: u8) -> String {
+    let n = match sessions {
+        0 => "not played".to_string(),
+        1 => "1 session".to_string(),
+        n => format!("{n} sessions"),
+    };
+    format!("{}: {n}", day.format("%a %-d %b"))
+}
+
+/// The line under the play history: its first day at the left, "Today" at the right, and how many days it was
+/// played in the middle (under the strip when there is no room between them).
+fn history_dates(ui: &mut Ui, ends: &(String, String), caption: &str) {
+    let w = ui.available_width();
+    let (row, _) = ui.allocate_exact_size(vec2(w, 16.0), Sense::hover());
+    let p = ui.painter();
+    let date = |text: &str| p.layout_no_wrap(text.to_string(), super::fonts::mono(FS_META), c_faint());
+    let (first, last) = (date(&ends.0), date(&ends.1));
+    let mid = p.layout_no_wrap(caption.to_string(), egui::FontId::proportional(FS_META), c_muted());
+    let y = |g: &egui::Galley| row.center().y - g.size().y / 2.0;
+    let fits = first.size().x + last.size().x + mid.size().x + 48.0 <= w;
+    p.galley(pos2(row.left(), y(&first)), first.clone(), c_faint());
+    p.galley(pos2(row.right() - last.size().x, y(&last)), last, c_faint());
+    if fits {
+        p.galley(pos2(row.center().x - mid.size().x / 2.0, y(&mid)), mid, c_muted());
+    } else {
+        ui.add_space(4.0);
+        small_muted(ui, caption);
+    }
+}
+
 /// The play history as bars across the width: one per day, oldest first and today last (with a ring), filled in the
-/// instance's colour on the days it was played. Hovering a bar says which day it is.
+/// instance's colour on the days it was played. Pointing at a bar says which day it is and how often it was played;
+/// so does the strip from the keyboard: it takes the focus, and the arrow keys (Home and End too) go from day to day.
 fn history_bars(ui: &mut Ui, days: &[u8], hue: Color32) -> Response {
     let w = ui.available_width();
-    let (rect, resp) = ui.allocate_exact_size(vec2(w, BARS_H), Sense::hover());
+    let (rect, resp) = ui.allocate_exact_size(vec2(w, BARS_H), Sense::hover() | Sense::FOCUSABLE);
     let n = days.len().max(1) as f32;
     let bar = ((w - BAR_GAP * (n - 1.0)) / n).max(1.0);
-    let index_at = |x: f32| (((x - rect.left()) / (bar + BAR_GAP)).floor().max(0.0) as usize).min(days.len() - 1);
-    let pointed = resp.hover_pos().filter(|_| !days.is_empty()).map(|p| index_at(p.x));
+    let last = days.len().saturating_sub(1);
+    let index_at = |x: f32| (((x - rect.left()) / (bar + BAR_GAP)).floor().max(0.0) as usize).min(last);
+    // the day chosen from the keyboard, kept while the strip has the focus; it starts at today
+    let key = resp.id.with("day");
+    let focused = resp.has_focus() && !days.is_empty();
+    let chosen = if focused {
+        ui.memory_mut(|m| {
+            m.set_focus_lock_filter(resp.id, egui::EventFilter { horizontal_arrows: true, ..Default::default() })
+        });
+        let at: usize = ui.data(|d| d.get_temp(key)).unwrap_or(last).min(last);
+        let at = ui.input(|i| {
+            if i.key_pressed(egui::Key::ArrowLeft) {
+                at.saturating_sub(1)
+            } else if i.key_pressed(egui::Key::ArrowRight) {
+                (at + 1).min(last)
+            } else if i.key_pressed(egui::Key::Home) {
+                0
+            } else if i.key_pressed(egui::Key::End) {
+                last
+            } else {
+                at
+            }
+        });
+        ui.data_mut(|d| d.insert_temp(key, at));
+        Some(at)
+    } else {
+        ui.data_mut(|d| d.remove_temp::<usize>(key));
+        None
+    };
+    let pointed = resp.hover_pos().filter(|_| !days.is_empty()).map(|p| index_at(p.x)).or(chosen);
     if ui.is_rect_visible(rect) {
         let p = ui.painter();
         let radius = CornerRadius::same(if bar >= 8.0 { 3 } else { 2 });
@@ -582,24 +677,33 @@ fn history_bars(ui: &mut Ui, days: &[u8], hue: Color32) -> Response {
             } else {
                 p.rect_filled(r, radius, if lit { c_control() } else { c_active() });
             }
-            if i + 1 == days.len() {
+            if i == last {
                 p.rect_stroke(r.expand(1.5), radius, Stroke::new(1.0, c_muted()), egui::StrokeKind::Outside);
+            }
+            if chosen == Some(i) {
+                // the day the keyboard is on, under the strip's focus ring
+                let mark = Rect::from_min_max(pos2(x, rect.top()), pos2(x + bar, rect.bottom()));
+                p.rect_stroke(mark.expand(2.0), radius, Stroke::new(1.5, c_accent()), egui::StrokeKind::Outside);
             }
         }
     }
-    let label = super::strip::caption(days.iter().filter(|d| **d > 0).count(), days.len());
+    focus_ring(ui, &resp, rect.expand(2.0), R_CONTROL);
+    let today = chrono::Local::now().date_naive();
+    let detail = |i: usize| day_detail(today - chrono::Duration::days((last - i) as i64), days[i]);
+    let caption = super::strip::caption(days.iter().filter(|d| **d > 0).count(), days.len());
+    let label = match chosen {
+        Some(i) => format!("Play history, {caption}. {}", detail(i)),
+        None => format!("Play history, {caption}. {HISTORY_UNIT}. Arrow keys go from day to day"),
+    };
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Image, true, &label));
-    if let Some(i) = pointed {
-        let ago = days.len() - 1 - i;
-        let day = chrono::Local::now().date_naive() - chrono::Duration::days(ago as i64);
-        let sessions = match days[i] {
-            0 => "not played".to_string(),
-            1 => "1 session".to_string(),
-            n => format!("{n} sessions"),
-        };
-        return resp.on_hover_text(format!("{}: {sessions}", day.format("%a %-d %b")));
+    match (resp.hover_pos().and(pointed), chosen) {
+        (Some(i), _) => resp.on_hover_text(detail(i)),
+        (None, Some(i)) => {
+            resp.show_tooltip_text(detail(i));
+            resp
+        }
+        (None, None) => resp,
     }
-    resp
 }
 
 #[cfg(test)]
@@ -628,6 +732,50 @@ mod tests {
         assert!(bar_height(1, full) < bar_height(2, full));
         assert!(bar_height(4, full) <= full);
         assert_eq!(bar_height(4, full), bar_height(200, full));
+    }
+
+    #[test]
+    fn the_banner_shade_keeps_inside_the_rounded_corners() {
+        for h in [64.0, 120.0, 196.0] {
+            let rect = Rect::from_min_size(pos2(10.0, 20.0), vec2(600.0, h));
+            let r = 16.0;
+            let mesh = bottom_shade_mesh(rect, r, 120);
+            for v in &mesh.vertices {
+                let p = v.pos;
+                assert!(rect.expand(0.01).contains(p), "{p:?} outside {rect:?}");
+                // in a corner's square, a point must be within the corner's circle
+                for cx in [rect.left() + r, rect.right() - r] {
+                    let in_square = (p.x - cx).abs() <= r
+                        && p.y > rect.bottom() - r
+                        && (p.x < rect.left() + r || p.x > rect.right() - r);
+                    if in_square {
+                        assert!(p.distance(pos2(cx, rect.bottom() - r)) <= r + 0.01, "{p:?} past the corner (h {h})");
+                    }
+                }
+            }
+            // clear at the top, darkest along the bottom
+            let top = mesh.vertices.iter().map(|v| v.pos.y).fold(f32::MAX, f32::min);
+            assert!(mesh.vertices.iter().filter(|v| v.pos.y == top).all(|v| v.color.a() == 0));
+            assert!(mesh.vertices.iter().filter(|v| v.pos.y == rect.bottom()).all(|v| v.color.a() == 120));
+        }
+    }
+
+    #[test]
+    fn a_day_of_the_history_says_how_often_it_was_played_not_how_tall_its_bar_is() {
+        let day = chrono::NaiveDate::from_ymd_opt(2026, 10, 21).unwrap();
+        assert_eq!(day_detail(day, 0), "Wed 21 Oct: not played");
+        assert_eq!(day_detail(day, 1), "Wed 21 Oct: 1 session");
+        assert_eq!(day_detail(day, 5), "Wed 21 Oct: 5 sessions");
+        // five sessions draw as tall as four, the cap the title speaks of
+        assert_eq!(bar_height(5, BARS_H), bar_height(4, BARS_H));
+        assert!(HISTORY_UNIT.contains("capped at 4"));
+    }
+
+    #[test]
+    fn the_history_names_its_first_day_and_today() {
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 10, 30).unwrap();
+        assert_eq!(history_ends(today, 56), ("5 Sep".to_string(), "Today".to_string()));
+        assert_eq!(history_ends(today, 14).0, "17 Oct");
     }
 
     #[test]

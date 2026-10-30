@@ -243,8 +243,8 @@ impl App {
     }
 
     /// The "Performance" button next to Play: the same switches, one click away. The current state is on hover.
-    pub(super) fn performance_button(&self, ui: &mut Ui, inst: &Instance) -> Option<Act> {
-        let (resp, act) = super::instance_menu::secondary_switch_menu(ui, "Performance", |ui| {
+    pub(super) fn performance_button(&self, ui: &mut Ui, inst: &Instance, height: f32) -> Option<Act> {
+        let (resp, act) = super::instance_menu::secondary_switch_menu(ui, "Performance", height, |ui| {
             let act = self.helpers_contents(ui, inst);
             ui.add_space(4.0);
             ui.horizontal(|ui| {

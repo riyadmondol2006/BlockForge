@@ -132,27 +132,29 @@ fn open_menu_closing<R>(resp: &Response, close: egui::PopupCloseBehavior, add: i
 /// A neutral button with a chevron that opens a menu (the "Play as" of the header). Returns what the menu returned
 /// while it is open.
 pub(super) fn secondary_menu<R>(ui: &mut Ui, text: &str, add: impl FnOnce(&mut Ui) -> R) -> (Response, Option<R>) {
-    secondary_menu_closing(ui, text, egui::PopupCloseBehavior::CloseOnClick, add)
+    secondary_menu_closing(ui, text, 32.0, egui::PopupCloseBehavior::CloseOnClick, add)
 }
 
 /// [`secondary_menu`] for a menu of switches: it stays open while they are flipped and closes on a click outside it.
 pub(super) fn secondary_switch_menu<R>(
     ui: &mut Ui,
     text: &str,
+    height: f32,
     add: impl FnOnce(&mut Ui) -> R,
 ) -> (Response, Option<R>) {
-    secondary_menu_closing(ui, text, egui::PopupCloseBehavior::CloseOnClickOutside, add)
+    secondary_menu_closing(ui, text, height, egui::PopupCloseBehavior::CloseOnClickOutside, add)
 }
 
 fn secondary_menu_closing<R>(
     ui: &mut Ui,
     text: &str,
+    height: f32,
     close: egui::PopupCloseBehavior,
     add: impl FnOnce(&mut Ui) -> R,
 ) -> (Response, Option<R>) {
     let font = super::fonts::medium(FS_BODY);
     let w = ui.painter().layout_no_wrap(text.to_string(), font.clone(), c_text()).size().x;
-    let (rect, resp) = ui.allocate_exact_size(vec2(w + 28.0 + 18.0, 32.0), Sense::click());
+    let (rect, resp) = ui.allocate_exact_size(vec2(w + 28.0 + 18.0, height), Sense::click());
     let open = egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&resp));
     if ui.is_rect_visible(rect) {
         let t = super::motion::hover(ui, resp.id, resp.hovered() || open);
