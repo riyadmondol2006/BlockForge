@@ -1529,12 +1529,29 @@ impl App {
             }
             return;
         }
+        // nor do they cover what the keyboard is on: a row or field under them has them wait until the focus moves on
+        let notes_id = egui::Id::unique("toasts-rect");
+        let last: Option<egui::Rect> = ctx.data(|d| d.get_temp(notes_id));
+        let focused = ctx
+            .memory(|m| m.focused())
+            .and_then(|id| ctx.read_response(id))
+            // a note's own close button is not something under the notes
+            .filter(|r| r.layer_id.id != egui::Id::unique("toasts"))
+            .map(|r| r.rect);
+        if let (Some(notes), Some(f)) = (last, focused) {
+            if notes.intersects(f) {
+                for t in self.toasts.iter_mut() {
+                    t.until = t.until.max(now + Duration::from_secs(3));
+                }
+                return;
+            }
+        }
         let mut dismiss: Option<usize> = None;
         // in the bottom right corner of the page, out of the way of what is being read in the middle
         let screen = ctx.content_rect();
         let page = if self.page_rect.is_positive() { self.page_rect } else { screen };
         let max_w = (page.width() - 32.0).clamp(200.0, 360.0);
-        egui::Area::new(egui::Id::unique("toasts"))
+        let shown = egui::Area::new(egui::Id::unique("toasts"))
             .pivot(egui::Align2::RIGHT_BOTTOM)
             .fixed_pos(egui::pos2(page.right(), screen.bottom() - 24.0))
             .order(egui::Order::Foreground)
@@ -1585,6 +1602,7 @@ impl App {
                     ui.add_space(6.0);
                 }
             });
+        ctx.data_mut(|d| d.insert_temp(notes_id, shown.response.rect));
         if let Some(i) = dismiss {
             self.toasts.remove(i);
         }
@@ -2610,9 +2628,6 @@ impl App {
                 v if v.starts_with("settings") => self.shot_settings(ctx, v),
                 "who" => {
                     self.page = Page::Home;
-                    theme::set_dark(true);
-                    theme::apply(ctx, false);
-                    self.settings.theme = crate::config::DEFAULT_THEME.into();
                     self.who = Some(whoplays::WhoState::default());
                 }
                 "tools" => self.page = Page::Tools,

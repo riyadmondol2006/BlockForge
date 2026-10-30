@@ -317,13 +317,12 @@ impl CraftState {
                 });
             }
         });
-        if merged {
+        // in a small window the totals give their line to the answer: the number to gather is on the shopping list's
+        // head, and the steps, operations and storage have tabs of their own
+        if merged && !pill_shown {
             ui.horizontal(|ui| {
-                if !pill_shown {
-                    let (good, text) = plan_state(v);
-                    status_text(ui, good, text);
-                }
-                self.figures(ui, v);
+                let (good, text) = plan_state(v);
+                status_text(ui, good, text);
             });
         }
         ui.spacing_mut().item_spacing.y = 12.0;
@@ -501,17 +500,21 @@ impl CraftState {
         panel(ui, |ui| {
             let total = plan.materials.len();
             let ticked = plan.materials.iter().filter(|(i, _)| self.done.contains(&format!("gather:{i}"))).count();
+            // one line: the title, how many kinds and how many in all, how far the ticking got, and Copy list; a thin
+            // bar under it shows the ticking too
+            let gather: u64 = plan.materials.iter().map(|(_, n)| *n).sum();
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
                 card_title(ui, "To gather");
-                ui.label(
-                    RichText::new(if total == 1 { "(1 item)".to_string() } else { format!("({total} items)") })
-                        .color(c_muted()),
-                );
+                let kinds = if total == 1 { "1 kind".to_string() } else { format!("{total} kinds") };
+                ui.label(RichText::new(format!("({kinds} \u{00B7} {} in all)", thousands(gather))).color(c_muted()));
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if total > 0 && secondary(ui, "Copy list").on_hover_text("Copy the shopping list as text").clicked()
                     {
                         acts.push(Act::Copy(saved::clipboard_list(&book.ds, plan)));
+                    }
+                    if total > 0 {
+                        small_muted(ui, format!("{ticked} of {total} ticked"));
                     }
                 });
             });
@@ -519,18 +522,7 @@ impl CraftState {
                 muted(ui, "Nothing to gather: everything comes from your items or from what you bring.");
                 return;
             }
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 10.0;
-                let text = format!("{ticked} of {total} ticked");
-                let w =
-                    ui.painter().layout_no_wrap(text.clone(), egui::FontId::proportional(FS_META), c_muted()).size().x;
-                ui.scope(|ui| {
-                    ui.set_width((ui.available_width() - w - 10.0).max(40.0));
-                    ui.add_space(0.0);
-                    progress_bar(ui, Some(ticked as f32 / total as f32), 4.0);
-                });
-                small_muted(ui, text);
-            });
+            progress_bar(ui, Some(ticked as f32 / total as f32), 3.0);
             ui.add_space(4.0);
             for (k, (id, qty)) in plan.materials.iter().enumerate() {
                 let key = format!("gather:{id}");
@@ -538,12 +530,17 @@ impl CraftState {
                 let before = on;
                 let supplied = self.supplied.contains(id);
                 let mut unbring = false;
+                // what the player's own items already cover, right on the row, so the shorter list explains itself
+                let from_stock = plan.ledger.iter().find(|r| &r.item == id).map(|r| r.from_stock).unwrap_or(0);
                 self.list_row(ui, book, id, *qty, Some(&mut on), before, k + 1 == total, |ui| {
                     if supplied {
                         if x_button(ui, "No longer bringing this") {
                             unbring = true;
                         }
                         small_faint(ui, "you bring");
+                    }
+                    if from_stock > 0 {
+                        small_faint(ui, format!("+{} from your items", thousands(from_stock)));
                     }
                 });
                 if on != before {

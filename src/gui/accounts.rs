@@ -213,7 +213,9 @@ impl App {
                                     acts.sign_in = true;
                                     ui.close();
                                 }
-                                if ui.button("Copy UUID").clicked() {
+                                // the UUID itself is in the menu too, so it can be read without a pointer to hover
+                                let short: String = acc.uuid.chars().take(8).collect();
+                                if ui.button(format!("Copy UUID ({short}\u{2026})")).clicked() {
                                     ui.ctx().copy_text(acc.uuid.clone());
                                     acts.copied = true;
                                     ui.close();

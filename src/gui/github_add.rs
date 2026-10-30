@@ -293,7 +293,10 @@ impl App {
                     }
                 },
                 |ui| {
-                    if secondary(ui, "Cancel").clicked() {
+                    // the safe answer has the focus when the window opens, so Enter or Space never confirms by accident
+                    let safe = secondary(ui, "Cancel");
+                    focus_when_shown(ui, &safe);
+                    if safe.clicked() {
                         action.set(Some(Action::Close));
                     }
                     if primary_enabled(ui, "Add", can_add).clicked() {

@@ -574,7 +574,10 @@ impl App {
                 "ftb-updates",
                 |_| {},
                 |ui| {
-                    if secondary(ui, "Close").clicked() {
+                    // the safe answer has the focus when the window opens, so Enter or Space never confirms by accident
+                    let safe = secondary(ui, "Close");
+                    focus_when_shown(ui, &safe);
+                    if safe.clicked() {
                         close = true;
                     }
                 },
@@ -717,7 +720,10 @@ impl App {
                     } else if !ready {
                         small_muted(ui, "Install waits for the version\u{2019}s details");
                     }
-                    if secondary(ui, "Close").clicked() {
+                    // the safe answer has the focus when the window opens, so Enter or Space never confirms by accident
+                    let safe = secondary(ui, "Close");
+                    focus_when_shown(ui, &safe);
+                    if safe.clicked() {
                         close = true;
                     }
                     if primary_enabled(ui, "Install", ready && !installing).clicked() {
@@ -804,7 +810,10 @@ impl App {
                     }
                 },
                 |ui| {
-                    if secondary(ui, "Cancel").clicked() {
+                    // the safe answer has the focus when the window opens, so Enter or Space never confirms by accident
+                    let safe = secondary(ui, "Cancel");
+                    focus_when_shown(ui, &safe);
+                    if safe.clicked() {
                         dismiss = true;
                     }
                     if primary(ui, "Try again").clicked() {

@@ -1455,7 +1455,10 @@ impl App {
                     if !reason.is_empty() {
                         small_muted(ui, reason);
                     }
-                    if secondary(ui, "Cancel").clicked() {
+                    // the safe answer has the focus when the window opens, so Enter or Space never confirms by accident
+                    let safe = secondary(ui, "Cancel");
+                    focus_when_shown(ui, &safe);
+                    if safe.clicked() {
                         close = true;
                     }
                     if primary_enabled(ui, if is_pack { "Install" } else { "Add" }, can).clicked() {
@@ -1745,7 +1748,10 @@ impl App {
                 "cf-updates",
                 |_| {},
                 |ui| {
-                    if secondary(ui, "Close").clicked() {
+                    // the safe answer has the focus when the window opens, so Enter or Space never confirms by accident
+                    let safe = secondary(ui, "Close");
+                    focus_when_shown(ui, &safe);
+                    if safe.clicked() {
                         close = true;
                     }
                     if w.mods.len() > 1 && primary(ui, "Update all").clicked() {

@@ -408,7 +408,7 @@ impl App {
                 for p in &d.written {
                     ui.horizontal_wrapped(|ui| {
                         check_label(ui, "Saved");
-                        ui.label(p.display().to_string());
+                        path_line(ui, &p.display().to_string());
                     });
                 }
                 if !d.written.is_empty() {
@@ -582,7 +582,10 @@ impl App {
                 },
                 |ui| {
                     ui.spacing_mut().item_spacing.x = 8.0;
-                    if secondary(ui, "Cancel").clicked() {
+                    // the safe answer has the focus when the window opens, so Enter or Space never confirms by accident
+                    let safe = secondary(ui, "Cancel");
+                    focus_when_shown(ui, &safe);
+                    if safe.clicked() {
                         close = true;
                     }
                     if primary_enabled(ui, if running { "Exporting" } else { "Export" }, ready).clicked() {
