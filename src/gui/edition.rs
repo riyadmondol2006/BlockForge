@@ -114,6 +114,16 @@ impl From<crate::curseforge::api::Section> for Content {
     }
 }
 
+/// What Explore shows: the CurseForge `section` when CurseForge is the side shown (`cf_active`), else Modrinth's
+/// `kind`. The two are kept apart: CurseForge's Worlds has no Modrinth kind, which stays at the one open before.
+pub(super) fn active_content(
+    cf_active: bool,
+    section: crate::curseforge::api::Section,
+    kind: crate::modrinth::Kind,
+) -> Content {
+    if cf_active { section.into() } else { kind.into() }
+}
+
 /// Whether `content` can go into `inst`. Anything can go into a Java Edition instance (Explore says what fits);
 /// Horizon runs no Java mods and no loader, so only what it reads as the game does goes into one of its instances:
 /// resource packs and worlds.
@@ -312,6 +322,24 @@ mod tests {
         assert!(takes(&hz, crate::modrinth::Kind::ResourcePack.into()));
         assert!(takes(&hz, crate::curseforge::api::Section::Worlds.into()));
         assert!(!takes(&hz, crate::curseforge::api::Section::ShaderPacks.into()));
+    }
+
+    #[test]
+    fn a_horizon_target_follows_what_explore_shows_not_the_kind_open_before() {
+        use crate::curseforge::api::Section;
+        use crate::modrinth::Kind;
+        let hz = instance(true);
+        // Mods, then Worlds on CurseForge: Modrinth's kind is still Mod, but Worlds is what is shown
+        assert_eq!(active_content(true, Section::Worlds, Kind::Mod), Content::Worlds);
+        assert!(takes(&hz, active_content(true, Section::Worlds, Kind::Mod)), "offered, and kept as the target");
+        // Resource packs, then Worlds
+        assert!(takes(&hz, active_content(true, Section::Worlds, Kind::ResourcePack)));
+        // back on Modrinth, its own kind counts again
+        assert_eq!(active_content(false, Section::Worlds, Kind::Mod), Content::Mods);
+        assert!(!takes(&hz, active_content(false, Section::Worlds, Kind::Mod)));
+        // plugins are for servers, never for a Horizon instance
+        assert!(!takes(&hz, active_content(true, Section::Plugins, Kind::ResourcePack)));
+        assert!(takes(&instance(false), active_content(true, Section::Plugins, Kind::Mod)));
     }
 
     #[test]

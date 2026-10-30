@@ -11,9 +11,10 @@ The section for a version is used as the text of its release on GitHub. Older re
   Minecraft: Java Edition, or Horizon. Horizon plays the Minecraft version its builds are made for (26.3 now), so there
   is no version or mod loader to pick: the card says what plays (singleplayer, servers, worlds in Minecraft's own
   format, resource packs, Horizon's own mods) and what doesn't (Java mods and mod loaders). BlockForge downloads
-  Horizon's signed release, checks it, and prepares it from its own copy of Minecraft, about 1.5 GB the first time.
-  Your normal Minecraft and its instances are left as they are. It needs a Microsoft account that owns Minecraft: Java
-  Edition. Experimental.
+  Horizon's signed release, checks it, and prepares it from its own copy of Minecraft with the Java that preparation
+  needs, which it gets by itself: about 1.5 GB the first time. The game then plays without Java. Your normal Minecraft
+  and its instances are left as they are. It needs a Microsoft account that owns Minecraft: Java Edition.
+  Experimental.
 - **A Horizon instance is an instance like the others:** Play, Stop, the log, play time, worlds, resource packs,
   screenshots, backups, rename, cover and delete work as usual, and so do the graphics-card choice and the memory
   setting: Horizon draws with the card chosen, and BlockForge sizes its preparation and its first-start render

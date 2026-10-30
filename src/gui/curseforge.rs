@@ -306,6 +306,12 @@ impl App {
 
     /// Draws Discover for CurseForge when that platform is selected. Returns `false` (drawing nothing) when
     /// Modrinth is selected, so the Modrinth page carries on.
+    /// What Explore shows now: the CurseForge section when CurseForge is the side shown (Worlds has no Modrinth kind,
+    /// so Modrinth's kind is left at whatever was open before), Modrinth's kind otherwise.
+    pub(super) fn explore_content(&self) -> super::edition::Content {
+        super::edition::active_content(self.cf.active, self.cf.section, self.discover.kind)
+    }
+
     pub(super) fn cf_discover_ui(&mut self, ui: &mut Ui) -> bool {
         use super::discover::*;
         self.cf_init();

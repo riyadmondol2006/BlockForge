@@ -88,7 +88,8 @@ pick: each Horizon build plays the Minecraft version it is made for (26.3 now).
   (automatic by default) to size Horizon's preparation and, on the first start, the render distance it begins with.
 - It needs a Microsoft account that owns Minecraft: Java Edition.
 - BlockForge downloads Horizon's signed release, checks it, and prepares it from BlockForge's own copy of Minecraft
-  (about 1.5 GB the first time). What Horizon needs is kept in the `horizon` folder of BlockForge's data folder and in
+  with the Java that preparation needs, which BlockForge gets by itself (about 1.5 GB the first time). The game then
+  plays without Java. What Horizon needs is kept in the `horizon` folder of BlockForge's data folder and in
   the instance's own folder; your normal Minecraft, its instances and other launchers are left as they are.
 - It is experimental: Horizon is young, and so is BlockForge's support for it.
 

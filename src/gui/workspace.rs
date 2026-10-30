@@ -410,7 +410,7 @@ impl App {
                     ("Last played", last, last_sub),
                     ("Play time", time, sessions),
                     ("Edition", crate::horizon::NAME.to_string(), build),
-                    ("Runs on", "Rust".to_string(), "No Java needed".to_string()),
+                    ("Runs as", "Native Rust".to_string(), "No Java while playing".to_string()),
                 ],
             );
             return;

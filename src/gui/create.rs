@@ -1170,8 +1170,9 @@ impl App {
             );
             let download = format!(
                 "BlockForge downloads Horizon's signed release, checks it, and prepares it from BlockForge's own copy \
-                 of Minecraft {mc}: about 1.5 GB the first time. Your normal Minecraft and its instances are left as \
-                 they are."
+                 of Minecraft {mc}, with the Java that preparation needs (BlockForge gets it by itself): about 1.5 GB \
+                 the first time. The game then plays without Java. Your normal Minecraft and its instances are left \
+                 as they are."
             );
             fact_line(ui, Icon::Download, &download);
             ui.add_space(6.0);
@@ -1311,7 +1312,7 @@ impl App {
                 // Horizon isn't Java: no performance mods, and its memory budget is set in its settings later
                 small_muted(
                     ui,
-                    "Horizon runs without Java and takes no mods from here. Its memory and graphics card are in the \
+                    "Horizon plays without Java and takes no mods from here. Its memory and graphics card are in the \
                      instance's settings once it is made.",
                 );
                 return;

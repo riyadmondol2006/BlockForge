@@ -1895,7 +1895,7 @@ impl App {
             .map(|i| clip(i.name(), 24))
             .unwrap_or_else(|| "Any instance".into());
         let instances = &self.instances;
-        let kind = self.discover.kind;
+        let content = self.explore_content();
         let target = &mut self.discover.target;
         dropdown(ui, "target", "For", &current, target.is_some(), false, |ui| {
             if ui.selectable_label(target.is_none(), "Any instance").clicked() {
@@ -1904,7 +1904,7 @@ impl App {
             }
             ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
                 // a Horizon instance only for what it can take
-                for inst in instances.iter().filter(|i| super::edition::takes(i, kind.into())) {
+                for inst in instances.iter().filter(|i| super::edition::takes(i, content)) {
                     let on = target.as_ref() == Some(&inst.folder);
                     if ui.selectable_label(on, instance_choice(inst)).clicked() {
                         *target = Some(inst.folder.clone());
@@ -2476,13 +2476,13 @@ impl App {
 
     pub(super) fn discover_ui(&mut self, ui: &mut Ui) {
         // an instance that was deleted or renamed can't be the target any more, nor a Horizon instance for what it
-        // can't take (its mods, say, after its resource packs)
-        let kind = self.discover.kind;
+        // can't take (its mods, say, after its resource packs), judged by what Explore shows now, on either side
+        let content = self.explore_content();
         if self
             .discover
             .target
             .as_ref()
-            .is_some_and(|f| self.instance(f).is_none_or(|i| !super::edition::takes(i, kind.into())))
+            .is_some_and(|f| self.instance(f).is_none_or(|i| !super::edition::takes(i, content)))
         {
             self.discover.target = None;
             self.discover.searched = false;

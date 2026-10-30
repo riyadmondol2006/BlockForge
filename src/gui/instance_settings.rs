@@ -213,6 +213,17 @@ impl InstDraft {
     /// the launcher-wide Java arguments: the draft shows them when the instance has none of its own, and they are
     /// not this page's to judge (with `-Xmx` there, saving anything at all here used to fail).
     fn validate(&self, uses_mc_java: bool, global_args: &str) -> Option<String> {
+        self.validate_java(uses_mc_java, global_args).or_else(|| self.validate_general())
+    }
+
+    /// [`InstDraft::validate`] for the game the instance plays: a Horizon instance has no Java settings on its page,
+    /// so only the general ones are checked (a Java path it can't see must never keep its Play as from saving).
+    fn validate_for(&self, horizon: bool, uses_mc_java: bool, global_args: &str) -> Option<String> {
+        if horizon { self.validate_general() } else { self.validate(uses_mc_java, global_args) }
+    }
+
+    /// The checks of the Java settings: the Java path, and no memory in the Java arguments.
+    fn validate_java(&self, uses_mc_java: bool, global_args: &str) -> Option<String> {
         if !uses_mc_java && !std::path::Path::new(&self.java_path).join("bin").exists() {
             return Some("The Java Path you set is incorrect. Please verify it points to the folder where the bin folder is and try again.".into());
         }
@@ -227,6 +238,11 @@ impl InstDraft {
                     .into(),
             );
         }
+        None
+    }
+
+    /// The checks of the settings every instance has: where Quick play starts.
+    fn validate_general(&self) -> Option<String> {
         if self.quick == QuickKind::Multi {
             let a = self.server.trim();
             if a.is_empty() {
@@ -257,6 +273,29 @@ impl InstDraft {
         uses_mc_java: bool,
         has_java_version: bool,
     ) {
+        self.write_general(l);
+        self.write_java(l, settings, uses_mc_java, has_java_version);
+    }
+
+    /// [`InstDraft::write_to`] for the game the instance plays: a Horizon instance gets only what its page shows (the
+    /// account, Quick play, the memory and the graphics card); the Java settings it never saw are left as they are.
+    fn write_for(
+        &self,
+        l: &mut LauncherBlock,
+        settings: &crate::config::Settings,
+        horizon: bool,
+        uses_mc_java: bool,
+        has_java_version: bool,
+    ) {
+        if horizon {
+            self.write_general(l);
+        } else {
+            self.write_to(l, settings, uses_mc_java, has_java_version);
+        }
+    }
+
+    /// What every instance has: who plays it, where it starts, its memory and its graphics card.
+    fn write_general(&self, l: &mut LauncherBlock) {
         set_ex(l, "account", self.account.clone().map(Value::String));
         let quick = match self.quick {
             QuickKind::Multi => json!({"serverAddress": self.server.trim()}),
@@ -279,6 +318,17 @@ impl InstDraft {
                 l.maximum_memory = None;
             }
         }
+        set_ex(l, "gpu", self.gpu.clone().map(Value::String));
+    }
+
+    /// The Java settings: memory for loaded code, the Java, its arguments, the library switches and the commands.
+    fn write_java(
+        &self,
+        l: &mut LauncherBlock,
+        settings: &crate::config::Settings,
+        uses_mc_java: bool,
+        has_java_version: bool,
+    ) {
         l.perm_gen = if self.perm_gen == settings.metaspace { None } else { Some(self.perm_gen) };
         if !uses_mc_java || !has_java_version {
             l.java_path = if self.java_path == settings.java_path { None } else { Some(self.java_path.clone()) };
@@ -294,7 +344,6 @@ impl InstDraft {
         set_ex(l, "preLaunchCommand", some(&self.pre).map(Value::String));
         set_ex(l, "postExitCommand", some(&self.post).map(Value::String));
         l.wrapper_command = some(&self.wrapper);
-        set_ex(l, "gpu", self.gpu.clone().map(Value::String));
     }
 }
 
@@ -586,11 +635,12 @@ impl App {
         let mut chosen = d.rebase(InstDraft::from(&fresh, &settings));
         let has_java = fresh.file.version.java_version.is_some();
         let uses_mc_java = chosen.use_mc_java.unwrap_or(true) && has_java;
-        if let Some(e) = chosen.validate(uses_mc_java, &settings.java_parameters) {
+        let horizon = crate::horizon::is_horizon(&fresh);
+        if let Some(e) = chosen.validate_for(horizon, uses_mc_java, &settings.java_parameters) {
             d.error = Some(e);
             return false;
         }
-        chosen.write_to(&mut fresh.file.launcher, &settings, uses_mc_java, has_java);
+        chosen.write_for(&mut fresh.file.launcher, &settings, horizon, uses_mc_java, has_java);
         match fresh.save() {
             Ok(()) => {
                 self.instances[idx] = fresh;
@@ -674,7 +724,7 @@ impl App {
             let mut bar = SplitRow::new(ui, egui::Id::unique("instance-settings-bar"), 32.0);
             bar.left(ui, |ui| {
                 if horizon {
-                    small_muted(ui, "Horizon runs without Java: there is no Java, argument or command to set");
+                    small_muted(ui, "Horizon plays without Java: there is no Java, argument or command to set");
                 } else if let Some(i) = segmented(ui, &["General", "Java and Minecraft", "Commands"], d.tab as usize) {
                     d.tab = i as u8;
                 }
@@ -1091,6 +1141,46 @@ mod validation_tests {
         assert!(d.dirty());
         let d = d.with_base();
         assert!(!d.dirty(), "saved");
+    }
+
+    #[test]
+    fn a_horizon_instance_saves_without_the_java_checks_it_cannot_see() {
+        // no javaVersion in its file and an empty Java path: a Java instance would be stopped by the path
+        let settings = crate::config::Settings { java_path: String::new(), ..Default::default() };
+        let mut inst = instance(None);
+        assert!(inst.file.version.java_version.is_none());
+        crate::horizon::mark(&mut inst);
+        let mut d = InstDraft::from(&inst, &settings);
+        d.java_path = "/no/java/here".into();
+        d.account = Some("Alex".into());
+        let uses_mc_java = false;
+        assert_eq!(d.validate_for(true, uses_mc_java, &settings.java_parameters), None, "Horizon saves its Play as");
+        assert!(d.validate_for(false, uses_mc_java, &settings.java_parameters).is_some(), "Java still checks its path");
+        // the general checks still hold for Horizon
+        d.quick = QuickKind::Multi;
+        assert!(d.validate_for(true, uses_mc_java, &settings.java_parameters).is_some());
+        d.quick = QuickKind::Disabled;
+        // and only what its page shows is written
+        let mut l = inst.file.launcher.clone();
+        d.java_args = "-Xss4M".into();
+        d.wrapper = "prime-run %command%".into();
+        d.gpu = Some("dedicated".into());
+        d.write_for(&mut l, &settings, true, uses_mc_java, false);
+        assert_eq!(
+            (l.java_path.as_deref(), l.java_arguments.as_deref(), l.wrapper_command.as_deref()),
+            (None, None, None)
+        );
+        assert_eq!(l.extras.get("account").and_then(Value::as_str), Some("Alex"));
+        assert_eq!(l.extras.get("gpu").and_then(Value::as_str), Some("dedicated"));
+        assert!(crate::horizon::is_horizon(&Instance {
+            file: crate::instances::InstanceFile { launcher: l, ..Default::default() },
+            ..instance(None)
+        }));
+        // a Java instance writes its Java settings as before
+        let mut l = LauncherBlock::default();
+        d.write_for(&mut l, &settings, false, uses_mc_java, false);
+        assert_eq!(l.java_path.as_deref(), Some("/no/java/here"));
+        assert_eq!(l.wrapper_command.as_deref(), Some("prime-run %command%"));
     }
 
     #[test]
