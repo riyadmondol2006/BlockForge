@@ -96,7 +96,7 @@ impl Context {
 
 /// The folders of `$XDG_DATA_DIRS` (or the standard two when it is empty), without anything inside the AppImage's
 /// own mount, because the entry in there is ours and not a package's.
-fn system_dirs(xdg_data_dirs: &str, appdir: Option<&Path>) -> Vec<PathBuf> {
+pub(crate) fn system_dirs(xdg_data_dirs: &str, appdir: Option<&Path>) -> Vec<PathBuf> {
     let mut dirs: Vec<PathBuf> = xdg_data_dirs.split(':').filter(|d| d.starts_with('/')).map(PathBuf::from).collect();
     if dirs.is_empty() {
         dirs = vec![PathBuf::from("/usr/local/share"), PathBuf::from("/usr/share")];
@@ -171,7 +171,7 @@ fn helper_entry_exists(applications: &Path) -> bool {
 }
 
 /// Writes `data` to `path` through a temporary file, unless the file already holds exactly that. `true` if it wrote.
-fn write_if_changed(path: &Path, data: &[u8]) -> io::Result<bool> {
+pub(crate) fn write_if_changed(path: &Path, data: &[u8]) -> io::Result<bool> {
     if fs::read(path).is_ok_and(|old| old == data) {
         return Ok(false);
     }
@@ -248,7 +248,7 @@ pub fn integrate(ctx: &Context, refresh: bool) -> io::Result<Outcome> {
 }
 
 /// Runs a helper program, ignoring a missing program, a failure and anything it prints.
-fn run_quietly<'a>(program: &str, args: impl IntoIterator<Item = &'a OsStr>) {
+pub(crate) fn run_quietly<'a>(program: &str, args: impl IntoIterator<Item = &'a OsStr>) {
     let _ = Command::new(program).args(args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).status();
 }
 

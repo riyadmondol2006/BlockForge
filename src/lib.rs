@@ -38,6 +38,7 @@ pub mod diagnostics;
 pub mod disk;
 pub mod export;
 pub mod ftb;
+pub mod game_icons;
 pub mod github;
 pub mod gpu;
 pub mod horizon;

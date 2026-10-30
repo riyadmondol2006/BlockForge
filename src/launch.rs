@@ -809,6 +809,9 @@ pub async fn prepare_ext(
 
     let dashed_uuid = account.uuid.clone();
     let censor = gamelog::LineCensor::new(&[], "", Some(token.as_str()).filter(|t| *t != "0"), false);
+    if let Some(index) = &version.asset_index {
+        crate::game_icons::ensure_minecraft(settings, dirs, &index.id, instance.file.version.kind == "snapshot");
+    }
     Ok(Prepared {
         censor,
         program,
