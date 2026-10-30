@@ -609,12 +609,7 @@ pub fn paint_avatar(ui: &Ui, rect: egui::Rect, name: &str) {
 }
 
 /// An on/off switch: ink when on, a quiet outlined track when off.
-pub fn toggle(ui: &mut Ui, on: &mut bool) -> Response {
-    toggle_named(ui, on, "")
-}
-
-/// [`toggle`] that tells a screen reader what it switches: `name` is the title of its row ("Item frames", the mod's
-/// name).
+/// `name` tells a screen reader what it switches: the title of its row ("Item frames", the mod's name).
 pub fn toggle_named(ui: &mut Ui, on: &mut bool, name: &str) -> Response {
     let size = vec2(36.0, 20.0);
     // the track is 36 x 20; the part that takes a click is 40 x 28
@@ -944,8 +939,19 @@ pub fn notice(ui: &mut Ui, kind: NoticeKind, text: &str, action: Option<&str>) -
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
-                ui.add(egui::Label::new(RichText::new(text).color(fg)).wrap());
-                action.map(|a| ui.with_layout(Layout::right_to_left(Align::Center), |ui| secondary(ui, a)).inner)
+                // the words wrap in the room the button leaves (as wide as it was last time), so a long message never
+                // runs under it
+                let id = ui.scope_id().with(("notice-action", text));
+                let button_w = if action.is_some() { remembered_width(ui, id, 120.0) + 12.0 } else { 0.0 };
+                let words_w = (ui.available_width() - button_w).max(80.0);
+                ui.allocate_ui_with_layout(vec2(words_w, 0.0), Layout::left_to_right(Align::Center), |ui| {
+                    ui.add(egui::Label::new(RichText::new(text).color(fg)).wrap());
+                });
+                action.map(|a| {
+                    let r = ui.with_layout(Layout::right_to_left(Align::Center), |ui| secondary(ui, a)).inner;
+                    remember_width(ui, id, r.rect.width());
+                    r
+                })
             })
             .inner
         })
