@@ -1,7 +1,8 @@
-//! Colours and look: "glass and depth". Deep, slightly blue grounds, surfaces that sit in layers with soft shadows,
-//! rounded shapes, and one brand gradient (emerald into cyan) for the main actions and for progress. There is a dark
-//! and a light variant; the theme the player picks decides which one is in use, and every colour is looked up when it
-//! is drawn so a change shows at once.
+//! Colours and look: "the Workbench". A deep blue-black ground with a faint pattern of blocks, surfaces in three
+//! steps (surface, elevated, what floats), one mint primary for Play and the main actions, and a warm amber secondary
+//! for what wants a look (favourites, updates). Technical facts (versions, paths, logs) are set in a monospace face.
+//! There is a dark and a light variant; the theme the player picks decides which one is in use, and every colour is
+//! looked up when it is drawn so a change shows at once.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -28,84 +29,94 @@ fn pick(dark: u32, light: u32) -> Color32 {
 
 /// Window background, under the soft glow drawn behind the pages.
 pub fn c_bg() -> Color32 {
-    pick(0x0A0D14, 0xEEF1F6)
+    pick(0x0B1016, 0xF2F4F7)
 }
 /// The sidebar: a pane of glass over the ground.
 pub fn c_surface() -> Color32 {
-    pick(0x0E121B, 0xF7F8FB)
+    pick(0x0D131B, 0xF8F9FB)
 }
 /// Cards and panels.
 pub fn c_card() -> Color32 {
-    pick(0x131824, 0xFFFFFF)
+    pick(0x151D29, 0xFFFFFF)
 }
 /// Inputs and tonal buttons.
 pub fn c_field() -> Color32 {
-    pick(0x182031, 0xFFFFFF)
+    pick(0x1A2433, 0xFFFFFF)
 }
 /// The fill of a row, a nav item or a ghost button under the pointer.
 pub fn c_hover() -> Color32 {
-    pick(0x1D2638, 0xECEFF5)
+    pick(0x1E2939, 0xEBEFF4)
 }
 /// The open nav item, a pressed button, a selected segment, an empty cell of the play strip.
 pub fn c_active() -> Color32 {
-    pick(0x253047, 0xE0E6EF)
+    pick(0x243247, 0xDFE5EE)
 }
 /// Old names for the hover fill, kept so older code reads the same.
 pub fn c_card_hover() -> Color32 {
     c_hover()
 }
 pub fn c_field_hover() -> Color32 {
-    pick(0x1F2840, 0xF2F5F9)
+    pick(0x202B3C, 0xF2F5F9)
 }
 /// Menus, dialogs and tooltips: what floats sits one step above the cards.
 pub fn c_raised() -> Color32 {
-    pick(0x18202F, 0xFFFFFF)
+    pick(0x1A2332, 0xFFFFFF)
 }
 /// The line around cards and panels: barely there.
 pub fn c_border() -> Color32 {
-    pick(0x222B3D, 0xE1E5EC)
+    pick(0x212D3F, 0xDDE2E9)
 }
 /// The line between rows inside one card or list.
 pub fn c_rule() -> Color32 {
-    pick(0x1A2232, 0xECEFF4)
+    pick(0x1A2433, 0xEBEEF3)
 }
 /// The line around things you can press: one step stronger than a card's, and at least 3:1 against the card, the
 /// field and the page behind it (WCAG 1.4.11), since in the light look a field is white on a white card and the line
 /// is all that shows where it is.
 pub fn c_control() -> Color32 {
-    pick(0x66728C, 0x8A93A3)
+    pick(0x66748C, 0x8A93A3)
 }
 pub fn c_text() -> Color32 {
-    pick(0xE9EDF5, 0x0F1420)
+    pick(0xE8EDF4, 0x0D141C)
 }
 pub fn c_muted() -> Color32 {
-    pick(0xA6AFC2, 0x515A6B)
+    pick(0xA3AEBF, 0x4F5A69)
 }
 /// Meta text, placeholders and the like (4.5:1 on the cards). Never on `c_active` or `c_selection`: use `c_muted` there.
 pub fn c_faint() -> Color32 {
-    pick(0x8A94A9, 0x5E6778)
+    pick(0x8893A6, 0x5C6776)
 }
 /// A selected list row or combo item, and selected text.
 pub fn c_selection() -> Color32 {
-    pick(0x2A3550, 0xDCE3EE)
+    pick(0x27364D, 0xD9E2EC)
 }
 /// The brand colour, where the gradient starts: Play, the main action, progress, what is switched on.
 pub fn c_accent() -> Color32 {
-    pick(0x34D399, 0x047857)
+    pick(0x2DD4AA, 0x0A7A62)
 }
 /// Where the brand gradient ends.
 pub fn c_accent2() -> Color32 {
-    pick(0x22D3EE, 0x0E7490)
+    pick(0x5EE6C6, 0x0F766E)
 }
 pub fn c_accent_hover() -> Color32 {
-    pick(0x6EE7B7, 0x065F46)
+    pick(0x6EEBCB, 0x07614E)
 }
 pub fn c_on_accent() -> Color32 {
-    pick(0x03251A, 0xFFFFFF)
+    pick(0x03261D, 0xFFFFFF)
 }
 /// The tint behind a highlighted banner, a selected chip or a file dropped on the window.
 pub fn c_accent_soft() -> Color32 {
-    pick(0x0F2E26, 0xD7F5EA)
+    pick(0x0D2E29, 0xD3F4EA)
+}
+/// The warm secondary: a favourite's star, an update waiting, a highlight that is not the main action.
+#[allow(dead_code)]
+pub fn c_secondary() -> Color32 {
+    pick(0xF3B56B, 0x9A5A06)
+}
+/// The tint behind something marked in the secondary colour.
+#[allow(dead_code)]
+pub fn c_secondary_soft() -> Color32 {
+    pick(0x2C2316, 0xFCEFD9)
 }
 pub fn c_danger() -> Color32 {
     pick(0xFF8A8A, 0xC02626)
@@ -144,10 +155,10 @@ pub fn c_glass_edge() -> Color32 {
 }
 
 /// Corner radii, used everywhere so the shapes agree: cards and panels, things you press, small tags, dialogs.
-pub const R_CARD: u8 = 14;
-pub const R_CONTROL: u8 = 10;
+pub const R_CARD: u8 = 12;
+pub const R_CONTROL: u8 = 8;
 pub const R_TAG: u8 = 6;
-pub const R_DIALOG: u8 = 18;
+pub const R_DIALOG: u8 = 16;
 
 /// The type scale: nothing else is used.
 pub const FS_TITLE: f32 = 26.0;

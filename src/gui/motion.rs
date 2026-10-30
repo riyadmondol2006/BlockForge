@@ -156,20 +156,115 @@ pub fn glow(painter: &Painter, center: Pos2, radius: f32, color: Color32) {
     painter.add(egui::Shape::mesh(mesh));
 }
 
-/// The ground of the window: the background colour with two wide, faint glows of the brand colours in the upper
-/// corners, so the glass of the sidebar and the cards has something to sit over.
+/// The ground of the window: the background colour, a faint pattern of blocks that fades out lower down (when
+/// "background artwork" is on), and one wide, faint glow of the primary colour in the upper left.
 pub fn backdrop(painter: &Painter, rect: Rect) {
     painter.rect_filled(rect, 0.0, c_bg());
-    let (a1, a2) = if is_dark() { (34, 26) } else { (40, 30) };
-    let tint = |c: Color32, a: u8| Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), a);
+    if pattern_on() {
+        let tex = pattern_texture(painter.ctx());
+        let tile = PATTERN_TILE;
+        let uv = Rect::from_min_max(
+            egui::pos2(rect.left() / tile, rect.top() / tile),
+            egui::pos2(rect.right() / tile, rect.bottom() / tile),
+        );
+        painter.image(tex.id(), rect, uv, Color32::WHITE);
+        // the pattern is there at the top and gone by two thirds of the way down
+        let bg = c_bg();
+        let clear = Color32::from_rgba_unmultiplied(bg.r(), bg.g(), bg.b(), 0);
+        let mut mesh = egui::Mesh::default();
+        let fade = rect.top() + rect.height() * 0.66;
+        mesh.colored_vertex(rect.left_top(), clear);
+        mesh.colored_vertex(rect.right_top(), clear);
+        mesh.colored_vertex(egui::pos2(rect.right(), fade), bg);
+        mesh.colored_vertex(egui::pos2(rect.left(), fade), bg);
+        mesh.add_triangle(0, 1, 2);
+        mesh.add_triangle(0, 2, 3);
+        painter.add(egui::Shape::mesh(mesh));
+        painter.rect_filled(Rect::from_min_max(egui::pos2(rect.left(), fade), rect.right_bottom()), 0.0, bg);
+    }
+    let a = if is_dark() { 22 } else { 26 };
+    let c = c_accent();
     let w = rect.width().max(rect.height());
-    glow(painter, rect.left_top() + egui::vec2(rect.width() * 0.28, -w * 0.06), w * 0.55, tint(c_accent(), a1));
-    glow(painter, rect.right_top() + egui::vec2(-rect.width() * 0.08, w * 0.04), w * 0.45, tint(c_accent2(), a2));
+    glow(
+        painter,
+        rect.left_top() + egui::vec2(rect.width() * 0.3, -w * 0.08),
+        w * 0.5,
+        Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), a),
+    );
+}
+
+/// Points one repeat of the block pattern covers (it is 32 by 32 texels, so a block is 4 points across).
+const PATTERN_TILE: f32 = 128.0;
+
+static PATTERN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+/// Settings: "Show background artwork".
+#[allow(dead_code)]
+pub fn set_pattern(on: bool) {
+    PATTERN.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn pattern_on() -> bool {
+    PATTERN.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// The block pattern, made once for each look: most cells empty, some a breath lighter (darker in the light look),
+/// a few in little clusters like the blocks of a hillside seen from far away.
+fn pattern_texture(ctx: &Context) -> egui::TextureHandle {
+    let dark = is_dark();
+    let key = Id::unique(if dark { "bg-pattern-dark" } else { "bg-pattern-light" });
+    if let Some(t) = ctx.data(|d| d.get_temp::<egui::TextureHandle>(key)) {
+        return t;
+    }
+    let image = pattern_image(dark);
+    let t = ctx.load_texture("bg-pattern", image, egui::TextureOptions::NEAREST_REPEAT);
+    ctx.data_mut(|d| d.insert_temp(key, t.clone()));
+    t
+}
+
+fn pattern_image(dark: bool) -> egui::ColorImage {
+    const N: usize = 32;
+    let cell = |x: usize, y: usize| -> u32 {
+        // a small fixed hash, so the pattern is the same on every start
+        let mut h = (x as u32).wrapping_mul(0x9E37_79B9) ^ (y as u32).wrapping_mul(0x85EB_CA6B);
+        h ^= h >> 15;
+        h = h.wrapping_mul(0x2C1B_3C6D);
+        h ^ (h >> 12)
+    };
+    let mut pixels = vec![Color32::TRANSPARENT; N * N];
+    for y in 0..N {
+        for x in 0..N {
+            let h = cell(x / 2, y / 2) % 100;
+            let fine = cell(x, y) % 100;
+            let level = if h < 9 && fine < 85 {
+                3
+            } else if fine < 7 {
+                2
+            } else if fine < 12 {
+                1
+            } else {
+                0
+            };
+            let a = [0u8, 4, 6, 9][level];
+            pixels[y * N + x] =
+                if dark { Color32::from_white_alpha(a) } else { Color32::from_black_alpha(a.saturating_sub(1)) };
+        }
+    }
+    egui::ColorImage::new([N, N], pixels)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_block_pattern_is_faint_and_the_same_every_time() {
+        let a = pattern_image(true);
+        assert_eq!(a.pixels, pattern_image(true).pixels);
+        let lit = a.pixels.iter().filter(|p| p.a() > 0).count();
+        assert!(lit > 40 && lit < 32 * 32 / 3, "some blocks, mostly ground: {lit}");
+        assert!(a.pixels.iter().all(|p| p.a() <= 9), "never more than a breath");
+    }
 
     #[test]
     fn easing_starts_fast_and_lands_gently() {

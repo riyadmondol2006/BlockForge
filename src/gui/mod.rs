@@ -40,6 +40,7 @@ mod tray;
 mod updates;
 mod whoplays;
 mod widgets;
+mod workbench;
 
 // services: tools, servers, news, skins, backups
 mod backups;
@@ -86,7 +87,7 @@ pub(super) const STOP_WARNING: &str = "Minecraft is stopped at once. A world tha
 const MIN_ZOOM: f32 = 0.5;
 const MAX_ZOOM: f32 = 3.0;
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Page {
     Home,
     Library,
@@ -294,6 +295,10 @@ pub struct App {
     manifest: Option<Arc<Manifest>>,
     manifest_error: Option<String>,
     icons: HashMap<String, IconState>,
+    /// The drawn covers of the instances (see `workbench::cover_spec`).
+    covers: covers::Covers,
+    /// The page last open in each place of the sidebar, so going back to a place opens it there.
+    section_last: HashMap<workbench::Section, Page>,
     local_pictures: instance_icon::LocalPictures,
     play_cache: strip::PlayCache,
     java_list: Vec<JavaInstall>,
@@ -465,6 +470,8 @@ impl App {
             manifest: None,
             manifest_error: None,
             icons: HashMap::new(),
+            covers: Default::default(),
+            section_last: HashMap::new(),
             local_pictures: Default::default(),
             play_cache: Default::default(),
             java_list: Vec::new(),
@@ -1251,28 +1258,9 @@ impl App {
             }
         }
         ui.add_space(18.0);
-        // Three groups of destinations, then Settings and About pinned to the bottom with the account. Who plays is the
-        // account row at the bottom, so Accounts is not repeated in the list.
-        let groups: Vec<(&str, Vec<(Page, &str, Icon)>)> = vec![
-            ("Play", vec![(Page::Home, "Home", Icon::Home), (Page::Library, "Library", Icon::Library)]),
-            (
-                "Mods and modpacks",
-                vec![
-                    (Page::Discover, "Discover", Icon::Search),
-                    (Page::Packs, "ATLauncher & Technic", Icon::Package),
-                    (Page::Ftb, "FTB", Icon::Layers),
-                ],
-            ),
-            ("Utilities", {
-                #[allow(unused_mut)]
-                let mut tools = vec![(Page::Craft, "Crafting", Icon::Craft)];
-                #[cfg(feature = "converter")]
-                tools.push((Page::Convert, "World converter", Icon::Convert));
-                tools.push((Page::Servers, "Servers", Icon::Server));
-                tools.push((Page::Tools, "Tools", Icon::Wrench));
-                tools
-            }),
-        ];
+        // The five places, then Settings and About pinned to the bottom with the account. Who plays is the account
+        // row at the bottom, so Accounts is not repeated in the list.
+        let places = workbench::Section::MAIN;
         // games that are starting or running, and what is being downloaded, show from every page
         let playing: Vec<(String, String, std::time::Duration)> = self
             .games
@@ -1290,72 +1278,26 @@ impl App {
         };
         let reserve =
             (52.0 + 2.0 * 34.0 + 24.0 + tasks_h + playing.len().min(2) as f32 * 30.0).max(self.sidebar_bottom + 8.0);
-        // in a short window, or one where jobs and games take the room at the bottom, the group names go, so every
-        // destination still fits without scrolling
-        let items = groups.iter().map(|g| g.1.len()).sum::<usize>();
-        let compact = ui.available_height() < 610.0 || ui.available_height() - reserve < nav_list_height(items, 3);
         let mut go = None;
         // folded, the scroll bar (in a short window) floats over the icons' edge instead of taking room from them
         if rail {
             ui.spacing_mut().scroll.floating_allocated_width = 0.0;
         }
+        let here = workbench::Section::of(self.page);
         egui::ScrollArea::vertical()
             .id_salt("nav")
             .max_height((ui.available_height() - reserve).max(120.0))
             .auto_shrink([false, true])
             .show(ui, |ui| {
-                ui.spacing_mut().item_spacing.y = 2.0;
-                for (n, (group, items)) in groups.into_iter().enumerate() {
-                    if n > 0 {
-                        ui.add_space(if compact { 6.0 } else { 10.0 });
-                    }
-                    if !compact {
-                        ui.add_space(2.0);
-                        // the group's name; folded, a short line in its place keeps the groups apart
-                        let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 14.0), egui::Sense::hover());
-                        if open > 0.0 {
-                            let mut job = egui::text::LayoutJob::default();
-                            job.append(
-                                &group.to_uppercase(),
-                                0.0,
-                                egui::TextFormat {
-                                    font_id: egui::FontId::proportional(10.5),
-                                    color: c_faint().gamma_multiply(open),
-                                    extra_letter_spacing: 0.8,
-                                    ..Default::default()
-                                },
-                            );
-                            let galley = ui.fonts_mut(|f| f.layout_job(job));
-                            ui.painter().with_clip_rect(rect.intersect(ui.clip_rect())).galley(
-                                egui::pos2(rect.left() + 12.0, rect.center().y - galley.size().y / 2.0),
-                                galley,
-                                c_faint(),
-                            );
-                        }
-                        if open < 1.0 {
-                            let line = Stroke::new(1.0, c_border().gamma_multiply(1.0 - open));
-                            ui.painter().hline(rect.center().x - 10.0..=rect.center().x + 10.0, rect.center().y, line);
-                        }
-                        ui.add_space(2.0);
-                    } else if n > 0 && rail {
-                        let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 1.0), egui::Sense::hover());
-                        let line = Stroke::new(1.0, c_border());
-                        ui.painter().hline(rect.center().x - 10.0..=rect.center().x + 10.0, rect.center().y, line);
-                        ui.add_space(4.0);
-                    }
-                    for (page, label, icon) in items {
-                        let active = self.page == page || (page == Page::Library && self.page == Page::Instance);
-                        if self.nav_button(ui, icon, label, active).clicked() {
-                            go = Some(page);
-                        }
+                ui.spacing_mut().item_spacing.y = 4.0;
+                for place in places {
+                    if self.nav_button(ui, place.icon(), place.label(), here == place).clicked() {
+                        go = Some(place);
                     }
                 }
             });
-        match go {
-            #[cfg(feature = "converter")]
-            Some(Page::Convert) => self.open_convert(None),
-            Some(page) => self.page = page,
-            None => {}
+        if let Some(place) = go {
+            self.go_section(place);
         }
 
         let bottom = ui.with_layout(Layout::bottom_up(Align::Min), |ui| {
@@ -1418,7 +1360,7 @@ impl App {
             for (page, label, icon) in [(Page::About, "About", Icon::Info), (Page::Settings, "Settings", Icon::Sliders)]
             {
                 if self.nav_button(ui, icon, label, self.page == page).clicked() {
-                    self.page = page;
+                    self.go(page);
                 }
             }
             ui.add_space(8.0);
@@ -1895,12 +1837,6 @@ fn page_column(page: Page) -> f32 {
     }
 }
 
-/// How tall the sidebar's list of `items` destinations in `groups` groups is with the groups' names: the items with
-/// the room between them, and each name with its room.
-fn nav_list_height(items: usize, groups: usize) -> f32 {
-    items as f32 * 38.0 + groups as f32 * 22.0 + groups.saturating_sub(1) as f32 * 12.0
-}
-
 /// About how tall a [`task_row`] is: the name with its Cancel, the bar, a line of numbers and the gap.
 const TASK_ROW_HEIGHT: f32 = 58.0;
 
@@ -2066,15 +2002,6 @@ mod tests {
         // one job that doesn't know yet: the bar just moves
         assert_eq!(rail_fraction([Some(0.5), None].into_iter()), None);
         assert_eq!(rail_fraction(std::iter::empty()), None);
-    }
-
-    #[test]
-    fn the_group_names_go_when_the_list_would_not_fit_with_them() {
-        // ten destinations in three groups
-        let full = nav_list_height(10, 3);
-        assert_eq!(full, 380.0 + 66.0 + 24.0);
-        assert!(nav_list_height(10, 3) > nav_list_height(9, 3));
-        assert_eq!(nav_list_height(0, 0), 0.0);
     }
 
     #[test]
@@ -2272,6 +2199,7 @@ impl eframe::App for App {
 
 impl App {
     fn page_ui(&mut self, ui: &mut Ui) {
+        self.section_tabs(ui);
         match self.page {
             Page::Home => self.home_ui(ui),
             Page::Library => self.library_ui(ui),

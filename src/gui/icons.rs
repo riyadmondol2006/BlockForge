@@ -18,6 +18,8 @@ pub enum Icon {
     Craft,
     Package,
     Layers,
+    /// A block seen from above a corner: Explore.
+    Cube,
     Server,
     Wrench,
     #[cfg_attr(not(feature = "converter"), allow(dead_code))]
@@ -121,6 +123,11 @@ pub fn paint(p: &Painter, icon: Icon, c: Pos2, size: f32, color: Color32) {
         Icon::Layers => {
             line(&[(-0.92, -0.35), (0.0, -0.85), (0.92, -0.35), (0.0, 0.15), (-0.92, -0.35)]);
             line(&[(-0.92, 0.18), (0.0, 0.68), (0.92, 0.18)]);
+        }
+        Icon::Cube => {
+            line(&[(0.0, -0.92), (0.86, -0.46), (0.86, 0.5), (0.0, 0.96), (-0.86, 0.5), (-0.86, -0.46), (0.0, -0.92)]);
+            line(&[(-0.86, -0.46), (0.0, 0.0), (0.86, -0.46)]);
+            line(&[(0.0, 0.0), (0.0, 0.96)]);
         }
         Icon::Server => {
             for (top, bottom) in [(-0.85, -0.12), (0.12, 0.85)] {
