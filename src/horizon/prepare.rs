@@ -387,6 +387,8 @@ mod tests {
         };
         std::fs::write(dir.join("crates/horizon-prepare/src/lib.rs"), lib).unwrap();
         std::fs::write(program(dir, "horizon-client"), b"").unwrap();
+        std::fs::write(program(dir, "horizon-prepare"), b"").unwrap();
+        release::seal_for_tests(dir);
     }
 
     fn prepared(dir: &Path, mc: &str) {
