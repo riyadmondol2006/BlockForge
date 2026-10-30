@@ -235,7 +235,10 @@ impl App {
         let room = ui.available_width();
         // the picture gives way first in a narrow window
         let picture = (ui.available_height()).min(124.0);
-        if room >= 520.0 {
+        // the cover is the instance's picture; a picture of its own (instance.png) sits on it, the stand-in block
+        // would only cover it up
+        let own = self.local_picture(inst.root.join("instance.png")).is_some();
+        if room >= 520.0 && own {
             self.instance_icon(ui, inst, picture);
             ui.add_space(22.0);
         }
@@ -262,7 +265,7 @@ impl App {
         // Performance stays in a wide banner; decided by the banner's width alone, not by the buttons' (which it
         // changes), so the row doesn't flip between the two
         let roomy = room >= SHORT_ROOMY;
-        if room >= 480.0 {
+        if room >= 480.0 && self.local_picture(inst.root.join("instance.png")).is_some() {
             let side = ui.available_height().min(56.0);
             self.instance_icon(ui, inst, side);
             ui.add_space(16.0);
