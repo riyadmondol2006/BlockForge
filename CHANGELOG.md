@@ -3,6 +3,33 @@
 The section for a version is used as the text of its release on GitHub. Older releases (the Java versions, up to
 3.4.42.x) are on the [releases page](https://github.com/riyadmondol2006/BlockForge/releases).
 
+## 5.0.2
+
+A round of polish after an independent review of every page, which went from 6.5 to 8.7 out of 10.
+
+### Better
+
+- **Chinese, Japanese and Korean text** in mod and modpack names and descriptions now shows instead of empty boxes,
+  using a font your system already has.
+- **Instance page:** Play stays in the same place on every tab, the banner is shorter on the work tabs so lists start
+  higher, Open folder and Manage backups sit right under the figures, and the play history says what its bars mean.
+- **Crafting calculator:** the answer is in view without scrolling, even in a small window; when your own items change
+  the plan, "Your items · N applied · Edit" says so and opens them, and each material shows what your items cover.
+- **Explore:** the content kinds come first, then only the sources that have that kind; quieter result rows with the
+  version and loaders first; named loading states; pack pages with headings and lists.
+- **New instance:** name, memory and performance mods come first and the cover is one row with Change cover; the
+  loader version sits right under the chosen loader.
+- **World converter:** a conversion with warnings or unmatched blocks says so in amber instead of a plain success;
+  steps are ticked only once you have been through them; paths show their last folder.
+- **Dialogs** all put Cancel first and the main action last, and open with the safe answer focused. Export shows the
+  files it will include and how many; Who's playing puts your account first.
+- **Tools:** the network checker runs without the reporting setting, and sharing its report is a separate step that
+  asks first.
+- **Servers** that need attention are listed first, with Open folder and Reinstall beside the warning.
+- **Settings:** search shows the settings named first; Accounts and About open on their own.
+- Notes appear in the bottom right with a close button and wait while a dialog is open; switches are named for screen
+  readers; lighter shadows in the light look.
+
 ## 5.0.1
 
 ### What is new
