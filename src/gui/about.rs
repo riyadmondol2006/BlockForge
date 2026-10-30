@@ -115,6 +115,18 @@ impl App {
     }
 
     pub(super) fn about_ui(&mut self, ui: &mut Ui) {
+        self.account_corner(
+            ui,
+            super::Page::About,
+            "About",
+            "The version, updates, and where BlockForge keeps its files.",
+            COLUMN,
+            |app, ui| app.about_body(ui),
+        );
+    }
+
+    /// The page itself, beside the list of the account corner.
+    fn about_body(&mut self, ui: &mut Ui) {
         let mut copy = false;
         let mut open_data = false;
         let mut check = false;
@@ -147,7 +159,11 @@ impl App {
                         ui.spacing_mut().item_spacing.y = 3.0;
                         ui.add_space(2.0);
                         ui.label(RichText::new(crate::NAME).size(FS_TITLE).semibold());
-                        muted(ui, format!("Version {} \u{00B7} {}", version_text(), install_label(kind)));
+                        ui.horizontal_wrapped(|ui| {
+                            ui.spacing_mut().item_spacing.x = 6.0;
+                            ui.label(RichText::new(format!("v{}", version_text())).font(super::fonts::mono(FS_BODY)).color(c_text()));
+                            muted(ui, format!("\u{00B7} {}", install_label(kind)));
+                        });
                         ui.add_space(2.0);
                         ui.horizontal_wrapped(|ui| {
                             ui.spacing_mut().item_spacing.x = 6.0;
@@ -217,7 +233,8 @@ impl App {
                 ] {
                     rows.gap(ui);
                     key_value(ui, k, |ui| {
-                        ui.add(egui::Label::new(v).truncate());
+                        // the facts of the computer in the monospace face, like every technical figure
+                        ui.add(egui::Label::new(RichText::new(v).font(super::fonts::mono(FS_META + 1.0))).truncate());
                     });
                 }
                 rows.gap(ui);
@@ -227,7 +244,12 @@ impl App {
                             open_data = true;
                         }
                         ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                            ui.add(egui::Label::new(self.dirs.base.display().to_string()).truncate());
+                            ui.add(
+                                egui::Label::new(
+                                    RichText::new(self.dirs.base.display().to_string()).font(super::fonts::mono(FS_META)),
+                                )
+                                .truncate(),
+                            );
                         });
                     });
                 });

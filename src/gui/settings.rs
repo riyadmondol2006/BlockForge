@@ -15,11 +15,11 @@ use super::widgets::*;
 
 /// The widest the page's content gets; a wider window leaves the rest empty rather than stretching the rows.
 const PAGE_WIDTH: f32 = 720.0;
-/// The jump list at the left of a wide window, and the room between it and the groups.
-const NAV_W: f32 = 176.0;
-const NAV_GAP: f32 = 28.0;
-/// The least room the groups keep beside the jump list; a narrower window shows the groups as chips above instead.
-const NAV_CONTENT_MIN: f32 = 600.0;
+/// The list of sections at the left of a wide window, and the room between it and the settings.
+const NAV_W: f32 = 204.0;
+const NAV_GAP: f32 = 24.0;
+/// The least room the settings keep beside the list; a narrower window shows the sections as chips above instead.
+const NAV_CONTENT_MIN: f32 = 460.0;
 
 /// How wide the drop-downs and text fields of the rows are, so they line up down a card.
 pub(super) const CONTROL_W: f32 = 300.0;
@@ -78,69 +78,62 @@ fn saved_stamp(ui: &mut Ui) {
 
 // ---- the groups and the settings in them, as the search and the jump list know them
 
-/// The groups of the Settings page, in the order they are shown: the ones changed most often first.
+/// The sections of the Settings page, in the order the list at the left shows them.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum Group {
-    Game,
-    Performance,
     Appearance,
-    Launcher,
-    Backups,
+    Game,
+    Java,
     Network,
+    Backups,
+    Launcher,
     Privacy,
 }
 
 impl Group {
-    const ALL: [Group; 7] = [
-        Group::Game,
-        Group::Performance,
-        Group::Appearance,
-        Group::Launcher,
-        Group::Backups,
-        Group::Network,
-        Group::Privacy,
-    ];
+    const ALL: [Group; 7] =
+        [Group::Appearance, Group::Game, Group::Java, Group::Network, Group::Backups, Group::Launcher, Group::Privacy];
 
     fn title(self) -> &'static str {
         match self {
-            Group::Game => "Game",
-            Group::Performance => "Performance",
             Group::Appearance => "Appearance",
-            Group::Launcher => "Launcher",
+            Group::Game => "Game",
+            Group::Java => "Java & performance",
+            Group::Network => "Downloads and network",
             Group::Backups => "Backups",
-            Group::Network => "Network and downloads",
+            Group::Launcher => "Launcher",
             Group::Privacy => "Privacy",
         }
     }
 
-    /// The short name in the jump list.
+    /// The short name in the list at the left.
     fn short(self) -> &'static str {
         match self {
-            Group::Network => "Network",
+            Group::Network => "Downloads",
             g => g.title(),
         }
     }
 
     fn hint(self) -> &'static str {
         match self {
-            Group::Game => "Memory, Java and how games start",
-            Group::Performance => "Helpers that make games open sooner and run smoother",
             Group::Appearance => "How the launcher looks",
-            Group::Launcher => "Updates, the tray and where files are kept",
-            Group::Backups => "Automatic backups of instances and where they are kept",
+            Group::Game => "Memory, the console and how games start",
+            Group::Java => "Helpers that make games open sooner and run smoother, and the Java they run on",
             Group::Network => "Connection changes apply the next time BlockForge starts",
+            Group::Backups => "Automatic backups of instances and where they are kept",
+            Group::Launcher => "Updates, the tray and where files are kept",
             Group::Privacy => "Off unless you turn it on",
         }
     }
 
     fn icon(self) -> Icon {
         match self {
-            Group::Game => Icon::Play,
-            Group::Performance => Icon::Sliders,
             Group::Appearance => Icon::Layers,
-            Group::Launcher => Icon::Home,
+            Group::Game => Icon::Play,
+            Group::Java => Icon::Sliders,
+            Group::Network => Icon::Download,
             Group::Backups => Icon::Folder,
-            Group::Network => Icon::Server,
+            Group::Launcher => Icon::Home,
             Group::Privacy => Icon::Info,
         }
     }
@@ -171,8 +164,40 @@ const fn entry(
 
 use Group as G;
 
-/// Every setting of the page, group by group in the order they are shown.
-const ENTRIES: [Entry; 30] = [
+/// Every setting of the page, section by section in the order they are listed.
+const ENTRIES: [Entry; 31] = [
+    entry(
+        "theme",
+        G::Appearance,
+        false,
+        "Theme",
+        "Dark, light or the same as your system, and the colour themes the Java edition knows",
+        "dark light system colour color look material night",
+    ),
+    entry(
+        "zoom",
+        G::Appearance,
+        false,
+        "Interface size",
+        "How big text and buttons are. Ctrl + and Ctrl \u{2212} change it too",
+        "zoom scale font text size dpi bigger smaller percent",
+    ),
+    entry(
+        "artwork",
+        G::Appearance,
+        false,
+        "Show background artwork",
+        "A faint pattern of blocks behind the pages",
+        "pattern background blocks wallpaper decoration picture",
+    ),
+    entry(
+        "light-mode",
+        G::Appearance,
+        false,
+        "Light mode for slower PCs",
+        "Fewer animations and a smaller picture cache, for computers with 4 GB of memory or less",
+        "animations motion reduce slow low memory",
+    ),
     entry(
         "memory",
         G::Game,
@@ -215,7 +240,7 @@ const ENTRIES: [Entry; 30] = [
     ),
     entry(
         "compiler",
-        G::Game,
+        G::Java,
         true,
         "Java compiler",
         "Automatic uses the light one on computers with few cores, for much quicker starts. Full performance can give higher frame rates in long sessions.",
@@ -223,7 +248,7 @@ const ENTRIES: [Entry; 30] = [
     ),
     entry(
         "java-path",
-        G::Game,
+        G::Java,
         true,
         "Java path",
         "For games set not to use the Java that comes with Minecraft. Leave empty for automatic",
@@ -231,7 +256,7 @@ const ENTRIES: [Entry; 30] = [
     ),
     entry(
         "java-args",
-        G::Game,
+        G::Java,
         true,
         "Java arguments",
         "Extra options passed to the Java virtual machine",
@@ -239,7 +264,7 @@ const ENTRIES: [Entry; 30] = [
     ),
     entry(
         "fast-start",
-        G::Performance,
+        G::Java,
         false,
         "Fast start",
         super::performance::FAST_START_HINT,
@@ -247,7 +272,7 @@ const ENTRIES: [Entry; 30] = [
     ),
     entry(
         "smoothness",
-        G::Performance,
+        G::Java,
         false,
         "Smoothness helper",
         super::performance::LITE_HINT,
@@ -255,7 +280,7 @@ const ENTRIES: [Entry; 30] = [
     ),
     entry(
         "low-end",
-        G::Performance,
+        G::Java,
         false,
         "Low-end mode",
         super::performance::LOW_END_HINT,
@@ -263,7 +288,7 @@ const ENTRIES: [Entry; 30] = [
     ),
     entry(
         "class-cache",
-        G::Performance,
+        G::Java,
         false,
         "Speed up game start (class cache)",
         "Makes the next start of a game quicker (Minecraft 1.18 and newer)",
@@ -271,91 +296,11 @@ const ENTRIES: [Entry; 30] = [
     ),
     entry(
         "warm-up",
-        G::Performance,
+        G::Java,
         false,
         "Read game files ahead of Play",
         "Loads a game's files into memory while the launcher is idle so Play starts quicker",
         "preload cache disk speed warm",
-    ),
-    entry(
-        "theme",
-        G::Appearance,
-        false,
-        "Theme",
-        "Light and dark looks for the whole launcher",
-        "dark light colour color look material",
-    ),
-    entry(
-        "zoom",
-        G::Appearance,
-        false,
-        "Interface size",
-        "How big text and buttons are. Ctrl + and Ctrl \u{2212} change it too",
-        "zoom scale font text size dpi bigger smaller percent",
-    ),
-    entry(
-        "light-mode",
-        G::Appearance,
-        false,
-        "Light mode for slower PCs",
-        "Fewer animations and a smaller picture cache, for computers with 4 GB of memory or less",
-        "animations motion reduce slow low memory",
-    ),
-    entry(
-        "updates",
-        G::Launcher,
-        false,
-        "Check for BlockForge updates",
-        "Look on GitHub for a newer version and offer to install it",
-        "update version upgrade new release",
-    ),
-    entry(
-        "tray",
-        G::Launcher,
-        false,
-        "Tray icon",
-        "Show a tray menu while the launcher runs",
-        "system tray menu notification area",
-    ),
-    entry(
-        "data-folder",
-        G::Launcher,
-        false,
-        "Data folder",
-        "Where instances, mods and logs are stored",
-        "files directory location open path",
-    ),
-    entry(
-        "auto-backup",
-        G::Backups,
-        false,
-        "Back up after playing",
-        "Makes a backup every time a game closes",
-        "automatic backup save worlds",
-    ),
-    entry(
-        "backups-keep",
-        G::Backups,
-        false,
-        "Backups to keep",
-        "Per instance; the oldest go when a new one is made. 0 keeps them all",
-        "count number limit old delete",
-    ),
-    entry(
-        "backup-contents",
-        G::Backups,
-        false,
-        "Backup contents",
-        "What the automatic backup holds",
-        "mode worlds config mods",
-    ),
-    entry(
-        "backups-folder",
-        G::Backups,
-        true,
-        "Backups folder",
-        "Where instance backups are saved. Empty uses the backups folder in the data folder.",
-        "directory location path",
     ),
     entry(
         "connections",
@@ -396,6 +341,62 @@ const ENTRIES: [Entry; 30] = [
         "Downloads folder",
         "Where support bundles are saved. Empty uses your Downloads folder.",
         "directory location path support bundle",
+    ),
+    entry(
+        "auto-backup",
+        G::Backups,
+        false,
+        "Back up after playing",
+        "Makes a backup every time a game closes",
+        "automatic backup save worlds",
+    ),
+    entry(
+        "backups-keep",
+        G::Backups,
+        false,
+        "Backups to keep",
+        "Per instance; the oldest go when a new one is made. 0 keeps them all",
+        "count number limit old delete",
+    ),
+    entry(
+        "backup-contents",
+        G::Backups,
+        false,
+        "Backup contents",
+        "What the automatic backup holds",
+        "mode worlds config mods",
+    ),
+    entry(
+        "backups-folder",
+        G::Backups,
+        true,
+        "Backups folder",
+        "Where instance backups are saved. Empty uses the backups folder in the data folder.",
+        "directory location path",
+    ),
+    entry(
+        "updates",
+        G::Launcher,
+        false,
+        "Check for BlockForge updates",
+        "Look on GitHub for a newer version and offer to install it",
+        "update version upgrade new release",
+    ),
+    entry(
+        "tray",
+        G::Launcher,
+        false,
+        "Tray icon",
+        "Show a tray menu while the launcher runs",
+        "system tray menu notification area",
+    ),
+    entry(
+        "data-folder",
+        G::Launcher,
+        false,
+        "Data folder",
+        "Where instances, mods and logs are stored",
+        "files directory location open path",
     ),
     entry(
         "analytics",
@@ -469,34 +470,33 @@ impl View {
         ENTRIES.iter().filter(|e| e.group == g && e.advanced && self.shows(e.key)).count()
     }
 
+    #[cfg(test)]
     fn groups(&self) -> Vec<Group> {
         Group::ALL.into_iter().filter(|g| self.group_shown(*g)).collect()
     }
 }
 
-/// The jump list's state, kept between frames.
-#[derive(Clone, Copy, Default)]
+/// The section list's state, kept between frames: the section that is open.
+#[derive(Clone, Copy)]
 pub(super) struct Nav {
-    /// The group a click in the jump list asked for: the page scrolls to it when its head is drawn.
-    jump: Option<Group>,
-    /// The group last jumped to. It stays marked until the page is scrolled by hand, since the last groups may never
-    /// reach the top of the page.
-    pinned: Option<Group>,
-    /// The group at the top of the visible part of the page, found while the groups are drawn.
-    active: Option<Group>,
-    /// The top of the visible part of the page, on the screen.
-    view_top: f32,
+    open: Group,
+}
+
+impl Default for Nav {
+    fn default() -> Nav {
+        Nav { open: Group::Appearance }
+    }
 }
 
 impl Nav {
     fn id() -> egui::Id {
         egui::Id::unique("settings-nav")
     }
+}
 
-    /// The group the jump list marks.
-    fn current(&self) -> Option<Group> {
-        self.pinned.or(self.active)
-    }
+/// Which sections the page draws: the open one, or while searching every one with a setting that matches.
+fn drawn(view: &View, nav: &Nav, group: Group) -> bool {
+    if view.searching { view.group_shown(group) } else { group == nav.open }
 }
 
 // ---- the parts of the page
@@ -531,16 +531,6 @@ pub(super) fn paint_icon_tile(p: &egui::Painter, rect: egui::Rect, icon: Icon) {
         egui::StrokeKind::Inside,
     );
     icons::paint(p, icon, rect.center(), (rect.width() * 0.46).round(), ink);
-}
-
-/// The head of a group of settings, above its card: its icon in a tile, the title, and one muted line about it. The
-/// Settings page and an instance's settings both use it. Returns where it was drawn.
-pub(super) fn group_head(ui: &mut Ui, icon: Icon, title: &str, hint: &str) -> egui::Rect {
-    ui.add_space(26.0);
-    let top = ui.cursor().top();
-    let rect = ui.scope(|ui| group_title(ui, icon, title, hint)).response.rect;
-    ui.add_space(10.0);
-    egui::Rect::from_min_max(egui::pos2(rect.left(), top), rect.max)
 }
 
 /// The icon tile and the two lines of a group's head, without the room around it.
@@ -752,30 +742,25 @@ pub(super) enum Part {
     Advanced,
 }
 
-/// A group of the Settings page, when the search shows any of it: its head, then one card of glass holding the rows
-/// (`rows` draws them, once for each [`Part`]). The advanced ones are folded under "Advanced" at the end of the card,
+/// A section of the Settings page, when it is the open one (or, while searching, when the search finds any of it): its
+/// head, then one card of glass holding the rows (`rows` draws them, once for each [`Part`]). The advanced ones are folded under "Advanced" at the end of the card,
 /// which says how many of them were changed (`changed`); while searching, they are shown like the others.
 pub(super) fn section(
     ui: &mut Ui,
     view: &View,
-    nav: &mut Nav,
+    nav: &Nav,
     group: Group,
     changed: usize,
     mut rows: impl FnMut(&mut Ui, &mut Card, Part),
 ) {
-    if !view.group_shown(group) {
+    if !view.group_shown(group) || !drawn(view, nav, group) {
         return;
     }
-    let head = group_head(ui, group.icon(), group.title(), group.hint());
-    if nav.jump == Some(group) {
-        // a little of the room above the head comes along, so it doesn't sit against the edge
-        ui.scroll_to_rect(head.expand2(egui::vec2(0.0, 16.0)), Some(Align::TOP));
-        nav.jump = None;
-        nav.pinned = Some(group);
-    }
-    if nav.active.is_none() || head.top() <= nav.view_top + 40.0 {
-        nav.active = Some(group);
-    }
+    // the first section starts at the top of the page; the room above a head is for between two sections
+    let first = Group::ALL.into_iter().find(|g| view.group_shown(*g) && drawn(view, nav, *g)) == Some(group);
+    ui.add_space(if first { 0.0 } else { 26.0 });
+    group_title(ui, group.icon(), group.title(), group.hint());
+    ui.add_space(10.0);
     card(ui, |ui| {
         // the title of a row sits close to its explanation
         ui.spacing_mut().item_spacing.y = 2.0;
@@ -856,11 +841,16 @@ fn advanced_fold(
 /// right that clears it (Escape does too). Ctrl+F (Cmd+F) goes to it.
 fn search_box(ui: &mut Ui, query: &mut String, width: f32) {
     let shortcut = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::F);
-    let hint = format!("Search settings  ({})", ui.ctx().format_shortcut(&shortcut));
+    // the shortcut is named in the field when there is room for it
+    let hint = if width >= 280.0 {
+        format!("Search settings  ({})", ui.ctx().format_shortcut(&shortcut))
+    } else {
+        "Search settings".to_string()
+    };
     let r = ui.add_sized(
         [width, 36.0],
         egui::TextEdit::singleline(query)
-            .id_salt("settings-search")
+            .id(egui::Id::unique("settings-search"))
             .hint_text(RichText::new(hint).color(c_faint()))
             .margin(egui::Margin { left: 34, right: 34, top: 8, bottom: 8 })
             .background_color(c_field()),
@@ -894,9 +884,10 @@ fn search_box(ui: &mut Ui, query: &mut String, width: f32) {
     }
 }
 
-/// One group in the jump list of a wide window: its icon and name, tinted when it is the group being looked at.
-fn nav_item(ui: &mut Ui, group: Group, current: bool) -> egui::Response {
-    let (rect, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 34.0), egui::Sense::click());
+/// One line of the list at the left: an icon and a name, tinted when it is the open section. `count` is how many
+/// settings of it a search found.
+fn nav_item(ui: &mut Ui, icon: Icon, label: &str, current: bool, count: Option<usize>) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 36.0), egui::Sense::click());
     let t = motion::hover(ui, resp.id, resp.hovered());
     let s = motion::toward(ui.ctx(), resp.id.with("on"), current, motion::MEDIUM);
     let p = ui.painter();
@@ -906,45 +897,88 @@ fn nav_item(ui: &mut Ui, group: Group, current: bool) -> egui::Response {
     }
     if s > 0.0 {
         p.rect_filled(rect, shape, c_accent_soft().gamma_multiply(s));
-        // a short bar in the brand gradient at the left edge grows in as the group is reached
-        let h = 16.0 * s;
+        // a short bar in the brand gradient at the left edge grows in as the section opens
+        let h = 18.0 * s;
         let bar = egui::Rect::from_center_size(egui::pos2(rect.left() + 1.5, rect.center().y), egui::vec2(3.0, h));
         motion::brand_rect(p, bar, 2);
     }
     let ink = if is_dark() { c_accent() } else { c_accent_hover() };
     let icon_c = motion::mix(c_muted(), ink, s);
-    icons::paint(p, group.icon(), egui::pos2(rect.left() + 20.0, rect.center().y), 15.0, icon_c);
+    icons::paint(p, icon, egui::pos2(rect.left() + 20.0, rect.center().y), 15.0, icon_c);
     let fg = motion::mix(c_muted(), c_text(), t.max(s));
-    let g = p.layout_no_wrap(group.short().to_string(), super::fonts::medium(FS_BODY), fg);
-    p.galley(egui::pos2(rect.left() + 38.0, rect.center().y - g.size().y / 2.0), g, fg);
+    let g = p.layout_no_wrap(label.to_string(), super::fonts::medium(FS_BODY), fg);
+    p.with_clip_rect(rect.shrink(2.0)).galley(
+        egui::pos2(rect.left() + 38.0, rect.center().y - g.size().y / 2.0),
+        g,
+        fg,
+    );
+    if let Some(n) = count {
+        let g = p.layout_no_wrap(n.to_string(), super::fonts::mono(FS_META), c_muted());
+        let pill = egui::Rect::from_center_size(
+            egui::pos2(rect.right() - 8.0 - (g.size().x + 12.0) / 2.0, rect.center().y),
+            egui::vec2(g.size().x + 12.0, 20.0),
+        );
+        p.rect_filled(pill, egui::CornerRadius::same(10), c_field());
+        p.galley(pill.center() - g.size() / 2.0, g, c_muted());
+    }
     focus_ring(ui, &resp, rect, R_CONTROL);
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, current, group.title()));
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Tab, true, current, label));
     resp.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
-/// The jump list: one line per group the search shows, down the left of a wide window, or a row of chips over the
-/// groups in a narrow one. A click scrolls to the group.
-fn jump_list(ui: &mut Ui, groups: &[Group], nav: &mut Nav, side: bool) {
-    let current = nav.current();
+/// What a press in the list at the left asks for.
+enum NavPick {
+    Section(Group),
+    Page(super::Page),
+}
+
+/// The list of sections down the left of a wide window (a row of chips over the settings in a narrow one), and
+/// under it the two other pages of the account corner. While searching, each section says how many settings it
+/// found.
+fn nav_list(ui: &mut Ui, view: &View, nav: &Nav, side: bool, here: super::Page) -> Option<NavPick> {
+    let on_settings = here == super::Page::Settings;
+    let mut pick = None;
+    let count = |g: Group| view.searching.then(|| ENTRIES.iter().filter(|e| e.group == g && view.shows(e.key)).count());
     if side {
         ui.spacing_mut().item_spacing.y = 2.0;
-        small_muted(ui, "Jump to");
-        ui.add_space(4.0);
-        for g in groups {
-            if nav_item(ui, *g, current == Some(*g)).clicked() {
-                nav.jump = Some(*g);
+        for g in Group::ALL {
+            let n = count(g);
+            if n == Some(0) {
+                continue;
+            }
+            if nav_item(ui, g.icon(), g.short(), on_settings && !view.searching && nav.open == g, n).clicked() {
+                pick = Some(NavPick::Section(g));
             }
         }
-        return;
+        ui.add_space(8.0);
+        rule(ui);
+        ui.add_space(8.0);
+        if nav_item(ui, Icon::User, "Accounts", here == super::Page::Accounts, None).clicked() {
+            pick = Some(NavPick::Page(super::Page::Accounts));
+        }
+        if nav_item(ui, Icon::Info, "About", here == super::Page::About, None).clicked() {
+            pick = Some(NavPick::Page(super::Page::About));
+        }
+        return pick;
     }
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
-        for g in groups {
-            if chip(ui, g.short(), current == Some(*g)).clicked() {
-                nav.jump = Some(*g);
+        for g in Group::ALL {
+            if count(g) == Some(0) {
+                continue;
+            }
+            if chip(ui, g.short(), on_settings && !view.searching && nav.open == g).clicked() {
+                pick = Some(NavPick::Section(g));
             }
         }
+        if chip(ui, "Accounts", here == super::Page::Accounts).clicked() {
+            pick = Some(NavPick::Page(super::Page::Accounts));
+        }
+        if chip(ui, "About", here == super::Page::About).clicked() {
+            pick = Some(NavPick::Page(super::Page::About));
+        }
     });
+    pick
 }
 
 /// What the page shows when the search finds nothing. Returns true when "Clear search" was pressed.
@@ -1119,34 +1153,176 @@ fn memory_slider_max(total_mb: u64) -> u32 {
     (half.min(u32::MAX as u64) as u32).max(2048)
 }
 
+/// Where the settings keep "Show background artwork" (on unless it was turned off), among the launcher's extras.
+const ARTWORK_KEY: &str = "backgroundArtwork";
+/// Where the settings keep that the look follows the system's, among the launcher's extras.
+const FOLLOW_SYSTEM_KEY: &str = "themeFollowsSystem";
+/// The light theme the Light card picks (the Dark card picks the default theme).
+const LIGHT_THEME: &str = "com.blockforge.launcher.themes.Material3Light";
+
+/// Whether the faint pattern of blocks is drawn behind the pages (Settings: "Show background artwork").
+pub(super) fn artwork_on(s: &crate::config::Settings) -> bool {
+    s.extras.get(ARTWORK_KEY).and_then(|v| v.as_bool()).unwrap_or(true)
+}
+
+/// Turn the background artwork on or off (on, the default, is not written).
+fn set_artwork(s: &mut crate::config::Settings, on: bool) {
+    if on {
+        s.extras.remove(ARTWORK_KEY);
+    } else {
+        s.extras.insert(ARTWORK_KEY.into(), false.into());
+    }
+}
+
+/// Whether the look follows the system's (the System card).
+fn follows_system(s: &crate::config::Settings) -> bool {
+    s.extras.get(FOLLOW_SYSTEM_KEY).and_then(|v| v.as_bool()).unwrap_or(false)
+}
+
+/// Whether the launcher is drawn dark: as the system is when it follows the system (and the system says), else as
+/// the colour theme is.
+pub(super) fn look_is_dark(s: &crate::config::Settings, system_dark: Option<bool>) -> bool {
+    match system_dark.filter(|_| follows_system(s)) {
+        Some(dark) => dark,
+        None => theme::theme_is_dark(&s.theme),
+    }
+}
+
+/// Pick one of the theme cards: 0 dark, 1 light, 2 the system's. A colour theme that is already of the right kind is
+/// kept, so a player's Dracula stays when Dark is pressed again; the system's look also sets a theme of its kind, for
+/// the Java edition, which reads the same file.
+fn set_look(s: &mut crate::config::Settings, card: usize, system_dark: Option<bool>) {
+    let dark = match card {
+        0 => true,
+        1 => false,
+        _ => system_dark.unwrap_or_else(|| theme::theme_is_dark(&s.theme)),
+    };
+    if card == 2 {
+        s.extras.insert(FOLLOW_SYSTEM_KEY.into(), true.into());
+    } else {
+        s.extras.remove(FOLLOW_SYSTEM_KEY);
+    }
+    if theme::theme_is_dark(&s.theme) != dark {
+        s.theme = if dark { crate::config::DEFAULT_THEME } else { LIGHT_THEME }.to_string();
+    }
+}
+
+/// The three cards of the Theme row, Dark, Light and System, each with a small picture of the launcher in that look.
+/// Returns the card that was pressed.
+fn theme_cards(ui: &mut Ui, current: usize, system_dark: Option<bool>) -> Option<usize> {
+    const GAP: f32 = 12.0;
+    let w = ((ui.available_width() - 2.0 * GAP) / 3.0).clamp(96.0, 220.0).floor();
+    let preview_h = (w * 0.56).round();
+    let mut pressed = None;
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = GAP;
+        let system = match system_dark {
+            Some(true) => "System (dark now)",
+            Some(false) => "System (light now)",
+            None => "System",
+        };
+        for (i, label) in ["Dark", "Light", system].into_iter().enumerate() {
+            let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, preview_h + 30.0), egui::Sense::click());
+            let on = i == current;
+            let t = motion::hover(ui, resp.id, resp.hovered());
+            let s = motion::toward(ui.ctx(), resp.id.with("on"), on, motion::MEDIUM);
+            let preview = egui::Rect::from_min_size(rect.min, egui::vec2(w, preview_h));
+            let p = ui.painter();
+            match i {
+                0 => paint_preview(p, preview, true),
+                1 => paint_preview(p, preview, false),
+                _ => {
+                    // half and half: the system decides
+                    paint_preview(&p.with_clip_rect(preview.with_max_x(preview.center().x)), preview, true);
+                    paint_preview(&p.with_clip_rect(preview.with_min_x(preview.center().x)), preview, false);
+                }
+            }
+            let edge = motion::mix(motion::mix(c_border(), c_control(), t), c_accent(), s);
+            p.rect_stroke(
+                preview.expand(if s > 0.0 { 2.0 } else { 0.0 }),
+                egui::CornerRadius::same(R_CONTROL + 2),
+                egui::Stroke::new(1.0 + s, edge),
+                egui::StrokeKind::Inside,
+            );
+            if s > 0.0 {
+                // a check in the brand colour at the picture's corner
+                let c = egui::pos2(preview.right() - 12.0, preview.top() + 12.0);
+                p.circle_filled(c, 8.0, c_accent().gamma_multiply(s));
+                super::discover::paint_check(p, c, 9.0, c_on_accent().gamma_multiply(s));
+            }
+            let fg = motion::mix(c_muted(), c_text(), t.max(s));
+            let font = if on { super::fonts::semibold(FS_BODY) } else { super::fonts::medium(FS_BODY) };
+            p.text(egui::pos2(rect.center().x, preview.bottom() + 16.0), egui::Align2::CENTER_CENTER, label, font, fg);
+            focus_ring(ui, &resp, preview, R_CONTROL + 2);
+            resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::RadioButton, true, on, label));
+            if resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                pressed = Some(i);
+            }
+        }
+    });
+    pressed
+}
+
+/// A small picture of the launcher in the dark or the light look: the sidebar with its places, a title, a card with
+/// a Play button and two more cards. Drawn in that look's own colours, whatever the window's look is now.
+fn paint_preview(p: &egui::Painter, rect: egui::Rect, dark: bool) {
+    let rgb = |v: u32| egui::Color32::from_rgb((v >> 16) as u8, (v >> 8) as u8, v as u8);
+    let (ground, side, card, line, ink, faint, accent) = if dark {
+        (rgb(0x0B1016), rgb(0x0D131B), rgb(0x151D29), rgb(0x212D3F), rgb(0xE8EDF4), rgb(0x3A4658), rgb(0x2DD4AA))
+    } else {
+        (rgb(0xF2F4F7), rgb(0xF8F9FB), rgb(0xFFFFFF), rgb(0xDDE2E9), rgb(0x0D141C), rgb(0xC9D0DA), rgb(0x0A7A62))
+    };
+    let r = egui::CornerRadius::same(R_CONTROL + 2);
+    p.rect_filled(rect, r, ground);
+    let u = rect.width() / 100.0;
+    let at = |x: f32, y: f32, w: f32, h: f32| {
+        egui::Rect::from_min_size(rect.min + egui::vec2(x * u, y * u), egui::vec2(w * u, h * u))
+    };
+    // the sidebar and its places, the first one open
+    p.rect_filled(
+        egui::Rect::from_min_max(rect.min, egui::pos2(rect.left() + 26.0 * u, rect.bottom())),
+        egui::CornerRadius { nw: R_CONTROL + 2, sw: R_CONTROL + 2, ne: 0, se: 0 },
+        side,
+    );
+    p.rect_filled(at(4.0, 6.0, 7.0, 7.0), 2.0, accent);
+    for k in 0..4 {
+        let y = 18.0 + k as f32 * 7.0;
+        let fill = if k == 0 { accent.gamma_multiply(0.35) } else { faint };
+        p.rect_filled(at(4.0, y, 18.0, 3.5), 1.5, fill);
+    }
+    // the page: a title, a wide card with Play, two small cards
+    p.rect_filled(at(31.0, 7.0, 30.0, 4.5), 1.5, ink);
+    p.rect_filled(at(31.0, 14.0, 44.0, 2.5), 1.0, faint);
+    let big = at(31.0, 20.0, 63.0, 15.0);
+    p.rect_filled(big, 3.0, card);
+    p.rect_stroke(big, 3.0, egui::Stroke::new(1.0, line), egui::StrokeKind::Inside);
+    p.rect_filled(at(35.0, 24.0, 22.0, 3.0), 1.0, ink);
+    p.rect_filled(at(35.0, 29.5, 14.0, 2.5), 1.0, faint);
+    p.rect_filled(at(78.0, 24.5, 12.0, 6.0), 2.0, accent);
+    for k in 0..2 {
+        let c = at(31.0 + k as f32 * 32.5, 39.0, 30.5, 13.0);
+        p.rect_filled(c, 3.0, card);
+        p.rect_stroke(c, 3.0, egui::Stroke::new(1.0, line), egui::StrokeKind::Inside);
+        p.rect_filled(at(34.0 + k as f32 * 32.5, 43.0, 16.0, 2.5), 1.0, faint);
+    }
+}
+
 impl App {
     pub(super) fn settings_ui(&mut self, ui: &mut Ui) {
-        // the page's room less the scroll bar's strip at the window's edge. A wide window has the jump list down the
-        // left and the groups beside it; a narrow one has the jump list as chips over the groups.
+        // the page's room less the scroll bar's strip at the window's edge. A wide window has the list of sections
+        // down the left and the open section beside it; a narrow one has the sections as chips over it.
         let room = ui.available_width() - 14.0;
         let side = room >= NAV_W + NAV_GAP + NAV_CONTENT_MIN;
         let content_w = if side { (room - NAV_W - NAV_GAP).min(PAGE_WIDTH) } else { room.min(PAGE_WIDTH) };
+        let full_w = if side { NAV_W + NAV_GAP + content_w } else { content_w };
         // the title, and at the right of the same row a "Saved" that shows for a moment after each save
         ui.scope(|ui| {
-            ui.set_max_width(if side { NAV_W + NAV_GAP + content_w } else { content_w });
-            // as tall as the title, like the title row of every other page
-            ui.spacing_mut().interact_size.y = 0.0;
-            ui.horizontal(|ui| {
-                heading(ui, "Settings");
-                ui.with_layout(Layout::right_to_left(Align::Center), saved_stamp);
-            });
+            ui.set_max_width(full_w);
+            PageHeader::new("Settings").subtitle("Every change is saved as soon as it is made.").show(ui, saved_stamp);
         });
-        muted(ui, "Every change is saved as soon as it is made.");
-        ui.add_space(14.0);
 
         let mut query = ui.data(|d| d.get_temp::<String>(query_id())).unwrap_or_default();
         let mut nav = ui.data(|d| d.get_temp::<Nav>(Nav::id())).unwrap_or_default();
-        if ui.input(|i| i.raw.events.iter().any(|e| matches!(e, egui::Event::MouseWheel { .. }))) {
-            // scrolled by hand: the jump list follows the page again
-            nav.pinned = None;
-        }
-        let marked = nav.current();
-        let typed = query.clone();
         // the graphics card can only be chosen on some systems
         let hidden: &[&str] = if crate::gpu::supported() { &[] } else { &["gpu"] };
 
@@ -1154,12 +1330,14 @@ impl App {
         let mut dragged = false;
         let mut theme_changed = false;
         let mut open_data = false;
+        let mut go: Option<super::Page> = None;
         let (total_mb, free_mb) = memory_now();
         let max_mb = memory_slider_max(total_mb);
         let example = self.automatic_memory_example(total_mb, free_mb);
         let self_gpus = self.gpus.clone();
         let data_dir = self.dirs.base.display().to_string();
         let perf = super::performance::SettingsView::new(self, ui.ctx());
+        let system_dark = ui.ctx().system_theme().map(|t| t == egui::Theme::Dark);
 
         let area = ui.available_rect_before_wrap();
         let main = if side {
@@ -1167,303 +1345,373 @@ impl App {
         } else {
             area
         };
-        ui.scope_builder(egui::UiBuilder::new().max_rect(main), |ui| {
-            search_box(ui, &mut query, content_w);
+        // the search and the list of sections come first for the keyboard (Tab), wherever they are on the page
+        let view = if side {
+            let list = egui::Rect::from_min_size(area.min, egui::vec2(NAV_W, area.height()));
+            let mut list = ui.new_child(egui::UiBuilder::new().max_rect(list).layout(Layout::top_down(Align::Min)));
+            search_box(&mut list, &mut query, NAV_W);
+            list.add_space(12.0);
             let view = View::new(&query, hidden);
-            if query != typed {
-                nav.pinned = None;
-                nav.jump = None;
+            match nav_list(&mut list, &view, &nav, true, super::Page::Settings) {
+                Some(NavPick::Section(g)) => {
+                    nav.open = g;
+                    query.clear();
+                }
+                Some(NavPick::Page(p)) => {
+                    go = Some(p);
+                    query.clear();
+                }
+                None => {}
             }
-            // the jump list comes right after the search for the keyboard (Tab), wherever it is on the page; it
-            // marks the group the page showed on the last frame
-            let groups = view.groups();
-            if side {
-                let size = egui::vec2(NAV_W, area.height());
-                let list = egui::Rect::from_min_size(area.min + egui::vec2(0.0, 2.0), size);
-                // a child that takes no room in this column, beside it
-                let mut list = ui.new_child(egui::UiBuilder::new().max_rect(list));
-                jump_list(&mut list, &groups, &mut nav, true);
-            } else if !groups.is_empty() {
+            View::new(&query, hidden)
+        } else {
+            let mut view = View::new(&query, hidden);
+            ui.scope_builder(egui::UiBuilder::new().max_rect(main), |ui| {
+                search_box(ui, &mut query, content_w);
                 ui.add_space(10.0);
                 ui.scope(|ui| {
                     ui.set_max_width(content_w);
-                    jump_list(ui, &groups, &mut nav, false);
-                });
-            }
-            ui.add_space(2.0);
-            ScrollArea::vertical().id_salt("settings-page").auto_shrink(false).show(ui, |ui| {
-                // at most PAGE_WIDTH wide, but never wider than the window (set_max_width alone would widen a
-                // narrow page)
-                ui.set_max_width(content_w.min(ui.available_width()));
-                nav.view_top = ui.clip_rect().top();
-                nav.active = None;
-                if view.searching {
-                    if view.shown.is_empty() {
-                        if no_matches(ui, &query) {
+                    view = View::new(&query, hidden);
+                    match nav_list(ui, &view, &nav, false, super::Page::Settings) {
+                        Some(NavPick::Section(g)) => {
+                            nav.open = g;
                             query.clear();
                         }
-                    } else {
-                        ui.add_space(10.0);
-                        let n = view.shown.len();
-                        let found = if n == 1 { "1 setting found".to_string() } else { format!("{n} settings found") };
-                        small_muted(ui, found);
+                        Some(NavPick::Page(p)) => {
+                            go = Some(p);
+                            query.clear();
+                        }
+                        None => {}
                     }
-                }
-                let s = &mut self.settings;
-                let custom_java = s.using_custom_java_path.then(|| s.java_path.clone()).filter(|p| !p.is_empty());
-                let game_changed = [
-                    s.startup_mode != "auto",
-                    custom_java.is_some(),
-                    s.java_parameters != crate::config::DEFAULT_JAVA_ARGS,
-                ]
-                .into_iter()
-                .filter(|c| *c)
-                .count();
-                section(ui, &view, &mut nav, Group::Game, game_changed, |ui, c, part| match part {
-                    Part::Main => {
-                        let mut auto = s.automatic_memory != Some(false);
-                        let hint = if auto {
-                            example.clone()
+                });
+            });
+            View::new(&query, hidden)
+        };
+        let top = if side { main.top() } else { ui.cursor().top() + 4.0 };
+        let main = egui::Rect::from_min_max(egui::pos2(main.left(), top), main.max);
+        ui.scope_builder(egui::UiBuilder::new().max_rect(main), |ui| {
+            ScrollArea::vertical()
+                .id_salt(("settings-page", nav.open.title(), view.searching))
+                .auto_shrink(false)
+                .show(ui, |ui| {
+                    // at most PAGE_WIDTH wide, but never wider than the window (set_max_width alone would widen a
+                    // narrow page)
+                    ui.set_max_width(content_w.min(ui.available_width()));
+                    if view.searching {
+                        if view.shown.is_empty() {
+                            if no_matches(ui, &query) {
+                                query.clear();
+                            }
                         } else {
-                            format!(
-                                "Set by hand, for every game without its own setting: 1 GB to {}",
-                                memory_text(max_mb)
-                            )
+                            let n = view.shown.len();
+                            let found =
+                                if n == 1 { "1 setting found".to_string() } else { format!("{n} settings found") };
+                            ui.label(
+                                RichText::new(format!("{found} for \u{201C}{}\u{201D}", query.trim()))
+                                    .size(FS_SECTION)
+                                    .semibold(),
+                            );
+                            ui.add_space(14.0);
+                        }
+                    }
+                    let s = &mut self.settings;
+                    section(ui, &view, &nav, Group::Appearance, 0, |ui, c, part| {
+                        if part != Part::Main {
+                            return;
+                        }
+                        let follows = follows_system(s);
+                        if c.shows("theme") {
+                            c.gap(ui);
+                            row_title(ui, find("theme").title, None);
+                            small_muted(ui, find("theme").hint);
+                            ui.add_space(8.0);
+                            let current = if follows {
+                                2
+                            } else if theme::theme_is_dark(&s.theme) {
+                                0
+                            } else {
+                                1
+                            };
+                            if let Some(i) = theme_cards(ui, current, system_dark) {
+                                if i != current {
+                                    set_look(s, i, system_dark);
+                                    theme_changed = true;
+                                    dirty = true;
+                                }
+                            }
+                            ui.add_space(10.0);
+                            // the whole list of colour themes the Java edition knows, which this look follows as dark or
+                            // light
+                            let reset = (s.theme != crate::config::DEFAULT_THEME || follows)
+                                .then(|| theme::theme_label(crate::config::DEFAULT_THEME));
+                            let pressed = option_row(
+                                ui,
+                                "Colour theme",
+                                "Shared with the Java edition; BlockForge draws it dark or light",
+                                CONTROL_W,
+                                reset,
+                                |ui| {
+                                    egui::ComboBox::from_id_salt("theme")
+                                        .selected_text(theme::theme_label(&s.theme))
+                                        .width(COMBO_W)
+                                        .show_ui(ui, |ui| {
+                                            for (id, label, _) in theme::THEMES {
+                                                if ui.selectable_label(s.theme == id, label).clicked() && s.theme != id
+                                                {
+                                                    s.theme = id.to_string();
+                                                    s.extras.remove(FOLLOW_SYSTEM_KEY);
+                                                    theme_changed = true;
+                                                    dirty = true;
+                                                }
+                                            }
+                                        });
+                                },
+                            );
+                            if pressed {
+                                s.theme = crate::config::DEFAULT_THEME.to_string();
+                                s.extras.remove(FOLLOW_SYSTEM_KEY);
+                                theme_changed = true;
+                                dirty = true;
+                            }
+                        }
+                        let zoom = ui.ctx().zoom_factor();
+                        let reset = ((zoom - 1.0).abs() > 0.001).then_some("100%");
+                        let pressed = c.row(ui, "zoom", CONTROL_W, reset, |ui| {
+                            let labels: Vec<&str> = ZOOMS.iter().map(|z| z.1).collect();
+                            if let Some(i) = segmented(ui, &labels, nearest_zoom(zoom)) {
+                                // the window applies it (and keeps it for the next start) on the next frame
+                                ui.ctx().set_zoom_factor(ZOOMS[i].0);
+                            }
+                        });
+                        if pressed {
+                            ui.ctx().set_zoom_factor(1.0);
+                        }
+                        let mut artwork = artwork_on(s);
+                        if c.switch(ui, "artwork", &mut artwork, true) {
+                            set_artwork(s, artwork);
+                            dirty = true;
+                        }
+                        let low_end = super::low_end_pc();
+                        let hint = if low_end {
+                            "Fewer animations and a smaller picture cache. On by default for this computer"
+                        } else {
+                            find("light-mode").hint
                         };
-                        let reset = (!auto).then_some("Automatic");
-                        let width = if auto { 140.0 } else { 400.0 };
-                        let pressed = c.row_hint(ui, "memory", &hint, width, reset, |ui| {
-                            if toggle(ui, &mut auto).changed() {
-                                s.automatic_memory = Some(auto);
-                                dirty = true;
-                            }
-                            ui.label("Automatic");
-                            if !auto {
-                                // the row lays out from the right: the amount, then the slider to its left
-                                ui.add_space(16.0);
-                                let label = ui.label(
-                                    RichText::new(memory_text(s.maximum_memory)).font(super::fonts::medium(FS_BODY)),
-                                );
-                                if s.maximum_memory > max_mb {
-                                    // set elsewhere (an imported setting, the file): more than the slider goes to
-                                    label.on_hover_text(format!(
-                                        "More than the slider goes to ({}, half of this computer's memory). \
-                                             Drag it to pick less.",
-                                        memory_text(max_mb)
-                                    ));
-                                }
-                                ui.scope(|ui| {
-                                    // a rail that can be seen, filled in the brand colour up to the handle (like
-                                    // a switch that is on)
-                                    ui.visuals_mut().widgets.inactive.bg_fill = c_active();
-                                    ui.visuals_mut().selection.bg_fill = c_accent();
-                                    ui.spacing_mut().slider_width = 200.0;
-                                    let mut mb = s.maximum_memory.clamp(1024, max_mb);
-                                    let slider = egui::Slider::new(&mut mb, 1024..=max_mb)
-                                        .step_by(256.0)
-                                        .show_value(false)
-                                        .trailing_fill(true);
-                                    if ui.add(slider).changed() {
-                                        s.maximum_memory = mb;
-                                        // written once the drag is over, not on every frame of it
-                                        dragged = true;
-                                    }
-                                });
-                            }
-                        });
-                        if pressed {
-                            s.automatic_memory = Some(true);
-                            dirty = true;
-                        }
-                        dirty |= c.switch(ui, "keep-open", &mut s.keep_launcher_open, true);
-                        dirty |= c.switch(ui, "console", &mut s.enable_console, false);
-                        dirty |= c.switch(ui, "game-options", &mut s.auto_game_options, true);
-                        dirty |= graphics_card_row(ui, c, &mut s.gpu, self_gpus.as_deref());
-                    }
-                    Part::Advanced => {
-                        const MODES: [(&str, &str); 3] =
-                            [("auto", "Automatic"), ("fast", "Light"), ("full", "Full performance")];
-                        let reset = (s.startup_mode != "auto").then_some("Automatic");
-                        let pressed = c.row(ui, "compiler", CONTROL_W, reset, |ui| {
-                            let labels = MODES.map(|(_, label)| label);
-                            let now = MODES.iter().position(|(mode, _)| *mode == s.startup_mode).unwrap_or(usize::MAX);
-                            if let Some(i) = segmented(ui, &labels, now).filter(|&i| i != now) {
-                                s.startup_mode = MODES[i].0.to_string();
+                        let mut on = s.light_mode.unwrap_or(low_end);
+                        // the default follows the computer
+                        let reset = (on != low_end).then_some(if low_end { "On, for this computer" } else { "Off" });
+                        let pressed = c.row_hint(ui, "light-mode", hint, SWITCH_W, reset, |ui| {
+                            if toggle(ui, &mut on).changed() {
+                                s.light_mode = Some(on);
+                                theme_changed = true;
                                 dirty = true;
                             }
                         });
                         if pressed {
-                            s.startup_mode = "auto".to_string();
-                            dirty = true;
-                        }
-                        // an empty path means automatic. The game only falls back to this Java when it doesn't use
-                        // the one that comes with Minecraft (an instance's own Java setting), as in the Java
-                        // edition.
-                        let custom = s.using_custom_java_path.then(|| s.java_path.clone()).filter(|p| !p.is_empty());
-                        let (typed, pressed) = c.text(
-                            ui,
-                            "java-path",
-                            "Automatic (recommended)",
-                            custom.as_deref().unwrap_or(""),
-                            custom.is_some().then_some("Automatic"),
-                        );
-                        if let Some(path) = typed {
-                            let path = path.trim().trim_matches('"').to_string();
-                            if custom.as_deref().unwrap_or("") != path {
-                                // a cleared path is cleared for real, or the old Java would still be used at launch
-                                s.using_custom_java_path = !path.is_empty();
-                                s.java_path = path;
-                                dirty = true;
-                            }
-                        }
-                        if pressed {
-                            s.using_custom_java_path = false;
-                            s.java_path.clear();
-                            dirty = true;
-                        }
-                        if let Some(warning) = java_path_warning(custom.as_deref()).filter(|_| c.shows("java-path")) {
-                            ui.add(egui::Label::new(RichText::new(warning).color(c_warn()).size(FS_META)).wrap());
-                        }
-                        let own_args = s.java_parameters != crate::config::DEFAULT_JAVA_ARGS;
-                        let (typed, pressed) = c.text(
-                            ui,
-                            "java-args",
-                            "",
-                            &s.java_parameters,
-                            own_args.then_some("the recommended arguments"),
-                        );
-                        if let Some(args) = typed {
-                            let args = args.trim().to_string();
-                            if args != s.java_parameters {
-                                s.java_parameters = args;
-                                dirty = true;
-                            }
-                        }
-                        if pressed {
-                            s.java_parameters = crate::config::DEFAULT_JAVA_ARGS.to_string();
-                            dirty = true;
-                        }
-                    }
-                });
-                section(ui, &view, &mut nav, Group::Performance, 0, |ui, c, part| {
-                    if part != Part::Main {
-                        return;
-                    }
-                    dirty |= perf.rows(ui, c, s);
-                    dirty |= c.switch(ui, "class-cache", &mut s.class_data_cache, true);
-                    let mut warm = s.extras.get("warmUpGameFiles").and_then(|v| v.as_bool()).unwrap_or(true);
-                    if c.switch(ui, "warm-up", &mut warm, true) {
-                        s.extras.insert("warmUpGameFiles".into(), warm.into());
-                        dirty = true;
-                    }
-                    // what the smoothness helper did in the last game, folded at the end of the card
-                    if c.shows("smoothness") {
-                        c.gap(ui);
-                        perf.details_fold(ui);
-                    }
-                });
-                section(ui, &view, &mut nav, Group::Appearance, 0, |ui, c, part| {
-                    if part != Part::Main {
-                        return;
-                    }
-                    let reset = (s.theme != crate::config::DEFAULT_THEME)
-                        .then(|| theme::theme_label(crate::config::DEFAULT_THEME));
-                    let pressed = c.row(ui, "theme", CONTROL_W, reset, |ui| {
-                        egui::ComboBox::from_id_salt("theme")
-                            .selected_text(theme::theme_label(&s.theme))
-                            .width(COMBO_W)
-                            .show_ui(ui, |ui| {
-                                for (id, label, _) in theme::THEMES {
-                                    if ui.selectable_label(s.theme == id, label).clicked() && s.theme != id {
-                                        s.theme = id.to_string();
-                                        theme_changed = true;
-                                        dirty = true;
-                                    }
-                                }
-                            });
-                    });
-                    if pressed {
-                        s.theme = crate::config::DEFAULT_THEME.to_string();
-                        theme_changed = true;
-                        dirty = true;
-                    }
-                    let zoom = ui.ctx().zoom_factor();
-                    let reset = ((zoom - 1.0).abs() > 0.001).then_some("100%");
-                    let pressed = c.row(ui, "zoom", CONTROL_W, reset, |ui| {
-                        let labels: Vec<&str> = ZOOMS.iter().map(|z| z.1).collect();
-                        if let Some(i) = segmented(ui, &labels, nearest_zoom(zoom)) {
-                            // the window applies it (and keeps it for the next start) on the next frame
-                            ui.ctx().set_zoom_factor(ZOOMS[i].0);
-                        }
-                    });
-                    if pressed {
-                        ui.ctx().set_zoom_factor(1.0);
-                    }
-                    let low_end = super::low_end_pc();
-                    let hint = if low_end {
-                        "Fewer animations and a smaller picture cache. On by default for this computer"
-                    } else {
-                        find("light-mode").hint
-                    };
-                    let mut on = s.light_mode.unwrap_or(low_end);
-                    // the default follows the computer
-                    let reset = (on != low_end).then_some(if low_end { "On, for this computer" } else { "Off" });
-                    let pressed = c.row_hint(ui, "light-mode", hint, SWITCH_W, reset, |ui| {
-                        if toggle(ui, &mut on).changed() {
-                            s.light_mode = Some(on);
+                            s.light_mode = None;
                             theme_changed = true;
                             dirty = true;
                         }
+                        // no Language row: the window is in English only for now, so a choice there would change
+                        // nothing. `language` stays in the settings file for the Java edition.
                     });
-                    if pressed {
-                        s.light_mode = None;
-                        theme_changed = true;
-                        dirty = true;
-                    }
-                    // no Language row: the window is in English only for now, so a choice there would change
-                    // nothing. `language` stays in the settings file for the Java edition.
-                });
-                section(ui, &view, &mut nav, Group::Launcher, 0, |ui, c, part| {
-                    if part != Part::Main {
-                        return;
-                    }
-                    dirty |= c.switch(ui, "updates", &mut s.check_for_launcher_updates, true);
-                    dirty |= c.switch(ui, "tray", &mut s.enable_tray_menu, true);
-                    let hint = format!("{}: {data_dir}", find("data-folder").hint);
-                    c.row_hint(ui, "data-folder", &hint, 100.0, None, |ui| {
-                        if secondary_icon(ui, super::icons::Icon::Folder, "Open").clicked() {
-                            open_data = true;
+                    section(ui, &view, &nav, Group::Game, 0, |ui, c, part| match part {
+                        Part::Main => {
+                            let mut auto = s.automatic_memory != Some(false);
+                            let hint = if auto {
+                                example.clone()
+                            } else {
+                                format!(
+                                    "Set by hand, for every game without its own setting: 1 GB to {}",
+                                    memory_text(max_mb)
+                                )
+                            };
+                            let reset = (!auto).then_some("Automatic");
+                            let width = if auto { 140.0 } else { 400.0 };
+                            let pressed = c.row_hint(ui, "memory", &hint, width, reset, |ui| {
+                                if toggle(ui, &mut auto).changed() {
+                                    s.automatic_memory = Some(auto);
+                                    dirty = true;
+                                }
+                                ui.label("Automatic");
+                                if !auto {
+                                    // the row lays out from the right: the amount, then the slider to its left
+                                    ui.add_space(16.0);
+                                    let label = ui.label(
+                                        RichText::new(memory_text(s.maximum_memory))
+                                            .font(super::fonts::medium(FS_BODY)),
+                                    );
+                                    if s.maximum_memory > max_mb {
+                                        // set elsewhere (an imported setting, the file): more than the slider goes to
+                                        label.on_hover_text(format!(
+                                            "More than the slider goes to ({}, half of this computer's memory). \
+                                             Drag it to pick less.",
+                                            memory_text(max_mb)
+                                        ));
+                                    }
+                                    ui.scope(|ui| {
+                                        // a rail that can be seen, filled in the brand colour up to the handle (like
+                                        // a switch that is on)
+                                        ui.visuals_mut().widgets.inactive.bg_fill = c_active();
+                                        ui.visuals_mut().selection.bg_fill = c_accent();
+                                        ui.spacing_mut().slider_width = 200.0;
+                                        let mut mb = s.maximum_memory.clamp(1024, max_mb);
+                                        let slider = egui::Slider::new(&mut mb, 1024..=max_mb)
+                                            .step_by(256.0)
+                                            .show_value(false)
+                                            .trailing_fill(true);
+                                        if ui.add(slider).changed() {
+                                            s.maximum_memory = mb;
+                                            // written once the drag is over, not on every frame of it
+                                            dragged = true;
+                                        }
+                                    });
+                                }
+                            });
+                            if pressed {
+                                s.automatic_memory = Some(true);
+                                dirty = true;
+                            }
+                            dirty |= c.switch(ui, "keep-open", &mut s.keep_launcher_open, true);
+                            dirty |= c.switch(ui, "console", &mut s.enable_console, false);
+                            dirty |= c.switch(ui, "game-options", &mut s.auto_game_options, true);
+                            dirty |= graphics_card_row(ui, c, &mut s.gpu, self_gpus.as_deref());
+                        }
+                        Part::Advanced => {}
+                    });
+                    let custom_java = s.using_custom_java_path.then(|| s.java_path.clone()).filter(|p| !p.is_empty());
+                    let java_changed = [
+                        s.startup_mode != "auto",
+                        custom_java.is_some(),
+                        s.java_parameters != crate::config::DEFAULT_JAVA_ARGS,
+                    ]
+                    .into_iter()
+                    .filter(|c| *c)
+                    .count();
+                    section(ui, &view, &nav, Group::Java, java_changed, |ui, c, part| match part {
+                        Part::Main => {
+                            dirty |= perf.rows(ui, c, s);
+                            dirty |= c.switch(ui, "class-cache", &mut s.class_data_cache, true);
+                            let mut warm = s.extras.get("warmUpGameFiles").and_then(|v| v.as_bool()).unwrap_or(true);
+                            if c.switch(ui, "warm-up", &mut warm, true) {
+                                s.extras.insert("warmUpGameFiles".into(), warm.into());
+                                dirty = true;
+                            }
+                            // what the smoothness helper did in the last game, under its rows
+                            if c.shows("smoothness") {
+                                c.gap(ui);
+                                perf.details_fold(ui);
+                            }
+                        }
+                        Part::Advanced => {
+                            const MODES: [(&str, &str); 3] =
+                                [("auto", "Automatic"), ("fast", "Light"), ("full", "Full performance")];
+                            let reset = (s.startup_mode != "auto").then_some("Automatic");
+                            let pressed = c.row(ui, "compiler", CONTROL_W, reset, |ui| {
+                                let labels = MODES.map(|(_, label)| label);
+                                let now =
+                                    MODES.iter().position(|(mode, _)| *mode == s.startup_mode).unwrap_or(usize::MAX);
+                                if let Some(i) = segmented(ui, &labels, now).filter(|&i| i != now) {
+                                    s.startup_mode = MODES[i].0.to_string();
+                                    dirty = true;
+                                }
+                            });
+                            if pressed {
+                                s.startup_mode = "auto".to_string();
+                                dirty = true;
+                            }
+                            // an empty path means automatic. The game only falls back to this Java when it doesn't use
+                            // the one that comes with Minecraft (an instance's own Java setting), as in the Java
+                            // edition.
+                            let custom =
+                                s.using_custom_java_path.then(|| s.java_path.clone()).filter(|p| !p.is_empty());
+                            let (typed, pressed) = c.text(
+                                ui,
+                                "java-path",
+                                "Automatic (recommended)",
+                                custom.as_deref().unwrap_or(""),
+                                custom.is_some().then_some("Automatic"),
+                            );
+                            if let Some(path) = typed {
+                                let path = path.trim().trim_matches('"').to_string();
+                                if custom.as_deref().unwrap_or("") != path {
+                                    // a cleared path is cleared for real, or the old Java would still be used at launch
+                                    s.using_custom_java_path = !path.is_empty();
+                                    s.java_path = path;
+                                    dirty = true;
+                                }
+                            }
+                            if pressed {
+                                s.using_custom_java_path = false;
+                                s.java_path.clear();
+                                dirty = true;
+                            }
+                            if let Some(warning) = java_path_warning(custom.as_deref()).filter(|_| c.shows("java-path"))
+                            {
+                                ui.add(egui::Label::new(RichText::new(warning).color(c_warn()).size(FS_META)).wrap());
+                            }
+                            let own_args = s.java_parameters != crate::config::DEFAULT_JAVA_ARGS;
+                            let (typed, pressed) = c.text(
+                                ui,
+                                "java-args",
+                                "",
+                                &s.java_parameters,
+                                own_args.then_some("the recommended arguments"),
+                            );
+                            if let Some(args) = typed {
+                                let args = args.trim().to_string();
+                                if args != s.java_parameters {
+                                    s.java_parameters = args;
+                                    dirty = true;
+                                }
+                            }
+                            if pressed {
+                                s.java_parameters = crate::config::DEFAULT_JAVA_ARGS.to_string();
+                                dirty = true;
+                            }
                         }
                     });
+                    section(ui, &view, &nav, Group::Launcher, 0, |ui, c, part| {
+                        if part != Part::Main {
+                            return;
+                        }
+                        dirty |= c.switch(ui, "updates", &mut s.check_for_launcher_updates, true);
+                        dirty |= c.switch(ui, "tray", &mut s.enable_tray_menu, true);
+                        let hint = format!("{}: {data_dir}", find("data-folder").hint);
+                        c.row_hint(ui, "data-folder", &hint, 100.0, None, |ui| {
+                            if secondary_icon(ui, super::icons::Icon::Folder, "Open").clicked() {
+                                open_data = true;
+                            }
+                        });
+                    });
+                    self.services_settings_ui(ui, &view, &nav);
+                    let s = &mut self.settings;
+                    section(ui, &view, &nav, Group::Privacy, 0, |ui, c, part| {
+                        if part != Part::Main {
+                            return;
+                        }
+                        dirty |= c.switch(ui, "analytics", &mut s.enable_analytics, false);
+                        dirty |= c.switch(ui, "pack-stats", &mut s.enable_logs, false);
+                    });
+                    ui.add_space(24.0);
                 });
-                self.services_settings_ui(ui, &view, &mut nav);
-                let s = &mut self.settings;
-                section(ui, &view, &mut nav, Group::Privacy, 0, |ui, c, part| {
-                    if part != Part::Main {
-                        return;
-                    }
-                    dirty |= c.switch(ui, "analytics", &mut s.enable_analytics, false);
-                    dirty |= c.switch(ui, "pack-stats", &mut s.enable_logs, false);
-                });
-                ui.add_space(24.0);
-            });
         });
-        if nav.current() != marked {
-            // the jump list was drawn before the groups said where the page is
-            ui.ctx().request_repaint();
-        }
         ui.data_mut(|d| {
             d.insert_temp(query_id(), query);
             d.insert_temp(Nav::id(), nav);
         });
+        if let Some(page) = go {
+            self.go(page);
+        }
         if open_data {
             self.open_folder(&self.dirs.base.clone());
         }
         if theme_changed {
-            theme::set_dark(theme::theme_is_dark(&self.settings.theme));
+            theme::set_dark(look_is_dark(&self.settings, system_dark));
             theme::apply(ui.ctx(), self.settings.light_mode.unwrap_or_else(super::low_end_pc));
         }
         if dirty {
+            super::motion::set_pattern(artwork_on(&self.settings));
             self.save_settings();
             // the player is looking: a tray that can't start now says why
             self.tray_quiet = false;
@@ -1472,6 +1720,103 @@ impl App {
         } else if dragged {
             self.save_settings_soon();
             mark_saved(ui.ctx());
+        }
+    }
+
+    /// The frame of Accounts and About, the other two pages of the account corner: their title over the search and
+    /// the list of Settings' sections at the left (as on Settings), and the page beside it, at most `max_w` wide.
+    /// Typing in the search or picking a section goes to Settings.
+    pub(super) fn account_corner(
+        &mut self,
+        ui: &mut Ui,
+        here: super::Page,
+        title: &str,
+        subtitle: &str,
+        max_w: f32,
+        content: impl FnOnce(&mut App, &mut Ui),
+    ) {
+        let room = ui.available_width() - 14.0;
+        let side = room >= NAV_W + NAV_GAP + NAV_CONTENT_MIN;
+        let content_w = if side { (room - NAV_W - NAV_GAP).min(max_w) } else { room.min(max_w) };
+        ui.scope(|ui| {
+            ui.set_max_width(if side { NAV_W + NAV_GAP + content_w } else { content_w });
+            PageHeader::new(title).subtitle(subtitle).show(ui, |_| {});
+        });
+        // a search left on Settings means nothing here: the field starts empty, and what is typed in it goes to
+        // Settings
+        let mut query = String::new();
+        let mut nav = ui.data(|d| d.get_temp::<Nav>(Nav::id())).unwrap_or_default();
+        let hidden: &[&str] = if crate::gpu::supported() { &[] } else { &["gpu"] };
+        let mut go = None;
+        let area = ui.available_rect_before_wrap();
+        let main = if side {
+            let list = egui::Rect::from_min_size(area.min, egui::vec2(NAV_W, area.height()));
+            let mut list = ui.new_child(egui::UiBuilder::new().max_rect(list).layout(Layout::top_down(Align::Min)));
+            search_box(&mut list, &mut query, NAV_W);
+            list.add_space(12.0);
+            let view = View::new("", hidden);
+            match nav_list(&mut list, &view, &nav, true, here) {
+                Some(NavPick::Section(g)) => {
+                    nav.open = g;
+                    go = Some(super::Page::Settings);
+                }
+                Some(NavPick::Page(p)) => go = Some(p),
+                None => {}
+            }
+            egui::Rect::from_min_max(egui::pos2(area.left() + NAV_W + NAV_GAP, area.top()), area.max)
+        } else {
+            ui.scope(|ui| {
+                ui.set_max_width(content_w);
+                let view = View::new("", hidden);
+                match nav_list(ui, &view, &nav, false, here) {
+                    Some(NavPick::Section(g)) => {
+                        nav.open = g;
+                        go = Some(super::Page::Settings);
+                    }
+                    Some(NavPick::Page(p)) => go = Some(p),
+                    None => {}
+                }
+            });
+            ui.add_space(14.0);
+            egui::Rect::from_min_max(egui::pos2(area.left(), ui.cursor().top()), area.max)
+        };
+        let main = main.with_max_x(main.left() + content_w + 14.0);
+        ui.scope_builder(egui::UiBuilder::new().max_rect(main), |ui| content(self, ui));
+        if !query.is_empty() {
+            // a search is a search of the settings
+            go = Some(super::Page::Settings);
+        }
+        ui.data_mut(|d| {
+            d.insert_temp(query_id(), query);
+            d.insert_temp(Nav::id(), nav);
+        });
+        if let Some(page) = go.filter(|p| *p != here) {
+            self.go(page);
+        }
+    }
+
+    /// For the screenshot tour: Settings on a section (`settings-java`), with a search (`settings-search`), or on its
+    /// first section.
+    pub(super) fn shot_settings(&mut self, ctx: &egui::Context, variant: &str) {
+        self.page = super::Page::Settings;
+        let open = if variant == "settings-java" { Group::Java } else { Group::Appearance };
+        let query = if variant == "settings-search" { "java" } else { "" };
+        ctx.data_mut(|d| {
+            d.insert_temp(query_id(), query.to_string());
+            d.insert_temp(Nav::id(), Nav { open });
+        });
+    }
+
+    /// Follow the system's look when the theme is set to: called every frame, it changes the look when the system's
+    /// does (and does nothing otherwise, or when the system doesn't say).
+    pub(super) fn follow_system_theme(&mut self, ctx: &egui::Context) {
+        if !follows_system(&self.settings) {
+            return;
+        }
+        let Some(dark) = ctx.system_theme().map(|t| t == egui::Theme::Dark) else { return };
+        if dark != theme::is_dark() {
+            theme::set_dark(dark);
+            theme::apply(ctx, self.settings.light_mode.unwrap_or_else(super::low_end_pc));
         }
     }
 
@@ -1646,6 +1991,53 @@ mod tests {
         let view = View::new("", &["gpu"]);
         assert!(!view.shows("gpu") && view.shows("memory"));
         assert!(View::new("graphics card", &["gpu"]).shown.is_empty(), "a hidden setting isn't found either");
+    }
+
+    #[test]
+    fn the_page_shows_the_open_section_or_every_section_a_search_finds() {
+        let nav = Nav { open: Group::Backups };
+        let all = View::new("", &[]);
+        let drawn_all: Vec<Group> = Group::ALL.into_iter().filter(|g| drawn(&all, &nav, *g)).collect();
+        assert_eq!(drawn_all, [Group::Backups], "one section at a time");
+        let found = View::new("folder", &[]);
+        let drawn_found: Vec<Group> =
+            Group::ALL.into_iter().filter(|g| found.group_shown(*g) && drawn(&found, &nav, *g)).collect();
+        assert_eq!(
+            drawn_found,
+            [Group::Java, Group::Network, Group::Backups, Group::Launcher],
+            "a search looks everywhere"
+        );
+        assert!(found.shows("data-folder"));
+    }
+
+    #[test]
+    fn the_theme_cards_pick_a_look_and_keep_a_theme_of_its_kind() {
+        let mut s = crate::config::Settings::default();
+        assert!(look_is_dark(&s, Some(false)), "the default theme is dark, whatever the system is");
+        set_look(&mut s, 1, None);
+        assert_eq!(s.theme, LIGHT_THEME);
+        assert!(!look_is_dark(&s, Some(true)));
+        // a dark theme of the player's own stays when Dark is picked
+        s.theme = "com.blockforge.launcher.themes.CatppuccinMocha".into();
+        set_look(&mut s, 0, None);
+        assert_eq!(s.theme, "com.blockforge.launcher.themes.CatppuccinMocha");
+        // following the system: the look is the system's, and the theme follows it for the Java edition
+        set_look(&mut s, 2, Some(false));
+        assert!(follows_system(&s) && s.theme == LIGHT_THEME);
+        assert!(look_is_dark(&s, Some(true)) && !look_is_dark(&s, Some(false)));
+        assert!(!look_is_dark(&s, None), "a system that doesn't say: the theme decides");
+        set_look(&mut s, 0, Some(false));
+        assert!(!follows_system(&s) && look_is_dark(&s, Some(false)));
+    }
+
+    #[test]
+    fn background_artwork_is_on_unless_turned_off() {
+        let mut s = crate::config::Settings::default();
+        assert!(artwork_on(&s));
+        set_artwork(&mut s, false);
+        assert!(!artwork_on(&s) && s.extras.get(ARTWORK_KEY) == Some(&serde_json::Value::Bool(false)));
+        set_artwork(&mut s, true);
+        assert!(artwork_on(&s) && !s.extras.contains_key(ARTWORK_KEY), "the default isn't written");
     }
 
     #[test]

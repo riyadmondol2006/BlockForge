@@ -1137,6 +1137,83 @@ pub fn pill_tabs(ui: &mut Ui, items: &[(&str, Option<Color32>)], selected: usize
     pressed
 }
 
+/// How something stands, for a [`status_line`]: the same marks and colours for every check, log and clean-up.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Status {
+    /// It worked, or all is well: a check in the brand colour.
+    Good,
+    /// It can't go on until something is done: an exclamation mark in amber.
+    Warn,
+    /// It failed: an exclamation mark in red.
+    Error,
+    /// It is running: a turning arc.
+    Busy,
+}
+
+impl Status {
+    /// The colour of the mark and the words.
+    pub fn color(self) -> Color32 {
+        match self {
+            Status::Good | Status::Busy => {
+                if is_dark() {
+                    c_accent()
+                } else {
+                    c_accent_hover()
+                }
+            }
+            Status::Warn => c_warn(),
+            Status::Error => c_danger(),
+        }
+    }
+}
+
+/// One line that says how something stands and what to do about it: a small round mark (a check, an exclamation
+/// mark or a turning arc) and the words, in the colour of the state. The words wrap.
+pub fn status_line(ui: &mut Ui, status: Status, text: &str) -> Response {
+    let color = status.color();
+    ui.horizontal_top(|ui| {
+        ui.spacing_mut().item_spacing.x = 7.0;
+        let (rect, _) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
+        paint_status_mark(ui, rect, status);
+        ui.add(egui::Label::new(RichText::new(text).color(color).size(FS_META)).wrap())
+    })
+    .inner
+}
+
+/// The mark of a [`status_line`] in `rect`.
+pub fn paint_status_mark(ui: &Ui, rect: egui::Rect, status: Status) {
+    let color = status.color();
+    let p = ui.painter();
+    let c = rect.center();
+    let r = rect.width().min(rect.height()) / 2.0;
+    match status {
+        Status::Busy => {
+            if !motion::reduced(ui.ctx()) {
+                ui.ctx().request_repaint_after(ANIMATION_FRAME);
+            }
+            let start = if motion::reduced(ui.ctx()) { 0.0 } else { ui.input(|i| i.time) as f32 * 4.0 };
+            let points: Vec<egui::Pos2> = (0..=14)
+                .map(|k| {
+                    let a = start + k as f32 / 14.0 * 4.4;
+                    c + vec2(a.cos(), a.sin()) * (r - 2.0)
+                })
+                .collect();
+            p.add(egui::Shape::line(points, Stroke::new(1.8, color)));
+        }
+        Status::Good => {
+            p.circle_filled(c, r, color.gamma_multiply(0.18));
+            let s = Stroke::new(1.6, color);
+            p.line_segment([c + vec2(-3.5, 0.3), c + vec2(-1.0, 2.8)], s);
+            p.line_segment([c + vec2(-1.0, 2.8), c + vec2(3.8, -2.6)], s);
+        }
+        Status::Warn | Status::Error => {
+            p.circle_filled(c, r, color.gamma_multiply(0.18));
+            p.line_segment([c + vec2(0.0, -4.0), c + vec2(0.0, 1.2)], Stroke::new(1.8, color));
+            p.circle_filled(c + vec2(0.0, 3.8), 1.1, color);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

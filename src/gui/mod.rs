@@ -432,6 +432,7 @@ impl App {
         fonts::install(&cc.egui_ctx);
         theme::set_dark(theme::theme_is_dark(&settings.theme));
         theme::apply(&cc.egui_ctx, settings.light_mode.unwrap_or_else(low_end_pc));
+        motion::set_pattern(settings::artwork_on(&settings));
         // the size the window had last time (checked against the screen once the window is up, see `follow_zoom`)
         if let Some(z) = settings.ui_zoom.filter(|z| (MIN_ZOOM..=MAX_ZOOM).contains(z)) {
             cc.egui_ctx.set_zoom_factor(z);
@@ -1052,6 +1053,10 @@ impl App {
                 }
             },
             Msg::TaskDone { id, result } => {
+                // a tool's row on the Tools page says how its job ended
+                if let Some(t) = self.tasks.iter().find(|t| t.id == id) {
+                    tools::note_task_end(&mut self.svc, &t.label, &result);
+                }
                 self.tasks.retain(|t| t.id != id);
                 self.mods_cache = None;
                 match result {
@@ -1831,10 +1836,8 @@ fn zoom_that_fits(zoom: f32, monitor: egui::Vec2) -> Option<f32> {
     (zoom > 1.0 && zoom > fits + 0.01).then(|| fits.max(1.0))
 }
 
-/// The column of the pages of text and forms (Settings, Accounts, About, New instance, the world converter): the
-/// 720 points they are laid out in and the strip their scroll bar floats in.
-const READ_COLUMN: f32 = 734.0;
-/// The column of Tools and Servers: their 1040 points and the scroll bar's strip.
+/// The column of New instance, Tools, Servers, the account corner and the world converter: their 1040 points and the
+/// scroll bar's strip.
 const WIDE_COLUMN: f32 = 1054.0;
 /// Home: its panel, the row of instances and the news read best at this width at most.
 const HOME_COLUMN: f32 = 1320.0;
@@ -1845,12 +1848,11 @@ const HOME_COLUMN: f32 = 1320.0;
 /// [`PAGE_MAX_W`].
 fn page_column(page: Page) -> f32 {
     match page {
-        Page::Settings | Page::Accounts | Page::About => READ_COLUMN,
-        // the steps of a new instance with the summary panel beside them
-        Page::Create => WIDE_COLUMN,
+        // the steps of a new instance with the summary panel beside them, the account corner and the converter with
+        // the list of their parts down the left, and the tools and servers
+        Page::Create | Page::Settings | Page::Accounts | Page::About | Page::Tools | Page::Servers => WIDE_COLUMN,
         #[cfg(feature = "converter")]
-        Page::Convert => READ_COLUMN,
-        Page::Tools | Page::Servers => WIDE_COLUMN,
+        Page::Convert => WIDE_COLUMN,
         Page::Home => HOME_COLUMN,
         _ => PAGE_MAX_W,
     }
@@ -2025,15 +2027,17 @@ mod tests {
 
     #[test]
     fn pages_of_text_are_centred_and_lists_use_the_width() {
-        assert_eq!(page_column(Page::Settings), READ_COLUMN);
-        assert_eq!(page_column(Page::Servers), WIDE_COLUMN);
+        // New instance has its summary beside the steps, the account corner its list of sections down the left
+        for page in [Page::Create, Page::Settings, Page::Servers] {
+            assert_eq!(page_column(page), WIDE_COLUMN, "{page:?}");
+        }
         for page in [Page::Library, Page::Discover, Page::Instance, Page::Craft, Page::Packs, Page::Ftb] {
             assert_eq!(page_column(page), PAGE_MAX_W, "{page:?}");
         }
-        // on a 1920 screen the open sidebar and the margins leave about 1616 points: Settings sits in the middle
-        let (left, width) = centred_column(1616.0, page_column(Page::Settings));
-        assert_eq!(width, READ_COLUMN);
-        assert!(left > 400.0);
+        // on a 1920 screen the open sidebar and the margins leave about 1616 points: a form sits in the middle
+        let (left, width) = centred_column(1616.0, page_column(Page::Create));
+        assert_eq!(width, WIDE_COLUMN);
+        assert!(left > 200.0);
         assert_eq!(centred_column(1616.0, page_column(Page::Library)), (0.0, 1616.0));
     }
 
@@ -2159,6 +2163,8 @@ impl eframe::App for App {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        // Settings: a look that follows the system's changes with it
+        self.follow_system_theme(&ctx);
         // the ground with its soft glow, under the glass of the sidebar and the pages
         motion::backdrop(ui.painter(), ctx.content_rect());
         let glass = c_surface();
@@ -2290,7 +2296,7 @@ struct Shot {
 /// The ids of the jobs the tour makes up to show the sidebar busy; no real job gets ids this high.
 const SHOT_TASK: u64 = u64::MAX - 8;
 
-const SHOT_PAGES: [&str; 53] = [
+const SHOT_PAGES: [&str; 57] = [
     "home",
     "library",
     "instance",
@@ -2326,11 +2332,15 @@ const SHOT_PAGES: [&str; 53] = [
     "convert-error",
     "convert-instance",
     "convert-instance-done",
+    "convert-options",
+    "convert-save",
     "packs",
     "ftb",
     "about",
     "who",
     "settings-light",
+    "settings-java",
+    "settings-search",
     "home-light",
     "library-light",
     "library-list",
@@ -2517,7 +2527,7 @@ impl App {
                 "create-fabric" => self.shot_create(create::Step::Loader),
                 "create-configure" => self.shot_create(create::Step::Configure),
                 "accounts" => self.page = Page::Accounts,
-                "settings" => self.page = Page::Settings,
+                v if v.starts_with("settings") => self.shot_settings(ctx, v),
                 "who" => {
                     self.page = Page::Home;
                     theme::set_dark(true);

@@ -1,7 +1,7 @@
 //! The Servers page: pack servers installed on this computer. Start one in a terminal window, open its folder,
 //! back it up or delete it.
 
-use egui::{Align, Color32, CornerRadius, Layout, RichText, ScrollArea, Sense, Stroke, Ui, vec2};
+use egui::{Align, CornerRadius, Layout, RichText, ScrollArea, Sense, Ui, vec2};
 
 use super::App;
 use super::icons::Icon;
@@ -12,7 +12,7 @@ use crate::servers::{self, Server};
 use crate::svcsettings::ServiceSettings;
 
 /// The widest the list gets.
-const COLUMN: f32 = 1040.0;
+const COLUMN: f32 = 860.0;
 
 enum Act {
     Launch(String),
@@ -73,53 +73,33 @@ impl App {
             self.reload_servers();
         }
         let mut act: Option<Act> = None;
-        // one width for the header and the list, so their right edges (the folder button and the card) line up; at most
-        // as wide as the list gets, but never wider than the window (the scroll bar floats over the edge)
+        // one width for the head and the list, so their right edges line up; at most as wide as the list gets, but
+        // never wider than the window (the scroll bar floats over the edge)
         let width = (ui.available_width() - 14.0).min(COLUMN);
         ui.scope(|ui| {
             ui.set_max_width(width);
-            let title = |ui: &mut Ui| {
-                ui.horizontal(|ui| {
-                    heading(ui, "Servers");
-                    if !self.svc.servers.is_empty() {
-                        count_pill(ui, &self.svc.servers.len().to_string());
-                    }
-                });
-                muted(ui, "Servers installed from modpacks. They run in their own window.");
-            };
-            if ui.available_width() < 600.0 {
-                // no room beside the title: the buttons go under it
-                title(ui);
-                ui.horizontal(|ui| {
-                    if ghost(ui, "Refresh").clicked() {
-                        act = Some(Act::Reload);
-                    }
-                    if secondary_icon(ui, Icon::Folder, "Open servers folder").clicked() {
-                        act = Some(Act::Folder(String::new()));
-                    }
-                });
-            } else {
-                ui.horizontal(|ui| {
-                    ui.vertical(|ui| {
-                        // leave room for the two buttons on the right, so the line wraps instead of running under them
-                        ui.set_max_width((ui.available_width() - 300.0).max(160.0));
-                        title(ui);
-                    });
-                    // the buttons stay level with the title, whatever the help line does
-                    ui.with_layout(Layout::right_to_left(Align::TOP), |ui| {
-                        if secondary_icon(ui, Icon::Folder, "Open servers folder").clicked() {
-                            act = Some(Act::Folder(String::new()));
-                        }
-                        if ghost(ui, "Refresh").clicked() {
-                            act = Some(Act::Reload);
-                        }
-                    });
-                });
+            let mut head =
+                PageHeader::new("Servers").subtitle("Servers installed from modpacks. They run in their own window.");
+            if !self.svc.servers.is_empty() {
+                head = head.count(self.svc.servers.len());
             }
+            head.show(ui, |ui| {
+                if secondary_icon(ui, Icon::Folder, "Open servers folder").clicked() {
+                    act = Some(Act::Folder(String::new()));
+                }
+                if ghost(ui, "Refresh").clicked() {
+                    act = Some(Act::Reload);
+                }
+            });
         });
-        ui.add_space(12.0);
         let account = self.current_account().cloned();
         let busy: Vec<bool> = self.svc.servers.iter().map(|s| self.server_busy(&s.name)).collect();
+        // the servers in three groups: the ones that can be started, the ones with something wrong, the hidden ones
+        let mut groups: [Vec<usize>; 3] = Default::default();
+        for (k, (s, row)) in self.svc.servers.iter().zip(&self.svc.server_rows).enumerate() {
+            let hidden = account.as_ref().is_some_and(|a| servers::is_collapsed(a, s));
+            groups[server_group(hidden, s.is_patched_for_log4_shell, row.has_script)].push(k);
+        }
         ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
             ui.set_max_width(width);
             if self.svc.servers.is_empty() {
@@ -136,74 +116,47 @@ impl App {
                     });
                     ui.add_space(18.0);
                 });
-            } else {
-                // a card of its own for every server, the gap between them a little less than between the page's blocks
-                ui.spacing_mut().item_spacing.y = 12.0;
-                for ((s, row), busy) in self.svc.servers.iter().zip(&self.svc.server_rows).zip(busy) {
-                    let collapsed = account.as_ref().is_some_and(|a| servers::is_collapsed(a, s));
-                    // the buttons keep their room on the right (as wide as on the last frame)
-                    let id = ui.scope_id().with(("server-buttons", &s.name));
-                    let buttons_w = remembered_width(ui, id, 160.0);
-                    let mut used = buttons_w;
-                    server_card(ui, collapsed, |ui| {
-                        // the title of a card sits close to its line of facts
-                        ui.spacing_mut().item_spacing.y = 2.0;
-                        ui.horizontal(|ui| {
-                            ui.set_min_height(if collapsed { 32.0 } else { 44.0 });
-                            ui.spacing_mut().item_spacing.x = 12.0;
-                            avatar(ui, &s.name, if collapsed { 28.0 } else { 40.0 });
-                            ui.vertical(|ui| {
-                                ui.set_max_width((ui.available_width() - buttons_w - 12.0).max(80.0));
-                                server_title(ui, s, row, collapsed);
-                            });
-                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                ui.spacing_mut().item_spacing.x = 8.0;
-                                if collapsed {
-                                    // folding a card away is remembered per account, so it needs one
-                                    if secondary(ui, "Show").clicked() {
-                                        act = Some(Act::Collapse(s.name.clone(), false));
-                                    }
-                                } else if busy {
-                                    ui.horizontal(|ui| {
-                                        spinner_sized(ui, 22.0);
-                                        muted(ui, "Backing up or deleting\u{2026}");
-                                    });
-                                } else {
-                                    kebab_menu(ui, |ui| {
-                                        if ui.button("Open folder").clicked() {
-                                            act = Some(Act::Folder(s.name.clone()));
-                                            ui.close();
-                                        }
-                                        if ui.button("Back up").clicked() {
-                                            act = Some(Act::Backup(s.name.clone()));
-                                            ui.close();
-                                        }
-                                        if account.is_some() && ui.button("Hide").clicked() {
-                                            act = Some(Act::Collapse(s.name.clone(), true));
-                                            ui.close();
-                                        }
-                                        ui.separator();
-                                        if ui.button(RichText::new("Delete").color(c_danger())).clicked() {
-                                            act = Some(Act::Remove(s.name.clone()));
-                                            ui.close();
-                                        }
-                                    });
-                                    let launch = if row.has_script {
-                                        secondary_icon(ui, Icon::Play, "Launch")
-                                    } else {
-                                        danger_enabled(ui, "Launch", false)
-                                            .on_hover_text("This server has no start script, so there is nothing to launch")
-                                    };
-                                    if launch.clicked() {
-                                        act = Some(Act::Launch(s.name.clone()));
-                                    }
-                                }
-                                used = ui.min_rect().width();
-                            });
-                        });
-                    });
-                    remember_width(ui, id, used);
+            }
+            let titles = [
+                ("Ready", "Launch one to start it in a terminal window of its own"),
+                ("Need a look", "Fix these before anyone plays on them"),
+                ("Hidden", "Put away for this account. Show one to use it again"),
+            ];
+            let mut first = true;
+            for (g, members) in groups.iter().enumerate() {
+                if members.is_empty() {
+                    continue;
                 }
+                if !std::mem::take(&mut first) {
+                    ui.add_space(18.0);
+                }
+                ui.scope(|ui| {
+                    ui.spacing_mut().item_spacing.y = 2.0;
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 8.0;
+                        ui.label(RichText::new(titles[g].0).size(FS_SECTION).semibold());
+                        ui.label(
+                            RichText::new(members.len().to_string()).font(super::fonts::mono(FS_META)).color(c_faint()),
+                        );
+                    });
+                    ui.label(RichText::new(titles[g].1).size(FS_META).color(c_muted()));
+                });
+                ui.add_space(8.0);
+                card(ui, |ui| {
+                    ui.spacing_mut().item_spacing.y = 0.0;
+                    for (n, &k) in members.iter().enumerate() {
+                        if n > 0 {
+                            ui.add_space(10.0);
+                            rule(ui);
+                            ui.add_space(10.0);
+                        }
+                        let s = &self.svc.servers[k];
+                        let row = &self.svc.server_rows[k];
+                        if let Some(a) = server_row(ui, s, row, g == 2, busy[k], account.is_some()) {
+                            act = Some(a);
+                        }
+                    }
+                });
             }
             ui.add_space(16.0);
         });
@@ -309,70 +262,115 @@ impl App {
     }
 }
 
-/// A server's name and how it stands (what is wrong with it if anything), and under it the line of facts and the
-/// folder (the whole of both in its tooltip).
-fn server_title(ui: &mut Ui, s: &Server, row: &ServerRow, collapsed: bool) {
-    ui.spacing_mut().item_spacing.y = 3.0;
-    // as tall as a pill, so the line of facts sits right under the name
-    ui.spacing_mut().interact_size.y = 22.0;
-    ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing.x = 8.0;
-        let name = RichText::new(&s.name).size(if collapsed { FS_BODY } else { FS_SECTION - 1.0 }).semibold();
-        ui.add(egui::Label::new(if collapsed { name.color(c_muted()) } else { name }).wrap());
-        // red and amber are for what is actually wrong; a server with nothing wrong gets the quiet brand colour
-        if !s.is_patched_for_log4_shell {
-            pill(ui, "Not patched for Log4Shell", c_danger());
-        }
-        if !row.has_script {
-            pill(ui, "No start script", c_warn());
-        }
-        if s.is_patched_for_log4_shell && row.has_script && !collapsed {
-            pill(ui, "Ready", c_accent());
-        }
-    });
-    if !collapsed {
-        let tip = format!("{}\n{}", row.details, row.folder);
-        ui.add(egui::Label::new(RichText::new(&row.details).size(FS_META).color(c_muted())).truncate())
-            .on_hover_text(&tip);
-        ui.add(egui::Label::new(RichText::new(&row.folder).size(FS_META).color(c_faint())).truncate())
-            .on_hover_text(&tip);
+/// Which group a server is listed in: 0 ready, 1 something wrong with it, 2 hidden by the player.
+fn server_group(hidden: bool, patched: bool, has_script: bool) -> usize {
+    if hidden {
+        2
+    } else if !patched || !has_script {
+        1
+    } else {
+        0
     }
 }
 
-/// The glass card of one server. A hidden server's card is flatter and quieter, so the ones in use stand out.
-fn server_card(ui: &mut Ui, collapsed: bool, add: impl FnOnce(&mut Ui)) {
-    if !collapsed {
-        card(ui, add);
-        return;
-    }
-    egui::Frame::new()
-        .fill(c_surface())
-        .stroke(Stroke::new(1.0, c_border()))
-        .corner_radius(CornerRadius::same(R_CARD))
-        .inner_margin(egui::Margin::symmetric(18, 10))
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            add(ui)
+/// One server in its group's card: its picture, name and facts, what is wrong with it and what to do, and at the
+/// right Launch and the menu (Show for a hidden one). Returns what was asked for.
+fn server_row(ui: &mut Ui, s: &Server, row: &ServerRow, hidden: bool, busy: bool, has_account: bool) -> Option<Act> {
+    let mut act = None;
+    let id = ui.scope_id().with(("server-buttons", &s.name));
+    let buttons_w = remembered_width(ui, id, 160.0);
+    let mut used = buttons_w;
+    ui.horizontal_top(|ui| {
+        ui.spacing_mut().item_spacing.x = 12.0;
+        avatar(ui, &s.name, if hidden { 28.0 } else { 36.0 });
+        ui.vertical(|ui| {
+            ui.set_width((ui.available_width() - buttons_w - 16.0).max(120.0));
+            ui.spacing_mut().item_spacing.y = 3.0;
+            let name = RichText::new(&s.name).font(super::fonts::semibold(FS_BODY));
+            if hidden {
+                ui.add_space(5.0);
+                ui.add(egui::Label::new(name.color(c_muted())).truncate());
+                return;
+            }
+            ui.add(egui::Label::new(name).truncate());
+            let tip = format!("{}\n{}", row.details, row.folder);
+            ui.add(
+                egui::Label::new(RichText::new(&row.details).font(super::fonts::mono(FS_META)).color(c_muted()))
+                    .truncate(),
+            )
+            .on_hover_text(&tip);
+            ui.add(
+                egui::Label::new(RichText::new(&row.folder).font(super::fonts::mono(FS_META)).color(c_faint()))
+                    .truncate(),
+            )
+            .on_hover_text(&tip);
+            // red and amber are for what is actually wrong, each with what to do about it
+            if !s.is_patched_for_log4_shell {
+                ui.add_space(2.0);
+                status_line(
+                    ui,
+                    Status::Error,
+                    "Not patched for Log4Shell. Delete it and install it again before anyone joins.",
+                );
+            }
+            if !row.has_script {
+                ui.add_space(2.0);
+                status_line(
+                    ui,
+                    Status::Warn,
+                    "No start script, so there is nothing to launch. Open its folder to add one, or install it again.",
+                );
+            }
         });
-}
-
-/// A status as a rounded pill: a dot and the words, in a pale tint of the colour.
-fn pill(ui: &mut Ui, text: &str, color: Color32) {
-    let galley = ui.painter().layout_no_wrap(text.to_string(), super::fonts::medium(FS_META), color);
-    let size = vec2(galley.size().x + 28.0, 22.0);
-    let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
-    let p = ui.painter();
-    p.rect_filled(rect, CornerRadius::same(11), color.gamma_multiply(0.14));
-    p.circle_filled(egui::pos2(rect.left() + 11.0, rect.center().y), 3.0, color);
-    p.galley(egui::pos2(rect.left() + 19.0, rect.center().y - galley.size().y / 2.0), galley, color);
-}
-
-/// The number of servers beside the title, in a neutral pill.
-fn count_pill(ui: &mut Ui, text: &str) {
-    let galley = ui.painter().layout_no_wrap(text.to_string(), super::fonts::medium(FS_META), c_muted());
-    let (rect, _) = ui.allocate_exact_size(vec2(galley.size().x.max(10.0) + 16.0, 22.0), Sense::hover());
-    ui.painter().rect(rect, CornerRadius::same(11), c_field(), Stroke::new(1.0, c_border()), egui::StrokeKind::Inside);
-    ui.painter().galley(rect.center() - galley.size() / 2.0, galley, c_muted());
+        used = ui
+            .with_layout(Layout::right_to_left(Align::Min), |ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                if hidden {
+                    // folding a server away is remembered per account, so it needs one
+                    if secondary(ui, "Show").clicked() {
+                        act = Some(Act::Collapse(s.name.clone(), false));
+                    }
+                } else if busy {
+                    ui.horizontal(|ui| {
+                        spinner_sized(ui, 22.0);
+                        muted(ui, "Backing up or deleting\u{2026}");
+                    });
+                } else {
+                    kebab_menu(ui, |ui| {
+                        if ui.button("Open folder").clicked() {
+                            act = Some(Act::Folder(s.name.clone()));
+                            ui.close();
+                        }
+                        if ui.button("Back up").clicked() {
+                            act = Some(Act::Backup(s.name.clone()));
+                            ui.close();
+                        }
+                        if has_account && ui.button("Hide").clicked() {
+                            act = Some(Act::Collapse(s.name.clone(), true));
+                            ui.close();
+                        }
+                        ui.separator();
+                        if ui.button(RichText::new("Delete").color(c_danger())).clicked() {
+                            act = Some(Act::Remove(s.name.clone()));
+                            ui.close();
+                        }
+                    });
+                    let launch = if row.has_script {
+                        secondary_icon(ui, Icon::Play, "Launch")
+                    } else {
+                        danger_enabled(ui, "Launch", false)
+                            .on_hover_text("This server has no start script, so there is nothing to launch")
+                    };
+                    if launch.clicked() {
+                        act = Some(Act::Launch(s.name.clone()));
+                    }
+                }
+                ui.min_rect().width()
+            })
+            .inner;
+    });
+    remember_width(ui, id, used);
+    act
 }
 
 /// A picture in a soft brand-tinted square, over an empty state.
@@ -380,4 +378,17 @@ fn badge(ui: &mut Ui, icon: Icon) {
     let (rect, _) = ui.allocate_exact_size(vec2(52.0, 52.0), Sense::hover());
     ui.painter().rect_filled(rect, CornerRadius::same(R_CARD), c_accent_soft());
     super::icons::paint(ui.painter(), icon, rect.center(), 22.0, c_accent());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_server_is_listed_where_it_belongs() {
+        assert_eq!(server_group(false, true, true), 0, "nothing wrong: ready");
+        assert_eq!(server_group(false, false, true), 1, "not patched");
+        assert_eq!(server_group(false, true, false), 1, "no start script");
+        assert_eq!(server_group(true, false, false), 2, "hidden wins: the player put it away");
+    }
 }

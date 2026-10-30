@@ -34,9 +34,18 @@ pub struct AcctState {
 
 impl App {
     pub(super) fn accounts_ui(&mut self, ui: &mut Ui) {
-        heading(ui, "Accounts");
-        muted(ui, "Choose who plays. Microsoft accounts can join online servers; offline players can't.");
-        ui.add_space(14.0);
+        self.account_corner(
+            ui,
+            super::Page::Accounts,
+            "Accounts",
+            "Choose who plays. Microsoft accounts can join online servers; offline players can't.",
+            COLUMN,
+            |app, ui| app.accounts_body(ui),
+        );
+    }
+
+    /// The accounts and the ways to add one, beside the list of the account corner.
+    fn accounts_body(&mut self, ui: &mut Ui) {
         let mut acts = Acts::default();
         let current = self.current_account().map(|a| a.uuid.clone());
         let area = ui.available_rect_before_wrap();

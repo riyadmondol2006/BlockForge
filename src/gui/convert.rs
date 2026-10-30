@@ -185,6 +185,9 @@ pub struct ConvertState {
     /// The blocks of the set-up do not fit the panel, so the Convert bar is pinned under the scrolling part. Learned
     /// while drawing; with room to spare the button follows the last block instead.
     pub(super) bar_pinned: bool,
+    /// The step of the set-up whose form is shown (0: the world, 1: what to convert to, 2: what comes along, 3: where
+    /// it goes). Only the page looks at it.
+    pub(super) step: usize,
 }
 
 impl ConvertState {
@@ -221,6 +224,7 @@ impl ConvertState {
             last_job: None,
             last_warnings: Vec::new(),
             bar_pinned: false,
+            step: 0,
         }
     }
 
@@ -996,6 +1000,13 @@ impl ConvertState {
             player: Default::default(),
             level_overrides: Default::default(),
             entities: Default::default(),
+        };
+        // the set-up opens on the step a picture is about
+        self.step = match variant {
+            "convert-target" => 1,
+            "convert-options" => 2,
+            "convert-save" | "convert-conflict" | "convert-instance" => 3,
+            _ => 0,
         };
         match variant {
             "convert-instance-done" => {

@@ -10,12 +10,19 @@ use super::craft_fmt::{check_labeled, small_faint};
 use super::icons::Icon;
 use super::theme::*;
 use super::widgets::*;
-use crate::convert::backend::{Edition, WorldPlayer};
-use crate::convert::level::{Difficulty, EntityFilter, GameType, InventorySource};
+use crate::convert::backend::{Edition, EntityOptions, WorldPlayer};
+use crate::convert::level::{Difficulty, EntityFilter, GameType, InventorySource, PlayerOptions};
 use crate::tr;
 
-/// How wide the page's content gets on a wide window.
-const PAGE_WIDTH: f32 = 720.0;
+/// How wide the page's content gets on a wide window: the rail of steps and the form beside it.
+const PAGE_WIDTH: f32 = 960.0;
+/// The rail of steps at the left, the room between it and the form, and the least room for both side by side.
+const RAIL_W: f32 = 236.0;
+const RAIL_GAP: f32 = 24.0;
+const RAIL_BESIDE: f32 = 640.0;
+/// The height of a step on the rail, and the room between two steps.
+const RAIL_ROW: f32 = 56.0;
+const RAIL_STEP_GAP: f32 = 14.0;
 /// The footer's height, kept free below the scrolling part.
 const FOOTER: f32 = 30.0;
 /// The height the pinned bar takes under the scrolling part: the gap, the room above the button, the button.
@@ -28,12 +35,8 @@ const BUTTON_H: f32 = 32.0;
 const TAIL: f32 = 8.0;
 /// The height of the dashed area that waits for a world.
 const ZONE_HEIGHT: f32 = 168.0;
-/// The room on the left of the steps, where their badges and the line between them sit.
-const GUTTER: f32 = 42.0;
 /// The side of a step's badge.
 const STEP_BADGE: f32 = 28.0;
-/// The room between two steps.
-const STEP_GAP: f32 = 20.0;
 
 /// A text of a button or a wait with its closing "..." typeset as one ellipsis character. The text in `tr!` stays the
 /// key of the translations as it was written; a translation that ends in three dots is shown the same way.
@@ -59,60 +62,128 @@ fn sentence(text: &str) -> String {
     }
 }
 
-/// The title of a block of the page, with the room under it.
-fn block_title(ui: &mut Ui, text: &str) {
-    ui.label(RichText::new(sentence(text)).size(FS_SECTION).semibold());
-    ui.add_space(2.0);
+/// How a step of the rail stands.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Mark {
+    /// Not done yet, nothing wrong.
+    Todo,
+    Done,
+    /// It can go on, but something wants a look.
+    Warn,
+    /// It can't go on like this.
+    Error,
+    Busy,
+    /// Not open until the world is chosen.
+    Locked,
 }
 
-/// A step of the set-up: its numbered badge and title, then its block, indented past the badge. A step that is
-/// `done` has its badge filled with the brand gradient and a check mark. Returns where the badge is, and `done`, so
-/// the line down to the next badge can be drawn.
-fn step(ui: &mut Ui, n: usize, title: &str, done: bool, add: impl FnOnce(&mut Ui)) -> (egui::Rect, bool) {
-    let badge = ui
-        .horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = GUTTER - STEP_BADGE;
-            let (rect, _) = ui.allocate_exact_size(vec2(STEP_BADGE, STEP_BADGE), Sense::hover());
-            // the fill fades in as the step becomes ready
-            let t = super::motion::toward(
-                ui.ctx(),
-                ui.scope_id().with(("convert-step-done", n)),
-                done,
-                super::motion::MEDIUM,
-            );
-            let p = ui.painter();
-            let r = (STEP_BADGE / 2.0) as u8;
-            p.rect(rect, CornerRadius::same(r), c_card(), Stroke::new(1.5, c_control()), egui::StrokeKind::Inside);
-            if t > 0.0 {
-                super::motion::gradient_rect(p, rect, r, c_accent().gamma_multiply(t), c_accent2().gamma_multiply(t));
-            }
-            if t > 0.5 {
-                let c = rect.center();
-                let mark = Stroke::new(2.0, c_on_accent().gamma_multiply(t));
-                p.line_segment([c + vec2(-5.0, 0.5), c + vec2(-1.5, 4.0)], mark);
-                p.line_segment([c + vec2(-1.5, 4.0), c + vec2(5.0, -3.5)], mark);
-            } else {
-                p.text(
-                    rect.center(),
-                    egui::Align2::CENTER_CENTER,
-                    n.to_string(),
-                    super::fonts::semibold(FS_META + 1.0),
-                    c_muted(),
-                );
-            }
-            ui.label(RichText::new(sentence(title)).size(FS_SECTION).semibold());
-            rect
-        })
-        .inner;
+/// How the step that says where the world goes stands, from the check of the folder.
+fn output_mark(check: OutputCheck) -> Mark {
+    match check {
+        OutputCheck::Ok => Mark::Done,
+        OutputCheck::Empty | OutputCheck::NotAbsolute | OutputCheck::NotEmpty => Mark::Warn,
+        OutputCheck::IsSource | OutputCheck::InsideSource | OutputCheck::IsFile | OutputCheck::NotWritable => {
+            Mark::Error
+        }
+    }
+}
+
+/// How many of the things that come along by default were changed, for the line under "What comes along".
+fn left_behind(e: &EntityOptions, p: &PlayerOptions, make_owner: bool, has_owner: bool) -> usize {
+    let (de, dp) = (EntityOptions::default(), PlayerOptions::default());
+    let entities = if e.convert {
+        [e.filter != de.filter, e.item_frames != de.item_frames, e.drop_transient != de.drop_transient]
+            .into_iter()
+            .filter(|c| *c)
+            .count()
+    } else {
+        1
+    };
+    let players = [
+        has_owner && !make_owner,
+        p.include_ender_chest != dp.include_ender_chest,
+        p.include_stats != dp.include_stats,
+        p.export_guest_profiles != dp.export_guest_profiles,
+        p.inventory_source != dp.inventory_source,
+    ]
+    .into_iter()
+    .filter(|c| *c)
+    .count();
+    entities + players
+}
+
+/// The round badge of step `n` on the rail: the brand gradient with a check mark when it is ready, amber or red with
+/// an exclamation mark when it needs a look, a turning arc while it runs, and its number otherwise.
+fn paint_mark(ui: &Ui, rect: egui::Rect, mark: Mark, n: usize, current: bool, id: egui::Id) {
+    let p = ui.painter();
+    let r = (rect.width() / 2.0) as u8;
+    let c = rect.center();
+    let t = super::motion::toward(ui.ctx(), id.with("done"), mark == Mark::Done, super::motion::MEDIUM);
+    let (fill, line) = match mark {
+        Mark::Warn => (c_warn_bg(), c_warn().gamma_multiply(0.7)),
+        Mark::Error => (c_danger_bg(), c_danger_line()),
+        Mark::Locked => (c_field(), c_border()),
+        _ if current => (c_card(), c_accent()),
+        _ => (c_card(), c_control()),
+    };
+    p.rect(rect, CornerRadius::same(r), fill, Stroke::new(1.5, line), egui::StrokeKind::Inside);
+    if t > 0.0 {
+        super::motion::gradient_rect(p, rect, r, c_accent().gamma_multiply(t), c_accent2().gamma_multiply(t));
+    }
+    match mark {
+        Mark::Done => {
+            let mark = Stroke::new(2.0, c_on_accent().gamma_multiply(t));
+            p.line_segment([c + vec2(-5.0, 0.5), c + vec2(-1.5, 4.0)], mark);
+            p.line_segment([c + vec2(-1.5, 4.0), c + vec2(5.0, -3.5)], mark);
+        }
+        Mark::Warn | Mark::Error => {
+            let ink = if mark == Mark::Warn { c_warn() } else { c_danger() };
+            p.line_segment([c + vec2(0.0, -6.0), c + vec2(0.0, 2.0)], Stroke::new(2.2, ink));
+            p.circle_filled(c + vec2(0.0, 6.0), 1.4, ink);
+        }
+        Mark::Busy => {
+            ui.ctx().request_repaint_after(ANIMATION_FRAME);
+            let start = if super::motion::reduced(ui.ctx()) { 0.0 } else { ui.input(|i| i.time) as f32 * 4.0 };
+            let points: Vec<egui::Pos2> = (0..=16)
+                .map(|k| {
+                    let a = start + k as f32 / 16.0 * 4.2;
+                    c + vec2(a.cos(), a.sin()) * (rect.width() / 2.0 - 5.0)
+                })
+                .collect();
+            p.add(egui::Shape::line(points, Stroke::new(2.0, c_accent())));
+        }
+        _ => {
+            let ink = match mark {
+                Mark::Locked => c_faint(),
+                _ if current => c_text(),
+                _ => c_muted(),
+            };
+            p.text(c, egui::Align2::CENTER_CENTER, n.to_string(), super::fonts::semibold(FS_META + 1.0), ink);
+        }
+    }
+}
+
+/// `text` on one line of at most `width`, cut short with an ellipsis when it is longer.
+fn one_line(ui: &Ui, text: &str, font: egui::FontId, color: Color32, width: f32) -> std::sync::Arc<egui::Galley> {
+    let mut job = egui::text::LayoutJob::simple_singleline(text.to_string(), font, color);
+    job.wrap = egui::text::TextWrapping::truncate_at_width(width.max(10.0));
+    ui.painter().layout_job(job)
+}
+
+/// The hairline between two rows of a card, with the same room above and below it.
+fn row_gap(ui: &mut Ui) {
+    ui.add_space(9.0);
+    rule(ui);
+    ui.add_space(9.0);
+}
+
+/// The title of a card of the form, and a quiet line about it.
+fn card_head(ui: &mut Ui, title: &str, hint: &str) {
+    ui.label(RichText::new(title).size(FS_SECTION).semibold());
+    if !hint.is_empty() {
+        ui.add(egui::Label::new(RichText::new(hint).color(c_muted()).size(FS_META)).wrap());
+    }
     ui.add_space(6.0);
-    ui.horizontal_top(|ui| {
-        ui.add_space(GUTTER - ui.spacing().item_spacing.x);
-        ui.vertical(|ui| {
-            ui.set_width(ui.available_width());
-            add(ui);
-        });
-    });
-    (badge, done)
 }
 
 /// The picture beside a world's name: a stack of layers in a soft brand tint.
@@ -187,72 +258,288 @@ impl ConvertState {
         let mut acts = Vec::new();
         ui.scope(|ui| {
             ui.set_max_width((ui.available_width() - 12.0).min(PAGE_WIDTH));
-            ui.horizontal(|ui| {
-                heading(ui, &if self.via_instance { tr!("Add a Bedrock world") } else { tr!("World converter") });
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if self.screen != Screen::Running {
-                        // the standalone converter is a page of its own in the sidebar: nowhere to go back to
-                        if let Some(d) = self.dest.as_ref().filter(|_| self.via_instance) {
-                            if back_link(ui, &tr!("Back to {0}", &d.name)).clicked() {
-                                acts.push(Act::BackToInstance(d.folder.clone()));
-                            }
+            let title = if self.via_instance { tr!("Add a Bedrock world") } else { tr!("World converter") };
+            let subtitle = match &self.dest {
+                Some(dest) => tr!("Bring a Bedrock world to Java Edition and add it to {0}", &dest.name),
+                None => tr!("Turn a Bedrock Edition world into a Java Edition world"),
+            };
+            PageHeader::new(&title).subtitle(&subtitle).show(ui, |ui| {
+                if self.screen != Screen::Running {
+                    // the standalone converter is a page of its own in the sidebar: nowhere to go back to
+                    if let Some(d) = self.dest.as_ref().filter(|_| self.via_instance) {
+                        if back_link(ui, &tr!("Back to {0}", &d.name)).clicked() {
+                            acts.push(Act::BackToInstance(d.folder.clone()));
                         }
                     }
+                }
+            });
+        });
+        // the world decides whether there is anything past the first step; a world that was just found moves the
+        // page on to the next one
+        let found = self.found().is_some();
+        let key = egui::Id::unique("convert-found-before");
+        let before = ui.data(|d| d.get_temp::<bool>(key)).unwrap_or(found);
+        ui.data_mut(|d| d.insert_temp(key, found));
+        if !found {
+            self.step = 0;
+        } else if !before && self.step == 0 {
+            self.step = 1;
+        }
+        let marks = self.marks();
+        let width = (ui.available_width() - 12.0).min(PAGE_WIDTH);
+        let room = (ui.available_height() - FOOTER).max(160.0);
+        if width >= RAIL_BESIDE {
+            ui.horizontal_top(|ui| {
+                ui.spacing_mut().item_spacing.x = RAIL_GAP;
+                ui.allocate_ui_with_layout(vec2(RAIL_W, room), Layout::top_down(Align::Min), |ui| {
+                    ui.set_width(RAIL_W);
+                    self.rail(ui, &marks);
+                });
+                let form_w = width - RAIL_W - RAIL_GAP;
+                ui.allocate_ui_with_layout(vec2(form_w, room), Layout::top_down(Align::Min), |ui| {
+                    ui.set_width(form_w);
+                    self.form(ui, room, &mut acts);
                 });
             });
-            match &self.dest {
-                Some(dest) => muted(ui, tr!("Bring a Bedrock world to Java Edition and add it to {0}", &dest.name)),
-                None => muted(ui, tr!("Turn a Bedrock Edition world into a Java Edition world")),
-            }
-        });
-        ui.add_space(12.0);
-        // The Convert button follows the last block. Only when the blocks do not fit the panel does it stay in view
-        // under the scrolling part, with a hairline over it so the clipped edge of the blocks shows.
-        let has_bar = self.screen == Screen::Setup && self.found().is_some();
-        let room = (ui.available_height() - FOOTER).max(120.0);
-        let pinned = has_bar && self.bar_pinned;
-        let height = if pinned { (room - START_BAR).max(120.0) } else { room };
-        let mut needs_pin = false;
-        let page = ScrollArea::vertical().id_salt("convert-page").max_height(height).auto_shrink([false, false]).show(
-            ui,
-            |ui| {
-                ui.set_max_width((ui.available_width() - 12.0).min(PAGE_WIDTH));
-                match self.screen {
-                    Screen::Setup => self.setup(ui, &mut acts),
-                    Screen::Running => self.running(ui),
-                    Screen::Done => self.done(ui, &mut acts),
-                    Screen::Failed => self.failed(ui, &mut acts),
-                }
-                if has_bar {
-                    // the last block ends at the min rect; the layout adds its item spacing under it
-                    needs_pin = ui.min_rect().height() + BAR_GAP + BUTTON_H > room;
-                }
-                if has_bar && !needs_pin {
-                    ui.add_space(BAR_GAP - ui.spacing().item_spacing.y);
-                    self.start_bar(ui, &mut acts, false);
-                } else {
-                    ui.add_space(TAIL);
-                }
-            },
-        );
-        if has_bar && needs_pin != self.bar_pinned {
-            // the page learned how it fits: draw it again at once with the button where it belongs
-            self.bar_pinned = needs_pin;
-            ui.ctx().request_discard("the Convert button moved under or into the blocks");
-            ui.ctx().request_repaint();
-        }
-        if needs_pin {
-            // a hairline where the blocks are cut off, so the clipped edge reads as an edge
-            let y = page.inner_rect.bottom() + 0.5;
-            let left = ui.max_rect().left();
-            ui.painter().hline(left..=ui.max_rect().right().min(left + PAGE_WIDTH), y, Stroke::new(1.0, c_border()));
-            self.start_bar(ui, &mut acts, true);
+        } else {
+            // no room beside the form: the steps are a row of chips over it
+            ui.scope(|ui| {
+                ui.set_max_width(width);
+                self.rail_chips(ui, &marks);
+            });
+            ui.add_space(10.0);
+            let room = (ui.available_height() - FOOTER).max(160.0);
+            ui.scope(|ui| {
+                ui.set_max_width(width);
+                self.form(ui, room, &mut acts);
+            });
         }
         self.footer(ui, &mut acts);
         if self.screen == Screen::Setup && !matches!(self.look, Look::Nothing) {
             drop_hint(ui);
         }
         acts
+    }
+
+    /// How each step of the rail stands, the world first; the fifth is the conversion itself.
+    fn marks(&mut self) -> [(Mark, String); 5] {
+        let found = self.found().map(|d| d.name.clone());
+        let world = match (&self.look, &found) {
+            (_, Some(name)) => (Mark::Done, name.clone()),
+            (Look::Busy, _) => (Mark::Busy, ellipsis(tr!("Looking at the world..."))),
+            (Look::Unknown(_), _) => (Mark::Error, tr!("This can't be converted")),
+            _ => (Mark::Todo, tr!("Choose a world")),
+        };
+        if found.is_none() {
+            let locked = |text: String| (Mark::Locked, text);
+            return [
+                world,
+                locked(tr!("Java Edition")),
+                locked(tr!("Mobs, players and settings")),
+                locked(if self.dest.is_some() { tr!("Into the instance") } else { tr!("Where it goes") }),
+                locked(tr!("When the steps are ready")),
+            ];
+        }
+        let dims = self.dims.iter().filter(|(_, on)| *on).count();
+        let target = if self.version.is_empty() {
+            (Mark::Warn, tr!("Choose a version"))
+        } else if dims == 0 {
+            (Mark::Warn, tr!("Choose a dimension"))
+        } else {
+            let what = crate::i18n::tr_n("{0} dimension", "{0} dimensions", dims as u64, &[dims.into()]);
+            let mark =
+                if self.dest.as_ref().is_some_and(|d| d.mc_version != self.version) { Mark::Warn } else { Mark::Done };
+            (mark, format!("{} {} \u{00B7} {what}", Edition::Java.label(), self.version))
+        };
+        let changes = left_behind(&self.entities, &self.player_opts, self.make_owner, self.owner.is_some())
+            + self.overrides_count();
+        let keep = (
+            Mark::Done,
+            if changes == 0 {
+                tr!("Everything comes along")
+            } else {
+                crate::i18n::tr_n("{0} change", "{0} changes", changes as u64, &[changes.into()])
+            },
+        );
+        let check = if self.screen == Screen::Setup { self.output_check() } else { OutputCheck::Ok };
+        let save_text = match (check, &self.dest) {
+            (OutputCheck::Ok, Some(d)) => tr!("Into {0}", &d.name),
+            (OutputCheck::Ok, None) => std::path::Path::new(self.output.trim())
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default(),
+            (OutputCheck::Empty, _) => tr!("Choose where it goes"),
+            (OutputCheck::NotEmpty, _) => tr!("That folder is in use"),
+            (OutputCheck::NotAbsolute, _) => tr!("Write the whole path"),
+            _ => tr!("Choose another place"),
+        };
+        let ready = self.blocked().is_none();
+        let run = match self.screen {
+            Screen::Setup if ready => (Mark::Todo, tr!("Ready when you are")),
+            Screen::Setup => (Mark::Todo, tr!("When the steps are ready")),
+            Screen::Running => (Mark::Busy, tr!("Converting")),
+            Screen::Done => (Mark::Done, tr!("Done")),
+            Screen::Failed => (Mark::Error, tr!("It didn't work")),
+        };
+        let mut marks = [world, target, keep, (output_mark(check), save_text), run];
+        if self.screen != Screen::Setup {
+            // the steps were ready when the conversion started: they stay ticked while it runs and after
+            for m in marks.iter_mut().take(4) {
+                m.0 = Mark::Done;
+            }
+        }
+        marks
+    }
+
+    /// How many of the world's settings are forced rather than kept.
+    fn overrides_count(&self) -> usize {
+        let o = &self.overrides;
+        [o.difficulty.is_some(), o.game_type.is_some(), o.allow_commands.is_some(), o.hardcore.is_some()]
+            .into_iter()
+            .filter(|c| *c)
+            .count()
+    }
+
+    /// The titles of the steps.
+    fn step_titles(&self) -> [String; 5] {
+        [
+            sentence(&tr!("BEDROCK WORLD")),
+            sentence(&tr!("CONVERT TO")),
+            sentence(&tr!("WHAT COMES ALONG")),
+            if self.dest.is_some() { tr!("Add to the instance") } else { tr!("Save") },
+            tr!("Convert"),
+        ]
+    }
+
+    /// The steps down the left: a badge each (a check once the step is ready, a warning when it needs a look), the
+    /// title and how it stands, joined by a line. A step that can be opened opens its form on the right.
+    fn rail(&mut self, ui: &mut Ui, marks: &[(Mark, String); 5]) {
+        let titles = self.step_titles();
+        let setup = self.screen == Screen::Setup;
+        let mut badges: Vec<(egui::Rect, Mark)> = Vec::new();
+        ui.spacing_mut().item_spacing.y = 0.0;
+        for (i, ((mark, line), title)) in marks.iter().zip(&titles).enumerate() {
+            let current = setup && i == self.step;
+            let openable = setup && i < 4 && *mark != Mark::Locked;
+            let (row, resp) = ui.allocate_exact_size(vec2(ui.available_width(), RAIL_ROW), Sense::click());
+            let t = super::motion::hover(ui, resp.id, openable && resp.hovered());
+            let s = super::motion::toward(ui.ctx(), resp.id.with("on"), current, super::motion::MEDIUM);
+            let p = ui.painter();
+            if t > 0.0 {
+                p.rect_filled(row, CornerRadius::same(R_CONTROL), c_hover().gamma_multiply(t * (1.0 - s)));
+            }
+            if s > 0.0 {
+                p.rect_filled(row, CornerRadius::same(R_CONTROL), c_accent_soft().gamma_multiply(s));
+            }
+            let badge = egui::Rect::from_center_size(
+                egui::pos2(row.left() + 8.0 + STEP_BADGE / 2.0, row.top() + 10.0 + STEP_BADGE / 2.0),
+                vec2(STEP_BADGE, STEP_BADGE),
+            );
+            paint_mark(ui, badge, *mark, i + 1, current, ui.scope_id().with(("convert-rail", i)));
+            let x = badge.right() + 12.0;
+            let width = row.right() - x - 6.0;
+            let ink = if *mark == Mark::Locked { c_faint() } else { c_text() };
+            let font = if current { super::fonts::semibold(FS_BODY) } else { super::fonts::medium(FS_BODY) };
+            let title_g = one_line(ui, title, font, ink, width);
+            ui.painter().galley(egui::pos2(x, row.top() + 10.0), title_g, ink);
+            let sub = match mark {
+                Mark::Warn => c_warn(),
+                Mark::Error => c_danger(),
+                Mark::Locked => c_faint(),
+                _ => c_muted(),
+            };
+            let line_g = one_line(ui, line, egui::FontId::proportional(FS_META), sub, width);
+            ui.painter().galley(egui::pos2(x, row.top() + 30.0), line_g, sub);
+            if openable {
+                focus_ring(ui, &resp, row, R_CONTROL);
+                resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Tab, true, current, title.as_str()));
+                if resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                    self.step = i;
+                }
+            }
+            badges.push((badge, *mark));
+            ui.add_space(RAIL_STEP_GAP);
+        }
+        // the line between two badges: in the brand colour once the step above is ready
+        for pair in badges.windows(2) {
+            let ((a, mark), (b, _)) = (pair[0], pair[1]);
+            let color = if mark == Mark::Done { c_accent().gamma_multiply(0.6) } else { c_border() };
+            ui.painter().vline(a.center().x, a.bottom() + 4.0..=b.top() - 4.0, Stroke::new(2.0, color));
+        }
+    }
+
+    /// The steps as a row of chips, for a narrow window.
+    fn rail_chips(&mut self, ui: &mut Ui, marks: &[(Mark, String); 5]) {
+        let titles = self.step_titles();
+        let setup = self.screen == Screen::Setup;
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
+            for (i, ((mark, _), title)) in marks.iter().zip(&titles).enumerate().take(4) {
+                let label = format!(
+                    "{}  {}",
+                    if *mark == Mark::Done { "\u{2713}".to_string() } else { (i + 1).to_string() },
+                    title
+                );
+                let r = chip(ui, &label, setup && i == self.step);
+                if setup && *mark != Mark::Locked && r.clicked() {
+                    self.step = i;
+                }
+            }
+        });
+    }
+
+    /// The right side: the form of the open step in its cards, with Back, Next and Convert under it; or the
+    /// conversion's progress, result or error.
+    fn form(&mut self, ui: &mut Ui, room: f32, acts: &mut Vec<Act>) {
+        // The buttons follow the last card. Only when the cards do not fit do they stay in view under the scrolling
+        // part, with a hairline over them so the clipped edge of the cards shows.
+        let has_bar = self.screen == Screen::Setup && self.found().is_some();
+        let pinned = has_bar && self.bar_pinned;
+        let height = if pinned { (room - START_BAR).max(120.0) } else { room };
+        let mut needs_pin = false;
+        let page = ScrollArea::vertical().id_salt("convert-page").max_height(height).auto_shrink([false, false]).show(
+            ui,
+            |ui| {
+                ui.set_max_width(ui.available_width() - 12.0);
+                ui.spacing_mut().item_spacing.y = 12.0;
+                match self.screen {
+                    Screen::Setup => match self.step {
+                        0 => self.world_block(ui, acts),
+                        1 => self.target_block(ui),
+                        2 => self.keep_block(ui),
+                        _ => self.output_block(ui, acts),
+                    },
+                    Screen::Running => self.running(ui),
+                    Screen::Done => self.done(ui, acts),
+                    Screen::Failed => self.failed(ui, acts),
+                }
+                if has_bar {
+                    // the last card ends at the min rect; the layout adds its item spacing under it
+                    needs_pin = ui.min_rect().height() + BAR_GAP + BUTTON_H > room;
+                }
+                if has_bar && !needs_pin {
+                    ui.add_space(BAR_GAP - ui.spacing().item_spacing.y);
+                    self.start_bar(ui, acts, false);
+                } else {
+                    ui.add_space(TAIL);
+                }
+            },
+        );
+        if has_bar && needs_pin != self.bar_pinned {
+            // the page learned how it fits: draw it again at once with the buttons where they belong
+            self.bar_pinned = needs_pin;
+            ui.ctx().request_discard("the Convert button moved under or into the cards");
+            ui.ctx().request_repaint();
+        }
+        if needs_pin {
+            let y = page.inner_rect.bottom() + 0.5;
+            ui.painter().hline(
+                page.inner_rect.left()..=page.inner_rect.right() - 12.0,
+                y,
+                Stroke::new(1.0, c_border()),
+            );
+            self.start_bar(ui, acts, true);
+        }
     }
 
     /// "Powered by Chunker by Hive Games (MIT)", the credit the converter owes its origin: one quiet line.
@@ -275,47 +562,31 @@ impl ConvertState {
     // -----------------------------------------------------------------------------------------------------
     // Set up
 
-    fn setup(&mut self, ui: &mut Ui, acts: &mut Vec<Act>) {
-        // the three blocks are the steps of a stepper: a numbered badge each, joined by a line down the left, a step
-        // that is ready ticked off in the brand gradient
-        let found = self.found().is_some();
-        let target_ready = !self.version.is_empty() && self.dims.iter().any(|(_, on)| *on);
-        let output_ready = found && matches!(self.output_check(), OutputCheck::Ok);
-        let mut badges = Vec::new();
-        badges.push(step(ui, 1, &tr!("BEDROCK WORLD"), found, |ui| self.world_block(ui, acts)));
-        if found {
-            ui.add_space(STEP_GAP);
-            badges.push(step(ui, 2, &tr!("CONVERT TO"), target_ready, |ui| self.target_block(ui)));
-            ui.add_space(STEP_GAP);
-            badges.push(step(ui, 3, &tr!("WHAT COMES ALONG"), true, |ui| self.keep_block(ui)));
-            ui.add_space(STEP_GAP);
-            let title = if self.dest.is_some() { tr!("ADD TO THE INSTANCE AS") } else { tr!("SAVE AS") };
-            badges.push(step(ui, 4, &title, output_ready, |ui| self.output_block(ui, acts)));
-        }
-        // the line between two badges: in the brand colour once the step above it is ready
-        for pair in badges.windows(2) {
-            let ((a, done), (b, _)) = (pair[0], pair[1]);
-            let color = if done { c_accent().gamma_multiply(0.6) } else { c_border() };
-            ui.painter().vline(a.center().x, a.bottom() + 5.0..=b.top() - 5.0, Stroke::new(2.0, color));
-        }
-    }
-
-    /// The Convert button, and why it cannot be pressed yet when that is so. `pinned`: it sits under the scrolling
-    /// part, with a little more room above it.
+    /// Back and Next between the steps, and Convert (with why it can't be pressed yet, when that is so) at the
+    /// right. `pinned`: it sits under the scrolling part, with a little more room above it.
     fn start_bar(&mut self, ui: &mut Ui, acts: &mut Vec<Act>, pinned: bool) {
         let blocked = self.blocked();
         if pinned {
             ui.add_space(4.0);
         }
         ui.horizontal(|ui| {
-            // lined up with the blocks of the steps, not with their badges
-            ui.add_space(GUTTER - ui.spacing().item_spacing.x);
-            if primary_enabled_icon(ui, Icon::Convert, &tr!("Convert"), blocked.is_none()).clicked() {
-                acts.push(Act::Start);
+            // as wide as the cards over it (the scrolling part keeps a strip for its bar)
+            ui.set_width(ui.available_width() - if pinned { 12.0 } else { 0.0 });
+            if self.step > 0 && ghost(ui, &tr!("Back")).clicked() {
+                self.step -= 1;
             }
-            if let Some(why) = &blocked {
-                ui.add(egui::Label::new(RichText::new(why).color(c_faint()).size(FS_META)).wrap());
-            }
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if primary_enabled_icon(ui, Icon::Convert, &tr!("Convert"), blocked.is_none()).clicked() {
+                    acts.push(Act::Start);
+                }
+                if self.step < 3 && secondary(ui, &tr!("Next")).clicked() {
+                    self.step += 1;
+                }
+                if let Some(why) = &blocked {
+                    ui.add(egui::Label::new(RichText::new(why).color(c_faint()).size(FS_META)).truncate())
+                        .on_hover_text(why);
+                }
+            });
         });
     }
 
@@ -343,6 +614,7 @@ impl ConvertState {
             }
             Look::Found(d) => {
                 card(ui, |ui| {
+                    card_head(ui, &tr!("Select your Bedrock world"), "");
                     ui.horizontal_top(|ui| {
                         ui.spacing_mut().item_spacing.x = 14.0;
                         world_badge(ui);
@@ -466,6 +738,11 @@ impl ConvertState {
 
     fn target_block(&mut self, ui: &mut Ui) {
         card(ui, |ui| {
+            card_head(
+                ui,
+                &sentence(&tr!("CONVERT TO")),
+                &tr!("The version of Java Edition the world is written for, and its dimensions"),
+            );
             // the target is always Java Edition: there is nothing to choose
             option_row(ui, &tr!("Game"), |ui| {
                 ui.label(RichText::new(Edition::Java.label()).semibold());
@@ -517,9 +794,12 @@ impl ConvertState {
     }
 
     /// What comes along besides the blocks: the world's mobs and item frames, the players' things and who owns them,
-    /// and the world's settings. Everything is kept by default.
+    /// and the world's settings, a card each. Everything is kept by default.
     fn keep_block(&mut self, ui: &mut Ui) {
         card(ui, |ui| {
+            // the title of a row sits close to its explanation; the rows are kept apart by hairlines
+            ui.spacing_mut().item_spacing.y = 2.0;
+            card_head(ui, &tr!("Mobs and things"), "");
             switch_row(
                 ui,
                 &tr!("Mobs, pets and villagers"),
@@ -529,6 +809,7 @@ impl ConvertState {
                 &mut self.entities.convert,
             );
             if self.entities.convert {
+                row_gap(ui);
                 option_row(ui, &tr!("Which mobs"), |ui| {
                     let label = |f: EntityFilter| match f {
                         EntityFilter::All => tr!("All of them"),
@@ -545,12 +826,14 @@ impl ConvertState {
                             }
                         });
                 });
+                row_gap(ui);
                 switch_row(
                     ui,
                     &tr!("Item frames"),
                     &tr!("Item frames and glow item frames, with the item in them"),
                     &mut self.entities.item_frames,
                 );
+                row_gap(ui);
                 switch_row(
                     ui,
                     &tr!("Leave out what lies around"),
@@ -558,7 +841,11 @@ impl ConvertState {
                     &mut self.entities.drop_transient,
                 );
             }
-            rule(ui);
+        });
+        card(ui, |ui| {
+            // the title of a row sits close to its explanation; the rows are kept apart by hairlines
+            ui.spacing_mut().item_spacing.y = 2.0;
+            card_head(ui, &tr!("Players"), "");
             match self.owner.clone() {
                 Some((name, _)) => switch_row(
                     ui,
@@ -570,12 +857,14 @@ impl ConvertState {
                     option_row(ui, &tr!("Owner"), |ui| small_muted(ui, tr!("Add an account to become the owner")));
                 }
             }
+            row_gap(ui);
             switch_row(
                 ui,
                 &tr!("Ender chest"),
                 &tr!("What the host kept in the ender chest"),
                 &mut self.player_opts.include_ender_chest,
             );
+            row_gap(ui);
             switch_row(
                 ui,
                 &tr!("Experience, health and food"),
@@ -584,19 +873,22 @@ impl ConvertState {
             );
             let players = self.world_players().to_vec();
             if !players.is_empty() {
+                row_gap(ui);
                 switch_row(
                     ui,
                     &tr!("The other players"),
                     &tr!("Each player who joined the world gets their own player file with their things"),
                     &mut self.player_opts.export_guest_profiles,
                 );
+                row_gap(ui);
                 self.inventory_choice(ui, &players);
             }
-            rule(ui);
-            egui::CollapsingHeader::new(RichText::new(tr!("World settings")).semibold())
-                .id_salt("convert-world-settings")
-                .default_open(!self.overrides.is_empty())
-                .show(ui, |ui| self.overrides_rows(ui));
+        });
+        card(ui, |ui| {
+            // the title of a row sits close to its explanation; the rows are kept apart by hairlines
+            ui.spacing_mut().item_spacing.y = 2.0;
+            card_head(ui, &tr!("World settings"), &tr!("Kept as the world had them unless you choose otherwise"));
+            self.overrides_rows(ui);
         });
     }
 
@@ -756,6 +1048,8 @@ impl ConvertState {
     fn output_block(&mut self, ui: &mut Ui, acts: &mut Vec<Act>) {
         let check = self.output_check();
         card(ui, |ui| {
+            let title = if self.dest.is_some() { tr!("ADD TO THE INSTANCE AS") } else { tr!("SAVE AS") };
+            card_head(ui, &sentence(&title), &tr!("A new folder: the original world is never changed"));
             self.put_in_choice(ui, acts);
             ui.add_space(6.0);
             ui.horizontal(|ui| {
@@ -846,7 +1140,6 @@ impl ConvertState {
         ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
         let mut stop = false;
         let mut confirmed = false;
-        block_title(ui, &tr!("CONVERTING"));
         card(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 14.0;
@@ -1206,7 +1499,32 @@ fn rounded_outline(rect: egui::Rect, radius: f32) -> Vec<egui::Pos2> {
 
 #[cfg(test)]
 mod tests {
-    use super::ellipsis;
+    use super::*;
+
+    #[test]
+    fn the_save_step_warns_what_can_be_fixed_and_stops_what_would_harm_the_world() {
+        assert_eq!(output_mark(OutputCheck::Ok), Mark::Done);
+        for c in [OutputCheck::Empty, OutputCheck::NotAbsolute, OutputCheck::NotEmpty] {
+            assert_eq!(output_mark(c), Mark::Warn, "{c:?}");
+        }
+        for c in [OutputCheck::IsSource, OutputCheck::InsideSource, OutputCheck::IsFile, OutputCheck::NotWritable] {
+            assert_eq!(output_mark(c), Mark::Error, "{c:?}");
+        }
+    }
+
+    #[test]
+    fn what_comes_along_counts_what_was_changed_from_everything() {
+        let (e, p) = (EntityOptions::default(), PlayerOptions::default());
+        assert_eq!(left_behind(&e, &p, true, true), 0, "everything comes along by default");
+        // no account to own the world is not a change the player made
+        assert_eq!(left_behind(&e, &p, false, false), 0);
+        assert_eq!(left_behind(&e, &p, false, true), 1);
+        // no mobs at all is one change, whatever the mob options under it say
+        let none = EntityOptions { convert: false, item_frames: false, ..EntityOptions::default() };
+        assert_eq!(left_behind(&none, &p, true, true), 1);
+        let fewer = PlayerOptions { include_ender_chest: false, include_stats: false, ..PlayerOptions::default() };
+        assert_eq!(left_behind(&e, &fewer, true, true), 2);
+    }
 
     #[test]
     fn a_closing_three_dots_becomes_one_ellipsis() {

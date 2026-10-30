@@ -3,15 +3,14 @@
 use egui::{Align, Color32, CornerRadius, Layout, RichText, ScrollArea, Stroke, Ui, vec2};
 
 use super::icons::{self, Icon};
-use super::motion;
-use super::services::{NetReport, SvcMsg, confirm_modal, modal_scroll_height, modal_width};
+use super::services::{NetReport, SvcMsg, SvcState, ToolResult, confirm_modal, modal_scroll_height, modal_width};
 use super::theme::*;
 use super::widgets::*;
 use super::{App, Msg, Page};
 use crate::tools::{self, NetworkCheckOptions, TOOLS};
 
-/// The widest the grid of tools gets.
-const GRID_WIDTH: f32 = 1040.0;
+/// The widest the list of tools gets.
+const GRID_WIDTH: f32 = 860.0;
 
 /// The tools that look at things and the ones that tidy up, in the order each group shows them. Every tool of
 /// [`TOOLS`] is in one of the two.
@@ -79,10 +78,45 @@ fn freed(before: u64, after: u64) -> String {
     format!("{} freed", human_size(before.saturating_sub(after)))
 }
 
+/// Note how a job ended when it is one a tool started, so the tool's row can say so.
+pub(super) fn note_task_end(svc: &mut SvcState, label: &str, result: &Result<String, String>) {
+    if TOOLS.iter().any(|t| task_label(t.id) == Some(label)) {
+        let (ok, text) = match result {
+            Ok(t) => (true, t.clone()),
+            Err(e) => (false, e.clone()),
+        };
+        svc.tool_results.insert(label.to_string(), ToolResult { ok, text, at: std::time::Instant::now() });
+    }
+}
+
+/// What a tool's row says under its description: running, what stops it (and so what to do), or how it went last
+/// time. Nothing when it is simply ready.
+fn row_status(running: bool, blocked: Option<&str>, last: Option<&ToolResult>, ago: &str) -> Option<(Status, String)> {
+    if running {
+        return Some((Status::Busy, "Running now. Its progress is in the sidebar.".to_string()));
+    }
+    if let Some(why) = blocked {
+        return Some((Status::Warn, why.to_string()));
+    }
+    let last = last?;
+    let text = last.text.trim().trim_end_matches('.');
+    Some(if last.ok {
+        let text = if text.is_empty() { "Done" } else { text };
+        (Status::Good, format!("{text} \u{00B7} {ago}"))
+    } else {
+        (Status::Error, format!("Didn't work: {text}. Try again, or make a support bundle to ask for help"))
+    })
+}
+
 impl App {
     pub(super) fn tools_ui(&mut self, ui: &mut Ui) {
-        heading(ui, "Tools");
-        muted(ui, "Clean up, diagnose problems and keep things tidy");
+        let width = (ui.available_width() - 14.0).min(GRID_WIDTH);
+        ui.scope(|ui| {
+            ui.set_max_width(width);
+            PageHeader::new("Tools & diagnostics")
+                .subtitle("Find out what is wrong, gather what to send for help, and free up space")
+                .show(ui, |_| {});
+        });
         // the network checker needs `enableLogs`, which is a plain field of the settings (no need to read them all)
         let logs_on = self.settings.enable_logs;
         let flatpak = *FLATPAK.get_or_init(tools::is_flatpak);
@@ -92,18 +126,24 @@ impl App {
         let games_running = self.games.values().any(super::Game::active);
         let busy = busy_reason(games_running, !self.tasks.is_empty());
         let running: Vec<String> = self.tasks.iter().map(|t| t.label.clone()).collect();
+        let now_ms = chrono::Utc::now().timestamp_millis();
         let mut clicked: Option<&'static str> = None;
         let mut go: Option<Fix> = None;
         #[cfg(feature = "converter")]
         let mut open_convert = false;
         ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
-            // as wide as the grid gets, but never wider than the window
-            ui.set_max_width((ui.available_width() - 14.0).min(GRID_WIDTH));
-            for (title, ids) in [("Diagnose", &DIAGNOSE[..]), ("Clean up", &CLEAN_UP[..])] {
-                let mut tiles = Vec::new();
+            // as wide as the list gets, but never wider than the window
+            ui.set_max_width(width);
+            for (title, hint, ids) in [
+                ("Diagnose", "When a game or a download doesn't work", &DIAGNOSE[..]),
+                ("Clean up", "Free up space and refresh what the launcher keeps", &CLEAN_UP[..]),
+            ] {
+                let mut rows = Vec::new();
                 for tool in ids.iter().filter_map(|id| TOOLS.iter().find(|t| t.id == *id)) {
+                    let is_running = task_label(tool.id).is_some_and(|l| running.iter().any(|r| r == l));
                     // what stops a tool from running now, and where that is fixed
                     let (enabled, hint): (bool, Option<(&str, Option<Fix>)>) = match tool.id {
+                        _ if is_running => (false, None),
                         "network_checker" if !logs_on => (
                             false,
                             Some((
@@ -114,9 +154,6 @@ impl App {
                         "debug_mode" if flatpak => (false, Some(("Not available in a Flatpak.", None))),
                         "debug_mode" if tools::is_debug_enabled() => (false, Some(("Debug mode is already on.", None))),
                         "skin_updater" if no_accounts => (false, Some(("Add an account first.", Some(Fix::Accounts)))),
-                        id if task_label(id).is_some_and(|l| running.iter().any(|r| r == l)) => {
-                            (false, Some(("Running now. Its progress is in the sidebar.", None)))
-                        }
                         "debug_mode" if games_running => (
                             false,
                             Some((
@@ -136,23 +173,27 @@ impl App {
                         }
                         _ => (true, None),
                     };
+                    let last = task_label(tool.id).and_then(|l| self.svc.tool_results.get(l));
+                    let ago = last
+                        .map_or(String::new(), |r| time_ago(now_ms - r.at.elapsed().as_millis() as i64).to_lowercase());
                     let action = if is_destructive(tool.id) {
                         format!("{}\u{2026}", tool.action)
                     } else {
                         tool.action.to_string()
                     };
-                    tiles.push(Tile {
+                    rows.push(Row {
                         glyph: glyph_of(tool.id),
                         name: tool.name,
                         description: tool.description,
                         action,
                         button: if is_destructive(tool.id) { Button::Danger } else { Button::Plain },
                         enabled,
-                        hint,
+                        status: row_status(is_running, hint.map(|h| h.0), last, &ago),
+                        fix: hint.and_then(|h| h.1),
                     });
                 }
-                section_head(ui, title);
-                for (out, tool) in tile_grid(ui, title, &tiles).into_iter().zip(ids) {
+                group_head(ui, title, hint);
+                for (out, tool) in row_list(ui, title, &rows).into_iter().zip(ids) {
                     if out.pressed {
                         clicked = Some(*tool);
                     }
@@ -161,10 +202,10 @@ impl App {
                     }
                 }
             }
-            // the world converter has a tile of its own (it opens a page, not a job)
+            // the world converter has a row of its own (it opens a page, not a job)
             #[cfg(feature = "converter")]
             {
-                section_head(ui, "Worlds");
+                group_head(ui, "Worlds", "Bring worlds over from other editions");
                 if self.convert_tool_card(ui) {
                     open_convert = true;
                 }
@@ -172,7 +213,7 @@ impl App {
             ui.add_space(16.0);
         });
         if let Some(fix) = go {
-            self.page = fix.page();
+            self.go(fix.page());
         }
         if let Some(id) = clicked {
             self.tool_clicked(id);
@@ -421,9 +462,9 @@ impl App {
     }
 }
 
-/// The title of a group of tiles, with the room above and under it.
-fn section_head(ui: &mut Ui, title: &str) {
-    super::settings::section_head(ui, title, "");
+/// The title of a group of tools and a quiet line about it, above its card.
+fn group_head(ui: &mut Ui, title: &str, hint: &str) {
+    super::settings::section_head(ui, title, hint);
 }
 
 /// How a tile's button looks.
@@ -522,119 +563,119 @@ fn paint_glyph(p: &egui::Painter, glyph: Glyph, c: egui::Pos2, size: f32, color:
     }
 }
 
-/// One tile of the grid: what it shows and whether it can be used now.
-struct Tile<'a> {
+/// One row of a group: what it shows and whether it can be used now.
+struct Row<'a> {
     glyph: Glyph,
     name: &'a str,
     description: &'a str,
     action: String,
     button: Button,
     enabled: bool,
-    /// Why the tool can't run now, with where that is fixed.
-    hint: Option<(&'a str, Option<Fix>)>,
-}
-
-/// What a tile did this frame.
-struct RowOut {
-    pressed: bool,
-    /// The link next to the reason a tool can't run was pressed.
+    /// How it stands: running, what stops it, or how it went last time.
+    status: Option<(Status, String)>,
+    /// Where what stops it is fixed.
     fix: Option<Fix>,
 }
 
-/// The narrowest a tile gets before the grid takes a column away, and the room between tiles.
-const TILE_MIN: f32 = 250.0;
-const TILE_GAP: f32 = 14.0;
-/// The side of the badge with a tool's picture.
-const BADGE: f32 = 40.0;
+/// What a row did this frame.
+struct RowOut {
+    pressed: bool,
+    /// The link after the reason a tool can't run was pressed.
+    fix: Option<Fix>,
+}
 
-/// The tiles in a grid that fills the width. The tiles of one row are as tall as each other, with their buttons on
-/// one line along the bottom: each row remembers the tallest text of its tiles. Returns what each tile did.
-fn tile_grid(ui: &mut Ui, salt: &str, tiles: &[Tile]) -> Vec<RowOut> {
-    let (cols, w) = grid_columns(ui.available_width(), TILE_MIN, TILE_GAP);
-    let mut outs = Vec::with_capacity(tiles.len());
-    for (r, row) in tiles.chunks(cols).enumerate() {
-        let row_id = ui.scope_id().with(("tool-tiles", salt, r, cols));
-        let row_h = ui.data(|d| d.get_temp::<f32>(row_id)).unwrap_or(0.0);
-        let mut tallest = 0.0f32;
-        ui.horizontal_top(|ui| {
-            ui.spacing_mut().item_spacing.x = TILE_GAP;
-            for t in row {
-                let out = ui
-                    .allocate_ui_with_layout(vec2(w, 600.0), Layout::top_down(Align::Min), |ui| {
-                        ui.set_width(w);
-                        let (out, text_h) = tile(ui, row_id.with(t.name), t, row_h);
-                        tallest = tallest.max(text_h);
-                        out
-                    })
-                    .inner;
-                outs.push(out);
+/// The side of the badge with a tool's picture.
+const BADGE: f32 = 38.0;
+
+/// The rows of a group in one card, a hairline between two. Returns what each row did.
+fn row_list(ui: &mut Ui, salt: &str, rows: &[Row]) -> Vec<RowOut> {
+    let mut outs = Vec::with_capacity(rows.len());
+    card(ui, |ui| {
+        ui.spacing_mut().item_spacing.y = 0.0;
+        for (k, r) in rows.iter().enumerate() {
+            if k > 0 {
+                ui.add_space(12.0);
+                rule(ui);
+                ui.add_space(12.0);
             }
-        });
-        if (tallest - row_h).abs() > 0.5 {
-            // the row learned how tall its text is: draw it again at once with the buttons lined up
-            ui.data_mut(|d| d.insert_temp(row_id, tallest));
-            ui.ctx().request_discard("a row of tool tiles changed its height");
+            outs.push(tool_row(ui, ui.scope_id().with(("tool-row", salt, r.name)), r));
         }
-        ui.add_space(TILE_GAP - ui.spacing().item_spacing.y);
-    }
+    });
     outs
 }
 
-/// A tile: the badge, the name, what the tool does and, when it can't be used now, why (with a link to where that is
-/// fixed); then its button along the bottom, `text_h` under the top of the text. Returns what it did and how tall its
-/// own text was.
-fn tile(ui: &mut Ui, id: egui::Id, t: &Tile, text_h: f32) -> (RowOut, f32) {
+/// A row: the badge, the name, what the tool does and how it stands, and its button at the right (under the text
+/// when the card is narrow).
+fn tool_row(ui: &mut Ui, id: egui::Id, r: &Row) -> RowOut {
     let mut out = RowOut { pressed: false, fix: None };
-    let was_hot = ui.data(|d| d.get_temp::<bool>(id.with("hot"))).unwrap_or(false);
-    let lit = motion::hover(ui, id.with("badge"), was_hot && t.enabled);
-    let (natural, _) = hover_card(ui, id, |ui| {
-        ui.set_width(ui.available_width());
-        ui.spacing_mut().item_spacing.y = 4.0;
-        let top = ui.cursor().top();
+    let button_w = remembered_width(ui, id.with("button"), 120.0);
+    let narrow = ui.available_width() < 460.0;
+    let destructive = r.button == Button::Danger;
+    let text = |ui: &mut Ui, out: &mut RowOut| {
+        ui.spacing_mut().item_spacing.y = 3.0;
+        ui.add(egui::Label::new(RichText::new(r.name).font(super::fonts::semibold(FS_BODY))).wrap());
+        ui.add(egui::Label::new(RichText::new(r.description).color(c_muted()).size(FS_META)).wrap());
+        if let Some((status, line)) = &r.status {
+            ui.add_space(2.0);
+            // the mark, the words, and where to fix it right after them
+            ui.horizontal_top(|ui| {
+                ui.spacing_mut().item_spacing.x = 7.0;
+                // rows as tall as the text, so the words sit level with the mark
+                ui.spacing_mut().interact_size.y = 16.0;
+                let (mark, _) = ui.allocate_exact_size(vec2(16.0, 16.0), egui::Sense::hover());
+                paint_status_mark(ui, mark, *status);
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    ui.label(RichText::new(line).color(status.color()).size(FS_META));
+                    if let Some(fix) = r.fix {
+                        if ui.link(RichText::new(fix.label()).size(FS_META).underline()).clicked() {
+                            out.fix = Some(fix);
+                        }
+                    }
+                });
+            });
+        }
+    };
+    let button = |ui: &mut Ui| match (r.button, r.enabled) {
+        (Button::Plain, _) => secondary_enabled(ui, &r.action, r.enabled).clicked(),
+        (Button::Danger, true) => danger(ui, &r.action).clicked(),
+        (Button::Danger, false) => danger_enabled(ui, &r.action, false).clicked(),
+    };
+    ui.horizontal_top(|ui| {
+        ui.spacing_mut().item_spacing.x = 14.0;
         let (badge, _) = ui.allocate_exact_size(vec2(BADGE, BADGE), egui::Sense::hover());
-        let destructive = t.button == Button::Danger;
-        let (fill, fg) = match (t.enabled, destructive) {
+        let (fill, fg) = match (r.enabled, destructive) {
             (false, _) => (c_hover(), c_faint()),
             (true, true) => (c_danger_bg(), c_danger()),
-            (true, false) => (c_accent_soft(), c_accent()),
+            (true, false) => (c_accent_soft(), if is_dark() { c_accent() } else { c_accent_hover() }),
         };
-        let p = ui.painter();
-        p.rect_filled(badge, CornerRadius::same(R_CONTROL), fill);
-        // the badge of a tool that is safe to run takes the brand gradient while its tile is under the pointer
-        let fg = if !destructive && lit > 0.0 {
-            motion::gradient_rect(p, badge, R_CONTROL, c_accent().gamma_multiply(lit), c_accent2().gamma_multiply(lit));
-            motion::mix(fg, c_on_accent(), lit)
-        } else {
-            fg
-        };
-        paint_glyph(p, t.glyph, badge.center(), 18.0, fg);
-        ui.add_space(6.0);
-        ui.add(egui::Label::new(RichText::new(t.name).size(FS_SECTION - 1.0).semibold()).wrap());
-        ui.add(egui::Label::new(RichText::new(t.description).color(c_muted()).size(FS_META)).wrap());
-        if let Some((reason, fix)) = t.hint {
-            ui.add_space(4.0);
-            ui.add(egui::Label::new(RichText::new(reason).color(c_faint()).size(FS_META)).wrap());
-            if let Some(fix) = fix {
-                if ui.link(RichText::new(fix.label()).size(FS_META).underline()).clicked() {
-                    out.fix = Some(fix);
-                }
-            }
+        ui.painter().rect_filled(badge, CornerRadius::same(R_CONTROL), fill);
+        paint_glyph(ui.painter(), r.glyph, badge.center(), 17.0, fg);
+        if narrow {
+            ui.vertical(|ui| {
+                text(ui, &mut out);
+                ui.add_space(8.0);
+                out.pressed = button(ui);
+            });
+            return;
         }
-        let natural = ui.cursor().top() - top;
-        ui.add_space((text_h - natural).max(0.0) + 8.0);
-        // a tool that can't run now shows its button greyed out, and the reason above it
-        out.pressed = match (t.button, t.enabled) {
-            (Button::Plain, _) => secondary_enabled(ui, &t.action, t.enabled).clicked(),
-            (Button::Danger, true) => danger(ui, &t.action).clicked(),
-            (Button::Danger, false) => danger_enabled(ui, &t.action, false).clicked(),
-        };
-        natural
+        ui.vertical(|ui| {
+            ui.set_width((ui.available_width() - button_w - 20.0).max(160.0));
+            text(ui, &mut out);
+        });
+        let used = ui
+            .with_layout(Layout::right_to_left(Align::Min), |ui| {
+                out.pressed = button(ui);
+                ui.min_rect().width()
+            })
+            .inner;
+        remember_width(ui, id.with("button"), used);
     });
-    (out, natural)
+    out
 }
 
 #[cfg_attr(not(feature = "converter"), allow(dead_code))]
-/// A tile on its own in the grid, as the world converter's entry uses it. Returns whether its button was pressed.
+/// A group of one row, as the world converter's entry uses it. Returns whether its button was pressed.
 pub(super) fn card_frame(
     ui: &mut Ui,
     name: &str,
@@ -643,16 +684,17 @@ pub(super) fn card_frame(
     enabled: bool,
     hint: Option<&str>,
 ) -> bool {
-    let tile = Tile {
+    let row = Row {
         glyph: Glyph::Icon(Icon::Convert),
         name,
         description,
         action: action.to_string(),
         button: Button::Plain,
         enabled,
-        hint: hint.map(|h| (h, None)),
+        status: hint.map(|h| (Status::Warn, h.to_string())),
+        fix: None,
     };
-    tile_grid(ui, name, &[tile]).into_iter().any(|o| o.pressed)
+    row_list(ui, name, &[row]).into_iter().any(|o| o.pressed)
 }
 
 #[cfg(test)]
@@ -670,6 +712,21 @@ mod tests {
         });
         assert!(out.shapes.len() >= TOOLS.len());
         out.textures_delta.clear();
+    }
+
+    #[test]
+    fn a_row_says_first_that_it_runs_then_what_stops_it_then_how_it_went() {
+        let ok = ToolResult { ok: true, text: "Old logs cleared (3 removed)".into(), at: std::time::Instant::now() };
+        let bad = ToolResult { ok: false, text: "The folder is in use".into(), at: std::time::Instant::now() };
+        assert_eq!(row_status(false, None, None, ""), None, "a tool that is simply ready says nothing");
+        assert_eq!(row_status(true, Some("Close Minecraft first"), Some(&bad), "").unwrap().0, Status::Busy);
+        let (s, text) = row_status(false, Some("Close Minecraft first"), Some(&ok), "").unwrap();
+        assert_eq!((s, text.as_str()), (Status::Warn, "Close Minecraft first"));
+        let (s, text) = row_status(false, None, Some(&ok), "just now").unwrap();
+        assert_eq!((s, text.as_str()), (Status::Good, "Old logs cleared (3 removed) \u{00B7} just now"));
+        let (s, text) = row_status(false, None, Some(&bad), "").unwrap();
+        assert_eq!(s, Status::Error);
+        assert!(text.starts_with("Didn't work: The folder is in use."), "{text}");
     }
 
     #[test]

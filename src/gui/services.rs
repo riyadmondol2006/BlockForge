@@ -42,6 +42,13 @@ pub enum SvcMsg {
     SkinPicked(Option<std::path::PathBuf>),
 }
 
+/// How a tool's job ended: well or not, what it said, and when.
+pub struct ToolResult {
+    pub ok: bool,
+    pub text: String,
+    pub at: std::time::Instant,
+}
+
 #[derive(Default)]
 pub struct SvcState {
     // Tools
@@ -49,6 +56,8 @@ pub struct SvcState {
     pub tool_confirm: Option<&'static str>,
     pub skip_speed_test: bool,
     pub net_report: Option<NetReport>,
+    /// How each tool's job ended last, by the job's label, so its row can say so.
+    pub tool_results: HashMap<String, ToolResult>,
     // News
     pub news: NewsState,
     // Skins
@@ -279,7 +288,7 @@ impl App {
         &mut self,
         ui: &mut Ui,
         view: &super::settings::View,
-        nav: &mut super::settings::Nav,
+        nav: &super::settings::Nav,
     ) {
         use super::settings::{COMBO_W, CONTROL_W, Group, Part, section};
         use crate::backups::BackupMode;
