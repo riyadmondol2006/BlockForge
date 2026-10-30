@@ -91,6 +91,11 @@ impl App {
         summary(&self.svc.backups.list)
     }
 
+    /// Close the window with the backups of an instance.
+    pub(super) fn close_manage_backups(&mut self) {
+        self.svc.backups.manage = None;
+    }
+
     /// Open the window with the backups of an instance.
     pub(super) fn manage_backups(&mut self, folder: &str) {
         self.svc.backups.manage = Some(folder.to_string());
@@ -116,18 +121,19 @@ impl App {
         let mut open_folder = false;
         let mut show: Option<PathBuf> = None;
 
-        // the title, what happens by itself, and the way to make one: on one row when they fit, otherwise the
-        // buttons go under the title
+        // how many there are and what happens by itself, and the way to make one: on one row when they fit,
+        // otherwise the buttons go under it (the window has the title)
         let mut head_state = (&mut open_folder, &mut make);
+        let count = summary(&list);
         split_or_stack(
             ui,
             egui::Id::unique("backups-head"),
             BLOCK_TITLE_H,
             &mut head_state,
             |ui, _| {
-                ui.label(RichText::new("Backups").size(FS_SECTION).semibold());
+                ui.label(RichText::new(&count).font(super::fonts::medium(FS_BODY)));
                 if svc.enable_automatic_backup_after_launch {
-                    ui.label(RichText::new("Automatic after playing").size(FS_META).color(c_faint()));
+                    tag(ui, "Automatic after playing", c_muted());
                 }
             },
             |ui, (open_folder, make)| {
@@ -159,9 +165,9 @@ impl App {
             ui,
             "A backup is a zip file of this instance. Worlds and settings are small; adding the mods or everything makes it bigger.",
         );
-        ui.add_space(4.0);
+        ui.add_space(8.0);
         if list.is_empty() {
-            small_muted(ui, "No backups of this instance yet. Back up now makes the first one.");
+            small_muted(ui, "Back up now makes the first one.");
         }
         let shown = list.iter().take(if show_all { usize::MAX } else { SHOWN });
         for (i, b) in shown.enumerate() {
@@ -292,8 +298,11 @@ impl App {
                                 });
                             });
                             ui.add_space(6.0);
+                            // as tall as the window allows once the list needs to scroll
+                            let tall = (ctx.content_rect().height() - 220.0).clamp(160.0, 520.0);
                             egui::ScrollArea::vertical()
-                                .max_height((ctx.content_rect().height() - 200.0).max(200.0))
+                                .max_height(tall)
+                                .min_scrolled_height(tall)
                                 .show(ui, |ui| self.backups_card(ui, &inst));
                         });
                     if close || modal.should_close() {

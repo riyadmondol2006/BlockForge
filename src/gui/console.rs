@@ -125,15 +125,15 @@ impl App {
             egui::CentralPanel::default()
                 .frame(egui::Frame::new().fill(c_field()).inner_margin(egui::Margin::symmetric(16, 12)))
                 .show(ui, |ui| {
-                    ui.spacing_mut().item_spacing.y = 2.0;
-                    let row_h = ui.text_style_height(&egui::TextStyle::Monospace);
+                    ui.spacing_mut().item_spacing.y = 1.0;
+                    let row_h = ui.text_style_height(&egui::TextStyle::Monospace) + 1.0;
                     ScrollArea::both().auto_shrink(false).stick_to_bottom(true).show_rows(
                         ui,
                         row_h,
                         lines.len(),
                         |ui, range| {
                             for line in &lines[range] {
-                                ui.add(egui::Label::new(super::library::log_text(line)).extend());
+                                super::library::log_row(ui, line, false);
                             }
                         },
                     );

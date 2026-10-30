@@ -1413,7 +1413,7 @@ fn about_row(
 
 /// One line of a game's log: monospace in the colour of its level, and a warning or an error on a faint band of that
 /// colour with a mark at its start, so they stand out in a long log.
-fn log_row(ui: &mut Ui, line: &crate::launch::LogLine, wrap: bool) {
+pub(super) fn log_row(ui: &mut Ui, line: &crate::launch::LogLine, wrap: bool) {
     let band = ui.painter().add(egui::Shape::Noop);
     let label = egui::Label::new(log_text(line));
     let r = ui.add(if wrap { label.wrap() } else { label.extend() });

@@ -2290,12 +2290,13 @@ struct Shot {
 /// The ids of the jobs the tour makes up to show the sidebar busy; no real job gets ids this high.
 const SHOT_TASK: u64 = u64::MAX - 8;
 
-const SHOT_PAGES: [&str; 51] = [
+const SHOT_PAGES: [&str; 52] = [
     "home",
     "library",
     "instance",
     "instance-mods",
     "instance-resourcepacks",
+    "instance-backups",
     "instance-logs",
     "instance-settings",
     "instance-settings-java",
@@ -2425,6 +2426,7 @@ impl App {
                     self.settings.library_view = if list { "list" } else { "grid" }.to_string();
                 }
                 "instance"
+                | "instance-backups"
                 | "instance-mods"
                 | "instance-resourcepacks"
                 | "instance-logs"
@@ -2448,6 +2450,9 @@ impl App {
                             "instance-settings-java" => self.shot_instance_settings_tab(&f, 1),
                             "instance-settings-cmd" => self.shot_instance_settings_tab(&f, 2),
                             _ => {}
+                        }
+                        if name == "instance-backups" {
+                            self.manage_backups(&f);
                         }
                         if name == "instance-logs" {
                             self.games.insert(
@@ -2699,6 +2704,7 @@ impl App {
         self.upd = updates::UpdateUi::default();
         self.gh = Default::default();
         self.confirm_quit = false;
+        self.close_manage_backups();
         self.confirm_stop = None;
         self.confirm_play_unsaved = None;
         // these also hold their page's lists, which take a while to come again: only when their window was opened
