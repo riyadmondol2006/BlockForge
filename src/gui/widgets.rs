@@ -1068,6 +1068,26 @@ fn shot_note(text: &str, rect: egui::Rect) {
     }
 }
 
+/// [`play_button`] at a size of its own: the large Play over the cover of Home's banner.
+pub fn play_button_sized(ui: &mut Ui, min: Vec2) -> Response {
+    brand_button(ui, "Play", Some(Icon::Play), min, true, true)
+}
+
+/// [`danger_big`] at a size of its own: the Stop that takes the place of [`play_button_sized`] while the game runs.
+pub fn danger_sized(ui: &mut Ui, icon: Icon, text: &str, min: Vec2) -> Response {
+    styled_button(
+        ui,
+        text,
+        Some(icon),
+        c_danger_bg(),
+        c_danger_hover(),
+        c_danger(),
+        Stroke::new(1.0, c_danger_line()),
+        min,
+        true,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

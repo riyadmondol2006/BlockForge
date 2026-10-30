@@ -2271,7 +2271,7 @@ struct Shot {
 /// The ids of the jobs the tour makes up to show the sidebar busy; no real job gets ids this high.
 const SHOT_TASK: u64 = u64::MAX - 8;
 
-const SHOT_PAGES: [&str; 46] = [
+const SHOT_PAGES: [&str; 48] = [
     "home",
     "library",
     "instance",
@@ -2308,6 +2308,8 @@ const SHOT_PAGES: [&str; 46] = [
     "who",
     "settings-light",
     "home-light",
+    "library-light",
+    "library-list",
     "mods-light",
     // the windows
     "update",
@@ -2395,7 +2397,11 @@ impl App {
             }
             match name.trim_end_matches("-light") {
                 "home" => self.page = Page::Home,
-                "library" => self.page = Page::Library,
+                "library" | "library-list" => {
+                    self.page = Page::Library;
+                    let list = name.trim_end_matches("-light") == "library-list";
+                    self.settings.library_view = if list { "list" } else { "grid" }.to_string();
+                }
                 "instance"
                 | "instance-mods"
                 | "instance-logs"

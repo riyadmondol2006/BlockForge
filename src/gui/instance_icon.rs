@@ -56,7 +56,7 @@ pub fn read_square(path: &std::path::Path) -> Option<egui::ColorImage> {
 }
 
 impl App {
-    fn local_picture(&self, path: PathBuf) -> Option<TextureHandle> {
+    pub(super) fn local_picture(&self, path: PathBuf) -> Option<TextureHandle> {
         let mut all = self.local_pictures.0.borrow_mut();
         if let Some(e) = all.get(&path) {
             if e.looked.elapsed() < LOOK_AGAIN {

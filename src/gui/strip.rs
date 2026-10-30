@@ -73,9 +73,40 @@ pub fn caption(played: usize, days: usize) -> String {
     if played == 0 { "Not played yet".to_string() } else { format!("Played on {played} of the last {days} days") }
 }
 
+/// The colours of a strip's empty days and rings, which depend on what it is drawn on.
+pub struct Ink {
+    /// A day without a session.
+    pub empty: Color32,
+    /// The ring around today.
+    pub today: Color32,
+    /// The ring around the day under the pointer.
+    pub pointed: Color32,
+}
+
+impl Ink {
+    /// On the page: the quiet cell colour, today in ink.
+    pub fn page() -> Ink {
+        Ink { empty: c_active(), today: c_text(), pointed: c_muted() }
+    }
+
+    /// Over a cover (Home's banner), which is dark in both looks: light cells and rings.
+    pub fn on_cover() -> Ink {
+        Ink {
+            empty: Color32::from_white_alpha(40),
+            today: Color32::from_white_alpha(230),
+            pointed: Color32::from_white_alpha(150),
+        }
+    }
+}
+
 /// The strip itself: `days` is oldest first and ends with today; a day with sessions is filled in `hue`, an empty one
 /// is the quiet cell colour, and today has a thin outline. Hovering a cell says which day it is.
 pub fn play_strip(ui: &mut Ui, days: &[u8], hue: Color32, cell: f32, gap: f32) -> Response {
+    play_strip_inked(ui, days, hue, cell, gap, Ink::page())
+}
+
+/// [`play_strip`] in the colours of `ink`, for a strip on something other than the page.
+pub fn play_strip_inked(ui: &mut Ui, days: &[u8], hue: Color32, cell: f32, gap: f32, ink: Ink) -> Response {
     let n = days.len().max(1) as f32;
     let size = vec2(n * cell + (n - 1.0) * gap, cell);
     let (rect, resp) = ui.allocate_exact_size(size, Sense::hover());
@@ -102,12 +133,17 @@ pub fn play_strip(ui: &mut Ui, days: &[u8], hue: Color32, cell: f32, gap: f32) -
                     Color32::from_white_alpha(if is_dark() { 34 } else { 46 }),
                 );
             } else {
-                ui.painter().rect_filled(r, radius, c_active());
+                ui.painter().rect_filled(r, radius, ink.empty);
             }
             if i + 1 == days.len() {
-                ui.painter().rect_stroke(r.expand(1.0), radius, Stroke::new(1.0, c_text()), egui::StrokeKind::Outside);
+                ui.painter().rect_stroke(r.expand(1.0), radius, Stroke::new(1.0, ink.today), egui::StrokeKind::Outside);
             } else if pointed == Some(i as i64) {
-                ui.painter().rect_stroke(r.expand(1.0), radius, Stroke::new(1.0, c_muted()), egui::StrokeKind::Outside);
+                ui.painter().rect_stroke(
+                    r.expand(1.0),
+                    radius,
+                    Stroke::new(1.0, ink.pointed),
+                    egui::StrokeKind::Outside,
+                );
             }
         }
     }

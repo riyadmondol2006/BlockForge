@@ -2,7 +2,7 @@
 
 use egui::{Align, Color32, CornerRadius, Layout, RichText, ScrollArea, Sense, Stroke, Ui, UiBuilder, vec2};
 
-use super::icons::Icon;
+use super::icons::{self, Icon};
 use super::instance_menu::{Act, BLOCK_TITLE_H, SplitRow, block_title, menu_items, section_break};
 use super::motion;
 use super::theme::*;
@@ -18,45 +18,79 @@ fn elapsed_text(t: std::time::Duration) -> String {
 }
 
 impl App {
-    /// One instance as a tile that lifts under the pointer. Returns what the player asked for, if anything.
-    fn instance_card(&self, ui: &mut Ui, inst: &Instance, width: f32) -> Option<Act> {
+    /// One instance as a tile of Home's row: its cover on top, under it the name, what it is and how many mods, with
+    /// the menu and a quick Play. It lifts a little under the pointer; the one picked (or played last) has a line in
+    /// the brand colour. Returns what the player asked for, if anything.
+    fn instance_card(
+        &self,
+        ui: &mut Ui,
+        inst: &Instance,
+        cover: &egui::TextureHandle,
+        width: f32,
+        picked: bool,
+    ) -> Option<Act> {
         let mut act = None;
-        let (slot, resp) = ui.allocate_exact_size(vec2(width, TILE_H), Sense::click());
-        // the tile counts as pointed at over its buttons too, so it doesn't sink while the Play chip is reached for
+        let cover_h = tile_cover_h(width);
+        let (slot, resp) = ui.allocate_exact_size(vec2(width, cover_h + TILE_INFO_H), Sense::click());
+        // the tile counts as pointed at over its buttons too, so it doesn't sink while Play is reached for
         let hot = ui.rect_contains_pointer(slot);
         let folder = inst.folder.clone();
         let playing = self.is_playing(&folder);
         let t = motion::hover(ui, resp.id, hot);
-        // it rises a little, its shadow grows and its line brightens; a running instance has a green edge
         let rect = slot.translate(vec2(0.0, -3.0 * t));
+        let pic = egui::Rect::from_min_size(rect.min, vec2(rect.width(), cover_h));
+        let round = CornerRadius::same(R_CARD);
         if ui.is_rect_visible(slot) {
             let p = ui.painter();
-            p.add(lifted_shadow(t).as_shape(rect, CornerRadius::same(R_CARD)));
-            p.rect_filled(rect, CornerRadius::same(R_CARD), motion::mix(c_card(), c_raised(), t));
-            // a soft light in the instance's own colour behind its picture (green while it runs)
-            let hue = if playing { c_accent() } else { Self::strip_hue(inst) };
-            let a = if is_dark() { 26.0 + 22.0 * t } else { 30.0 + 22.0 * t };
-            let icon_center = rect.left_top() + vec2(16.0 + TILE_ICON / 2.0, 16.0 + TILE_ICON / 2.0);
-            motion::glow(&p.with_clip_rect(rect.shrink(1.0)), icon_center, 74.0, with_alpha(hue, a as u8));
-            let edge = if playing { c_accent() } else { motion::mix(c_border(), c_control().gamma_multiply(0.7), t) };
-            p.rect_stroke(rect, CornerRadius::same(R_CARD), Stroke::new(1.0, edge), egui::StrokeKind::Inside);
-            glass_edge(p, rect, R_CARD);
+            p.add(lifted_shadow(t).as_shape(rect, round));
+            p.rect_filled(rect, round, motion::mix(c_card(), c_raised(), t));
+            paint_cover_tex(ui, cover, pic, CornerRadius { nw: R_CARD, ne: R_CARD, sw: 0, se: 0 });
+            // the picked tile (and one whose game runs) has a line in the brand colour; the others brighten theirs
+            let (w, edge) = if picked || playing {
+                (1.5, c_accent())
+            } else {
+                (1.0, motion::mix(c_border(), c_control().gamma_multiply(0.7), t))
+            };
+            p.rect_stroke(rect, round, Stroke::new(w, edge), egui::StrokeKind::Inside);
         }
-        // Tab reaches the card too (Enter opens it)
+        let badge =
+            egui::Rect::from_min_size(pic.left_bottom() + vec2(10.0, -10.0 - TILE_BADGE), vec2(TILE_BADGE, TILE_BADGE));
+        self.picture_badge(ui, inst, badge);
+        // Tab reaches the tile too (Enter opens it)
         focus_ring(ui, &resp, rect, R_CARD);
         resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, inst.name()));
-        let inner = rect.shrink(16.0);
+        let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
 
-        // the picture, the name and the details
-        let mut top = ui.new_child(UiBuilder::new().max_rect(inner).layout(Layout::left_to_right(Align::Min)));
-        top.spacing_mut().item_spacing = vec2(12.0, 2.0);
-        self.instance_icon(&mut top, inst, TILE_ICON);
-        top.vertical(|ui| {
-            ui.spacing_mut().item_spacing.y = 3.0;
-            ui.set_max_width(inner.width() - TILE_ICON - 12.0 - 28.0);
-            ui.add_space(3.0);
-            ui.add(egui::Label::new(RichText::new(inst.name()).font(super::fonts::semibold(15.0))).truncate());
-            self.loader_line(ui, inst);
+        // the name with the menu at its end, then what it is and how many mods, and Play in the corner
+        let inner = egui::Rect::from_min_max(
+            egui::pos2(rect.left() + 14.0, pic.bottom() + 10.0),
+            rect.right_bottom() - vec2(8.0, 10.0),
+        );
+        let mut text = ui.new_child(
+            UiBuilder::new()
+                .max_rect(egui::Rect::from_min_max(inner.min, egui::pos2(inner.right() - 30.0, inner.bottom())))
+                .layout(Layout::top_down(Align::Min)),
+        );
+        text.spacing_mut().item_spacing.y = 4.0;
+        text.add(egui::Label::new(RichText::new(inst.name()).font(super::fonts::semibold(FS_BODY))).truncate());
+        text.set_max_width(inner.width() - 30.0 - 34.0);
+        self.loader_line(&mut text, inst, false);
+        let started = self.games.values().find(|g| g.folder == folder && g.active()).map(|g| g.started.elapsed());
+        text.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            match started {
+                Some(t) => {
+                    live_dot(ui);
+                    let note = format!("Playing \u{00B7} {}", elapsed_text(t));
+                    ui.add(egui::Label::new(RichText::new(note).size(FS_META).color(c_accent())).truncate());
+                }
+                None => {
+                    ui.add(
+                        egui::Label::new(RichText::new(mods_text(inst.mod_count)).size(FS_META).color(c_faint()))
+                            .truncate(),
+                    );
+                }
+            }
         });
         let mut menu = ui.new_child(
             UiBuilder::new()
@@ -69,91 +103,137 @@ impl App {
         if let Some(Some(a)) = kebab_menu(&mut menu, |ui| self.instance_menu(ui, inst)) {
             act = Some(a);
         }
-
-        // how much it has been played, and the quiet Play button
-        let foot = egui::Rect::from_min_max(egui::pos2(inner.left(), inner.bottom() - 34.0), inner.right_bottom());
-        let mut bottom = ui.new_child(UiBuilder::new().max_rect(foot).layout(Layout::right_to_left(Align::Center)));
-        if play_chip(&mut bottom, playing, hot).clicked() {
+        let mut corner = ui.new_child(
+            UiBuilder::new()
+                .max_rect(egui::Rect::from_min_max(inner.right_bottom() - vec2(34.0, 34.0), inner.right_bottom()))
+                .layout(Layout::top_down(Align::Min)),
+        );
+        if play_chip(&mut corner, playing, hot).clicked() {
             act = Some(if playing { Act::Stop(folder.clone()) } else { Act::Play(folder.clone()) });
         }
-        let started = self.games.values().find(|g| g.folder == folder && g.active()).map(|g| g.started.elapsed());
-        let (note, color) = match started {
-            Some(t) => (format!("Playing  \u{00B7}  {}", elapsed_text(t)), c_accent()),
-            None => {
-                let when =
-                    if inst.last_played() > 0 { time_ago(inst.last_played()) } else { "Not played yet".to_string() };
-                let note = if inst.mod_count > 0 { format!("{} mods  \u{00B7}  {when}", inst.mod_count) } else { when };
-                (note, c_faint())
-            }
-        };
-        bottom.with_layout(Layout::left_to_right(Align::Center), |ui| {
-            if started.is_some() {
-                live_dot(ui);
-            }
-            ui.add(egui::Label::new(RichText::new(note).size(FS_META).color(color)).truncate());
-        });
         if act.is_none() && resp.clicked() {
-            act = Some(Act::Open(inst.folder.clone()));
+            act = Some(Act::Open(folder));
         }
         act
     }
 
-    /// "1.21.1 · Fabric 0.20.0": the version in grey and the loader in its own colour.
-    fn loader_line(&self, ui: &mut Ui, inst: &Instance) {
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 5.0;
-            ui.label(RichText::new(inst.mc_version().to_string()).size(FS_META).color(c_muted()));
-            ui.label(RichText::new("\u{00B7}").size(FS_META).color(c_faint()));
-            match inst.loader() {
-                Some((kind, ver)) => {
-                    // when the whole name would be cut, show just the loader: a line never ends on a dot and ellipsis
-                    let full = format!("{kind} {ver}");
-                    let w = ui
-                        .painter()
-                        .layout_no_wrap(full.clone(), egui::FontId::proportional(FS_META), c_text())
-                        .size()
-                        .x;
-                    let text = if w <= ui.available_width() { full } else { kind.to_string() };
-                    ui.add(egui::Label::new(RichText::new(text).size(FS_META).color(loader_color(kind))).truncate());
-                }
-                None => {
-                    ui.label(RichText::new("Vanilla").size(FS_META).color(c_muted()));
-                }
-            }
-        });
+    /// "1.21.1 · Fabric 0.20.0" in the monospace face, the loader in its own colour. With `version` false, or when the
+    /// whole line would be cut, the loader's version is left out: a line never ends on a dot and an ellipsis.
+    fn loader_line(&self, ui: &mut Ui, inst: &Instance, version: bool) {
+        let room = ui.available_width();
+        let mut job = loader_job(inst, FS_META, version);
+        if version && ui.painter().layout_job(job.clone()).size().x > room {
+            job = loader_job(inst, FS_META, false);
+        }
+        ui.add(egui::Label::new(job).truncate());
     }
 
-    /// The name and details of the instance on Home, with the strip of the days it was played.
-    fn hero_title(&self, ui: &mut Ui, h: &Instance) {
-        ui.spacing_mut().item_spacing.y = 4.0;
-        ui.add(egui::Label::new(RichText::new(h.name()).size(FS_TITLE).semibold()).truncate());
-        // the version, the loader in its own colour and the mods, shortened a whole part at a time to fit
+    /// What sits over the cover of Home's banner: a small label, the name, what the instance is, the big Play (Stop
+    /// while it runs), the menu of the other ways to play, when it was played, and the strip of the days it was.
+    fn hero_title(&self, ui: &mut Ui, h: &Instance, action: &mut Option<Act>) {
+        let folder = h.folder.clone();
+        let playing = self.is_playing(&folder);
+        let wide = ui.available_width() >= 520.0;
+        ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
+        let label = if playing {
+            "Now playing"
+        } else if h.last_played() > 0 {
+            "Continue playing"
+        } else {
+            "Ready to play"
+        };
+        ui.label(RichText::new(label).font(super::fonts::semibold(13.0)).color(COVER_ACCENT));
+        ui.add_space(4.0);
+        let name_size = if wide { 34.0 } else { 28.0 };
+        ui.scope(|ui| {
+            ui.set_max_width(ui.available_width().min(640.0));
+            ui.add(
+                egui::Label::new(RichText::new(h.name()).font(super::fonts::semibold(name_size)).color(ON_COVER))
+                    .truncate(),
+            );
+        });
+        ui.add_space(6.0);
+        // the version, the loader and its version and the mods, a whole part at a time left out until it fits
         let room = ui.available_width();
-        let job = (0..META_LEVELS)
-            .map(|level| instance_meta(h, level))
+        let job = (0..BANNER_META_LEVELS)
+            .map(|level| banner_meta(h, level))
             .find(|job| ui.painter().layout_job(job.clone()).size().x <= room)
-            .unwrap_or_else(|| instance_meta(h, META_LEVELS - 1));
+            .unwrap_or_else(|| banner_meta(h, BANNER_META_LEVELS - 1));
         ui.add(egui::Label::new(job).truncate());
-        ui.add_space(8.0);
+        ui.add_space(20.0);
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 10.0;
+            // Stop takes Play's place at Play's size, so nothing beside it moves when the game starts
+            let size = vec2(if wide { 160.0 } else { 136.0 }, 46.0);
+            if playing {
+                if danger_sized(ui, Icon::Stop, "Stop", size).clicked() {
+                    *action = Some(Act::Stop(folder.clone()));
+                }
+            } else if play_button_sized(ui, size).clicked() {
+                *action = Some(Act::Play(folder.clone()));
+            }
+            // the other ways to play: as somebody else, and the switches that make the game run better
+            let more = cover_button(ui, 46.0).on_hover_text("Play as another account, and performance");
+            let menu = egui::Popup::menu(&more).gap(6.0).show(|ui| {
+                menu_items(ui);
+                ui.set_min_width(220.0);
+                let mut act = None;
+                let running =
+                    self.sessions_of(&folder).iter().filter(|k| self.games.get(*k).is_some_and(|g| g.active())).count();
+                let play_as = if running > 0 {
+                    format!("Play as\u{2026} ({running} running)")
+                } else {
+                    "Play as\u{2026}".to_string()
+                };
+                ui.menu_button(play_as, |ui| {
+                    if let Some(a) = self.account_menu(ui, &folder) {
+                        act = Some(a);
+                    }
+                });
+                if let Some(a) = self.helpers_menu(ui, h) {
+                    act = Some(a);
+                }
+                ui.separator();
+                ui.add_enabled(
+                    false,
+                    egui::Label::new(RichText::new(self.speed_summary(h)).size(FS_META).color(c_faint())),
+                );
+                act
+            });
+            if let Some(Some(a)) = menu.map(|r| r.inner) {
+                *action = Some(a);
+            }
+            // a thin line, then when it was played (or for how long it has been running)
+            ui.add_space(6.0);
+            let (line, _) = ui.allocate_exact_size(vec2(1.0, 34.0), Sense::hover());
+            ui.painter().rect_filled(line, 0.0, Color32::from_white_alpha(56));
+            ui.add_space(6.0);
+            let started = self.games.values().find(|g| g.folder == folder && g.active()).map(|g| g.started.elapsed());
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = 2.0;
+                let (top, value) = match started {
+                    Some(t) => ("Playing for".to_string(), elapsed_text(t)),
+                    None if h.last_played() > 0 => ("Last played".to_string(), time_ago(h.last_played())),
+                    None => ("Last played".to_string(), "Not yet".to_string()),
+                };
+                ui.label(RichText::new(top).size(FS_META).color(Color32::from_white_alpha(170)));
+                ui.label(RichText::new(value).font(super::fonts::semibold(FS_BODY)).color(ON_COVER));
+            });
+        });
+        ui.add_space(18.0);
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 12.0;
-            // four weeks of days, or fewer (down to two) in a narrow window: the strip gives up its oldest days
-            // before the time is cut short
+            // four weeks of days, or two in a narrow window: the strip gives up its oldest days before its words go
             const DAY: f32 = 13.0;
-            const WHEN: f32 = 150.0;
-            let n = ((ui.available_width() - 12.0 - WHEN) / DAY).floor().clamp(14.0, 28.0) as usize;
+            const WORDS: f32 = 210.0;
+            let n = if ui.available_width() >= 28.0 * DAY + 12.0 + WORDS { 28 } else { 14 };
             let days = self.play_days(h, n);
             let played = days.iter().filter(|d| **d > 0).count();
-            super::strip::play_strip(ui, &days, Self::strip_hue(h), 10.0, 3.0);
-            // the words "Last played" go when the line is too short for them
-            let room = ui.available_width();
-            let when = if h.last_played() > 0 {
-                let ago = time_ago(h.last_played()).to_lowercase();
-                if room >= 150.0 { format!("Last played {ago}") } else { ago }
-            } else {
-                super::strip::caption(played, n)
-            };
-            ui.add(egui::Label::new(RichText::new(when).size(FS_META).color(c_faint())).truncate());
+            super::strip::play_strip_inked(ui, &days, COVER_ACCENT, 10.0, 3.0, super::strip::Ink::on_cover());
+            let caption = super::strip::caption(played, n);
+            ui.add(
+                egui::Label::new(RichText::new(caption).size(FS_META).color(Color32::from_white_alpha(170))).truncate(),
+            );
         });
     }
 
@@ -175,9 +255,9 @@ impl App {
     }
 
     pub(super) fn home_ui(&mut self, ui: &mut Ui) {
-        // the instances are looked up by position, not copied: an instance carries its whole version file
-        let hero =
-            self.instances.iter().position(|i| i.last_played() > 0).or((!self.instances.is_empty()).then_some(0));
+        // the instances are looked up by position, not copied: an instance carries its whole version file. The banner
+        // is the one played last (the first one when none has been played yet)
+        let hero = (0..self.instances.len()).max_by_key(|&i| (self.instances[i].last_played(), std::cmp::Reverse(i)));
         let mut action = None;
         ScrollArea::vertical().id_salt("home").auto_shrink(false).show(ui, |ui| {
             self.low_end_hint(ui);
@@ -198,14 +278,19 @@ impl App {
                         });
                     });
                 });
-                ui.add_space(8.0);
+                ui.add_space(12.0);
             }
 
-            // in a wide window the news sits beside the instance and the ones played lately, instead of under them
+            match hero {
+                Some(h) => self.home_banner(ui, h, &mut action),
+                None => self.home_empty(ui),
+            }
+            ui.add_space(26.0);
+            // in a wide window the news sits beside the instances instead of under them
             let news = self.settings.home_news;
             let room = ui.available_width();
             if news && hero.is_some() && room >= HOME_SPLIT {
-                let news_w = (room * 0.36).clamp(360.0, 520.0);
+                let news_w = (room * 0.34).clamp(340.0, 480.0);
                 two_columns(
                     ui,
                     room - news_w - HOME_GAP,
@@ -215,15 +300,19 @@ impl App {
                     |ui, this| this.news_section(ui),
                 );
             } else {
-                self.home_main(ui, hero, &mut action);
+                if hero.is_some() {
+                    self.home_main(ui, hero, &mut action);
+                }
                 if news {
-                    ui.add_space(28.0);
+                    if hero.is_some() {
+                        ui.add_space(26.0);
+                    }
                     self.news_section(ui);
                 }
             }
             if !news {
                 // the news was hidden on this page: the way to bring it back is where it was
-                ui.add_space(20.0);
+                ui.add_space(14.0);
                 if ghost(ui, "Show news").on_hover_text("Show the launcher news on Home again").clicked() {
                     self.settings.home_news = true;
                     self.save_settings();
@@ -236,151 +325,173 @@ impl App {
         }
     }
 
-    /// The main part of Home: the instance played last on its panel, and under it the others, most recently played
-    /// first (or the way to a first instance when there is none).
-    fn home_main(&mut self, ui: &mut Ui, hero: Option<usize>, action: &mut Option<Act>) {
-        match hero {
-            Some(h) => {
-                let h = &self.instances[h];
-                // a panel as tall as what is on it was on the last frame: the large picture on the left, and beside
-                // it the name, the details, the strip and the buttons, Play first
-                let height_id = egui::Id::unique("home-hero-height");
-                let height = remembered_width(ui, height_id, 2.0 * HERO_PAD + HERO_ICON + 60.0);
-                let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
-                let icon_center = egui::pos2(rect.left() + HERO_PAD + HERO_ICON / 2.0, rect.center().y);
-                hero_ground(ui, rect, icon_center, self.is_playing(&h.folder));
-                let mut icon = ui.new_child(
-                    UiBuilder::new().max_rect(egui::Rect::from_center_size(icon_center, vec2(HERO_ICON, HERO_ICON))),
-                );
-                self.instance_icon(&mut icon, h, HERO_ICON);
-                let inner = rect.shrink(HERO_PAD);
-                let column = egui::Rect::from_min_max(
-                    egui::pos2(inner.left() + HERO_ICON + 28.0, inner.top()),
-                    egui::pos2(inner.right(), inner.top() + 1000.0),
-                );
-                let mut info = ui.new_child(UiBuilder::new().max_rect(column).layout(Layout::top_down(Align::Min)));
-                self.hero_title(&mut info, h);
-                info.add_space(14.0);
-                info.horizontal_wrapped(|ui| {
-                    ui.spacing_mut().item_spacing = vec2(8.0, 8.0);
-                    if self.is_playing(&h.folder) {
-                        if danger_big(ui, Icon::Stop, "Stop").clicked() {
-                            *action = Some(Act::Stop(h.folder.clone()));
-                        }
-                    } else if play_button(ui, true).clicked() {
-                        *action = Some(Act::Play(h.folder.clone()));
-                    }
-                    if let Some(a) = self.play_as_menu(ui, &h.folder) {
-                        *action = Some(a);
-                    }
-                    if let Some(a) = self.performance_button(ui, h) {
-                        *action = Some(a);
-                    }
-                });
-                let content = info.min_rect().height().max(HERO_ICON);
-                remember_width(ui, height_id, (content + 2.0 * HERO_PAD).ceil());
-            }
-            None => {
-                card(ui, |ui| {
-                    ui.label(RichText::new("No instances yet").size(FS_SECTION).semibold());
-                    muted(ui, "An instance is one copy of Minecraft with its own worlds and mods.");
-                    ui.add_space(6.0);
-                    ui.horizontal_wrapped(|ui| {
-                        if primary(ui, "Create your first instance").clicked() {
-                            self.page = Page::Create;
-                        }
-                        if secondary(ui, "Browse modpacks").clicked() {
-                            self.page = Page::Discover;
-                            self.discover.kind = crate::modrinth::Kind::Modpack;
-                            self.discover_search(true);
-                        }
-                        // instances from another launcher (MultiMC, Prism, CurseForge, a .mrpack) come in here
-                        if secondary(ui, "Import").on_hover_text("From another launcher, or a modpack file").clicked() {
-                            self.open_import(None);
-                        }
-                    });
-                    small_muted(ui, "You can also drop a modpack file (.mrpack or .zip) on this window.");
-                });
-            }
+    /// The banner at the top of Home: the cover of the instance played last fills the panel, and over its darker left
+    /// side are what it is, Play and when it was played (see [`Self::hero_title`]). It is as tall as the window's width
+    /// allows, between a low and a high limit, and what is on it is centred in it.
+    fn home_banner(&mut self, ui: &mut Ui, h: usize, action: &mut Option<Act>) {
+        let w = ui.available_width();
+        let height = (w * 0.31).clamp(BANNER_MIN_H, BANNER_MAX_H).round();
+        let (rect, _) = ui.allocate_exact_size(vec2(w, height), Sense::hover());
+        let cover = self.cover_at(h, rect.size(), true);
+        let inst = &self.instances[h];
+        let round = CornerRadius::same(R_CARD + 4);
+        if ui.is_rect_visible(rect) {
+            let p = ui.painter();
+            p.add(card_shadow().as_shape(rect, round));
+            paint_cover_tex(ui, &cover, rect, round);
+            // a little more shade on the left, under the words, so they read on a bright sky in either look
+            shade_left(p, rect, R_CARD + 4, 120, rect.width() * 0.7);
+            p.rect_stroke(rect, round, Stroke::new(1.0, Color32::from_white_alpha(18)), egui::StrokeKind::Inside);
         }
-
-        if self.instances.len() == 1 {
-            // the one instance is the panel above; the ways to more stay in reach
-            ui.add_space(16.0);
-            ui.horizontal(|ui| {
-                if secondary_icon(ui, Icon::Plus, "New instance").clicked() {
-                    self.page = Page::Create;
-                }
-                if secondary(ui, "Find mods").clicked() {
-                    self.page = Page::Discover;
-                }
-            });
-        }
-        if self.instances.len() > 1 {
-            // the others, most recently played first: the one on the panel above isn't shown twice
-            let mut rest: Vec<usize> = (0..self.instances.len()).filter(|&i| Some(i) != hero).collect();
-            rest.sort_by(|&a, &b| {
-                let (a, b) = (&self.instances[a], &self.instances[b]);
-                b.last_played()
-                    .cmp(&a.last_played())
-                    .then_with(|| a.name().to_lowercase().cmp(&b.name().to_lowercase()))
-            });
-            ui.add_space(24.0);
-            let (cols, width) = grid_columns(ui.available_width(), 248.0, 16.0);
-            let shown = rest.len().min(cols * 2);
-            ui.horizontal(|ui| {
-                ui.label(RichText::new("Continue playing").size(FS_SECTION).semibold());
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    // the whole Library, with how many instances there are
-                    let all = format!("View all {}", self.instances.len());
-                    if ghost(ui, &all).on_hover_text("Open the Library").clicked() {
-                        self.page = Page::Library;
-                    }
-                    if ghost(ui, "Find mods").clicked() {
-                        self.page = Page::Discover;
-                    }
-                    if ghost(ui, "New instance").clicked() {
-                        self.page = Page::Create;
-                    }
-                });
-            });
-            ui.add_space(6.0);
-            ui.spacing_mut().item_spacing = vec2(16.0, 16.0);
-            for row in rest[..shown].chunks(cols) {
-                ui.horizontal(|ui| {
-                    for &i in row {
-                        if let Some(a) = self.instance_card(ui, &self.instances[i], width) {
-                            *action = Some(a);
-                        }
-                    }
-                });
-            }
-            ui.spacing_mut().item_spacing = vec2(8.0, 8.0);
-        }
+        // the instance's own picture, when it has one, in the far corner
+        let badge = egui::Rect::from_min_size(
+            rect.right_top() + vec2(-20.0 - BANNER_BADGE, 20.0),
+            vec2(BANNER_BADGE, BANNER_BADGE),
+        );
+        self.picture_badge(ui, inst, badge);
+        let pad = if w < 720.0 { 24.0 } else { 36.0 };
+        let content_id = egui::Id::unique("home-banner-content");
+        let content_h = remembered_width(ui, content_id, 200.0);
+        let top = rect.top() + ((height - content_h) / 2.0).max(pad * 0.6);
+        let column = egui::Rect::from_min_max(egui::pos2(rect.left() + pad, top), rect.right_bottom() - vec2(pad, 0.0));
+        let mut info = ui.new_child(UiBuilder::new().max_rect(column).layout(Layout::top_down(Align::Min)));
+        info.set_clip_rect(rect.intersect(ui.clip_rect()));
+        self.hero_title(&mut info, inst, action);
+        remember_width(ui, content_id, info.min_rect().height().ceil());
     }
 
-    pub(super) fn library_ui(&mut self, ui: &mut Ui) {
-        ui.horizontal(|ui| {
-            heading(ui, "Library");
-            count_pill(ui, self.instances.len());
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if primary_icon(ui, Icon::Plus, "New instance").clicked() {
+    /// Home without any instance: the way to a first one, a modpack, or one from another launcher.
+    fn home_empty(&mut self, ui: &mut Ui) {
+        card(ui, |ui| {
+            ui.label(RichText::new("No instances yet").size(FS_SECTION).semibold());
+            muted(ui, "An instance is one copy of Minecraft with its own worlds and mods.");
+            ui.add_space(6.0);
+            ui.horizontal_wrapped(|ui| {
+                if primary(ui, "Create your first instance").clicked() {
                     self.page = Page::Create;
                 }
-                if secondary(ui, "Import").clicked() {
+                if secondary(ui, "Browse modpacks").clicked() {
+                    self.page = Page::Discover;
+                    self.discover.kind = crate::modrinth::Kind::Modpack;
+                    self.discover_search(true);
+                }
+                // instances from another launcher (MultiMC, Prism, CurseForge, a .mrpack) come in here
+                if secondary(ui, "Import").on_hover_text("From another launcher, or a modpack file").clicked() {
                     self.open_import(None);
                 }
             });
+            small_muted(ui, "You can also drop a modpack file (.mrpack or .zip) on this window.");
         });
-        ui.add_space(8.0);
-        let mut show = library_show(ui.ctx());
-        // a filter for a loader no instance has any more (the last one was deleted) is dropped
-        if let Show::Loader(kind) = &show {
-            if !self.instances.iter().any(|i| loader_kind(i) == kind) {
-                show = Show::All;
+    }
+
+    /// "Your instances" under the banner: a row of tiles, most recently played first, as many as fit on one line,
+    /// with the ways to more (a new instance, mods, an import, the whole Library) at the end of the title.
+    fn home_main(&mut self, ui: &mut Ui, hero: Option<usize>, action: &mut Option<Act>) {
+        let mut order: Vec<usize> = (0..self.instances.len()).collect();
+        order.sort_by(|&a, &b| {
+            let (a, b) = (&self.instances[a], &self.instances[b]);
+            b.last_played().cmp(&a.last_played()).then_with(|| a.name().to_lowercase().cmp(&b.name().to_lowercase()))
+        });
+        let mut head = SplitRow::new(ui, egui::Id::unique("home-instances-head"), 34.0);
+        head.left(ui, |ui| {
+            ui.add(egui::Label::new(RichText::new("Your instances").size(FS_SECTION).semibold()).truncate());
+        });
+        head.right(ui, |ui| {
+            ui.spacing_mut().item_spacing.x = 2.0;
+            if ghost(ui, "New instance").clicked() {
+                self.page = Page::Create;
             }
+            if ghost(ui, "Find mods").clicked() {
+                self.page = Page::Discover;
+            }
+            // instances from another launcher (MultiMC, Prism, CurseForge, a .mrpack) come in here
+            if ghost(ui, "Import").on_hover_text("From another launcher, or a modpack file").clicked() {
+                self.open_import(None);
+            }
+            let all = format!("View library ({}) \u{2192}", self.instances.len());
+            if ghost(ui, &all).on_hover_text("Every instance, in the Library").clicked() {
+                self.go(Page::Library);
+            }
+        });
+        head.finish(ui);
+        ui.add_space(10.0);
+        let (cols, width) = grid_columns(ui.available_width(), HOME_TILE_MIN, HOME_TILE_GAP);
+        let shown: Vec<usize> = order.into_iter().take(cols).collect();
+        let size = vec2(width, tile_cover_h(width));
+        let covers: Vec<egui::TextureHandle> = shown.iter().map(|&i| self.cover_at(i, size, false)).collect();
+        // the outlined tile is the instance last opened, else the one on the banner
+        let picked = self.selected.as_deref().and_then(|f| self.instances.iter().position(|i| i.folder == f)).or(hero);
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = HOME_TILE_GAP;
+            for (k, &i) in shown.iter().enumerate() {
+                if let Some(a) = self.instance_card(ui, &self.instances[i], &covers[k], width, picked == Some(i)) {
+                    *action = Some(a);
+                }
+            }
+        });
+    }
+
+    /// The cover of the instance at position `i` for a place of `size` points, drawn once and then kept. By position,
+    /// so the instance isn't borrowed while the store of covers changes.
+    fn cover_at(&mut self, i: usize, size: egui::Vec2, fade_left: bool) -> egui::TextureHandle {
+        let spec = super::workbench::cover_spec(&self.instances[i]).with_fade_left(fade_left);
+        let (w, h) = super::workbench::cover_size(size);
+        self.covers.texture(&self.ctx, &spec, w, h)
+    }
+
+    /// The instance's own picture (its `instance.png`), when it has one, as a small rounded badge in `rect` over its
+    /// cover: the cover stays the backdrop, and a picture that was chosen isn't lost.
+    fn picture_badge(&self, ui: &Ui, inst: &Instance, rect: egui::Rect) {
+        if !ui.is_rect_visible(rect) {
+            return;
         }
-        if show == Show::Running && !self.instances.iter().any(|i| self.is_playing(&i.folder)) {
+        let Some(tex) = self.local_picture(inst.root.join("instance.png")) else { return };
+        let r = (rect.width() * 0.24).round() as u8;
+        let p = ui.painter();
+        let shadow = egui::Shadow { offset: [0, 2], blur: 10, spread: 0, color: Color32::from_black_alpha(120) };
+        p.add(shadow.as_shape(rect, CornerRadius::same(r)));
+        p.rect_filled(rect.expand(2.0), CornerRadius::same(r + 2), Color32::from_rgb(0x15, 0x1D, 0x29));
+        egui::Image::from_texture(&tex).corner_radius(r).paint_at(ui, rect);
+        p.rect_stroke(
+            rect.expand(2.0),
+            CornerRadius::same(r + 2),
+            Stroke::new(1.0, Color32::from_white_alpha(70)),
+            egui::StrokeKind::Inside,
+        );
+    }
+
+    pub(super) fn library_ui(&mut self, ui: &mut Ui) {
+        // the title with how many there are, and on the right the search, the view and the ways to more instances
+        PageHeader::new("Library").count(self.instances.len()).show(ui, |ui| {
+            if primary_icon(ui, Icon::Plus, "New instance").clicked() {
+                self.page = Page::Create;
+            }
+            // instances from another launcher (MultiMC, Prism, CurseForge, a .mrpack) come in here
+            if secondary(ui, "Import").on_hover_text("From another launcher, or a modpack file").clicked() {
+                self.open_import(None);
+            }
+            let list = self.settings.library_view == "list";
+            if let Some(list) = view_switch(ui, list) {
+                let view = if list { "list" } else { "grid" };
+                if self.settings.library_view != view {
+                    self.settings.library_view = view.to_string();
+                    self.save_settings();
+                }
+            }
+            let mut s = std::mem::take(&mut self.library_search);
+            search_field(ui, &mut s, "Search instances", LIBRARY_SEARCH_W.min(ui.available_width()));
+            self.library_search = s;
+        });
+        let mut show = library_show(ui.ctx());
+        // a filter for a loader no instance has any more (the last one was deleted), for favourites when there are
+        // none left, or for running games when none runs, is dropped
+        let gone = match &show {
+            Show::All => false,
+            Show::Loader(kind) => !self.instances.iter().any(|i| loader_kind(i) == kind),
+            Show::Favorites => !self.instances.iter().any(is_favorite),
+            Show::Running => !self.instances.iter().any(|i| self.is_playing(&i.folder)),
+        };
+        if gone {
             show = Show::All;
         }
         self.library_toolbar(ui, &mut show);
@@ -418,6 +529,9 @@ impl App {
         if let Some(sort) = out.sort {
             self.set_library_sort(sort);
         }
+        if let Some((folder, on)) = out.favorite {
+            self.set_favorite(&folder, on);
+        }
         ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique(SHOW_KEY), show));
         if let Some(a) = out.act {
             self.apply(a);
@@ -434,98 +548,99 @@ impl App {
         self.save_settings();
     }
 
-    /// The search, the loader filters, the sorting and the view of the Library. On one line when they fit, otherwise
-    /// the filters go on a line of their own under the others.
-    fn library_toolbar(&mut self, ui: &mut Ui, show: &mut Show) {
-        let chips = self.library_chips();
-        let chips_id = egui::Id::unique("library-chips-width");
-        let chips_w = if chips.is_empty() { 0.0 } else { remembered_width(ui, chips_id, 0.0) };
-        let tools_id = egui::Id::unique("library-tools");
-        let tools_w = remembered_width(ui, tools_id, 300.0);
-        let one_row = ui.available_width() >= LIBRARY_SEARCH_W + 16.0 + chips_w + 24.0 + tools_w;
-        let mut measured = None;
-        let mut row = SplitRow::new(ui, tools_id, 34.0);
-        row.left(ui, |ui| {
-            let mut s = std::mem::take(&mut self.library_search);
-            search_field(ui, &mut s, "Search instances", LIBRARY_SEARCH_W.min(ui.available_width()));
-            self.library_search = s;
-            if one_row && !chips.is_empty() {
-                ui.add_space(8.0);
-                measured = Some(filter_chips(ui, &chips, show));
-            }
-        });
-        row.right(ui, |ui| {
-            let sort = Sort::of(&self.settings);
-            let mut picked = None;
-            egui::ComboBox::from_id_salt("library-sort").selected_text(sort.label()).width(176.0).show_ui(ui, |ui| {
-                for s in Sort::ALL {
-                    if ui.selectable_label(sort == s, s.label()).clicked() {
-                        picked = Some(s);
-                    }
-                }
-            });
-            if let Some(s) = picked {
-                self.set_library_sort(s);
-            }
-            let list = self.settings.library_view == "list";
-            if let Some(i) = segmented(ui, &["Grid", "List"], usize::from(list)) {
-                let view = if i == 1 { "list" } else { "grid" };
-                if self.settings.library_view != view {
-                    self.settings.library_view = view.to_string();
-                    self.save_settings();
-                }
-            }
-        });
-        row.finish(ui);
-        if !one_row && !chips.is_empty() {
-            ui.add_space(4.0);
-            ui.horizontal_wrapped(|ui| measured = Some(filter_chips(ui, &chips, show)));
-        }
-        if let Some(w) = measured {
-            remember_width(ui, chips_id, w);
+    /// Mark an instance as a favourite or not, in its own file.
+    fn set_favorite(&mut self, folder: &str, on: bool) {
+        let Some(inst) = self.instances.iter_mut().find(|i| i.folder == folder) else { return };
+        set_favorite(inst, on);
+        if let Err(e) = inst.save() {
+            self.toast_err(format!("Couldn't save the favourite: {e:#}"));
         }
     }
 
-    /// The filter chips the Library offers: All, one per loader its instances use (when there is more than one), and
-    /// Running while a game is. Each with how many of the instances matching the search it would show.
+    /// The filter chips of the Library and, at the end of their line, how it is sorted. The chips wrap onto more lines
+    /// in a narrow window; the sorting stays at the right of the first.
+    fn library_toolbar(&mut self, ui: &mut Ui, show: &mut Show) {
+        let chips = self.library_chips();
+        let sort = Sort::of(&self.settings);
+        let sort_id = egui::Id::unique("library-sort-width");
+        let sort_w = remembered_width(ui, sort_id, 190.0);
+        let room = ui.available_width();
+        let mut picked = None;
+        ui.horizontal_top(|ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
+            let left_w = (room - sort_w - 16.0).max(120.0);
+            ui.allocate_ui_with_layout(
+                vec2(left_w, 30.0),
+                Layout::left_to_right(Align::Center).with_main_wrap(true),
+                |ui| {
+                    ui.spacing_mut().item_spacing = vec2(8.0, 8.0);
+                    ui.set_max_width(left_w);
+                    filter_chips(ui, &chips, show);
+                },
+            );
+            ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
+                let label = format!("Sort: {}", sort.short());
+                let (resp, _) = super::instance_menu::secondary_menu(ui, &label, |ui| {
+                    ui.set_min_width(220.0);
+                    for s in Sort::ALL {
+                        if ui.selectable_label(sort == s, s.label()).clicked() {
+                            picked = Some(s);
+                        }
+                    }
+                });
+                remember_width(ui, sort_id, resp.rect.width());
+            });
+        });
+        if let Some(s) = picked {
+            self.set_library_sort(s);
+        }
+    }
+
+    /// The filter chips the Library offers: All, Favourites when there are any, one per loader its instances use (when
+    /// there is more than one), and Running while a game is. Each with how many of the instances matching the search
+    /// it would show.
     fn library_chips(&self) -> Vec<(Show, String)> {
         let q = self.library_search.trim().to_lowercase();
         let found: Vec<&Instance> = self.instances.iter().filter(|i| matches_search(i, &q)).collect();
         let mut kinds: Vec<&str> = self.instances.iter().map(loader_kind).collect();
         kinds.sort_by_key(|k| loader_rank(k));
         kinds.dedup();
-        let running = found.iter().filter(|i| self.is_playing(&i.folder)).count();
-        let any_running = self.instances.iter().any(|i| self.is_playing(&i.folder));
-        if kinds.len() < 2 && !any_running {
-            return Vec::new();
+        let mut chips = vec![(Show::All, format!("All ({})", found.len()))];
+        if self.instances.iter().any(is_favorite) {
+            let n = found.iter().filter(|i| is_favorite(i)).count();
+            chips.push((Show::Favorites, format!("Favourites ({n})")));
         }
-        let mut chips = vec![(Show::All, format!("All  {}", found.len()))];
         if kinds.len() >= 2 {
             for kind in kinds {
                 let n = found.iter().filter(|i| loader_kind(i) == kind).count();
-                chips.push((Show::Loader(kind.to_string()), format!("{kind}  {n}")));
+                chips.push((Show::Loader(kind.to_string()), format!("{kind} ({n})")));
             }
         }
-        if any_running {
-            chips.push((Show::Running, format!("Running  {running}")));
+        if self.instances.iter().any(|i| self.is_playing(&i.folder)) {
+            let n = found.iter().filter(|i| self.is_playing(&i.folder)).count();
+            chips.push((Show::Running, format!("Running ({n})")));
         }
         chips
     }
 
-    /// The instances that match the search and the filter, sorted as chosen: as tiles or as rows. Returns what was
+    /// The instances that match the search and the filter, sorted as chosen: as cards or as rows. Returns what was
     /// asked of them.
-    fn library_list(&self, ui: &mut Ui, show: &Show) -> LibraryOut {
+    fn library_list(&mut self, ui: &mut Ui, show: &Show) -> LibraryOut {
         let mut out = LibraryOut::default();
         let q = self.library_search.trim().to_lowercase();
-        let mut list: Vec<&Instance> = self
-            .instances
-            .iter()
-            .filter(|i| matches_search(i, &q) && show.admits(i, self.is_playing(&i.folder)))
-            .collect();
         let sort = Sort::of(&self.settings);
-        let added = if sort == Sort::Added { added_times(ui.ctx(), &self.instances) } else { Default::default() };
-        sort_instances(&mut list, sort, |i| added.get(&i.folder).copied().unwrap_or(0));
-        if list.is_empty() {
+        // the positions of the instances shown, in order (by position, so the covers can be fetched for them)
+        let order: Vec<usize> = {
+            let mut list: Vec<&Instance> = self
+                .instances
+                .iter()
+                .filter(|i| matches_search(i, &q) && show.admits(i, self.is_playing(&i.folder)))
+                .collect();
+            let added = if sort == Sort::Added { added_times(ui.ctx(), &self.instances) } else { Default::default() };
+            sort_instances(&mut list, sort, |i| added.get(&i.folder).copied().unwrap_or(0));
+            list.iter().filter_map(|i| self.instances.iter().position(|x| std::ptr::eq(x, *i))).collect()
+        };
+        if order.is_empty() {
             card(ui, |ui| {
                 if self.instances.is_empty() {
                     ui.label(RichText::new("Nothing here yet").size(FS_SECTION).semibold());
@@ -542,30 +657,148 @@ impl App {
             return out;
         }
         if self.settings.library_view == "list" {
-            self.library_rows(ui, &list, sort, &mut out);
+            let size = vec2(LIST_ICON, LIST_ICON);
+            let covers: Vec<egui::TextureHandle> = order.iter().map(|&i| self.cover_at(i, size, false)).collect();
+            self.library_rows(ui, &order, &covers, sort, &mut out);
             return out;
         }
+        let size = vec2(LIB_CARD_H * 0.8, LIB_CARD_H - 2.0 * LIB_CARD_PAD);
+        let covers: Vec<egui::TextureHandle> = order.iter().map(|&i| self.cover_at(i, size, false)).collect();
         ScrollArea::vertical().id_salt("library").auto_shrink(false).show(ui, |ui| {
-            // room above the first row for a tile that rises
+            // room above the first row for a card that rises
             ui.add_space(4.0);
-            let (per_row, width) = grid_columns(ui.available_width(), 248.0, 16.0);
-            ui.spacing_mut().item_spacing = vec2(16.0, 16.0);
-            for row in list.chunks(per_row) {
+            let (per_row, width) = grid_columns(ui.available_width(), LIB_CARD_MIN, LIB_CARD_GAP);
+            ui.spacing_mut().item_spacing = vec2(LIB_CARD_GAP, LIB_CARD_GAP);
+            for (r, row) in order.chunks(per_row).enumerate() {
                 ui.horizontal(|ui| {
-                    for inst in row {
-                        if let Some(a) = self.instance_card(ui, inst, width) {
+                    for (k, &i) in row.iter().enumerate() {
+                        let cover = &covers[r * per_row + k];
+                        if let Some(a) = self.library_card(ui, &self.instances[i], cover, width, &mut out) {
                             out.act = Some(a);
                         }
                     }
                 });
             }
+            ui.add_space(8.0);
         });
         out
     }
 
+    /// One instance as a card of the Library's grid: its cover as a picture on the left, and beside it the name with
+    /// the favourite star, what it is, its mods and when it was played, and Play with the menu. The card lifts a
+    /// little under the pointer and opens the instance when clicked.
+    fn library_card(
+        &self,
+        ui: &mut Ui,
+        inst: &Instance,
+        cover: &egui::TextureHandle,
+        width: f32,
+        out: &mut LibraryOut,
+    ) -> Option<Act> {
+        let mut act = None;
+        let (slot, resp) = ui.allocate_exact_size(vec2(width, LIB_CARD_H), Sense::click());
+        let hot = ui.rect_contains_pointer(slot);
+        let folder = inst.folder.clone();
+        let playing = self.is_playing(&folder);
+        let t = motion::hover(ui, resp.id, hot);
+        let rect = slot.translate(vec2(0.0, -2.0 * t));
+        let side = rect.height() - 2.0 * LIB_CARD_PAD;
+        let pic = egui::Rect::from_min_size(
+            rect.min + vec2(LIB_CARD_PAD, LIB_CARD_PAD),
+            vec2((side * 0.86).min(rect.width() * 0.34).round(), side),
+        );
+        if ui.is_rect_visible(slot) {
+            let p = ui.painter();
+            let round = CornerRadius::same(R_CARD);
+            p.add(lifted_shadow(t).as_shape(rect, round));
+            p.rect_filled(rect, round, motion::mix(c_card(), c_raised(), t));
+            let edge = if playing { c_accent() } else { motion::mix(c_border(), c_control().gamma_multiply(0.7), t) };
+            p.rect_stroke(rect, round, Stroke::new(1.0, edge), egui::StrokeKind::Inside);
+            glass_edge(p, rect, R_CARD);
+            paint_cover_tex(ui, cover, pic, CornerRadius::same(R_CONTROL + 2));
+        }
+        let badge =
+            egui::Rect::from_min_size(pic.left_bottom() + vec2(8.0, -8.0 - LIB_BADGE), vec2(LIB_BADGE, LIB_BADGE));
+        self.picture_badge(ui, inst, badge);
+        focus_ring(ui, &resp, rect, R_CARD);
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, inst.name()));
+        let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+
+        let inner = egui::Rect::from_min_max(
+            egui::pos2(pic.right() + 16.0, rect.top() + LIB_CARD_PAD + 2.0),
+            rect.right_bottom() - vec2(LIB_CARD_PAD, LIB_CARD_PAD),
+        );
+        let mut text = ui.new_child(
+            UiBuilder::new()
+                .max_rect(egui::Rect::from_min_max(inner.min, egui::pos2(inner.right() - 32.0, inner.bottom())))
+                .layout(Layout::top_down(Align::Min)),
+        );
+        text.spacing_mut().item_spacing.y = 6.0;
+        text.add(egui::Label::new(RichText::new(inst.name()).font(super::fonts::semibold(16.0))).truncate());
+        text.set_max_width(inner.width());
+        self.loader_line(&mut text, inst, true);
+        let started = self.games.values().find(|g| g.folder == folder && g.active()).map(|g| g.started.elapsed());
+        text.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            match started {
+                Some(t) => {
+                    live_dot(ui);
+                    let note = format!("Playing \u{00B7} {}", elapsed_text(t));
+                    ui.add(egui::Label::new(RichText::new(note).size(FS_META).color(c_accent())).truncate());
+                }
+                None => {
+                    let when =
+                        if inst.last_played() > 0 { time_ago(inst.last_played()) } else { "Not played yet".into() };
+                    let note = format!("{} \u{00B7} {}", mods_text(inst.mod_count), when.to_lowercase());
+                    ui.add(egui::Label::new(RichText::new(note).size(FS_META).color(c_faint())).truncate());
+                }
+            }
+        });
+        // the star at the top right: a favourite's is amber, the others' a faint outline until pointed at
+        let mut star = ui.new_child(
+            UiBuilder::new()
+                .max_rect(egui::Rect::from_min_size(
+                    egui::pos2(inner.right() - 28.0, inner.top() - 4.0),
+                    vec2(28.0, 28.0),
+                ))
+                .layout(Layout::top_down(Align::Min)),
+        );
+        let fav = is_favorite(inst);
+        if star_toggle(&mut star, fav, hot).clicked() {
+            out.favorite = Some((folder.clone(), !fav));
+        }
+        // Play and the menu along the bottom
+        let mut foot = ui.new_child(
+            UiBuilder::new()
+                .max_rect(egui::Rect::from_min_max(
+                    egui::pos2(inner.left(), inner.bottom() - 32.0),
+                    inner.right_bottom(),
+                ))
+                .layout(Layout::left_to_right(Align::Center)),
+        );
+        foot.spacing_mut().item_spacing.x = 6.0;
+        if play_pill(&mut foot, playing, hot).clicked() {
+            act = Some(if playing { Act::Stop(folder.clone()) } else { Act::Play(folder.clone()) });
+        }
+        if let Some(Some(a)) = kebab_menu(&mut foot, |ui| self.instance_menu(ui, inst)) {
+            act = Some(a);
+        }
+        if act.is_none() && resp.clicked() {
+            act = Some(Act::Open(folder));
+        }
+        act
+    }
+
     /// The Library as a list: one panel with a head that names the columns (and sorts by one when it is clicked) and
     /// a row per instance under it. The head stays put while the rows scroll.
-    fn library_rows(&self, ui: &mut Ui, list: &[&Instance], sort: Sort, out: &mut LibraryOut) {
+    fn library_rows(
+        &self,
+        ui: &mut Ui,
+        order: &[usize],
+        covers: &[egui::TextureHandle],
+        sort: Sort,
+        out: &mut LibraryOut,
+    ) {
         let panel = card_frame().inner_margin(egui::Margin::same(6)).show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.spacing_mut().item_spacing.y = 0.0;
@@ -582,11 +815,11 @@ impl App {
                 .auto_shrink([false, true])
                 .max_height(ui.available_height())
                 .show(ui, |ui| {
-                    for (n, inst) in list.iter().enumerate() {
+                    for (n, &i) in order.iter().enumerate() {
                         if n > 0 {
                             ui.add_space(2.0);
                         }
-                        if let Some(a) = self.instance_row(ui, inst, &cols, width) {
+                        if let Some(a) = self.instance_row(ui, &self.instances[i], &covers[n], &cols, width, out) {
                             out.act = Some(a);
                         }
                     }
@@ -596,15 +829,28 @@ impl App {
         glass_edge(ui.painter(), panel.response.rect, R_CARD);
     }
 
-    /// One instance as a row of the list: the picture and the name, the columns there is room for, and Play and the
-    /// menu at the end. The row is pointed at as a whole and opens the instance when clicked.
-    fn instance_row(&self, ui: &mut Ui, inst: &Instance, cols: &ListColumns, width: f32) -> Option<Act> {
+    /// One instance as a row of the list: a small square of its cover and the name (with the star of a favourite),
+    /// the columns there is room for, and Play and the menu at the end. The row is pointed at as a whole and opens
+    /// the instance when clicked.
+    fn instance_row(
+        &self,
+        ui: &mut Ui,
+        inst: &Instance,
+        cover: &egui::TextureHandle,
+        cols: &ListColumns,
+        width: f32,
+        out: &mut LibraryOut,
+    ) -> Option<Act> {
         let mut act = None;
         let (row, resp) = ui.allocate_exact_size(vec2(width, LIST_ROW_H), Sense::click());
         let hot = ui.rect_contains_pointer(row);
         let folder = inst.folder.clone();
         let playing = self.is_playing(&folder);
         let t = motion::hover(ui, resp.id, hot);
+        let spans = cols.spans(row.left(), row.right());
+        let mid = row.center().y;
+        let thumb =
+            egui::Rect::from_center_size(egui::pos2(spans.icon + LIST_ICON / 2.0, mid), vec2(LIST_ICON, LIST_ICON));
         if ui.is_rect_visible(row) {
             if t > 0.0 {
                 ui.painter().rect_filled(row, CornerRadius::same(R_CONTROL), c_hover().gamma_multiply(t));
@@ -615,24 +861,33 @@ impl App {
                     egui::Rect::from_min_size(egui::pos2(row.left() + 1.0, row.center().y - 10.0), vec2(3.0, 20.0));
                 ui.painter().rect_filled(mark, CornerRadius::same(2), c_accent());
             }
+            paint_cover_tex(ui, cover, thumb, CornerRadius::same(R_TAG + 1));
         }
+        let badge = egui::Rect::from_min_size(
+            thumb.right_bottom() - vec2(LIST_BADGE - 5.0, LIST_BADGE - 5.0),
+            vec2(LIST_BADGE, LIST_BADGE),
+        );
+        self.picture_badge(ui, inst, badge);
         focus_ring(ui, &resp, row, R_CONTROL);
         resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, inst.name()));
         let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
 
-        let spans = cols.spans(row.left(), row.right());
-        let mid = row.center().y;
-        let mut icon = ui.new_child(UiBuilder::new().max_rect(egui::Rect::from_center_size(
-            egui::pos2(spans.icon + LIST_ICON / 2.0, mid),
-            vec2(LIST_ICON, LIST_ICON),
-        )));
-        self.instance_icon(&mut icon, inst, LIST_ICON);
+        let fav = is_favorite(inst);
         list_cell(ui, row, spans.name, |ui| {
-            ui.add(egui::Label::new(RichText::new(inst.name()).font(super::fonts::semibold(FS_BODY))).truncate());
+            ui.spacing_mut().item_spacing.x = 2.0;
+            let name_w = ui.available_width() - 28.0;
+            ui.scope(|ui| {
+                ui.set_max_width(name_w);
+                ui.add(egui::Label::new(RichText::new(inst.name()).font(super::fonts::semibold(FS_BODY))).truncate());
+            });
+            if star_toggle(ui, fav, hot).clicked() {
+                out.favorite = Some((folder.clone(), !fav));
+            }
         });
         if let Some(x) = spans.version {
             list_cell(ui, row, x, |ui| {
-                ui.add(egui::Label::new(RichText::new(inst.mc_version()).color(c_muted())).truncate());
+                let text = RichText::new(inst.mc_version()).font(super::fonts::mono(13.0)).color(c_muted());
+                ui.add(egui::Label::new(text).truncate());
             });
         }
         if let Some(x) = spans.loader {
@@ -641,13 +896,13 @@ impl App {
                     Some((kind, ver)) => (format!("{kind} {ver}"), loader_color(kind)),
                     None => ("Vanilla".to_string(), c_muted()),
                 };
-                ui.add(egui::Label::new(RichText::new(text).color(color)).truncate());
+                ui.add(egui::Label::new(RichText::new(text).font(super::fonts::mono(13.0)).color(color)).truncate());
             });
         }
         if let Some(x) = spans.mods {
             list_cell(ui, row, x, |ui| {
                 let n = if inst.mod_count > 0 { inst.mod_count.to_string() } else { "\u{2014}".to_string() };
-                ui.label(RichText::new(n).color(c_muted()));
+                ui.label(RichText::new(n).font(super::fonts::mono(13.0)).color(c_muted()));
             });
         }
         if let Some(x) = spans.played {
@@ -1128,22 +1383,18 @@ impl App {
     }
 }
 
-/// The height of an instance's tile, and the size of its picture.
-const TILE_H: f32 = 116.0;
-const TILE_ICON: f32 = 46.0;
-/// The picture of the instance on Home, and the air around what is on its panel.
-const HERO_ICON: f32 = 112.0;
-const HERO_PAD: f32 = 24.0;
 /// The picture at the top of an instance's page, and the air around the panel it is on.
 const PAGE_ICON: f32 = 64.0;
 const PAGE_PAD: f32 = 20.0;
 
-/// What the Library shows: every instance, those of one loader (`Vanilla` for plain Minecraft), or those running.
+/// What the Library shows: every instance, those of one loader (`Vanilla` for plain Minecraft), the favourites, or
+/// those running.
 #[derive(Clone, Debug, Default, PartialEq)]
 enum Show {
     #[default]
     All,
     Loader(String),
+    Favorites,
     Running,
 }
 
@@ -1152,6 +1403,7 @@ impl Show {
         match self {
             Show::All => true,
             Show::Loader(kind) => loader_kind(inst) == kind,
+            Show::Favorites => is_favorite(inst),
             Show::Running => running,
         }
     }
@@ -1224,6 +1476,18 @@ impl Sort {
             Sort::Added => "Recently added first",
             Sort::Version => "Newest Minecraft first",
             Sort::Loader => "By loader",
+        }
+    }
+
+    /// The sorting in a word or two, after "Sort:" on its button.
+    fn short(self) -> &'static str {
+        match self {
+            Sort::Name => "Name",
+            Sort::LastPlayed => "Last played",
+            Sort::MostPlayed => "Most played",
+            Sort::Added => "Recently added",
+            Sort::Version => "Newest Minecraft",
+            Sort::Loader => "Loader",
         }
     }
 
@@ -1305,6 +1569,8 @@ struct LibraryOut {
     sort: Option<Sort>,
     /// "Clear filters" on the empty list.
     clear: bool,
+    /// A star was clicked: make this instance (its folder) a favourite, or not.
+    favorite: Option<(String, bool)>,
 }
 
 /// The filter chips in a row; the chosen one is lit, and choosing it again goes back to All. Returns how wide the
@@ -1457,6 +1723,290 @@ fn list_head(ui: &mut Ui, head: egui::Rect, cols: &ListColumns, current: Sort) -
     picked
 }
 
+/// Whether an instance is one of the player's favourites (`favorite` in its file's fields).
+fn is_favorite(inst: &Instance) -> bool {
+    inst.file.launcher.extras.get("favorite").and_then(|v| v.as_bool()).unwrap_or(false)
+}
+
+/// Mark an instance as a favourite in its file's fields, or not (which removes the field). The caller saves the file.
+fn set_favorite(inst: &mut Instance, on: bool) {
+    if on {
+        inst.file.launcher.extras.insert("favorite".into(), serde_json::Value::Bool(true));
+    } else {
+        inst.file.launcher.extras.remove("favorite");
+    }
+}
+
+/// "No mods", "1 mod", "12 mods".
+fn mods_text(n: usize) -> String {
+    match n {
+        0 => "No mods".to_string(),
+        1 => "1 mod".to_string(),
+        n => format!("{n} mods"),
+    }
+}
+
+/// "1.21.1 · Fabric 0.20.0" in the monospace face at `size`: the version in grey, the loader in its own colour (with
+/// its version when `version` is true), "Vanilla" for plain Minecraft.
+fn loader_job(inst: &Instance, size: f32, version: bool) -> egui::text::LayoutJob {
+    let part = |color: Color32| egui::TextFormat { font_id: super::fonts::mono(size), color, ..Default::default() };
+    let mut job = egui::text::LayoutJob::default();
+    job.append(inst.mc_version(), 0.0, part(c_muted()));
+    job.append(" \u{00B7} ", 0.0, part(c_faint()));
+    match inst.loader() {
+        Some((kind, ver)) if version => job.append(&format!("{kind} {ver}"), 0.0, part(loader_color(kind))),
+        Some((kind, _)) => job.append(kind, 0.0, part(loader_color(kind))),
+        None => job.append("Vanilla", 0.0, part(c_muted())),
+    }
+    job
+}
+
+/// How many shortenings [`banner_meta`] has.
+const BANNER_META_LEVELS: usize = 3;
+
+/// "1.21.1 · Fabric 0.20.0 · 7 mods" in light monospace type, for the banner's cover. `level` 0 is all of it; each next
+/// level leaves out one more part from the end (the mods, then the loader's version).
+fn banner_meta(inst: &Instance, level: usize) -> egui::text::LayoutJob {
+    let part = |a: u8| egui::TextFormat {
+        font_id: super::fonts::mono(14.0),
+        color: Color32::from_white_alpha(a),
+        ..Default::default()
+    };
+    let mut job = egui::text::LayoutJob::default();
+    job.append(inst.mc_version(), 0.0, part(225));
+    job.append(" \u{00B7} ", 0.0, part(120));
+    match inst.loader() {
+        Some((kind, ver)) if level < 2 => job.append(&format!("{kind} {ver}"), 0.0, part(225)),
+        Some((kind, _)) => job.append(kind, 0.0, part(225)),
+        None => job.append("Vanilla", 0.0, part(225)),
+    }
+    if level == 0 {
+        job.append(" \u{00B7} ", 0.0, part(120));
+        job.append(&mods_text(inst.mod_count), 0.0, part(225));
+    }
+    job
+}
+
+/// A shade of black over the left of `rect` (whose corners are rounded by `radius`): `alpha` at the left edge, fading
+/// evenly to nothing `reach` points in.
+fn shade_left(p: &egui::Painter, rect: egui::Rect, radius: u8, alpha: u8, reach: f32) {
+    let r = radius as f32;
+    let at =
+        |x: f32| Color32::from_black_alpha((alpha as f32 * (1.0 - (x - rect.left()) / reach).clamp(0.0, 1.0)) as u8);
+    // the band along the rounded left edge is one shade (it is narrow), the rest strips that fade
+    let mut edge = Vec::new();
+    for i in 0..=8 {
+        let a = std::f32::consts::FRAC_PI_2 * i as f32 / 8.0;
+        edge.push(egui::pos2(rect.left() + r - r * a.sin(), rect.bottom() - r + r * a.cos()));
+    }
+    for i in 0..=8 {
+        let a = std::f32::consts::FRAC_PI_2 * i as f32 / 8.0;
+        edge.push(egui::pos2(rect.left() + r - r * a.cos(), rect.top() + r - r * a.sin()));
+    }
+    p.add(egui::Shape::convex_polygon(edge, at(rect.left() + r / 2.0), Stroke::NONE));
+    let mut mesh = egui::Mesh::default();
+    let steps = 24;
+    for i in 0..=steps {
+        let x = rect.left() + r + (reach - r) * i as f32 / steps as f32;
+        mesh.colored_vertex(egui::pos2(x, rect.top()), at(x));
+        mesh.colored_vertex(egui::pos2(x, rect.bottom()), at(x));
+        if i > 0 {
+            let k = 2 * i as u32;
+            mesh.add_triangle(k - 2, k - 1, k);
+            mesh.add_triangle(k - 1, k, k + 1);
+        }
+    }
+    p.add(egui::Shape::mesh(mesh));
+}
+
+/// Paint a cover's texture filling `rect`, cropped to its shape rather than stretched.
+fn paint_cover_tex(ui: &Ui, tex: &egui::TextureHandle, rect: egui::Rect, radius: CornerRadius) {
+    if !ui.is_rect_visible(rect) {
+        return;
+    }
+    let [w, h] = tex.size();
+    egui::Image::from_texture((tex.id(), vec2(w as f32, h as f32)))
+        .uv(super::workbench::cover_uv((w, h), rect.size()))
+        .corner_radius(radius)
+        .paint_at(ui, rect);
+}
+
+/// The height of the cover on a Home tile `width` wide.
+fn tile_cover_h(width: f32) -> f32 {
+    (width * 0.52).round().clamp(92.0, 150.0)
+}
+
+/// The grid or list switch of the Library: two small squares with a picture each, the chosen one raised. Returns
+/// `Some(true)` when the list was chosen, `Some(false)` for the grid.
+fn view_switch(ui: &mut Ui, list: bool) -> Option<bool> {
+    let (outer, _) = ui.allocate_exact_size(vec2(2.0 * 32.0 + 6.0, 34.0), Sense::hover());
+    ui.painter().rect(
+        outer,
+        CornerRadius::same(R_CONTROL),
+        c_field(),
+        Stroke::new(1.0, c_border()),
+        egui::StrokeKind::Inside,
+    );
+    let mut picked = None;
+    for (i, (label, is_list)) in [("Grid", false), ("List", true)].into_iter().enumerate() {
+        let rect = egui::Rect::from_min_size(outer.min + vec2(3.0 + 32.0 * i as f32, 3.0), vec2(32.0, 28.0));
+        let resp = ui.interact(rect, ui.scope_id().with(("library-view", i)), Sense::click());
+        let on = list == is_list;
+        if on {
+            ui.painter().rect_filled(
+                rect,
+                CornerRadius::same(R_CONTROL - 3),
+                if is_dark() { c_active() } else { c_card() },
+            );
+        }
+        let t = motion::hover(ui, resp.id, on || resp.hovered());
+        let color = motion::mix(c_faint(), c_text(), t);
+        let c = rect.center();
+        if is_list {
+            for dy in [-4.5, 0.0, 4.5] {
+                ui.painter().circle_filled(c + vec2(-5.5, dy), 1.3, color);
+                ui.painter().hline(c.x - 2.5..=c.x + 6.5, c.y + dy, Stroke::new(1.6, color));
+            }
+        } else {
+            for (dx, dy) in [(-3.5, -3.5), (3.5, -3.5), (-3.5, 3.5), (3.5, 3.5)] {
+                let cell = egui::Rect::from_center_size(c + vec2(dx, dy), vec2(5.5, 5.5));
+                ui.painter().rect_filled(cell, CornerRadius::same(1), color);
+            }
+        }
+        focus_ring(ui, &resp, rect, R_CONTROL - 3);
+        resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, on, label));
+        if resp.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(label).clicked() && !on {
+            picked = Some(is_list);
+        }
+    }
+    picked
+}
+
+/// A five-pointed star centred on `c`, `r` from its middle to a point: filled, or as an outline.
+fn paint_star(p: &egui::Painter, c: egui::Pos2, r: f32, color: Color32, filled: bool) {
+    let points: Vec<egui::Pos2> = (0..10)
+        .map(|i| {
+            let a = -std::f32::consts::FRAC_PI_2 + i as f32 * std::f32::consts::PI / 5.0;
+            let reach = if i % 2 == 0 { r } else { r * 0.46 };
+            c + vec2(a.cos(), a.sin()) * reach
+        })
+        .collect();
+    if filled {
+        // a star is not convex: it is filled as a fan of triangles from its middle
+        let mut mesh = egui::Mesh::default();
+        mesh.colored_vertex(c, color);
+        for p in &points {
+            mesh.colored_vertex(*p, color);
+        }
+        for i in 0..10u32 {
+            mesh.add_triangle(0, 1 + i, 1 + (i + 1) % 10);
+        }
+        p.add(egui::Shape::mesh(mesh));
+    }
+    p.add(egui::Shape::closed_line(points, Stroke::new(if filled { 1.0 } else { 1.4 }, color)));
+}
+
+/// The star that makes an instance a favourite: amber when it is one; otherwise a faint outline while its card or row
+/// is pointed at (`shown`), and nothing at rest, so a page of instances isn't a page of stars.
+fn star_toggle(ui: &mut Ui, on: bool, shown: bool) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(vec2(28.0, 28.0), Sense::click());
+    let t = motion::hover(ui, resp.id, resp.hovered());
+    let seen = motion::toward(ui.ctx(), resp.id.with("seen"), on || shown || resp.has_focus(), motion::FAST);
+    if ui.is_rect_visible(rect) {
+        if t > 0.0 {
+            ui.painter().rect_filled(rect, CornerRadius::same(R_CONTROL), c_hover().gamma_multiply(t));
+        }
+        let color = if on { c_secondary() } else { motion::mix(c_faint(), c_secondary(), t).gamma_multiply(seen) };
+        if seen > 0.0 {
+            paint_star(ui.painter(), rect.center() + vec2(0.0, 0.5), 7.5, color, on);
+        }
+    }
+    focus_ring(ui, &resp, rect, R_CONTROL);
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, true, on, "Favourite"));
+    let tip = if on { "Remove from favourites" } else { "Add to favourites" };
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(tip)
+}
+
+/// Play (Stop while it runs) with its name, on a card of the Library: neutral at rest, the brand gradient fading in as
+/// the card is pointed at, like [`play_chip`].
+fn play_pill(ui: &mut Ui, playing: bool, card_hot: bool) -> egui::Response {
+    let text = if playing { "Stop" } else { "Play" };
+    let galley = ui.painter().layout_no_wrap(text.to_string(), super::fonts::semibold(13.0), Color32::PLACEHOLDER);
+    let (rect, resp) = ui.allocate_exact_size(vec2(galley.size().x + 46.0, 32.0), Sense::click());
+    let hot = resp.hovered() || resp.is_pointer_button_down_on();
+    let t = motion::hover(ui, resp.id, !playing && (hot || card_hot));
+    if ui.is_rect_visible(rect) {
+        let p = ui.painter();
+        let round = CornerRadius::same(R_CONTROL);
+        let fg = if playing {
+            let bg = if hot { c_danger_hover() } else { c_danger_bg() };
+            p.rect(rect, round, bg, Stroke::new(1.0, c_danger_line()), egui::StrokeKind::Inside);
+            c_danger()
+        } else {
+            p.rect(
+                rect,
+                round,
+                c_field(),
+                Stroke::new(1.0, c_control().gamma_multiply(1.0 - t)),
+                egui::StrokeKind::Inside,
+            );
+            if t > 0.0 {
+                motion::gradient_rect(p, rect, R_CONTROL, c_accent().gamma_multiply(t), c_accent2().gamma_multiply(t));
+            }
+            motion::mix(c_text(), c_on_accent(), t)
+        };
+        let left = rect.center().x - (galley.size().x + 20.0) / 2.0;
+        let icon = if playing { Icon::Stop } else { Icon::Play };
+        icons::paint(p, icon, egui::pos2(left + 6.0, rect.center().y), 12.0, fg);
+        p.galley(egui::pos2(left + 20.0, rect.center().y - galley.size().y / 2.0), galley, fg);
+    }
+    focus_ring(ui, &resp, rect, R_CONTROL);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, text));
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+/// A square button with three dots over a cover: dark glass with a light rim, so it reads on any picture.
+fn cover_button(ui: &mut Ui, side: f32) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(vec2(side, side), Sense::click());
+    let open = egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&resp));
+    let t = motion::hover(ui, resp.id, resp.hovered() || open);
+    if ui.is_rect_visible(rect) {
+        let p = ui.painter();
+        let round = CornerRadius::same(R_CONTROL + 2);
+        let fill = Color32::from_black_alpha((105.0 + 45.0 * t) as u8);
+        let rim = Color32::from_white_alpha((46.0 + 50.0 * t) as u8);
+        p.rect(rect, round, fill, Stroke::new(1.0, rim), egui::StrokeKind::Inside);
+        for dx in [-6.0, 0.0, 6.0] {
+            p.circle_filled(rect.center() + vec2(dx, 0.0), 2.1, ON_COVER);
+        }
+    }
+    focus_ring(ui, &resp, rect, R_CONTROL + 2);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "More ways to play"));
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+/// Words over a cover: light in both looks, since a cover is dark enough under its shade in either.
+const ON_COVER: Color32 = Color32::from_rgb(0xF4, 0xF7, 0xFA);
+/// The brand colour over a cover: the bright one of the dark look, in both looks.
+const COVER_ACCENT: Color32 = Color32::from_rgb(0x2D, 0xD4, 0xAA);
+/// How tall Home's banner gets, from a narrow window to a wide one.
+const BANNER_MIN_H: f32 = 252.0;
+const BANNER_MAX_H: f32 = 330.0;
+/// The instance's own picture over the corner of the banner, a Home tile, a Library card and a list row.
+const BANNER_BADGE: f32 = 52.0;
+const TILE_BADGE: f32 = 30.0;
+const LIB_BADGE: f32 = 28.0;
+const LIST_BADGE: f32 = 16.0;
+/// The tiles of Home: the least width of one, the gap between them, and the height under the cover.
+const HOME_TILE_MIN: f32 = 196.0;
+const HOME_TILE_GAP: f32 = 14.0;
+const TILE_INFO_H: f32 = 84.0;
+/// The cards of the Library's grid: their height, the air inside them, their least width and the gap between them.
+const LIB_CARD_H: f32 = 148.0;
+const LIB_CARD_PAD: f32 = 12.0;
+const LIB_CARD_MIN: f32 = 330.0;
+const LIB_CARD_GAP: f32 = 16.0;
+
 /// From this width on, Home puts the news beside the instances instead of under them.
 const HOME_SPLIT: f32 = 1100.0;
 /// The gap between the columns of Home and of an instance's overview.
@@ -1526,16 +2076,6 @@ fn hero_ground(ui: &Ui, rect: egui::Rect, glow_at: egui::Pos2, running: bool) {
     motion::glow(&lit, far, reach * 1.5, with_alpha(c_accent2(), (a2 * boost) as u8));
     p.rect_stroke(rect, radius, Stroke::new(1.0, c_border()), egui::StrokeKind::Inside);
     glass_edge(p, rect, R_CARD + 4);
-}
-
-/// The number of things next to a title, in a small quiet pill.
-fn count_pill(ui: &mut Ui, n: usize) {
-    let text = n.to_string();
-    let galley = ui.painter().layout_no_wrap(text.clone(), super::fonts::medium(FS_META), c_muted());
-    let (rect, resp) = ui.allocate_exact_size(vec2((galley.size().x + 14.0).max(24.0), 22.0), Sense::hover());
-    ui.painter().rect(rect, CornerRadius::same(11), c_field(), Stroke::new(1.0, c_border()), egui::StrokeKind::Inside);
-    ui.painter().galley(rect.center() - galley.size() / 2.0, galley, c_muted());
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, &text));
 }
 
 /// The green dot of something that is running, with a soft light around it.
@@ -1770,6 +2310,44 @@ mod tests {
             }
             assert!(s.actions.1 <= w);
         }
+    }
+
+    #[test]
+    fn a_favourite_is_kept_in_the_instance_file_and_filtered_on() {
+        let root = std::env::temp_dir().join(format!("bf-library-favourite-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let mut a = inst("Alpha", "1.21.1", Some("Fabric"), 100, 9);
+        a.root = root.clone();
+        assert!(!is_favorite(&a));
+        set_favorite(&mut a, true);
+        assert!(is_favorite(&a));
+        a.save().unwrap();
+        // it is in the launcher's part of the file, next to the other fields BlockForge keeps there
+        let written: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(root.join("instance.json")).unwrap()).unwrap();
+        assert_eq!(written["launcher"]["favorite"], serde_json::Value::Bool(true));
+        let mut back = crate::instances::load_one(&root).expect("the instance reads back");
+        assert!(is_favorite(&back));
+        assert!(Show::Favorites.admits(&back, false));
+        assert!(!Show::Favorites.admits(&inst("beta", "1.20.1", None, 0, 0), false));
+        // no longer a favourite: the field goes, rather than staying as false
+        set_favorite(&mut back, false);
+        back.save().unwrap();
+        let written = std::fs::read_to_string(root.join("instance.json")).unwrap();
+        assert!(!written.contains("\"favorite\""), "{written}");
+        assert!(!is_favorite(&crate::instances::load_one(&root).unwrap()));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn every_sorting_has_a_short_name_for_its_button() {
+        for s in Sort::ALL {
+            assert!(!s.short().is_empty() && s.short().len() < s.label().len().max(8), "{s:?}");
+        }
+        assert_eq!(mods_text(0), "No mods");
+        assert_eq!(mods_text(1), "1 mod");
+        assert_eq!(mods_text(12), "12 mods");
     }
 
     #[test]

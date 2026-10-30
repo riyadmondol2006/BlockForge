@@ -1,7 +1,8 @@
 //! The launcher news on the home page, and the window that shows one article in full.
 
-use egui::{Align, Context, CornerRadius, Layout, RichText, ScrollArea, Sense, Ui};
+use egui::{Context, CornerRadius, RichText, ScrollArea, Sense, Ui};
 
+use super::covers::{CoverSpec, CoverTheme};
 use super::instance_menu::SplitRow;
 use super::services::{SvcMsg, modal_scroll_height, modal_width};
 use super::theme::*;
@@ -113,23 +114,55 @@ fn preview(item: &NewsItem) -> String {
     format!("{}\u{2026}", whole.trim_end_matches([' ', ',', ';', ':', '.', '-']))
 }
 
-/// `text` as at most two lines of wrapped muted text; what does not fit ends in an ellipsis at the edge.
-fn two_lines(ui: &Ui, text: &str, width: f32) -> std::sync::Arc<egui::Galley> {
-    let mut job = egui::text::LayoutJob::single_section(
-        text.to_string(),
-        egui::TextFormat::simple(egui::FontId::proportional(FS_META), c_muted()),
-    );
-    job.wrap = egui::text::TextWrapping {
-        max_width: width,
-        max_rows: 2,
-        break_anywhere: false,
-        overflow_character: Some('\u{2026}'),
-    };
-    ui.painter().layout_job(job)
+/// The least width of a news card on Home, and the gap between the cards.
+const CARD_MIN: f32 = 300.0;
+const CARD_GAP: f32 = 12.0;
+const CARD_H: f32 = 76.0;
+const THUMB: f32 = 52.0;
+
+/// One article as a small card: its picture, the title, a line of its text and the date. It brightens under the
+/// pointer and opens the article when clicked.
+fn news_card(ui: &mut Ui, item: &Shown, thumb: &egui::TextureHandle, width: f32) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, CARD_H), Sense::click());
+    let t = super::motion::hover(ui, resp.id, resp.hovered());
+    if ui.is_rect_visible(rect) {
+        let p = ui.painter();
+        let round = CornerRadius::same(R_CARD);
+        p.rect_filled(rect, round, super::motion::mix(c_card(), c_raised(), t));
+        let edge = super::motion::mix(c_border(), c_control().gamma_multiply(0.7), t);
+        p.rect_stroke(rect, round, egui::Stroke::new(1.0, edge), egui::StrokeKind::Inside);
+        glass_edge(p, rect, R_CARD);
+        let pic = egui::Rect::from_min_size(
+            egui::pos2(rect.left() + 12.0, rect.center().y - THUMB / 2.0),
+            egui::vec2(THUMB, THUMB),
+        );
+        egui::Image::from_texture(thumb).corner_radius(R_CONTROL).paint_at(ui, pic);
+        let left = pic.right() + 14.0;
+        let room = (rect.right() - 14.0 - left).max(0.0);
+        let line = |text: &str, font: egui::FontId, color: egui::Color32| {
+            let mut job =
+                egui::text::LayoutJob::single_section(text.to_string(), egui::TextFormat::simple(font, color));
+            job.wrap = egui::text::TextWrapping::truncate_at_width(room);
+            ui.painter().layout_job(job)
+        };
+        let title = line(&item.title, super::fonts::semibold(13.0), c_text());
+        let preview = line(&item.preview, egui::FontId::proportional(FS_META), c_muted());
+        let date = line(&item.date, super::fonts::mono(11.0), c_faint());
+        let total = title.size().y + 3.0 + preview.size().y + 3.0 + date.size().y;
+        let mut y = rect.center().y - total / 2.0;
+        for (g, gap) in [(title, 3.0), (preview, 3.0), (date, 0.0)] {
+            let h = g.size().y;
+            p.galley(egui::pos2(left, y), g, c_text());
+            y += h + gap;
+        }
+    }
+    focus_ring(ui, &resp, rect, R_CARD);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &item.title));
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
 impl App {
-    /// The news list of the home page: at its bottom, or beside the instances in a wide window.
+    /// The news of the home page, as small cards: under the instances, or beside them in a wide window.
     pub(super) fn news_section(&mut self, ui: &mut Ui) {
         if matches!(self.svc.news.status, Status::Idle) {
             self.svc.news.status = Status::Loading;
@@ -164,74 +197,28 @@ impl App {
             }
             Status::Loaded if self.svc.news.items.is_empty() => muted(ui, "No news right now."),
             Status::Loaded => {
+                // small cards side by side, two rows at most: the news is the second thing on Home, not the first
+                let (cols, width) = grid_columns(ui.available_width(), CARD_MIN, CARD_GAP);
+                let shown = self.svc.news.items.len().min(if cols == 1 { 4 } else { cols * 2 });
+                // each article gets a little voxel picture of its own, drawn from its title
+                let thumbs: Vec<egui::TextureHandle> = (0..shown)
+                    .map(|i| {
+                        let spec = CoverSpec::new(&self.svc.news.items[i].title, "1.21", None, CoverTheme::Auto);
+                        self.covers.texture(&self.ctx, &spec, 128, 128)
+                    })
+                    .collect();
                 let mut open = None;
-                // one panel of glass, a rule between the articles; the one under the pointer fades to a tone step
-                // and gets a short brand mark at its start
-                let panel = card_frame().inner_margin(egui::Margin::same(6)).show(ui, |ui| {
-                    ui.spacing_mut().item_spacing.y = 0.0;
-                    for (i, item) in self.svc.news.items.iter().enumerate() {
-                        if i > 0 {
-                            ui.add_space(2.0);
-                            rule(ui);
-                            ui.add_space(2.0);
+                ui.spacing_mut().item_spacing = egui::vec2(CARD_GAP, CARD_GAP);
+                for (r, row) in self.svc.news.items[..shown].chunks(cols).enumerate() {
+                    ui.horizontal(|ui| {
+                        for (k, item) in row.iter().enumerate() {
+                            let i = r * cols + k;
+                            if news_card(ui, item, &thumbs[i], width).clicked() {
+                                open = Some(i);
+                            }
                         }
-                        // the fill is put in behind the contents once it is known whether the row is pointed at
-                        let fill = ui.painter().add(egui::Shape::Noop);
-                        let resp = egui::Frame::new()
-                            .inner_margin(egui::Margin { left: 16, right: 14, top: 12, bottom: 12 })
-                            .show(ui, |ui| {
-                                ui.set_width(ui.available_width());
-                                ui.spacing_mut().item_spacing.y = 4.0;
-                                ui.spacing_mut().interact_size.y = 20.0;
-                                ui.horizontal(|ui| {
-                                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                        if !item.date.is_empty() {
-                                            ui.label(RichText::new(&item.date).size(FS_META).color(c_faint()));
-                                        }
-                                        ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                                            ui.add(
-                                                egui::Label::new(
-                                                    RichText::new(&item.title).font(super::fonts::semibold(FS_BODY)),
-                                                )
-                                                .truncate(),
-                                            );
-                                        });
-                                    });
-                                });
-                                let galley = two_lines(ui, &item.preview, ui.available_width());
-                                let (rect, _) = ui.allocate_exact_size(galley.size(), Sense::hover());
-                                ui.painter().galley(rect.min, galley, c_muted());
-                            })
-                            .response
-                            .interact(Sense::click())
-                            .on_hover_cursor(egui::CursorIcon::PointingHand);
-                        let t = super::motion::hover(ui, resp.id, resp.hovered());
-                        if t > 0.0 {
-                            let r = resp.rect;
-                            let mark = egui::Rect::from_min_size(
-                                egui::pos2(r.left() + 5.0, r.center().y - 9.0 * t),
-                                egui::vec2(3.0, 18.0 * t),
-                            );
-                            ui.painter().set(
-                                fill,
-                                egui::Shape::Vec(vec![
-                                    egui::Shape::rect_filled(
-                                        r,
-                                        CornerRadius::same(R_CONTROL),
-                                        c_hover().gamma_multiply(t),
-                                    ),
-                                    egui::Shape::rect_filled(mark, CornerRadius::same(2), c_accent().gamma_multiply(t)),
-                                ]),
-                            );
-                        }
-                        focus_ring(ui, &resp, resp.rect, R_CONTROL);
-                        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &item.title));
-                        if resp.clicked() {
-                            open = Some(i);
-                        }
-                    }
-                });
-                glass_edge(ui.painter(), panel.response.rect, R_CARD);
+                    });
+                }
                 if open.is_some() {
                     self.svc.news.open = open;
                 }
