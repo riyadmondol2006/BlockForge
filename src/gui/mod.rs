@@ -1522,24 +1522,32 @@ impl App {
         if !away {
             ctx.request_repaint_after(Duration::from_millis(500));
         }
+        // while a dialog is open they wait behind it and come out when it closes, still with a few seconds to read
+        if ctx.memory(|m| !m.is_above_modal_layer(egui::LayerId::background())) {
+            for t in self.toasts.iter_mut() {
+                t.until = t.until.max(now + Duration::from_secs(3));
+            }
+            return;
+        }
         let mut dismiss: Option<usize> = None;
-        // in the middle of the page rather than of the whole window, and never wider than the page
+        // in the bottom right corner of the page, out of the way of what is being read in the middle
         let screen = ctx.content_rect();
         let page = if self.page_rect.is_positive() { self.page_rect } else { screen };
-        let max_w = (page.width() - 32.0).clamp(200.0, 560.0);
+        let max_w = (page.width() - 32.0).clamp(200.0, 360.0);
         egui::Area::new(egui::Id::unique("toasts"))
-            .pivot(egui::Align2::CENTER_BOTTOM)
-            .fixed_pos(egui::pos2(page.center().x, screen.bottom() - 24.0))
-            .order(egui::Order::Tooltip)
+            .pivot(egui::Align2::RIGHT_BOTTOM)
+            .fixed_pos(egui::pos2(page.right(), screen.bottom() - 24.0))
+            .order(egui::Order::Foreground)
             .show(ctx, |ui| {
                 let shown = self.toasts.len().saturating_sub(3);
                 for (i, t) in self.toasts.iter_mut().enumerate().skip(shown).rev() {
                     let (bg, fg) = if t.error { (c_danger_bg(), c_danger()) } else { (c_raised(), c_text()) };
+                    let mut close = false;
                     let r = egui::Frame::new()
                         .fill(bg)
                         .stroke(Stroke::new(1.0, if t.error { c_danger_line() } else { c_control() }))
                         .corner_radius(CornerRadius::same(R_CONTROL + 2))
-                        .inner_margin(egui::Margin::symmetric(14, 9))
+                        .inner_margin(egui::Margin { left: 14, right: 6, top: 6, bottom: 6 })
                         .shadow(egui::Shadow {
                             offset: [0, 6],
                             blur: 18,
@@ -1548,18 +1556,30 @@ impl App {
                         })
                         .show(ui, |ui| {
                             ui.set_max_width(max_w);
-                            let text =
-                                if t.count > 1 { format!("{}  \u{00D7}{}", t.text, t.count) } else { t.text.clone() };
-                            ui.label(RichText::new(text).color(fg));
+                            ui.horizontal(|ui| {
+                                let text = if t.count > 1 {
+                                    format!("{}  \u{00D7}{}", t.text, t.count)
+                                } else {
+                                    t.text.clone()
+                                };
+                                ui.add(egui::Label::new(RichText::new(text).color(fg)).wrap());
+                                // a close button of its own, so nobody has to guess that the whole note can be clicked
+                                let x = ui
+                                    .add(
+                                        egui::Button::new(RichText::new("\u{00D7}").size(16.0).color(c_muted()))
+                                            .frame(false),
+                                    )
+                                    .on_hover_text("Close");
+                                close = x.clicked();
+                            });
                         })
                         .response
-                        .interact(egui::Sense::click())
-                        .on_hover_text("Click to close");
+                        .interact(egui::Sense::click());
                     // one being read stays a little longer
                     if r.hovered() {
                         t.until = t.until.max(now + Duration::from_secs(3));
                     }
-                    if r.clicked() {
+                    if r.clicked() || close {
                         dismiss = Some(i);
                     }
                     ui.add_space(6.0);
@@ -2443,6 +2463,13 @@ impl App {
                 theme::set_dark(!light);
                 theme::apply(ctx, false);
             }
+            // the theme setting agrees with the look, so the theme cards of Settings show the one in use
+            self.settings.theme = if light {
+                "com.blockforge.launcher.themes.Material3Light"
+            } else {
+                "com.blockforge.launcher.themes.Material3Dark"
+            }
+            .to_string();
             match name.trim_end_matches("-light") {
                 "home" => self.page = Page::Home,
                 "library" | "library-list" => {

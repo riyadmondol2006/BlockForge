@@ -755,7 +755,11 @@ impl App {
                     Ok(report) => {
                         if report.changed() {
                             if !report.added.is_empty() {
-                                self.toast(format!("Found {} new file(s) in the folders", report.added.len()));
+                                let n = report.added.len();
+                                self.toast(format!(
+                                    "Found {n} new {} in the folders",
+                                    if n == 1 { "file" } else { "files" }
+                                ));
                             }
                             self.mods.signature = None;
                             self.reload_instances();
@@ -1507,7 +1511,8 @@ impl App {
                 ),
             };
             if !report.unreadable.is_empty() {
-                text.push_str(&format!(". {} file(s) couldn't be opened as a zip", report.unreadable.len()));
+                let n = report.unreadable.len();
+                text.push_str(&format!(". {n} {} couldn't be opened as a zip", if n == 1 { "file" } else { "files" }));
             }
             if notice(ui, level, &text, Some("Dismiss")).is_some_and(|r| r.clicked()) {
                 acts.push(Act::DismissScan);

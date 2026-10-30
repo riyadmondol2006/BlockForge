@@ -610,6 +610,12 @@ pub fn paint_avatar(ui: &Ui, rect: egui::Rect, name: &str) {
 
 /// An on/off switch: ink when on, a quiet outlined track when off.
 pub fn toggle(ui: &mut Ui, on: &mut bool) -> Response {
+    toggle_named(ui, on, "")
+}
+
+/// [`toggle`] that tells a screen reader what it switches: `name` is the title of its row ("Item frames", the mod's
+/// name).
+pub fn toggle_named(ui: &mut Ui, on: &mut bool, name: &str) -> Response {
     let size = vec2(36.0, 20.0);
     // the track is 36 x 20; the part that takes a click is 40 x 28
     let (hit, mut resp) = ui.allocate_exact_size(vec2(40.0, 28.0), Sense::click());
@@ -636,7 +642,7 @@ pub fn toggle(ui: &mut Ui, on: &mut bool) -> Response {
     ui.painter().circle_filled(egui::pos2(cx, rect.center().y), 7.0, knob);
     focus_ring(ui, &resp, rect, 10);
     let state = *on;
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Switch, true, state, ""));
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Switch, true, state, name));
     resp.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 

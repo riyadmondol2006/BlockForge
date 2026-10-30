@@ -137,13 +137,14 @@ pub fn c_warn_bg() -> Color32 {
 
 /// The soft shadow under a card: depth without a hard edge.
 pub fn card_shadow() -> egui::Shadow {
-    let a = if is_dark() { 90 } else { 18 };
-    egui::Shadow { offset: [0, 6], blur: 22, spread: 0, color: Color32::from_black_alpha(a) }
+    // the light look keeps it to a breath: on white cards a darker shadow reads as grey shelves under every row
+    let (a, blur) = if is_dark() { (90, 22) } else { (8, 14) };
+    egui::Shadow { offset: [0, 6], blur, spread: 0, color: Color32::from_black_alpha(a) }
 }
 
 /// The shadow of a card under the pointer: it rises a little.
 pub fn card_shadow_raised() -> egui::Shadow {
-    let a = if is_dark() { 130 } else { 30 };
+    let a = if is_dark() { 130 } else { 16 };
     egui::Shadow { offset: [0, 12], blur: 32, spread: 0, color: Color32::from_black_alpha(a) }
 }
 
