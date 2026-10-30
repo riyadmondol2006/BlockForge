@@ -1,6 +1,6 @@
 [package]
 name = "blockforge"
-version = "5.0.0"
+version = "5.0.1"
 description = "BlockForge: a fast, modern Minecraft launcher written in Rust"
 license = "GPL-3.0-or-later"
 repository = "https://github.com/riyadmondol2006/BlockForge"
