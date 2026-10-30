@@ -1048,6 +1048,20 @@ pub fn clean_stale_temp(dirs: &Dirs) {
             }
         }
     }
+    // worlds the converter unpacked in a run that crashed or was killed (a running conversion keeps writing)
+    if let Ok(rd) = std::fs::read_dir(dirs.temp.join("convert")) {
+        for e in rd.flatten() {
+            let stale = e
+                .metadata()
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|m| m.elapsed().ok())
+                .is_some_and(|a| a > Duration::from_secs(24 * 3600));
+            if e.file_name().to_string_lossy().starts_with("blockforge-") && stale {
+                let _ = std::fs::remove_dir_all(e.path());
+            }
+        }
+    }
 }
 
 pub fn instance_log_dir(instance: &Instance) -> &Path {

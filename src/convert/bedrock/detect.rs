@@ -89,43 +89,76 @@ fn find_root(dir: &Path) -> Option<PathBuf> {
     found
 }
 
-/// Detect a Bedrock world at `path`: a world folder, or a `.mcworld`/`.zip` archive (extracted to the system temp
-/// directory). `None` when it is not a Bedrock world or cannot be read.
+/// Detect a Bedrock world at `path`: a world folder, or a `.mcworld`/`.zip` archive (extracted to the scratch
+/// root). `None` when it is not a Bedrock world or cannot be read.
 pub fn detect_bedrock(path: &Path) -> Option<BedrockWorldInfo> {
+    detect_bedrock_checked(path).ok().flatten()
+}
+
+/// [`detect_bedrock`] that tells a world it could not unpack or read (`Err`, with the reason: a full disk, a broken
+/// archive) from something that is not a Bedrock world at all (`Ok(None)`).
+pub fn detect_bedrock_checked(path: &Path) -> Result<Option<BedrockWorldInfo>> {
     detect_bedrock_in(path, None, &ExtractLimits::default())
 }
 
-/// [`detect_bedrock`] with an explicit parent for the scratch directory and explicit extraction limits.
+/// [`detect_bedrock_checked`] with an explicit parent for the scratch directory and explicit extraction limits.
 pub fn detect_bedrock_in(
     path: &Path,
     scratch_parent: Option<&Path>,
     limits: &ExtractLimits,
-) -> Option<BedrockWorldInfo> {
+) -> Result<Option<BedrockWorldInfo>> {
     if path.is_dir() {
-        let root = find_root(path)?;
-        return describe(root, None, path);
+        let Some(root) = find_root(path) else { return Ok(None) };
+        return describe(root, None, path).map(Some);
     }
     if !path.is_file() {
-        return None;
+        return Ok(None);
     }
-    let ext = path.extension()?.to_string_lossy().to_ascii_lowercase();
+    let ext = path.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
     if ext != "mcworld" && ext != "zip" {
-        return None;
+        return Ok(None);
     }
-    if !archive_has_world(path).ok()? {
-        return None;
+    // a zip that cannot be opened or holds no world is simply not a world
+    if !archive_has_world(path).unwrap_or(false) {
+        return Ok(None);
     }
     let scratch = match scratch_parent {
-        Some(p) => ScratchDir::new_in(p, "world").ok()?,
-        None => ScratchDir::new("world").ok()?,
-    };
-    extract_zip(path, scratch.path(), limits).ok()?;
-    let root = find_root(scratch.path())?;
-    describe(root, Some(scratch), path)
+        Some(p) => ScratchDir::new_in(p, "world"),
+        None => ScratchDir::new("world"),
+    }
+    .map_err(|e| unpack_error(&e, None))?;
+    extract_zip(path, scratch.path(), limits).map_err(|e| unpack_error(&e, scratch.path().parent()))?;
+    let Some(root) = find_root(scratch.path()) else { return Ok(None) };
+    describe(root, Some(scratch), path).map(Some)
 }
 
-fn describe(root: PathBuf, guard: Option<ScratchDir>, original: &Path) -> Option<BedrockWorldInfo> {
-    let level = LevelDat::read(&root.join("level.dat")).ok()?;
+/// Why an archive holding a world could not be unpacked, in words for the person converting it.
+fn unpack_error(e: &BedrockError, place: Option<&Path>) -> BedrockError {
+    let place = place.map(Path::to_path_buf).unwrap_or_else(super::db::scratch_root);
+    let text = e.to_string();
+    // a full disk or a used-up quota: ENOSPC and EDQUOT, ERROR_DISK_FULL and ERROR_HANDLE_DISK_FULL on Windows
+    let codes: &[&str] = if cfg!(windows) {
+        &["os error 112)", "os error 39)"]
+    } else if cfg!(target_os = "macos") {
+        &["os error 28)", "os error 69)"]
+    } else {
+        &["os error 28)", "os error 122)"]
+    };
+    let full = codes.iter().any(|code| text.contains(code));
+    let why = if full { format!("there is not enough free space there ({text})") } else { text };
+    BedrockError::Archive(format!("The world could not be unpacked into {}: {why}", place.display()))
+}
+
+/// The words of a detection failure, without the "archive error:" kind in front.
+pub fn failure_text(e: &BedrockError) -> String {
+    match e {
+        BedrockError::Archive(m) => m.clone(),
+        other => other.to_string(),
+    }
+}
+
+fn describe(root: PathBuf, guard: Option<ScratchDir>, original: &Path) -> Result<BedrockWorldInfo> {
+    let level = LevelDat::read(&root.join("level.dat"))?;
     let info = level.info();
     let from_file = std::fs::read_to_string(root.join("levelname.txt"))
         .ok()
@@ -135,7 +168,7 @@ fn describe(root: PathBuf, guard: Option<ScratchDir>, original: &Path) -> Option
         .or(info.level_name.filter(|s| !s.is_empty()))
         .or_else(|| original.file_stem().map(|s| s.to_string_lossy().into_owned()))
         .unwrap_or_default();
-    Some(BedrockWorldInfo {
+    Ok(BedrockWorldInfo {
         name,
         version: *level.bedrock_version(),
         game_version: level.game_version(),
@@ -307,7 +340,9 @@ mod tests {
             zip_dir(&world, &archive, prefix);
             let scratch_parent = tmp.path().join("scratch");
             std::fs::create_dir_all(&scratch_parent).unwrap();
-            let info = detect_bedrock_in(&archive, Some(&scratch_parent), &ExtractLimits::default()).expect("archive");
+            let info = detect_bedrock_in(&archive, Some(&scratch_parent), &ExtractLimits::default())
+                .expect("unpacked")
+                .expect("archive");
             assert_eq!(info.name, "My Name");
             assert!(info.is_extracted());
             assert!(info.root.starts_with(&scratch_parent));
@@ -316,6 +351,26 @@ mod tests {
             drop(info);
             assert!(!root.exists(), "scratch removed with the info");
         }
+    }
+
+    #[test]
+    fn a_world_that_cannot_be_unpacked_says_why() {
+        // a full disk looks the same to the converter as a place it cannot write to: the world is still a world,
+        // and the reason is reported instead of "not a Minecraft world"
+        let tmp = ScratchDir::new("detect-full").unwrap();
+        let world = tmp.path().join("world");
+        make_world(&world, [1, 21, 44], "Hello");
+        let archive = tmp.path().join("w.mcworld");
+        zip_dir(&world, &archive, "");
+        let blocked = tmp.path().join("not-a-folder");
+        std::fs::write(&blocked, b"a file where the scratch folder should go").unwrap();
+        let err = detect_bedrock_in(&archive, Some(&blocked), &ExtractLimits::default()).unwrap_err();
+        assert!(err.to_string().contains("could not be unpacked"), "{err}");
+        let tiny = ExtractLimits { max_total_bytes: 10, max_entries: 100 };
+        let err = detect_bedrock_in(&archive, Some(tmp.path()), &tiny).unwrap_err();
+        assert!(err.to_string().contains("could not be unpacked"), "{err}");
+        // a zip without a world is still just not a world
+        assert!(detect_bedrock_in(&tmp.path().join("missing.zip"), None, &tiny).unwrap().is_none());
     }
 
     #[test]

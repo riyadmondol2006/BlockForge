@@ -206,12 +206,14 @@ fn main() -> Result<()> {
     if !files.is_empty() {
         let dirs = Dirs::detect();
         dirs.ensure()?;
+        use_own_scratch(&dirs);
         blockforge::svcsettings::init(&dirs, false, None);
         return blockforge::gui::run(dirs, files);
     }
     let cli = Cli::parse();
     let dirs = Dirs::detect();
     dirs.ensure()?;
+    use_own_scratch(&dirs);
     match cli.command {
         None | Some(Cmd::Gui) => {
             blockforge::svcsettings::init(&dirs, cli.debug, cli.debug_level);
@@ -223,6 +225,15 @@ fn main() -> Result<()> {
             rt.block_on(run(cmd, dirs))
         }
     }
+}
+
+/// Unpacked worlds and database copies of the world converter go to the data folder, not the system temp folder,
+/// which is often a small RAM disk that a world of a few hundred MB does not fit in.
+fn use_own_scratch(dirs: &Dirs) {
+    #[cfg(feature = "converter")]
+    blockforge::convert::bedrock::db::set_scratch_root(dirs.temp.join("convert"));
+    #[cfg(not(feature = "converter"))]
+    let _ = dirs;
 }
 
 /// The arguments, if all of them are paths to files or folders that exist (also as `file://` addresses, which some

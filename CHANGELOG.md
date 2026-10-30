@@ -3,6 +3,19 @@
 The section for a version is used as the text of its release on GitHub. Older releases (the Java versions, up to
 3.4.42.x) are on the [releases page](https://github.com/riyadmondol2006/BlockForge/releases).
 
+## 4.9.1
+
+### Fixed
+
+- **World converter:** a large `.mcworld` was turned away as "This does not look like a Minecraft world" when the
+  system's temporary folder had no room to unpack it (on many Linux systems that folder is a small RAM disk). Worlds
+  are now unpacked into BlockForge's own data folder, an unpacked world is read where it is instead of being copied a
+  second time, and when a world really cannot be unpacked the page says why (for example, that there is not enough
+  free space) and where.
+- **World converter:** a world name with colour codes (`§a`, `§l`) is shown plain on the page and in the suggested
+  folder name; the converted world keeps its coloured name.
+- Worlds left half-unpacked by a launcher that crashed or was closed during a conversion are cleaned up.
+
 ## 4.9.0
 
 A new look for the whole launcher, with smooth motion, a layout that fits every window and more options, and a world

@@ -24,7 +24,7 @@ use std::sync::mpsc::sync_channel;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use crate::convert::bedrock::detect::detect_bedrock;
+use crate::convert::bedrock::detect::{detect_bedrock_checked, failure_text};
 use crate::convert::bedrock::reader::BedrockWorldReader;
 use crate::convert::bedrock::reader::ColumnEntities;
 use crate::convert::java::dirs::detect_java;
@@ -58,7 +58,9 @@ pub fn convert_world(
         ));
     }
     sink.stage("Reading the world");
-    let Some(info) = detect_bedrock(&req.input) else {
+    let found =
+        detect_bedrock_checked(&req.input).map_err(|e| ConvertError::Io(std::io::Error::other(failure_text(&e))))?;
+    let Some(info) = found else {
         return Err(if detect_java(&req.input).is_some() {
             ConvertError::Unsupported(
                 "This is a Java Edition world. Only Bedrock to Java conversion works for now.".into(),

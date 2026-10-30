@@ -10,7 +10,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::Sender;
 use std::time::Duration;
 
-use crate::convert::bedrock::detect::detect_bedrock;
+use crate::convert::bedrock::detect::{detect_bedrock_checked, failure_text};
 use crate::convert::bedrock::reader::BedrockWorldReader;
 use crate::convert::java::dirs::detect_java;
 use crate::convert::level::encoding::{EncodingType, TargetVersion, VersionTriple};
@@ -253,6 +253,22 @@ fn dimension_identifier(name: &str) -> String {
     }
 }
 
+/// A world name without its colour and style codes (`§l§eDSB §aSurvival` is "DSB Survival"): the page shows it and
+/// names the output folder after it. The converted world keeps its coloured name, which the Java edition shows too.
+fn plain_name(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    let mut chars = name.chars();
+    while let Some(c) = chars.next() {
+        if c == '\u{a7}' {
+            chars.next();
+        } else {
+            out.push(c);
+        }
+    }
+    let out = out.trim().to_string();
+    if out.is_empty() { name.trim().to_string() } else { out }
+}
+
 /// Sends what the conversion reports to the page.
 struct EventSink {
     events: Sender<Event>,
@@ -272,7 +288,8 @@ impl ProgressSink for EventSink {
 
 impl Backend for Engine {
     fn detect(&self, path: &Path) -> Result<Detected, String> {
-        if let Some(info) = detect_bedrock(path) {
+        let found = detect_bedrock_checked(path).map_err(|e| failure_text(&e))?;
+        if let Some(info) = found {
             let version = info
                 .game_version
                 .map(|v| format!("{}.{}.{}", v[0], v[1], v[2]))
@@ -300,7 +317,7 @@ impl Backend for Engine {
             return Ok(Detected {
                 edition: Edition::Bedrock,
                 version,
-                name: info.name.clone(),
+                name: plain_name(&info.name),
                 dimensions,
                 size_bytes: Engine::size_of(path),
                 players,
@@ -415,6 +432,13 @@ pub fn backend() -> Arc<dyn Backend> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_coloured_world_name_is_shown_plain() {
+        assert_eq!(super::plain_name("\u{a7}l\u{a7}eDSB \u{a7}aSurvival \u{a7}bWorld"), "DSB Survival World");
+        assert_eq!(super::plain_name("Plain"), "Plain");
+        assert_eq!(super::plain_name("\u{a7}a"), "\u{a7}a");
+    }
+
     use std::sync::mpsc::channel;
 
     use super::*;

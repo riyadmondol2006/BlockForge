@@ -47,7 +47,7 @@ pub use self::reader_entities::ColumnEntities;
 use self::reader_io::{DbHandle, DbOpener, Want};
 use super::BedrockError;
 use super::data_version::{BedrockVersion, GameVersion};
-use super::db::{BedrockDb, LevelDb};
+use super::db::{BedrockDb, DbOptions, LevelDb};
 use super::detect::BedrockWorldInfo;
 use super::keys::{self, DimensionId, DimensionTable};
 use super::level_dat::LevelDat;
@@ -162,8 +162,16 @@ impl BedrockWorldReader {
         let version = BedrockVersion::nearest_at_or_below(info.version.game);
         let game = info.game_version.unwrap_or(info.version.game);
         let db_path = info.db_path();
-        let opener: DbOpener =
-            Box::new(move || LevelDb::open_read(&db_path).map(|db| Box::new(db) as Box<dyn BedrockDb>));
+        // an unpacked archive is already a copy of its own; a world folder is copied so it is never touched
+        let private = info.is_extracted();
+        let opener: DbOpener = Box::new(move || {
+            let db = if private {
+                LevelDb::open_read_private(&db_path, &DbOptions::default())
+            } else {
+                LevelDb::open_read(&db_path)
+            };
+            db.map(|db| Box::new(db) as Box<dyn BedrockDb>)
+        });
         Self::from_parts(opener, level_dat, version, game, settings)
     }
 

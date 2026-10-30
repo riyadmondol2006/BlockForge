@@ -16,6 +16,7 @@ use std::io::{Read, Write};
 use std::ops::Bound;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::RwLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Compressor id of raw deflate (Mojang's `ZlibCompressorRaw`), what Bedrock writes.
@@ -237,18 +238,32 @@ impl BedrockDb for MemDb {
     }
 }
 
-/// A scratch directory under the system temp dir that is removed when dropped.
+/// A scratch directory under the scratch root (see [`set_scratch_root`]) that is removed when dropped.
 #[derive(Debug)]
 pub struct ScratchDir {
     path: PathBuf,
 }
 
 static SCRATCH_COUNTER: AtomicU64 = AtomicU64::new(0);
+static SCRATCH_ROOT: RwLock<Option<PathBuf>> = RwLock::new(None);
+
+/// Where unpacked worlds and database copies go from now on. The launcher points this at its own data folder: the
+/// system temp folder is often a small RAM disk (or under a quota) that a world of a few hundred MB does not fit in.
+pub fn set_scratch_root(dir: PathBuf) {
+    if let Ok(mut root) = SCRATCH_ROOT.write() {
+        *root = Some(dir);
+    }
+}
+
+/// The folder scratch directories are made in: the one set with [`set_scratch_root`], else the system temp folder.
+pub fn scratch_root() -> PathBuf {
+    SCRATCH_ROOT.read().ok().and_then(|r| r.clone()).unwrap_or_else(std::env::temp_dir)
+}
 
 impl ScratchDir {
-    /// Create a fresh directory `<temp>/blockforge-<label>-<pid>-<n>-<nanos>`.
+    /// Create a fresh directory `<scratch root>/blockforge-<label>-<pid>-<n>-<nanos>`.
     pub fn new(label: &str) -> Result<ScratchDir> {
-        Self::new_in(&std::env::temp_dir(), label)
+        Self::new_in(&scratch_root(), label)
     }
 
     /// Create a fresh scratch directory inside `parent`.
@@ -341,6 +356,19 @@ impl LevelDb {
         opts.reuse_logs = false;
         let db = DB::open(&target, opts)?;
         Ok(LevelDb { db: Some(db), read_only: true, _scratch: Some(scratch) })
+    }
+
+    /// Open, for reading, a database that is already a private copy (a world unpacked from an archive into a scratch
+    /// directory): no second copy is made, so a large world needs its space once.
+    pub fn open_read_private(db_dir: &Path, options: &DbOptions) -> Result<LevelDb> {
+        if !db_dir.join("CURRENT").is_file() {
+            return Err(BedrockError::Db(format!("{} is not a LevelDB folder (no CURRENT file)", db_dir.display())));
+        }
+        let _ = std::fs::remove_file(db_dir.join("LOCK"));
+        let mut opts = options.to_options(false);
+        opts.reuse_logs = false;
+        let db = DB::open(db_dir, opts)?;
+        Ok(LevelDb { db: Some(db), read_only: true, _scratch: None })
     }
 
     /// Create a new, empty database at `db_dir` (the folder must not hold a database yet).
