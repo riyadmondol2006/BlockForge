@@ -188,6 +188,9 @@ pub struct ConvertState {
     /// The step of the set-up whose form is shown (0: the world, 1: what to convert to, 2: what comes along, 3: where
     /// it goes). Only the page looks at it.
     pub(super) step: usize,
+    /// The steps of the set-up the player has had open since the world was chosen: only those are ticked, the others
+    /// say they are ready.
+    pub(super) visited: [bool; 4],
 }
 
 impl ConvertState {
@@ -225,6 +228,7 @@ impl ConvertState {
             last_warnings: Vec::new(),
             bar_pinned: false,
             step: 0,
+            visited: [false; 4],
         }
     }
 
@@ -1010,6 +1014,10 @@ impl ConvertState {
             "convert-save" | "convert-conflict" | "convert-instance" => 3,
             _ => 0,
         };
+        // the world was chosen and the step on show is open; the steps between were skipped, so they are only ready
+        self.visited = [false; 4];
+        self.visited[0] = true;
+        self.visited[self.step] = true;
         match variant {
             "convert-instance-done" => {
                 self.screen = Screen::Done;
@@ -1061,6 +1069,22 @@ impl ConvertState {
                     confirm: false,
                     stopping: false,
                     job,
+                });
+            }
+            // the result with only warnings, only blocks without a match, and with neither
+            "convert-done-warnings" | "convert-done-unmatched" | "convert-done-clean" => {
+                self.screen = Screen::Done;
+                let warnings = vec![
+                    "Bossbar settings of a command block were left out".into(),
+                    "A written book had more pages than Java Edition allows and was cut".into(),
+                ];
+                let unmapped = vec![("minecraft:trial_spawner".into(), 214), ("minecraft:vault".into(), 41)];
+                self.summary = Some(Summary {
+                    columns: 1_284,
+                    unmapped_blocks: if variant == "convert-done-unmatched" { unmapped } else { Vec::new() },
+                    warnings: if variant == "convert-done-warnings" { warnings } else { Vec::new() },
+                    elapsed: Duration::from_secs(73),
+                    output: PathBuf::from(&self.output),
                 });
             }
             "convert-done" => {

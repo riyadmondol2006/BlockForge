@@ -1220,6 +1220,112 @@ pub fn paint_status_mark(ui: &Ui, rect: egui::Rect, status: Status) {
     }
 }
 
+/// `text` cut in the middle to fit `max_w`, so its end stays whole: for a path, the folder it names. `widths` is the
+/// width of each of its characters and `dots_w` that of the ellipsis. The part after the last separator is kept; what
+/// room is left goes to the start and to what comes just before that part, a character each in turn. A last part
+/// that does not fit on its own keeps its end.
+pub fn middle_ellipsis(text: &str, widths: &[f32], dots_w: f32, max_w: f32) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    debug_assert_eq!(chars.len(), widths.len());
+    if widths.iter().sum::<f32>() <= max_w {
+        return text.to_string();
+    }
+    let sep = |c: &char| matches!(c, '/' | '\\');
+    let mut end = chars.len();
+    while end > 0 && sep(&chars[end - 1]) {
+        end -= 1;
+    }
+    let tail_start = chars[..end].iter().rposition(sep).unwrap_or(0);
+    let budget = max_w - dots_w;
+    let width = |r: std::ops::Range<usize>| widths[r].iter().sum::<f32>();
+    let (mut head, mut tail) = (0, tail_start);
+    let mut used = width(tail..chars.len());
+    if used > budget {
+        // even the last part is too long: as much of its end as fits
+        while tail < chars.len() && used > budget {
+            used -= widths[tail];
+            tail += 1;
+        }
+    } else {
+        loop {
+            let mut grew = false;
+            if head < tail && used + widths[head] <= budget {
+                used += widths[head];
+                head += 1;
+                grew = true;
+            }
+            if tail > head && used + widths[tail - 1] <= budget {
+                used += widths[tail - 1];
+                tail -= 1;
+                grew = true;
+            }
+            if !grew {
+                break;
+            }
+        }
+    }
+    let mut out: String = chars[..head].iter().collect();
+    out.push('\u{2026}');
+    out.extend(&chars[tail..]);
+    out
+}
+
+/// A path that can't be edited, in the monospace face, cut in the middle when it is too long so the folder at its end
+/// stays readable. The whole path shows under the pointer, and Copy after it copies it.
+pub fn path_line(ui: &mut Ui, path: &str) {
+    let font = super::fonts::mono(FS_META);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        let copy_w = ui.painter().layout_no_wrap("Copy".into(), super::fonts::medium(14.0), c_text()).size().x + 24.0;
+        let max_w = (ui.available_width() - copy_w - 4.0).max(40.0);
+        let (widths, dots_w) = ui.fonts_mut(|f| {
+            (path.chars().map(|c| f.glyph_width(&font, c)).collect::<Vec<_>>(), f.glyph_width(&font, '\u{2026}'))
+        });
+        let shown = middle_ellipsis(path, &widths, dots_w, max_w);
+        ui.add(egui::Label::new(RichText::new(shown).font(font.clone()).color(c_text())).selectable(false))
+            .on_hover_text(RichText::new(path).font(font.clone()));
+        if ghost(ui, "Copy").on_hover_text("Copy the whole path").clicked() {
+            ui.ctx().copy_text(path.to_string());
+        }
+    });
+}
+
+#[cfg(test)]
+mod path_tests {
+    use super::middle_ellipsis;
+
+    /// Every character one unit wide, the ellipsis too.
+    fn cut(text: &str, max: f32) -> String {
+        middle_ellipsis(text, &vec![1.0; text.chars().count()], 1.0, max)
+    }
+
+    #[test]
+    fn a_path_that_fits_is_left_alone() {
+        assert_eq!(cut("/home/a/World", 13.0), "/home/a/World");
+    }
+
+    #[test]
+    fn a_long_path_keeps_its_last_folder_and_fills_the_room() {
+        let p = "/home/player/.local/share/saves/My World";
+        for max in [12.0, 20.0, 30.0] {
+            let out = cut(p, max);
+            assert!(out.ends_with("/My World"), "{out}");
+            assert!(out.contains('\u{2026}'), "{out}");
+            assert_eq!(out.chars().count() as f32, max, "{out}");
+        }
+        assert_eq!(cut(p, 20.0), "/home\u{2026}saves/My World");
+        // a closing separator is not the last folder
+        assert!(cut("/home/player/.local/share/World/", 12.0).ends_with("/World/"));
+        assert!(cut("C:\\Users\\me\\AppData\\Roaming\\saves\\World", 12.0).ends_with("\\World"));
+    }
+
+    #[test]
+    fn a_last_folder_too_long_for_the_room_keeps_its_end() {
+        assert_eq!(cut("/a/abcdefghij", 6.0), "\u{2026}fghij");
+        assert_eq!(cut("abcdefghij", 4.0), "\u{2026}hij");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

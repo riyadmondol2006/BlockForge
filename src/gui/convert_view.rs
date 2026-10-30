@@ -10,7 +10,7 @@ use super::craft_fmt::{check_labeled, small_faint};
 use super::icons::Icon;
 use super::theme::*;
 use super::widgets::*;
-use crate::convert::backend::{Edition, EntityOptions, WorldPlayer};
+use crate::convert::backend::{Edition, EntityOptions, Summary, WorldPlayer};
 use crate::convert::level::{Difficulty, EntityFilter, GameType, InventorySource, PlayerOptions};
 use crate::tr;
 
@@ -67,6 +67,8 @@ fn sentence(text: &str) -> String {
 enum Mark {
     /// Not done yet, nothing wrong.
     Todo,
+    /// Fine as it is, but not looked at yet: a number, not a tick.
+    Ready,
     Done,
     /// It can go on, but something wants a look.
     Warn,
@@ -85,6 +87,15 @@ fn output_mark(check: OutputCheck) -> Mark {
         OutputCheck::IsSource | OutputCheck::InsideSource | OutputCheck::IsFile | OutputCheck::NotWritable => {
             Mark::Error
         }
+    }
+}
+
+/// How a step of the set-up shows on the rail: a step that is fine is only ticked once the player has had it open and
+/// moved on; the open one and those not seen yet keep their number and say they are ready.
+fn rail_mark(mark: Mark, visited: bool, current: bool) -> Mark {
+    match mark {
+        Mark::Done if current || !visited => Mark::Ready,
+        m => m,
     }
 }
 
@@ -112,8 +123,9 @@ fn left_behind(e: &EntityOptions, p: &PlayerOptions, make_owner: bool, has_owner
     entities + players
 }
 
-/// The round badge of step `n` on the rail: the brand gradient with a check mark when it is ready, amber or red with
-/// an exclamation mark when it needs a look, a turning arc while it runs, and its number otherwise.
+/// The round badge of step `n` on the rail: the brand gradient with a check mark when it is done, amber or red with
+/// an exclamation mark when it needs a look, a turning arc while it runs, and its number otherwise (outlined in the
+/// brand colour when it is the step on show).
 fn paint_mark(ui: &Ui, rect: egui::Rect, mark: Mark, n: usize, current: bool, id: egui::Id) {
     let p = ui.painter();
     let r = (rect.width() / 2.0) as u8;
@@ -193,28 +205,38 @@ fn world_badge(ui: &mut Ui) {
     super::icons::paint(ui.painter(), Icon::Layers, rect.center(), 22.0, c_accent());
 }
 
-/// A round badge at the head of the result: the brand gradient with a check mark when the world was converted, the
-/// danger tint with an exclamation mark when it was not.
-fn result_badge(ui: &mut Ui, good: bool) {
+/// How the result turned out, for its badge.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Outcome {
+    /// Converted, everything with a match.
+    Clean,
+    /// Converted, but with warnings or blocks without a match.
+    Warned,
+    Failed,
+}
+
+/// A round badge at the head of the result: the brand gradient with a check mark when the world was converted
+/// cleanly, amber with an exclamation mark when it was converted with something to look at, the danger tint when it
+/// was not converted.
+fn result_badge(ui: &mut Ui, outcome: Outcome) {
     let (rect, _) = ui.allocate_exact_size(vec2(44.0, 44.0), Sense::hover());
     let p = ui.painter();
     let c = rect.center();
-    if good {
+    if outcome == Outcome::Clean {
         super::motion::glow(p, c, 46.0, c_accent().gamma_multiply(if is_dark() { 0.22 } else { 0.18 }));
         super::motion::brand_rect(p, rect, 22);
         let mark = Stroke::new(2.6, c_on_accent());
         p.line_segment([c + vec2(-8.0, 0.5), c + vec2(-2.5, 6.0)], mark);
         p.line_segment([c + vec2(-2.5, 6.0), c + vec2(8.5, -6.0)], mark);
     } else {
-        p.rect(
-            rect,
-            CornerRadius::same(22),
-            c_danger_bg(),
-            Stroke::new(1.0, c_danger_line()),
-            egui::StrokeKind::Inside,
-        );
-        p.line_segment([c + vec2(0.0, -9.0), c + vec2(0.0, 3.0)], Stroke::new(2.6, c_danger()));
-        p.circle_filled(c + vec2(0.0, 8.5), 1.7, c_danger());
+        let (fill, line, ink) = if outcome == Outcome::Warned {
+            (c_warn_bg(), c_warn().gamma_multiply(0.6), c_warn())
+        } else {
+            (c_danger_bg(), c_danger_line(), c_danger())
+        };
+        p.rect(rect, CornerRadius::same(22), fill, Stroke::new(1.0, line), egui::StrokeKind::Inside);
+        p.line_segment([c + vec2(0.0, -9.0), c + vec2(0.0, 3.0)], Stroke::new(2.6, ink));
+        p.circle_filled(c + vec2(0.0, 8.5), 1.7, ink);
     }
 }
 
@@ -231,7 +253,7 @@ fn option_row(ui: &mut Ui, title: &str, control: impl FnOnce(&mut Ui)) {
 /// A row with a title, a line that says what it does, and a switch at the right.
 fn switch_row(ui: &mut Ui, title: &str, hint: &str, on: &mut bool) {
     setting_row(ui, title, hint, |ui| {
-        toggle(ui, on);
+        toggle_named(ui, on, title);
     });
 }
 
@@ -282,8 +304,13 @@ impl ConvertState {
         ui.data_mut(|d| d.insert_temp(key, found));
         if !found {
             self.step = 0;
+            self.visited = [false; 4];
         } else if !before && self.step == 0 {
+            self.visited = [true, false, false, false];
             self.step = 1;
+        }
+        if self.screen == Screen::Setup {
+            self.visited[self.step.min(3)] = true;
         }
         let marks = self.marks();
         let width = (ui.available_width() - 12.0).min(PAGE_WIDTH);
@@ -387,6 +414,10 @@ impl ConvertState {
             for m in marks.iter_mut().take(4) {
                 m.0 = Mark::Done;
             }
+        } else {
+            for (i, m) in marks.iter_mut().take(4).enumerate() {
+                m.0 = rail_mark(m.0, self.visited[i], i == self.step);
+            }
         }
         marks
     }
@@ -411,7 +442,8 @@ impl ConvertState {
         ]
     }
 
-    /// The steps down the left: a badge each (a check once the step is ready, a warning when it needs a look), the
+    /// The steps down the left: a badge each (a check once the step was seen and is fine, its number and "Ready" while
+    /// it is fine but not seen yet, a warning when it needs a look), the
     /// title and how it stands, joined by a line. A step that can be opened opens its form on the right.
     fn rail(&mut self, ui: &mut Ui, marks: &[(Mark, String); 5]) {
         let titles = self.step_titles();
@@ -437,7 +469,14 @@ impl ConvertState {
             );
             paint_mark(ui, badge, *mark, i + 1, current, ui.scope_id().with(("convert-rail", i)));
             let x = badge.right() + 12.0;
-            let width = row.right() - x - 6.0;
+            let mut width = row.right() - x - 6.0;
+            if *mark == Mark::Ready {
+                // says in words that the step is fine as it is, where a tick would say it was done
+                let ready = one_line(ui, &tr!("Ready"), egui::FontId::proportional(FS_META), c_muted(), 80.0);
+                let at = egui::pos2(row.right() - 10.0 - ready.size().x, row.top() + 12.0);
+                width -= ready.size().x + 10.0;
+                ui.painter().galley(at, ready, c_muted());
+            }
             let ink = if *mark == Mark::Locked { c_faint() } else { c_text() };
             let font = if current { super::fonts::semibold(FS_BODY) } else { super::fonts::medium(FS_BODY) };
             let title_g = one_line(ui, title, font, ink, width);
@@ -834,12 +873,16 @@ impl ConvertState {
                     &mut self.entities.item_frames,
                 );
                 row_gap(ui);
+                // on means "bring", like the switches above it; the option itself says what is left out, and keeps
+                // its meaning (and its default of leaving them out)
+                let mut bring = !self.entities.drop_transient;
                 switch_row(
                     ui,
-                    &tr!("Leave out what lies around"),
-                    &tr!("Dropped items, experience orbs, falling sand and arrows are not brought over"),
-                    &mut self.entities.drop_transient,
+                    &tr!("Bring dropped items and orbs"),
+                    &tr!("Dropped items, experience orbs, falling sand and arrows, lying around or in flight"),
+                    &mut bring,
                 );
+                self.entities.drop_transient = !bring;
             }
         });
         card(ui, |ui| {
@@ -1052,25 +1095,39 @@ impl ConvertState {
             card_head(ui, &sentence(&title), &tr!("A new folder: the original world is never changed"));
             self.put_in_choice(ui, acts);
             ui.add_space(6.0);
-            ui.horizontal(|ui| {
-                let button_w = 130.0;
-                let field = ui.add_sized(
-                    [(ui.available_width() - button_w - 8.0).max(120.0), 32.0],
-                    egui::TextEdit::singleline(&mut self.output)
-                        .hint_text(RichText::new(tr!("A folder for the converted world")).color(c_faint()))
-                        .margin(egui::Margin::symmetric(10, 7))
-                        .background_color(c_field()),
-                );
-                if field.changed() {
-                    self.output_edited();
+            // the whole width for the path, in the monospace face: its end is what tells the new folder apart. The
+            // field scrolls with the caret, so all of it can be reached and nothing is cut from what is saved.
+            let field = ui.add_sized(
+                [ui.available_width(), 32.0],
+                egui::TextEdit::singleline(&mut self.output)
+                    .font(super::fonts::mono(FS_META))
+                    .hint_text(RichText::new(tr!("A folder for the converted world")).color(c_faint()))
+                    .margin(egui::Margin::symmetric(10, 8))
+                    .background_color(c_field()),
+            );
+            if field.changed() {
+                self.output_edited();
+            }
+            // the field shows the start of a long path: the folder it ends in, which tells the new world apart, is
+            // said again under it
+            if check == OutputCheck::Ok {
+                if let Some(name) = std::path::Path::new(self.output.trim()).file_name() {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.spacing_mut().item_spacing.x = 6.0;
+                        small_muted(ui, tr!("New folder"));
+                        ui.label(
+                            RichText::new(name.to_string_lossy()).font(super::fonts::mono(FS_META)).color(c_text()),
+                        );
+                    });
                 }
-                ui.add_enabled_ui(!self.picking, |ui| {
-                    if secondary_icon(ui, Icon::Folder, &ellipsis(tr!("Choose..."))).clicked() {
-                        acts.push(Act::Pick(Pick::OutputParent));
-                    }
-                });
+            }
+            ui.add_space(4.0);
+            ui.add_enabled_ui(!self.picking, |ui| {
+                if secondary_icon(ui, Icon::Folder, &ellipsis(tr!("Choose..."))).clicked() {
+                    acts.push(Act::Pick(Pick::OutputParent));
+                }
             });
-            ui.add_space(2.0);
+            ui.add_space(4.0);
             match check {
                 OutputCheck::Ok => match &self.dest {
                     Some(dest) => small_muted(
@@ -1175,17 +1232,10 @@ impl ConvertState {
                 Some((l, v)) => (l.to_string(), v.to_string()),
                 None => (tr!("Time passed"), passed.clone()),
             };
+            // the percentage is already large at the top: only what it doesn't say, and nothing guessed (no time left)
             let warnings = run.warnings.len() + run.more_warnings;
-            let progress = if run.progress > 0.0 { format!("{:.0}%", run.progress * 100.0) } else { "\u{2013}".into() };
-            let (progress_label, warnings_label) = (tr!("Progress"), tr!("Warnings"));
-            facts(
-                ui,
-                &[
-                    (progress_label.as_str(), progress),
-                    (passed_label.as_str(), passed_value),
-                    (warnings_label.as_str(), number(warnings as u64)),
-                ],
-            );
+            let warnings_label = tr!("Warnings");
+            facts(ui, &[(passed_label.as_str(), passed_value), (warnings_label.as_str(), number(warnings as u64))]);
             ui.add_space(12.0);
             ui.add_enabled_ui(!run.stopping, |ui| {
                 if secondary(ui, &tr!("Cancel")).clicked() {
@@ -1217,32 +1267,41 @@ impl ConvertState {
         let Some(s) = self.summary.as_ref() else { return };
         let mut again = false;
         let dest = self.dest.clone();
+        // finished is not the same as faithful: warnings or blocks without a match turn the result amber, and say
+        // what they are before the way to the folder
+        let warned = !s.warnings.is_empty() || !s.unmapped_blocks.is_empty();
+        let mut jump: Option<Jump> = None;
         card(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 14.0;
-                result_badge(ui, true);
+                result_badge(ui, if warned { Outcome::Warned } else { Outcome::Clean });
                 ui.vertical(|ui| {
                     ui.spacing_mut().item_spacing.y = 2.0;
+                    let ink = if warned { c_warn() } else { c_text() };
                     match &dest {
                         Some(d) => {
-                            ui.add(
-                                egui::Label::new(
-                                    RichText::new(tr!("Your world was added to {0}", &d.name))
-                                        .size(FS_FIGURE)
-                                        .semibold(),
-                                )
-                                .wrap(),
-                            );
+                            let title = if warned {
+                                tr!("Your world was added to {0}, with warnings", &d.name)
+                            } else {
+                                tr!("Your world was added to {0}", &d.name)
+                            };
+                            ui.add(egui::Label::new(RichText::new(title).size(FS_FIGURE).semibold().color(ink)).wrap());
                             small_muted(ui, tr!("It is in the instance's saves folder and shows up in Singleplayer."));
                         }
                         None => {
                             // one line: centred on the badge
                             ui.add_space(9.0);
-                            ui.label(RichText::new(tr!("Your world was converted")).size(FS_FIGURE).semibold());
+                            let title =
+                                if warned { tr!("Converted with warnings") } else { tr!("Your world was converted") };
+                            ui.label(RichText::new(title).size(FS_FIGURE).semibold().color(ink));
                         }
                     }
                 });
             });
+            if warned {
+                ui.add_space(12.0);
+                jump = issues_box(ui, s);
+            }
             ui.add_space(14.0);
             let kinds = s.unmapped_blocks.len();
             let (columns_label, time_label, unmatched_label) =
@@ -1266,7 +1325,7 @@ impl ConvertState {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 8.0;
                 small_muted(ui, tr!("Saved in"));
-                ui.add(egui::Label::new(RichText::new(s.output.display().to_string()).size(FS_META)).truncate());
+                path_line(ui, &s.output.display().to_string());
             });
             ui.add_space(12.0);
             ui.horizontal(|ui| {
@@ -1296,38 +1355,48 @@ impl ConvertState {
         });
         if !s.warnings.is_empty() {
             ui.add_space(12.0);
-            card(ui, |ui| {
-                egui::CollapsingHeader::new(RichText::new(tr_n_warnings(s.warnings.len())).semibold())
-                    .id_salt("convert-warnings")
-                    .default_open(false)
-                    .show(ui, |ui| {
-                        ScrollArea::vertical().max_height(180.0).auto_shrink([false, true]).show(ui, |ui| {
-                            for w in &s.warnings {
-                                ui.horizontal_top(|ui| {
-                                    ui.label(RichText::new("\u{2022}").color(c_muted()));
-                                    ui.add(egui::Label::new(RichText::new(w).color(c_muted())).wrap());
-                                });
-                            }
+            let shown = ui.scope(|ui| {
+                card(ui, |ui| {
+                    egui::CollapsingHeader::new(RichText::new(tr_n_warnings(s.warnings.len())).semibold())
+                        .id_salt("convert-warnings")
+                        .default_open(true)
+                        .show(ui, |ui| {
+                            ScrollArea::vertical().max_height(180.0).auto_shrink([false, true]).show(ui, |ui| {
+                                for w in &s.warnings {
+                                    ui.horizontal_top(|ui| {
+                                        ui.label(RichText::new("\u{2022}").color(c_muted()));
+                                        ui.add(egui::Label::new(RichText::new(w).color(c_muted())).wrap());
+                                    });
+                                }
+                            });
                         });
-                    });
+                })
             });
+            if jump == Some(Jump::Warnings) {
+                shown.response.scroll_to_me(Some(Align::TOP));
+            }
         }
         if !s.unmapped_blocks.is_empty() {
             ui.add_space(12.0);
-            card(ui, |ui| {
-                ui.label(RichText::new(tr!("Blocks without an exact match")).semibold());
-                small_muted(ui, tr!("These blocks have no exact equivalent in the new version."));
-                ui.add_space(6.0);
-                unmapped_row(ui, &tr!("Block"), &tr!("Count"), true);
-                for (block, count) in s.unmapped_blocks.iter().take(MAX_UNMAPPED) {
-                    unmapped_row(ui, block, &number(*count), false);
-                }
-                let more = s.unmapped_blocks.len().saturating_sub(MAX_UNMAPPED);
-                if more > 0 {
-                    ui.add_space(4.0);
-                    small_muted(ui, tr!("and {0} more", more));
-                }
+            let shown = ui.scope(|ui| {
+                card(ui, |ui| {
+                    ui.label(RichText::new(tr!("Blocks without an exact match")).semibold());
+                    small_muted(ui, tr!("These blocks have no exact equivalent in the new version."));
+                    ui.add_space(6.0);
+                    unmapped_row(ui, &tr!("Block"), &tr!("Count"), true);
+                    for (block, count) in s.unmapped_blocks.iter().take(MAX_UNMAPPED) {
+                        unmapped_row(ui, block, &number(*count), false);
+                    }
+                    let more = s.unmapped_blocks.len().saturating_sub(MAX_UNMAPPED);
+                    if more > 0 {
+                        ui.add_space(4.0);
+                        small_muted(ui, tr!("and {0} more", more));
+                    }
+                })
             });
+            if jump == Some(Jump::Unmatched) {
+                shown.response.scroll_to_me(Some(Align::TOP));
+            }
         }
         if again {
             self.start_over();
@@ -1340,7 +1409,7 @@ impl ConvertState {
         card(ui, |ui| {
             ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 14.0;
-            result_badge(ui, false);
+            result_badge(ui, Outcome::Failed);
             ui.vertical(|ui| {
                 ui.spacing_mut().item_spacing.y = 2.0;
                 ui.add(
@@ -1434,6 +1503,87 @@ fn unmapped_row(ui: &mut Ui, name: &str, count: &str, header: bool) {
     painter.hline(rect.x_range(), rect.bottom(), Stroke::new(1.0, c_rule()));
 }
 
+/// The detail of the result a count in its amber box leads to.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Jump {
+    Warnings,
+    Unmatched,
+}
+
+/// The amber box of a result with something to look at: how many warnings and kinds of blocks without a match, each
+/// a link to its list below, then the blocks found most often and the first warning. Returns the list asked for.
+fn issues_box(ui: &mut Ui, s: &Summary) -> Option<Jump> {
+    let mut jump = None;
+    let kinds = s.unmapped_blocks.len();
+    egui::Frame::new()
+        .fill(c_warn_bg())
+        .stroke(Stroke::new(1.0, c_warn().gamma_multiply(0.4)))
+        .corner_radius(CornerRadius::same(R_CONTROL))
+        .inner_margin(egui::Margin::symmetric(14, 11))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.spacing_mut().item_spacing.y = 4.0;
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                let link = |ui: &mut Ui, text: String| {
+                    ui.link(RichText::new(text).color(c_warn()).font(super::fonts::semibold(FS_BODY)).underline())
+                        .on_hover_text(tr!("Show the list"))
+                        .clicked()
+                };
+                if !s.warnings.is_empty() && link(ui, tr_n_warnings(s.warnings.len())) {
+                    jump = Some(Jump::Warnings);
+                }
+                if !s.warnings.is_empty() && kinds > 0 {
+                    ui.label(RichText::new("\u{00B7}").color(c_warn()));
+                }
+                if kinds > 0
+                    && link(
+                        ui,
+                        crate::i18n::tr_n(
+                            "{0} kind of block without a match",
+                            "{0} kinds of blocks without a match",
+                            kinds as u64,
+                            &[kinds.into()],
+                        ),
+                    )
+                {
+                    jump = Some(Jump::Unmatched);
+                }
+            });
+            if kinds > 0 {
+                // the most frequent first, as the converter gives them
+                let line = s
+                    .unmapped_blocks
+                    .iter()
+                    .take(3)
+                    .map(|(b, n)| format!("{b} ({})", number(*n)))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let more = if kinds > 3 { format!(", {}", tr!("and {0} more", kinds - 3)) } else { String::new() };
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(format!("{line}{more}")).font(super::fonts::mono(FS_META)).color(c_text()),
+                    )
+                    .wrap(),
+                );
+            }
+            if let Some(w) = s.warnings.first() {
+                ui.add(egui::Label::new(RichText::new(w).color(c_text()).size(FS_META)).wrap());
+            }
+            ui.add(
+                egui::Label::new(
+                    RichText::new(tr!(
+                        "Those parts may be missing or look different in Java Edition. The original world is not changed."
+                    ))
+                    .color(c_muted())
+                    .size(FS_META),
+                )
+                .wrap(),
+            );
+        });
+    jump
+}
+
 fn tr_n_warnings(n: usize) -> String {
     crate::i18n::tr_n("{0} warning", "{0} warnings", n as u64, &[n.into()])
 }
@@ -1524,6 +1674,21 @@ mod tests {
         assert_eq!(left_behind(&none, &p, true, true), 1);
         let fewer = PlayerOptions { include_ender_chest: false, include_stats: false, ..PlayerOptions::default() };
         assert_eq!(left_behind(&e, &fewer, true, true), 2);
+    }
+
+    #[test]
+    fn only_a_step_that_was_open_and_is_fine_gets_a_tick() {
+        // not seen yet, or open now: ready, with its number
+        assert_eq!(rail_mark(Mark::Done, false, false), Mark::Ready);
+        assert_eq!(rail_mark(Mark::Done, true, true), Mark::Ready);
+        assert_eq!(rail_mark(Mark::Done, false, true), Mark::Ready);
+        // seen and left: ticked
+        assert_eq!(rail_mark(Mark::Done, true, false), Mark::Done);
+        // opening a step that needs a look does not make it done
+        for m in [Mark::Warn, Mark::Error, Mark::Todo, Mark::Busy, Mark::Locked] {
+            assert_eq!(rail_mark(m, true, false), m, "{m:?}");
+            assert_eq!(rail_mark(m, false, true), m, "{m:?}");
+        }
     }
 
     #[test]
