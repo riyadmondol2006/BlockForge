@@ -2320,10 +2320,17 @@ struct Shot {
     pointer: Vec<egui::Event>,
 }
 
+/// Where the tour's pointer rests for `packs-hover` (`BLOCKFORGE_SHOT_HOVER=520,349`), on the first pack's description.
+static SHOT_HOVER: std::sync::LazyLock<Option<egui::Pos2>> = std::sync::LazyLock::new(|| {
+    let v = std::env::var("BLOCKFORGE_SHOT_HOVER").ok()?;
+    let (x, y) = v.split_once(',')?;
+    Some(egui::pos2(x.trim().parse().ok()?, y.trim().parse().ok()?))
+});
+
 /// The ids of the jobs the tour makes up to show the sidebar busy; no real job gets ids this high.
 const SHOT_TASK: u64 = u64::MAX - 8;
 
-const SHOT_PAGES: [&str; 65] = [
+const SHOT_PAGES: [&str; 76] = [
     "home",
     "library",
     "instance",
@@ -2394,6 +2401,18 @@ const SHOT_PAGES: [&str; 65] = [
     "servers-repair",
     // Who's playing on the first start, with no account saved
     "who-new",
+    // Explore's and New instance's states: a gallery open, loading, failed, the pointer on a description
+    "create-cover",
+    "create-quilt",
+    "packs-loading",
+    "packs-error",
+    "packs-hover",
+    "technic-loading",
+    "ftb-loading",
+    "ftb-pack-loading",
+    "ftb-pack-ready",
+    "ftb-pack-error",
+    "explore-worlds",
 ];
 
 impl Shot {
@@ -2571,6 +2590,22 @@ impl App {
                 "create" => self.shot_create(create::Step::Version),
                 "create-fabric" => self.shot_create(create::Step::Loader),
                 "create-configure" => self.shot_create(create::Step::Configure),
+                "create-cover" => {
+                    self.shot_create(create::Step::Configure);
+                    self.shot_press("Change cover");
+                }
+                "create-quilt" => {
+                    self.shot_create(create::Step::Loader);
+                    self.create.name.clear();
+                    self.create.loader = crate::loaders::Loader::Quilt;
+                    self.request_loader_versions();
+                }
+                "explore-worlds" => {
+                    self.page = Page::Discover;
+                    self.discover.both = false;
+                    self.discover.query.clear();
+                    self.explore_open(crate::curseforge::api::Section::Worlds, discover::Source::CurseForge);
+                }
                 "accounts" => self.page = Page::Accounts,
                 v if v.starts_with("settings") => self.shot_settings(ctx, v),
                 "who" => {
@@ -2592,7 +2627,20 @@ impl App {
                 v if v.starts_with("craft") => self.shot_craft(v.trim_end_matches("-light")),
                 #[cfg(feature = "converter")]
                 v if v.starts_with("convert") => self.shot_convert(v),
-                "packs" => self.page = Page::Packs,
+                "packs" | "packs-hover" => self.page = Page::Packs,
+                "packs-loading" | "packs-error" | "technic-loading" => {
+                    self.page = Page::Packs;
+                    let state = match name {
+                        "packs-loading" => "atl-loading",
+                        "packs-error" => "atl-error",
+                        _ => "technic-loading",
+                    };
+                    self.shot_packs_state(state);
+                }
+                "ftb-loading" => {
+                    self.page = Page::Ftb;
+                    self.shot_ftb_state("loading");
+                }
                 "ftb" => self.page = Page::Ftb,
                 "about" => self.page = Page::About,
                 "mods" => {
@@ -2663,7 +2711,7 @@ impl App {
                     // Sodium on CurseForge, for the first instance
                     self.cf_open_project(ctx, 394468, first, None, false);
                 }
-                "ftb-pack" => {
+                "ftb-pack" | "ftb-pack-loading" | "ftb-pack-ready" | "ftb-pack-error" => {
                     self.page = Page::Ftb;
                     self.shot_press("Install");
                 }
@@ -2711,10 +2759,16 @@ impl App {
         }
         self.shot_pointer(frame);
         // both sites at once: the slower of the two decides
-        let wait = if matches!(name.trim_end_matches("-light"), "ftb-pack" | "packs-pack" | "cf-install") {
+        let wait = if matches!(
+            name.trim_end_matches("-light"),
+            "ftb-pack" | "packs-pack" | "cf-install" | "ftb-pack-loading" | "ftb-pack-ready" | "ftb-pack-error"
+        ) {
             // the list comes, then the window, then what the version or the files need
             700
-        } else if matches!(name.trim_end_matches("-light"), "discover-both" | "discover-datapacks" | "github-add") {
+        } else if matches!(
+            name.trim_end_matches("-light"),
+            "discover-both" | "discover-datapacks" | "github-add" | "create-quilt"
+        ) {
             400
         } else if matches!(
             name.trim_end_matches("-light"),
@@ -2727,6 +2781,13 @@ impl App {
                 | "mods"
                 | "packs"
                 | "ftb"
+                | "create-cover"
+                | "packs-loading"
+                | "packs-error"
+                | "packs-hover"
+                | "technic-loading"
+                | "ftb-loading"
+                | "explore-worlds"
                 | "about"
                 | "loader"
                 | "import"
@@ -2737,6 +2798,21 @@ impl App {
         } else {
             30
         };
+        // the FTB pack's version as it is being read, read, or failed to read, whatever FTB answered
+        if let Some(state) = name.trim_end_matches("-light").strip_prefix("ftb-pack-")
+            && self.shot.as_ref().is_some_and(|s| s.frames + 10 >= wait)
+        {
+            self.shot_ftb_state(&format!("version-{state}"));
+        }
+        // the pointer resting on the first pack's description, long enough for its excerpt to show
+        if name.trim_end_matches("-light") == "packs-hover"
+            && self.shot.as_ref().is_some_and(|s| s.frames + 120 == wait)
+        {
+            let at = SHOT_HOVER.unwrap_or(egui::pos2(520.0, 349.0));
+            if let Some(shot) = self.shot.as_mut() {
+                shot.pointer.push(egui::Event::PointerMoved(at));
+            }
+        }
         // two mods with an update waiting, as a check would find (the tour doesn't ask the sites)
         if name.trim_end_matches("-light") == "instance-mods"
             && self.shot.as_ref().is_some_and(|s| s.frames + 20 == wait)

@@ -514,7 +514,12 @@ impl App {
             }
         }
         if self.discover.merged.is_empty() && loading {
-            result_skeleton(ui, 6);
+            let sites = if self.discover.with_smithed() {
+                "Modrinth, CurseForge and Smithed"
+            } else {
+                "Modrinth and CurseForge"
+            };
+            result_skeleton(ui, 4, &format!("Searching {sites}\u{2026}"));
             return;
         }
         if self.discover.merged.is_empty() && failed.is_empty() {
@@ -584,22 +589,22 @@ impl App {
                     .map(|h| h.description.as_str())
                     .or(project.map(|p| p.summary.as_str()))
                     .or(pack.map(|p| p.summary.as_str()));
-                // where it comes from first, as small pills in each site's colour, then the downloads (in a narrow
-                // window) and its tags
-                let mut pills = Vec::new();
+                // the sites it is on, as a quiet dot and name each (after what it works with), and its categories
+                let mut sites = Vec::new();
                 if hit.is_some() {
-                    pills.push(("Modrinth".to_string(), modrinth_color()));
+                    sites.push(("Modrinth".to_string(), modrinth_color()));
                 }
                 if project.is_some() {
-                    pills.push(("CurseForge".to_string(), curseforge_color()));
+                    sites.push(("CurseForge".to_string(), curseforge_color()));
                 }
                 if pack.is_some() {
-                    pills.push(("Smithed".to_string(), smithed_color()));
+                    sites.push(("Smithed".to_string(), smithed_color()));
                 }
+                let mut pills = Vec::new();
                 let tags = match (hit, project, pack) {
-                    (Some(h), _, _) => hit_tags(h, kind, 2),
-                    (None, Some(p), _) => p.categories.iter().take(2).map(|c| c.name.clone()).collect(),
-                    (None, None, Some(p)) => split_tags(p.categories.iter().map(String::as_str), 2).1,
+                    (Some(h), _, _) => hit_tags(h, kind, usize::MAX),
+                    (None, Some(p), _) => p.categories.iter().map(|c| c.name.clone()).collect(),
+                    (None, None, Some(p)) => split_tags(p.categories.iter().map(String::as_str), usize::MAX).1,
                     _ => Vec::new(),
                 };
                 // what it works with: the instance's version and loader, or what the Modrinth project says
@@ -618,6 +623,7 @@ impl App {
                     summary: summary.unwrap_or_default(),
                     pills,
                     compat,
+                    sites,
                     tags,
                     figure: Some((human_count(downloads), "downloads")),
                 };

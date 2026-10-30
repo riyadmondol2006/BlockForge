@@ -190,6 +190,13 @@ impl App {
                     }
                 });
             });
+            // what the instance runs, which is what the file has to fit
+            if let Some(inst) = &target_inst {
+                ui.horizontal(|ui| {
+                    ui.add_space(LABEL_W + ui.spacing().item_spacing.x);
+                    small_muted(ui, target_line(inst));
+                });
+            }
             let mut chosen: Option<Asset> = None;
             if !g.releases.is_empty() {
                 let names: Vec<String> = g
@@ -250,6 +257,11 @@ impl App {
                 });
                 chosen = assets.get(g.asset).cloned();
                 ui.add_space(10.0);
+                // what the chosen file's name says about the instance: a hint at most, never a check
+                if let (Some(a), Some(inst)) = (&chosen, &target_inst) {
+                    fit_note(ui, github::name_fit(&a.name, loader.as_deref(), &mc), inst);
+                    ui.add_space(6.0);
+                }
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 6.0;
                     let (rect, _) = ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
@@ -309,6 +321,57 @@ impl App {
             None => {}
         }
     }
+}
+
+/// What an instance runs, as the line under the "Add to" choice says it: "Fabric Survival: Minecraft 1.21.1 · Fabric".
+fn target_line(inst: &crate::instances::Instance) -> String {
+    let loader = inst.loader().map(|(k, _)| k.to_string()).unwrap_or_else(|| "no mod loader".into());
+    format!("{}: Minecraft {} \u{00B7} {loader}", inst.name(), inst.mc_version())
+}
+
+/// What a file's name says about the instance, in words that never claim more than a name can tell: amber only when
+/// the name names a loader the instance doesn't run.
+fn fit_words(fit: github::NameFit, inst: &crate::instances::Instance) -> (bool, String) {
+    let runs = inst.loader().map(|(k, _)| k.to_string());
+    match fit {
+        github::NameFit::OtherLoader(l) => {
+            let named = super::discover::loader_display(l);
+            let runs = runs.map_or_else(|| "runs no mod loader".to_string(), |r| format!("runs {r}"));
+            (true, format!("The file name says {named}, but {} {runs}. It probably won\u{2019}t load.", inst.name()))
+        }
+        github::NameFit::Suggests { loader, mc } => {
+            let mut named = Vec::new();
+            if loader {
+                named.push(runs.unwrap_or_default());
+            }
+            if mc {
+                named.push(format!("Minecraft {}", inst.mc_version()));
+            }
+            let named = named.join(" and ");
+            (false, format!("The file name suggests a match: it names {named}. Compatibility isn\u{2019}t verified."))
+        }
+        github::NameFit::Silent => (
+            false,
+            "Compatibility not verified: the file name doesn\u{2019}t say which loader or Minecraft version it\u{2019}s for, and GitHub files carry nothing to check."
+                .to_string(),
+        ),
+    }
+}
+
+/// [`fit_words`] under the files: an amber warning for a loader that doesn't fit, otherwise a quiet line behind an
+/// info mark.
+fn fit_note(ui: &mut Ui, fit: github::NameFit, inst: &crate::instances::Instance) {
+    let (warn, text) = fit_words(fit, inst);
+    if warn {
+        notice(ui, NoticeKind::Warn, &text, None);
+        return;
+    }
+    ui.horizontal_top(|ui| {
+        ui.spacing_mut().item_spacing.x = 6.0;
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
+        super::icons::paint(ui.painter(), super::icons::Icon::Info, rect.center(), 14.0, c_faint());
+        ui.add(egui::Label::new(RichText::new(text).size(FS_META).color(c_muted())).wrap());
+    });
 }
 
 /// The width of the labels in front of the window's drop-downs.

@@ -35,7 +35,7 @@ enum CfMsg {
     Project { result: Result<Project, String>, folder: Option<String>, installed_file: Option<i64>, reinstall: bool },
 }
 
-/// The file chooser for one project ("Installing X" in the Java edition).
+/// The file chooser for one project ("Installing X" in the Java edition; "Add X" here, as its button says).
 struct FileDialog {
     id: u64,
     project: Project,
@@ -314,11 +314,8 @@ impl App {
         }
         let ctx = ui.ctx().clone();
         let enabled = *self.cf.enabled.get_or_insert_with(|| curseforge::platform_enabled(&self.dirs, "modsEnabled"));
-        let labels: Vec<&str> = Section::ALL.iter().map(|s| s.label()).collect();
-        let open = Section::ALL.iter().position(|s| *s == self.cf.section).unwrap_or(0);
-        let picked = self.explore_header(ui, &labels, open);
-        if !self.cf.active || self.page != super::Page::Discover {
-            // another source was picked in the head: it is drawn from the next frame
+        if self.explore_header(ui) {
+            // another kind or source was picked in the head: it is drawn from the next frame
             return true;
         }
         if !enabled {
@@ -331,10 +328,6 @@ impl App {
             return true;
         }
         let mut search = !self.cf.searched;
-        if let Some(i) = picked {
-            self.cf.section = Section::ALL[i];
-            search = true;
-        }
         self.cf_load_categories(&ctx);
         let page_w = ui.available_width();
         let hint = format!("Search {}", self.cf.section.label().to_lowercase());
@@ -385,7 +378,7 @@ impl App {
             }
         }
         if self.cf.projects.is_empty() && self.cf.loading {
-            result_skeleton(ui, 6);
+            result_skeleton(ui, 4, "Searching CurseForge\u{2026}");
             return true;
         }
         if self.cf.projects.is_empty() && self.cf.error.is_none() && self.cf.searched {
@@ -450,7 +443,8 @@ impl App {
                     summary: &p.summary,
                     pills,
                     compat: target_compat.clone().unwrap_or_else(|| project_compat(p, section)),
-                    tags: p.categories.iter().take(3).map(|c| c.name.clone()).collect(),
+                    sites: Vec::new(),
+                    tags: p.categories.iter().map(|c| c.name.clone()).collect(),
                     figure: Some((human_count(p.download_count.max(0.0) as u64), "downloads")),
                 };
                 result_item(ui, width, &view, |ui, slot| {
@@ -666,8 +660,8 @@ impl App {
         }
     }
 
-    /// Under the filters: what the chosen instance runs and the update check (or, for modpacks, where else to look and
-    /// the address field), the number of results, and the loader helper (Fabric API and friends) when it is missing.
+    /// Under the filters: what the chosen instance runs and the update check, the number of results, and the loader
+    /// helper (Fabric API and friends) when it is missing.
     fn cf_context_line(&mut self, ui: &mut Ui, search: &mut bool, page_w: f32) {
         use super::discover::*;
         let section = self.cf.section;
@@ -682,15 +676,13 @@ impl App {
         let count = (self.cf.total > 0).then(|| results_text(self.cf.total, "result", "results"));
         let mut show_everything = false;
         let (cards, mut flip) = (self.results_as_cards(), None);
-        if section == Section::Modpacks || limited_to.is_some() || count.is_some() {
+        if limited_to.is_some() || count.is_some() {
             context_line_with(
                 ui,
                 count,
                 limited_to.is_some() && section != Section::Modpacks,
                 |ui| {
-                    if section == Section::Modpacks {
-                        self.other_modpack_sources(ui);
-                    } else if let (Some(text), Some(folder)) = (limited_to, target) {
+                    if let (Some(text), Some(folder)) = (limited_to, target) {
                         small_muted(ui, text);
                         if ghost(ui, "Show everything").clicked() {
                             show_everything = true;
@@ -1266,12 +1258,9 @@ impl App {
                 self.result_icon(ui, d.project.logo_url(), &d.project.name, 44.0);
                 ui.vertical(|ui| {
                     ui.spacing_mut().item_spacing.y = 2.0;
-                    ui.add(
-                        egui::Label::new(
-                            RichText::new(format!("Installing {}", d.project.name)).size(FS_SECTION).semibold(),
-                        )
-                        .wrap(),
-                    );
+                    // the verb of the button below: nothing is installing until it is pressed
+                    let title = format!("{} {}", if is_pack { "Install" } else { "Add" }, d.project.name);
+                    ui.add(egui::Label::new(RichText::new(title).size(FS_SECTION).semibold()).wrap());
                     if let Some((_, name)) = &target {
                         small_muted(ui, format!("into {name}"));
                     } else if is_pack {

@@ -27,8 +27,7 @@ enum Event {
     },
     Target {
         version: i64,
-        text: String,
-        ok: bool,
+        target: Target,
     },
     Updates(HashMap<String, PackVersion>),
     Manual {
@@ -42,6 +41,46 @@ enum Event {
         folder: String,
         done: bool,
     },
+}
+
+/// What a version of a pack needs, as its details window shows it. Install waits for it: it says which Minecraft,
+/// loader and Java the instance gets.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) enum Target {
+    /// Being read from FTB.
+    Loading,
+    Ready {
+        /// "1.20.1"
+        minecraft: String,
+        /// "Fabric 0.14.21", when it has a loader.
+        loader: Option<String>,
+        /// "Java 17", when the version names one.
+        java: Option<String>,
+        mods: usize,
+        /// The memory it recommends, in MB (0: it doesn't say).
+        memory: i64,
+    },
+    /// It couldn't be read: why.
+    Failed(String),
+}
+
+impl Target {
+    pub(super) fn of(m: &ftb::VersionManifest) -> Target {
+        let minecraft = m.target(TargetType::Game).map(|t| t.version.clone()).unwrap_or_default();
+        let loader = m.target(TargetType::Modloader).map(|t| format!("{} {}", loader_display(&t.name), t.version));
+        // Java is a target too, of a type the manifest's reader doesn't name
+        let java = m.targets.iter().find(|t| t.name.eq_ignore_ascii_case("java")).map(|t| java_label(&t.version));
+        let mods = m.files.iter().filter(|f| f.is_mod()).count();
+        Target::Ready { minecraft, loader, java, mods, memory: m.specs.as_ref().map(|s| s.recommended).unwrap_or(0) }
+    }
+}
+
+/// A Java version as a player names it: "17.0.2+8" is Java 17, "1.8.0_312" Java 8.
+pub(super) fn java_label(version: &str) -> String {
+    let mut parts = version.split(['.', '_', '+', '-']);
+    let first = parts.next().unwrap_or_default();
+    let major = if first == "1" { parts.next().unwrap_or(first) } else { first };
+    format!("Java {major}")
 }
 
 /// The pack whose details are open.
@@ -66,10 +105,8 @@ pub struct FtbState {
     edited: Option<Instant>,
     /// The window that lists the packs with updates is open.
     review_open: bool,
-    /// version id -> "Minecraft 1.20.1, Fabric 0.14.21"
-    targets: HashMap<i64, String>,
-    /// Versions that couldn't be read; asked again when picked again.
-    targets_failed: HashSet<i64>,
+    /// version id -> what it needs (a version that couldn't be read is asked again when picked again)
+    targets: HashMap<i64, Target>,
     /// instance folder -> the newer version
     pub updates: HashMap<String, PackVersion>,
     /// The instances being updated right now.
@@ -99,7 +136,6 @@ impl Default for FtbState {
             edited: None,
             review_open: false,
             targets: HashMap::new(),
-            targets_failed: HashSet::new(),
             updates: HashMap::new(),
             updating: HashSet::new(),
             list_gen: 0,
@@ -180,31 +216,47 @@ impl App {
     /// Find out which Minecraft and loader a version needs, for the details card.
     fn ftb_load_target(&mut self, version: i64) {
         let Some(sel) = self.ftb.selected.as_ref() else { return };
-        if version == 0 || (self.ftb.targets.contains_key(&version) && !self.ftb.targets_failed.contains(&version)) {
+        if version == 0 || self.ftb.targets.get(&version).is_some_and(|t| !matches!(t, Target::Failed(_))) {
             return;
         }
-        self.ftb.targets_failed.remove(&version);
         let (pack_id, dirs, tx, ctx) = (sel.pack.id, self.dirs.clone(), self.ftb.tx.clone(), self.ctx.clone());
-        self.ftb.targets.insert(version, "Reading the version".into());
+        self.ftb.targets.insert(version, Target::Loading);
         self.rt.spawn(async move {
-            let (text, ok) = match ftb::version_manifest(&dirs, pack_id, version).await {
-                Ok(m) => {
-                    let t = |k| m.target(k).map(|t| format!("{} {}", t.name, t.version));
-                    let mods = m.files.iter().filter(|f| f.is_mod()).count();
-                    let text = format!(
-                        "{}, {}  \u{00B7}  {} mods  \u{00B7}  needs about {} MB of memory",
-                        t(TargetType::Game).unwrap_or_default().replace("minecraft", "Minecraft"),
-                        t(TargetType::Modloader).unwrap_or_default(),
-                        mods,
-                        m.specs.map(|s| s.recommended).unwrap_or(0)
-                    );
-                    (text, true)
-                }
-                Err(e) => (format!("Couldn't read this version: {e:#}"), false),
+            let target = match ftb::version_manifest(&dirs, pack_id, version).await {
+                Ok(m) => Target::of(&m),
+                Err(e) => Target::Failed(format!("{e:#}")),
             };
-            let _ = tx.send(Event::Target { version, text, ok });
+            let _ = tx.send(Event::Target { version, target });
             ctx.request_repaint();
         });
+    }
+
+    /// For the screenshot tour: the list still on its way (`loading`), or the open pack's version being read, read,
+    /// or failed to read (`version-loading`, `version-ready`, `version-error`).
+    pub(super) fn shot_ftb_state(&mut self, state: &str) {
+        let f = &mut self.ftb;
+        let version = f.selected.as_ref().map_or(0, |s| s.version);
+        let target = match state {
+            "loading" => {
+                // an answer already on its way is for an older listing
+                f.seq += 1;
+                (f.loading, f.loaded_once, f.error) = (true, true, None);
+                f.packs.clear();
+                f.ids.clear();
+                return;
+            }
+            "version-loading" => Target::Loading,
+            "version-ready" => Target::Ready {
+                minecraft: "1.21.1".into(),
+                loader: Some("NeoForge 21.1.172".into()),
+                java: Some("Java 21".into()),
+                mods: 384,
+                memory: 8192,
+            },
+            "version-error" => Target::Failed("FTB answered 503 Service Unavailable".into()),
+            _ => return,
+        };
+        f.targets.insert(version, target);
     }
 
     /// Takes in what background work found. Called on every frame (not only while the page shows), so update
@@ -240,11 +292,8 @@ impl App {
                     }
                     self.ftb.packs.extend(packs);
                 }
-                Event::Target { version, text, ok } => {
-                    if !ok {
-                        self.ftb.targets_failed.insert(version);
-                    }
-                    self.ftb.targets.insert(version, text);
+                Event::Target { version, target } => {
+                    self.ftb.targets.insert(version, target);
                 }
                 Event::Updates(u) => self.ftb.updates = u,
                 Event::Manual { pack, version, name, files } => self.ftb.manual = Some((pack, version, name, files)),
@@ -315,14 +364,8 @@ impl App {
             self.ftb_check_updates();
         }
         let mut search = false;
-        // FTB has modpacks only; another kind opens the site mods were last looked for on
-        let labels: Vec<&str> = crate::modrinth::Kind::ALL.iter().map(|k| k.label()).collect();
-        let modpacks = crate::modrinth::Kind::ALL.iter().position(|k| *k == crate::modrinth::Kind::Modpack);
-        if let Some(i) = self.explore_header(ui, &labels, modpacks.unwrap_or(0)) {
-            self.explore_kind_elsewhere(crate::modrinth::Kind::ALL[i]);
-            return;
-        }
-        if self.page != super::Page::Ftb {
+        // the platforms have modpacks only; another kind opens on a site that has it
+        if self.explore_header(ui) {
             return;
         }
         let page_w = ui.available_width();
@@ -399,7 +442,7 @@ impl App {
             self.set_results_view(flip);
         }
         if self.ftb.packs.is_empty() && self.ftb.loading {
-            result_skeleton(ui, 6);
+            result_skeleton(ui, 4, "Loading Feed The Beast packs\u{2026}");
         } else if self.ftb.packs.is_empty() && self.ftb.error.is_none() {
             let query = self.ftb.query.trim().to_string();
             let text = if query.is_empty() {
@@ -433,7 +476,8 @@ impl App {
                         .first()
                         .map(|v| vec![(super::packs::pack_version(&v.label()), c_muted())])
                         .unwrap_or_default(),
-                    tags: pack.tags.iter().take(4).map(|t| t.name.clone()).collect(),
+                    sites: Vec::new(),
+                    tags: pack.tags.iter().map(|t| t.name.clone()).collect(),
                     figure: Some((human_count(pack.installs.max(0) as u64), "installs")),
                 };
                 result_item(ui, width, &view, |ui, slot| match slot {
@@ -562,6 +606,7 @@ impl App {
         let mut close = false;
         let mut install: Option<(i64, i64, Option<String>, String)> = None;
         let mut version_change: Option<i64> = None;
+        let mut retry = false;
         let (width, body_height) = super::curseforge::modal_size(ctx, 620.0, 260.0);
         let Some(mut sel) = self.ftb.selected.take() else { return };
         let modal = egui::Modal::new(egui::Id::unique("ftb-details")).frame(super::modal_frame(ctx)).show(ctx, |ui| {
@@ -635,10 +680,12 @@ impl App {
                                 },
                             );
                         });
-                        if let Some(text) = targets.get(&sel.version).filter(|t| !t.is_empty()) {
-                            small_muted(ui, text.clone());
+                        // what the version needs, once it is read: Install waits for it
+                        ui.add_space(2.0);
+                        if version_needs(ui, targets.get(&sel.version)) {
+                            retry = true;
                         }
-                        ui.add_space(4.0);
+                        ui.add_space(6.0);
                         ui.horizontal(|ui| {
                             field_label(ui, "Name");
                             ui.add_sized(
@@ -653,6 +700,8 @@ impl App {
             );
             ui.add_space(12.0);
             let website = sel.pack.website_url();
+            // a version picked this frame has nothing read yet, so it can't be installed until it has
+            let ready = version_change.is_none() && matches!(targets.get(&sel.version), Some(Target::Ready { .. }));
             dialog_footer(
                 ui,
                 "ftb-details",
@@ -665,11 +714,13 @@ impl App {
                     if installing {
                         spinner(ui);
                         muted(ui, "Installing");
+                    } else if !ready {
+                        small_muted(ui, "Install waits for the version\u{2019}s details");
                     }
                     if secondary(ui, "Close").clicked() {
                         close = true;
                     }
-                    if primary_enabled(ui, "Install", !installing).clicked() {
+                    if primary_enabled(ui, "Install", ready && !installing).clicked() {
                         install = Some((
                             sel.pack.id,
                             sel.version,
@@ -685,6 +736,9 @@ impl App {
             close = true;
         }
         if let Some(v) = version_change {
+            self.ftb_load_target(v);
+        } else if retry {
+            let v = self.ftb.selected.as_ref().map_or(0, |s| s.version);
             self.ftb_load_target(v);
         }
         if let Some((pack, version, name, title)) = install {
@@ -774,6 +828,58 @@ impl App {
     }
 }
 
+/// What a version needs under its picker: a turning arc while it is read, its Minecraft, loader and Java on tags once
+/// it is (with how many mods and how much memory), or why it couldn't be read with a way to try again. Returns true
+/// when Try again was pressed.
+fn version_needs(ui: &mut Ui, target: Option<&Target>) -> bool {
+    match target {
+        None | Some(Target::Loading) => {
+            ui.horizontal(|ui| {
+                spinner_sized(ui, 16.0);
+                let r = small_muted_response(ui, "Loading version details\u{2026}");
+                r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Status, true, "Loading version details"));
+            });
+            false
+        }
+        Some(Target::Ready { minecraft, loader, java, mods, memory }) => {
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = egui::vec2(5.0, 5.0);
+                if !minecraft.is_empty() {
+                    mono_tag(ui, &format!("Minecraft {minecraft}"), c_muted());
+                }
+                if let Some(l) = loader {
+                    mono_tag(ui, l, tag_color(l.split(' ').next().unwrap_or_default()));
+                }
+                if let Some(j) = java {
+                    mono_tag(ui, j, c_muted());
+                }
+                ui.add_space(4.0);
+                let mut rest = vec![if *mods == 1 { "1 mod".to_string() } else { format!("{mods} mods") }];
+                if *memory > 0 {
+                    rest.push(format!("about {memory} MB of memory"));
+                }
+                small_muted(ui, rest.join("  \u{00B7}  "));
+            });
+            false
+        }
+        Some(Target::Failed(e)) => {
+            notice(
+                ui,
+                NoticeKind::Error,
+                &format!("Couldn\u{2019}t read this version, so it can\u{2019}t be installed yet: {e}"),
+                None,
+            );
+            ui.add_space(2.0);
+            secondary(ui, "Try again").clicked()
+        }
+    }
+}
+
+/// [`small_muted`] that hands back its response.
+fn small_muted_response(ui: &mut Ui, text: &str) -> egui::Response {
+    ui.label(RichText::new(text).size(FS_META).color(c_muted()))
+}
+
 /// The width of the labels in front of the fields of a pack's window, so the fields line up.
 const LABEL_W: f32 = 56.0;
 
@@ -783,4 +889,45 @@ fn field_label(ui: &mut Ui, text: &str) {
         ui.set_min_width(LABEL_W);
         filter_label(ui, text);
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn java_versions_are_named_as_players_name_them() {
+        assert_eq!(java_label("17.0.2+8"), "Java 17");
+        assert_eq!(java_label("1.8.0_312"), "Java 8");
+        assert_eq!(java_label("21"), "Java 21");
+    }
+
+    #[test]
+    fn a_versions_needs_are_read_from_its_targets() {
+        let target = |name: &str, version: &str, kind| ftb::ManifestTarget {
+            version: version.into(),
+            id: -1,
+            name: name.into(),
+            kind,
+            updated: 0,
+        };
+        let m = ftb::VersionManifest {
+            targets: vec![
+                target("minecraft", "1.18.2", Some(TargetType::Game)),
+                target("forge", "40.1.84", Some(TargetType::Modloader)),
+                target("java", "17.0.2+8", None),
+            ],
+            ..Default::default()
+        };
+        assert_eq!(
+            Target::of(&m),
+            Target::Ready {
+                minecraft: "1.18.2".into(),
+                loader: Some("Forge 40.1.84".into()),
+                java: Some("Java 17".into()),
+                mods: 0,
+                memory: 0,
+            }
+        );
+    }
 }

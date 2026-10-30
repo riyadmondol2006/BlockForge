@@ -1093,6 +1093,8 @@ fn pill_tab_width(ui: &Ui, text: &str, dot: bool) -> f32 {
 }
 
 /// How wide a row of [`pill_tabs`] is, gaps included, so a head can tell whether it fits beside its title.
+// Explore's head no longer measures its sources (they wrap under the kinds); kept for the heads that may
+#[allow(dead_code)]
 pub fn pill_tabs_width(ui: &Ui, items: &[(&str, Option<Color32>)]) -> f32 {
     let gaps = items.len().saturating_sub(1) as f32 * PILL_TAB_GAP;
     items.iter().map(|(t, dot)| pill_tab_width(ui, t, dot.is_some())).sum::<f32>() + gaps

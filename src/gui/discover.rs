@@ -12,6 +12,7 @@ use super::motion;
 use super::theme::*;
 use super::widgets::*;
 use super::{App, Msg, Page};
+use crate::curseforge::api::Section;
 use crate::modrinth::{self, Hit, Kind, Narrow, Side, Sort};
 use crate::mods::metadata::ContentKind;
 
@@ -259,10 +260,30 @@ pub(super) fn thousands(n: u64) -> String {
 /// A list that couldn't be fetched, said in one calm line with a button to try again (what exactly went wrong is
 /// in the tooltip). Returns whether "Try again" was pressed.
 pub(super) fn fetch_error(ui: &mut Ui, text: &str, detail: &str) -> bool {
-    let out = ui.scope(|ui| notice(ui, NoticeKind::Error, text, Some("Try again")));
+    // the error's own box rather than a notice with a button: the button is laid out first, so a long message wraps
+    // beside it instead of running under it
+    let out = egui::Frame::new()
+        .fill(c_danger_bg())
+        .stroke(Stroke::new(1.0, c_danger_line()))
+        .corner_radius(CornerRadius::same(R_CONTROL))
+        .inner_margin(egui::Margin::symmetric(14, 11))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            let id = ui.scope_id().with("fetch-error-retry");
+            let mut retry = false;
+            ui.horizontal(|ui| {
+                let room = ui.available_width() - remembered_width(ui, id, 100.0) - 16.0;
+                ui.scope(|ui| {
+                    ui.set_max_width(room.max(120.0));
+                    ui.add(egui::Label::new(RichText::new(text).color(c_danger())).wrap());
+                });
+                end_aligned(ui, id, |ui| retry = secondary(ui, "Try again").clicked());
+            });
+            retry
+        });
     out.response.on_hover_text(detail);
     ui.add_space(8.0);
-    out.inner.is_some_and(|r| r.clicked())
+    out.inner
 }
 
 /// Link-looking text in ink (not green): underlined, with the hand cursor.
@@ -373,7 +394,8 @@ impl App {
 }
 
 /// Where Explore looks: the sites with mods of every kind (Modrinth, CurseForge, or both of them as one list), and the
-/// platforms with modpacks only. One row of pills at the top of every Explore page switches between them.
+/// platforms with modpacks only. A row of pills under the kinds switches between the ones the open kind has (see
+/// [`sources_for`]).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum Source {
     Modrinth,
@@ -386,9 +408,6 @@ pub(super) enum Source {
 }
 
 impl Source {
-    pub const ALL: [Source; 6] =
-        [Source::Modrinth, Source::CurseForge, Source::Everywhere, Source::Atl, Source::Technic, Source::Ftb];
-
     pub fn label(self) -> &'static str {
         match self {
             Source::Modrinth => "Modrinth",
@@ -398,6 +417,20 @@ impl Source {
             Source::Technic => "Technic",
             Source::Ftb => "FTB",
         }
+    }
+
+    /// The name of the source on the pages of `kind`: for data packs the list of every site has Smithed in it too,
+    /// so it is not "Both" there.
+    pub fn label_for(self, kind: Section) -> &'static str {
+        match self {
+            Source::Everywhere if kind == Section::DataPacks => "All sources",
+            _ => self.label(),
+        }
+    }
+
+    /// One of the platforms with modpacks only.
+    pub fn is_catalog(self) -> bool {
+        matches!(self, Source::Atl | Source::Technic | Source::Ftb)
     }
 
     /// The colour of the source's dot: the sites keep the colours they have on the rows of a search on both.
@@ -412,6 +445,42 @@ impl Source {
         };
         let (r, g, b) = if is_dark() { dark } else { light };
         Color32::from_rgb(r, g, b)
+    }
+}
+
+/// The kinds Explore has, as tabs in this order. Each kind has the sources [`sources_for`] says; CurseForge's sections
+/// name them, as it is the site with the most (Modrinth has no worlds).
+pub(super) const EXPLORE_KINDS: [Section; 6] = [
+    Section::Mods,
+    Section::Modpacks,
+    Section::ResourcePacks,
+    Section::ShaderPacks,
+    Section::DataPacks,
+    Section::Worlds,
+];
+
+/// The sources a kind is found on, in two groups: the sites, and after a divider the platforms with modpacks only.
+pub(super) fn sources_for(kind: Section) -> (&'static [Source], &'static [Source]) {
+    const SITES: [Source; 3] = [Source::Modrinth, Source::CurseForge, Source::Everywhere];
+    const CATALOGS: [Source; 3] = [Source::Atl, Source::Technic, Source::Ftb];
+    match kind {
+        Section::Modpacks => (&SITES, &CATALOGS),
+        Section::Worlds => (&[Source::CurseForge], &[]),
+        _ => (&SITES, &[]),
+    }
+}
+
+/// The source to show `kind` on when `from` was open: the same one where the kind has it, otherwise the site mods
+/// were last looked for on (`site`), otherwise the first the kind has.
+pub(super) fn source_for_kind(kind: Section, from: Source, site: Source) -> Source {
+    let (sites, catalogs) = sources_for(kind);
+    let has = |s: Source| sites.contains(&s) || catalogs.contains(&s);
+    if has(from) {
+        from
+    } else if has(site) {
+        site
+    } else {
+        sites[0]
     }
 }
 
@@ -451,8 +520,10 @@ pub(super) fn empty_state(ui: &mut Ui, text: &str, action: Option<&str>) -> Opti
 }
 
 /// Cards in the shape of results (picture, name, summary, badges, the button at the right) while the first ones are
-/// on their way; the cards further down are fainter, and they all breathe gently.
-pub(super) fn result_skeleton(ui: &mut Ui, rows: usize) {
+/// on their way, under a line that says what is being asked (`status`: "Loading ATLauncher packs…"); the cards further
+/// down are fainter, and they all breathe gently.
+pub(super) fn result_skeleton(ui: &mut Ui, rows: usize, status: &str) {
+    loading_status(ui, status);
     let reduced = motion::reduced(ui.ctx());
     let phase = if reduced { 0.5 } else { (ui.input(|i| i.time) * 2.4).sin() as f32 * 0.5 + 0.5 };
     if !reduced {
@@ -503,6 +574,20 @@ pub(super) fn result_skeleton(ui: &mut Ui, rows: usize) {
             p.rect_filled(button, CornerRadius::same(R_CONTROL), c);
         }
     }
+}
+
+/// A list's loading line: a small turning arc and what is being asked, in words a screen reader reads out as a
+/// status, so the wait is explained without the grey rows.
+pub(super) fn loading_status(ui: &mut Ui, text: &str) {
+    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 28.0), Sense::hover());
+    if ui.is_rect_visible(rect) {
+        let spin = egui::Rect::from_center_size(egui::pos2(rect.left() + 8.0, rect.center().y), vec2(16.0, 16.0));
+        ui.scope_builder(egui::UiBuilder::new().max_rect(spin), |ui| spinner_sized(ui, 16.0));
+        let galley = ui.painter().layout_no_wrap(text.to_string(), egui::FontId::proportional(FS_BODY), c_muted());
+        ui.painter().galley(egui::pos2(rect.left() + 26.0, rect.center().y - galley.size().y / 2.0), galley, c_muted());
+    }
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Status, true, text));
+    ui.add_space(6.0);
 }
 
 /// What the search field wants on a frame.
@@ -644,7 +729,7 @@ pub(super) fn newest_release<'a>(versions: impl Iterator<Item = &'a str>) -> Opt
 }
 
 /// A loader's name as it is written everywhere else ("neoforge" is "NeoForge"); other words stay as they are.
-fn loader_display(name: &str) -> String {
+pub(super) fn loader_display(name: &str) -> String {
     match name.to_ascii_lowercase().as_str() {
         "fabric" => "Fabric".into(),
         "quilt" => "Quilt".into(),
@@ -678,9 +763,45 @@ pub(super) fn name_line_with(ui: &mut Ui, name: &str, note: Option<(String, Colo
     ui.add(egui::Label::new(job).truncate());
 }
 
-/// The second line of a result: what it is, in one line.
+/// The second line of a result: what it is, in one line. When that cuts it short the pointer shows more of it (see
+/// [`summary_tooltip`]).
 pub(super) fn summary_line(ui: &mut Ui, text: &str) {
-    ui.add(egui::Label::new(RichText::new(text).size(FS_BODY).color(c_muted())).truncate());
+    let text = one_line(text);
+    let mut job = LayoutJob::single_section(text.clone(), run(c_muted(), FS_BODY));
+    job.wrap = egui::text::TextWrapping::truncate_at_width(ui.available_width());
+    let galley = ui.painter().layout_job(job);
+    let elided = galley.elided;
+    let resp = ui.add(egui::Label::new(galley).show_tooltip_when_elided(false));
+    if elided {
+        summary_tooltip(resp, &text);
+    }
+}
+
+/// Text with its line breaks and runs of spaces made single spaces, for a line or a short excerpt.
+pub(super) fn one_line(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// How wide the excerpt of a result's words under the pointer gets, and how many lines it has at most.
+const SUMMARY_TIP_W: f32 = 360.0;
+const SUMMARY_TIP_ROWS: usize = 6;
+
+/// More of a result's words for the pointer when its line cut them short: an excerpt of six lines at most, ended
+/// with an ellipsis, so it doesn't cover the rows around it; the whole text is on the result's page. It waits the
+/// usual half second before it shows.
+pub(super) fn summary_tooltip(resp: Response, text: &str) -> Response {
+    resp.on_hover_ui(|ui| {
+        ui.set_max_width(SUMMARY_TIP_W);
+        let mut job = LayoutJob::single_section(one_line(text), run(c_text(), FS_BODY - 1.0));
+        job.wrap = egui::text::TextWrapping {
+            max_width: SUMMARY_TIP_W,
+            max_rows: SUMMARY_TIP_ROWS,
+            break_anywhere: false,
+            overflow_character: Some('\u{2026}'),
+        };
+        let galley = ui.painter().layout_job(job);
+        ui.add(egui::Label::new(galley));
+    })
 }
 
 /// One result in a list: a card of its own with the gap to the next under it. Under the pointer the card rises a
@@ -777,6 +898,10 @@ pub(super) enum Badge {
     Compat(String, Color32),
     /// A category: a soft chip.
     Chip(String),
+    /// How many categories there are besides the chips shown ("+2"), and their names for the pointer.
+    More(String, String),
+    /// A site it is on: a small dot in the site's colour and its name in quiet text.
+    Site(String, Color32),
     /// Its figure (downloads), in a narrow row where it has no room at the right.
     Figure(String),
 }
@@ -789,7 +914,8 @@ impl Badge {
                     + 14.0
             }
             Badge::Compat(t, _) | Badge::Figure(t) => mono_tag_width(ui, t) + if self.is_figure() { 12.0 } else { 0.0 },
-            Badge::Chip(t) => soft_chip_width(ui, t),
+            Badge::Chip(t) | Badge::More(t, _) => soft_chip_width(ui, t),
+            Badge::Site(t, _) => site_label_width(ui, t),
         }
     }
 
@@ -835,6 +961,12 @@ pub(super) fn badge_line(ui: &mut Ui, badges: &[Badge], room: f32) {
                     Badge::Chip(t) => {
                         soft_chip(ui, t, chip_hue(t));
                     }
+                    Badge::More(t, names) => {
+                        soft_chip(ui, t, c_muted()).on_hover_text(names);
+                    }
+                    Badge::Site(t, c) => {
+                        site_label(ui, t, *c);
+                    }
                     Badge::Figure(t) => {
                         let (rect, _) =
                             ui.allocate_exact_size(vec2(mono_tag_width(ui, t) + 12.0, 20.0), Sense::hover());
@@ -858,24 +990,40 @@ pub(super) fn badge_line(ui: &mut Ui, badges: &[Badge], room: f32) {
     });
 }
 
-/// How wide a figure's box is: room for "999.9M".
-const FIGURE_W: f32 = 92.0;
+/// How wide a result's figure is: room for "999.9M" after the arrow.
+const FIGURE_W: f32 = 64.0;
 
-/// A result's figure (its downloads) on a small outlined box with the download arrow, in the monospace face.
-pub(super) fn figure_box(ui: &mut Ui, figure: &str, unit: &str) -> Response {
-    let galley = ui.painter().layout_no_wrap(figure.to_string(), super::fonts::mono(12.5), c_text());
-    // one width for the boxes of a list (wider only for a figure that needs it), so they line up in a column
-    let (rect, resp) = ui.allocate_exact_size(vec2((galley.size().x + 40.0).max(FIGURE_W), 30.0), Sense::hover());
+/// A result's figure (its downloads) as plain quiet text in the monospace face after a faint download arrow, flush
+/// right in a column of its own: something to compare by, not something to press.
+pub(super) fn figure_text(ui: &mut Ui, figure: &str, unit: &str) -> Response {
+    let galley = ui.painter().layout_no_wrap(figure.to_string(), super::fonts::mono(12.0), c_muted());
+    // one width for the figures of a list (wider only for a figure that needs it), so they line up in a column
+    let (rect, resp) = ui.allocate_exact_size(vec2((galley.size().x + 16.0).max(FIGURE_W), 30.0), Sense::hover());
     if ui.is_rect_visible(rect) {
         let p = ui.painter();
-        p.rect(rect, CornerRadius::same(R_CONTROL), c_field(), Stroke::new(1.0, c_border()), egui::StrokeKind::Inside);
-        icons::paint(p, Icon::Download, egui::pos2(rect.left() + 15.0, rect.center().y), 12.0, c_faint());
-        let at = egui::pos2(rect.right() - 12.0 - galley.size().x, rect.center().y - galley.size().y / 2.0);
-        p.galley(at, galley, c_text());
+        let at = egui::pos2(rect.right() - galley.size().x, rect.center().y - galley.size().y / 2.0);
+        icons::paint(p, Icon::Download, egui::pos2(at.x - 11.0, rect.center().y), 11.0, c_faint());
+        p.galley(at, galley, c_muted());
     }
     let text = format!("{figure} {unit}");
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, &text));
     resp.on_hover_text(text)
+}
+
+/// A site a result is on, as quiet as a word can be: a small dot in the site's colour and its name.
+pub(super) fn site_label(ui: &mut Ui, text: &str, color: Color32) -> Response {
+    let galley = ui.painter().layout_no_wrap(text.to_string(), super::fonts::medium(FS_META), c_muted());
+    let (rect, resp) = ui.allocate_exact_size(vec2(site_label_width(ui, text), 20.0), Sense::hover());
+    if ui.is_rect_visible(rect) {
+        ui.painter().circle_filled(egui::pos2(rect.left() + 4.0, rect.center().y), 3.0, color);
+        ui.painter().galley(egui::pos2(rect.left() + 12.0, rect.center().y - galley.size().y / 2.0), galley, c_muted());
+    }
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, text));
+    resp
+}
+
+fn site_label_width(ui: &Ui, text: &str) -> f32 {
+    ui.painter().layout_no_wrap(text.to_string(), super::fonts::medium(FS_META), Color32::PLACEHOLDER).size().x + 14.0
 }
 
 /// The main button of a result: the brand gradient, the same size on every row.
@@ -1513,23 +1661,34 @@ pub(super) struct ResultView<'a> {
     pub pills: Vec<(String, Color32)>,
     /// What it works with (Minecraft versions, loaders), on monospace tags after the pills.
     pub compat: Vec<(String, Color32)>,
-    /// Its categories, on soft chips at the end of the badge line.
+    /// The sites it is on, in a list of more than one site: a dot and a name each, after what it works with.
+    pub sites: Vec<(String, Color32)>,
+    /// Its categories: the first [`MAX_CHIPS`] on soft chips at the end of the badge line, then how many more.
     pub tags: Vec<String>,
     /// The figure that tells results apart (its number and its unit): in a box at the right end of a wide row, at the
     /// foot of a card, on the badge line of a narrow row.
     pub figure: Option<(String, &'static str)>,
 }
 
+/// The most categories a result shows on chips; the rest are counted on one more ("+2").
+pub(super) const MAX_CHIPS: usize = 2;
+
 impl ResultView<'_> {
-    /// The badge line: pills, then what it works with, then its categories; with `figure`, the figure first.
+    /// The badge line in the order it matters to a player: warnings, what it works with, the sites it is on, then
+    /// its categories; with `figure`, the figure last.
     fn badges(&self, figure: bool) -> Vec<Badge> {
         let mut out = Vec::new();
+        out.extend(self.pills.iter().map(|(t, c)| Badge::Pill(t.clone(), *c)));
+        out.extend(self.compat.iter().map(|(t, c)| Badge::Compat(t.clone(), *c)));
+        out.extend(self.sites.iter().map(|(t, c)| Badge::Site(t.clone(), *c)));
+        out.extend(self.tags.iter().take(MAX_CHIPS).map(|t| Badge::Chip(t.clone())));
+        if self.tags.len() > MAX_CHIPS {
+            let rest = &self.tags[MAX_CHIPS..];
+            out.push(Badge::More(format!("+{}", rest.len()), rest.join(", ")));
+        }
         if let Some((f, _)) = self.figure.as_ref().filter(|_| figure) {
             out.push(Badge::Figure(f.clone()));
         }
-        out.extend(self.pills.iter().map(|(t, c)| Badge::Pill(t.clone(), *c)));
-        out.extend(self.compat.iter().map(|(t, c)| Badge::Compat(t.clone(), *c)));
-        out.extend(self.tags.iter().map(|t| Badge::Chip(t.clone())));
         out
     }
 }
@@ -1572,7 +1731,7 @@ fn result_row(ui: &mut Ui, view: &ResultView, fill: &mut dyn FnMut(&mut Ui, Slot
             row_actions(ui, key, |ui| {
                 action_cell(ui, key, |ui| fill(ui, Slot::Actions));
                 if let Some((figure, unit)) = view.figure.as_ref().filter(|_| wide) {
-                    figure_box(ui, figure, unit);
+                    figure_text(ui, figure, unit);
                 }
             });
         });
@@ -1606,7 +1765,7 @@ fn result_card(ui: &mut Ui, width: f32, view: &ResultView, fill: &mut dyn FnMut(
             ui.add_space(8.0);
             if !view.summary.is_empty() {
                 // two lines at most, ended with an ellipsis when there is more
-                let mut job = LayoutJob::single_section(view.summary.to_string(), run(c_muted(), FS_BODY - 1.0));
+                let mut job = LayoutJob::single_section(one_line(view.summary), run(c_muted(), FS_BODY - 1.0));
                 job.wrap = egui::text::TextWrapping {
                     max_width: ui.available_width(),
                     max_rows: 2,
@@ -1614,13 +1773,17 @@ fn result_card(ui: &mut Ui, width: f32, view: &ResultView, fill: &mut dyn FnMut(
                     overflow_character: Some('\u{2026}'),
                 };
                 let galley = ui.painter().layout_job(job);
-                ui.add(egui::Label::new(galley));
+                let elided = galley.elided;
+                let resp = ui.add(egui::Label::new(galley).show_tooltip_when_elided(false));
+                if elided {
+                    summary_tooltip(resp, view.summary);
+                }
             }
             // the foot first, from the bottom up: the figure and the actions, then the badges over them
             ui.with_layout(Layout::bottom_up(Align::Min), |ui| {
                 ui.horizontal(|ui| {
                     if let Some((figure, unit)) = &view.figure {
-                        figure_box(ui, figure, unit);
+                        figure_text(ui, figure, unit);
                     }
                     end_aligned(ui, id.with("actions"), |ui| fill(ui, Slot::Actions));
                 });
@@ -2120,24 +2283,6 @@ impl App {
         self.mods_cache = None;
     }
 
-    /// Discover lists Modrinth's and CurseForge's modpacks; the other sources are a pill away, and named here too.
-    pub(super) fn other_modpack_sources(&mut self, ui: &mut Ui) {
-        ui.horizontal_wrapped(|ui| {
-            small_muted(ui, "More modpacks:");
-            if text_link(ui, "ATLauncher", FS_META).clicked() {
-                self.open_source(Source::Atl);
-            }
-            small_muted(ui, "\u{00B7}");
-            if text_link(ui, "Technic", FS_META).clicked() {
-                self.open_source(Source::Technic);
-            }
-            small_muted(ui, "\u{00B7}");
-            if text_link(ui, "Feed The Beast", FS_META).clicked() {
-                self.open_source(Source::Ftb);
-            }
-        });
-    }
-
     /// The source the open Explore page shows.
     pub(super) fn explore_source(&mut self) -> Source {
         self.cf_init();
@@ -2200,82 +2345,107 @@ impl App {
         }
     }
 
-    /// The head of every Explore page: the title with the sources beside it (they go under it in a narrow window),
-    /// and under them the kinds the source has as tabs, with "Add from GitHub" at the right end. `kinds` are the tabs'
-    /// names and `kind` the open one. Returns the kind that was picked, when another was.
-    pub(super) fn explore_header(&mut self, ui: &mut Ui, kinds: &[&str], kind: usize) -> Option<usize> {
+    /// The kind the open Explore page shows (see [`EXPLORE_KINDS`]).
+    pub(super) fn explore_kind(&self) -> Section {
+        match self.page {
+            Page::Packs | Page::Ftb => Section::Modpacks,
+            _ if self.cf.active => self.cf_section(),
+            _ => super::discover_both::section_for(self.discover.kind),
+        }
+    }
+
+    /// Open `kind` on `source` (one the kind has, see [`sources_for`]). Modrinth's kind and CurseForge's section
+    /// follow each other, so switching between the two sites keeps the kind.
+    pub(super) fn explore_open(&mut self, kind: Section, source: Source) {
+        self.open_source(source);
+        if source.is_catalog() {
+            return;
+        }
+        // after the source: opening it carries its own idea of the kind over from the site that was open
+        self.cf_show_section(kind);
+        if let Some(k) = super::discover_both::kind_for(kind) {
+            if k != self.discover.kind {
+                self.discover.kind = k;
+                self.discover.kind_changed();
+                self.discover.searched = false;
+            }
+        }
+    }
+
+    /// The head of every Explore page: the title with "Add from GitHub" at its right, the kinds as tabs under it, and
+    /// under them the sources the open kind is found on. Returns true when another kind or source was picked: the rest
+    /// of the frame would draw the page that was open, so the caller stops.
+    pub(super) fn explore_header(&mut self, ui: &mut Ui) -> bool {
+        let kind = self.explore_kind();
         let current = self.explore_source();
-        let mut picked: Option<Source> = None;
-        let sources = |ui: &mut Ui, picked: &mut Option<Source>| {
-            // the sites with mods of every kind, then the modpack platforms, as one control with a gap between
-            for (i, group) in [&Source::ALL[..3], &Source::ALL[3..]].into_iter().enumerate() {
-                if i > 0 {
-                    let (r, _) = ui.allocate_exact_size(vec2(9.0, 32.0), Sense::hover());
-                    ui.painter().vline(r.center().x, r.y_range().shrink(8.0), Stroke::new(1.0, c_border()));
-                }
-                let items: Vec<(&str, Option<Color32>)> = group.iter().map(|s| (s.label(), Some(s.color()))).collect();
-                let on = group.iter().position(|s| *s == current).unwrap_or(usize::MAX);
-                if let Some(n) = pill_tabs(ui, &items, on) {
-                    *picked = Some(group[n]);
-                }
-            }
-        };
-        let all: Vec<(&str, Option<Color32>)> = Source::ALL.iter().map(|s| (s.label(), Some(s.color()))).collect();
-        let sources_w = pill_tabs_width(ui, &all) + 9.0 + 2.0 * ui.spacing().item_spacing.x;
-        let title_w =
-            ui.painter().layout_no_wrap("Discover".into(), super::fonts::semibold(FS_TITLE), c_text()).size().x;
-        if title_w + HEADER_GAP + sources_w <= ui.available_width() {
-            ui.horizontal(|ui| {
-                heading(ui, "Discover");
-                end_aligned(ui, egui::Id::unique("explore-sources"), |ui| sources(ui, &mut picked));
-            });
-        } else {
-            heading(ui, "Discover");
-            ui.add_space(6.0);
-            ui.horizontal_wrapped(|ui| sources(ui, &mut picked));
-        }
-        if picked.is_some() {
-            // the rest of this frame would still draw the source that was open
-            ui.ctx().request_discard("another source of Explore");
-        }
-        ui.add_space(12.0);
-        let mut chosen = None;
         let mut github = false;
-        tab_bar(ui, |ui| {
-            for (i, k) in kinds.iter().enumerate() {
-                let r = tab(ui, k, i == kind);
-                if r.clicked() && i != kind {
-                    chosen = Some(i);
-                }
-            }
+        ui.horizontal(|ui| {
+            heading(ui, "Explore");
             // a mod that is only on GitHub is added from the link to its page
-            let label = if ui.available_width() >= 170.0 { "Add from GitHub" } else { "GitHub" };
             end_aligned(ui, egui::Id::unique("explore-github"), |ui| {
-                github = ghost_icon(ui, Icon::Plus, label)
+                github = ghost_icon(ui, Icon::Plus, "Add from GitHub")
                     .on_hover_text("For a mod that is only on GitHub: paste the link to its page")
                     .clicked();
             });
         });
+        ui.add_space(8.0);
+        let mut picked_kind = None;
+        tab_bar(ui, |ui| {
+            for k in EXPLORE_KINDS {
+                if tab(ui, k.label(), k == kind).clicked() && k != kind {
+                    picked_kind = Some(k);
+                }
+            }
+        });
+        ui.add_space(12.0);
+        // the sources of this kind: the sites, then after a divider the platforms with modpacks only. Each pill is laid
+        // out on its own, so a narrow window wraps them one by one
+        let mut picked_source = None;
+        let (sites, catalogs) = sources_for(kind);
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = vec2(PILL_TAB_GAP, 6.0);
+            filter_label(ui, "Source");
+            ui.add_space(4.0);
+            for (i, group) in [sites, catalogs].into_iter().enumerate() {
+                if group.is_empty() {
+                    continue;
+                }
+                if i > 0 {
+                    let (r, _) = ui.allocate_exact_size(vec2(9.0, 32.0), Sense::hover());
+                    ui.painter().vline(r.center().x, r.y_range().shrink(8.0), Stroke::new(1.0, c_border()));
+                }
+                for s in group {
+                    let on = if *s == current { 0 } else { usize::MAX };
+                    if pill_tabs(ui, &[(s.label_for(kind), Some(s.color()))], on).is_some() {
+                        picked_source = Some(*s);
+                    }
+                }
+            }
+            // what the list of every site has in it, where that is more than its name says
+            let note = match kind {
+                Section::DataPacks => Some("All sources includes Smithed too"),
+                Section::Worlds => Some("Worlds are on CurseForge only"),
+                _ => None,
+            };
+            if let Some(note) = note {
+                ui.add_space(6.0);
+                small_muted(ui, note);
+            }
+        });
         ui.add_space(16.0);
-        if let Some(s) = picked {
-            self.open_source(s);
-        }
         if github {
             self.gh_open();
         }
-        chosen
-    }
-
-    /// A kind picked on a page of modpacks only (ATLauncher, Technic, FTB): the site mods were last looked for on,
-    /// open on that kind.
-    pub(super) fn explore_kind_elsewhere(&mut self, kind: Kind) {
-        if kind != self.discover.kind {
-            self.discover.kind = kind;
-            self.discover.kind_changed();
-        }
-        self.discover.searched = false;
-        self.cf_show_section(super::discover_both::section_for(kind));
-        self.open_source(self.mod_site());
+        let next = match (picked_kind, picked_source) {
+            (Some(k), _) => Some((k, source_for_kind(k, current, self.mod_site()))),
+            (None, Some(s)) => Some((kind, s)),
+            (None, None) => None,
+        };
+        let Some((k, s)) = next else { return false };
+        self.explore_open(k, s);
+        // the rest of this frame would still draw the page that was open
+        ui.ctx().request_discard("another kind or source of Explore");
+        true
     }
 
     /// Keeps the list of Modrinth projects in the target instance current, reading it again only when the
@@ -2303,20 +2473,12 @@ impl App {
         if self.cf_discover_ui(ui) {
             return;
         }
-        let labels: Vec<&str> = Kind::ALL.iter().map(|k| k.label()).collect();
-        let open = Kind::ALL.iter().position(|k| *k == self.discover.kind).unwrap_or(0);
-        let picked = self.explore_header(ui, &labels, open);
-        if self.page != Page::Discover || self.cf.active {
-            // another source was picked in the head: it is drawn from the next frame
+        if self.explore_header(ui) {
+            // another kind or source was picked in the head: it is drawn from the next frame
             return;
         }
-        // the first visit shows the most downloaded right away
+        // the first visit shows the most downloaded right away (and so does another kind)
         let mut search = !self.discover.searched;
-        if let Some(i) = picked {
-            self.discover.kind = Kind::ALL[i];
-            self.discover.kind_changed();
-            search = true;
-        }
         let page_w = ui.available_width();
         let hint = format!("Search {}", self.discover.kind.label().to_lowercase());
         let mut st = (&mut *self, &mut search);
@@ -2362,15 +2524,13 @@ impl App {
         let count = (total > 0).then(|| results_text(total, "result", "results"));
         let mut show_everything = false;
         let (cards, mut flip) = (self.results_as_cards(), None);
-        if kind == Kind::Modpack || limited_to.is_some() || count.is_some() {
+        if limited_to.is_some() || count.is_some() {
             context_line_with(
                 ui,
                 count,
                 limited_to.is_some(),
                 |ui| {
-                    if kind == Kind::Modpack {
-                        self.other_modpack_sources(ui);
-                    } else if let Some(text) = limited_to {
+                    if let Some(text) = limited_to {
                         small_muted(ui, text);
                         if ghost(ui, "Show everything").clicked() {
                             show_everything = true;
@@ -2407,7 +2567,7 @@ impl App {
             }
         }
         if self.discover.hits.is_empty() && self.discover.loading {
-            result_skeleton(ui, 6);
+            result_skeleton(ui, 4, "Searching Modrinth\u{2026}");
             return;
         }
         if self.discover.hits.is_empty() && self.discover.error.is_none() {
@@ -2438,7 +2598,8 @@ impl App {
                     summary: &hit.description,
                     pills: Vec::new(),
                     compat: hit_compat(hit, matched.as_ref(), kind),
-                    tags: hit_tags(hit, kind, 3),
+                    sites: Vec::new(),
+                    tags: hit_tags(hit, kind, usize::MAX),
                     figure: Some((human_count(hit.downloads), "downloads")),
                 };
                 result_item(ui, width, &view, |ui, slot| {
@@ -2630,27 +2791,34 @@ mod tests {
     }
 
     #[test]
-    fn a_rows_badges_go_in_order_with_the_figure_first_when_it_is_on_the_line() {
+    fn a_rows_badges_go_in_order_with_compatibility_first_and_two_chips_at_most() {
         let view = ResultView {
             key: "x".into(),
             title: "Sodium",
             by: None,
             summary: "",
-            pills: vec![("Modrinth".into(), Color32::GREEN)],
+            pills: vec![("Download in browser".into(), Color32::YELLOW)],
             compat: vec![("1.21.1".into(), Color32::GRAY)],
-            tags: vec!["Optimization".into()],
+            sites: vec![("Modrinth".into(), Color32::GREEN)],
+            tags: vec!["Optimization".into(), "Utility".into(), "Library".into(), "Fabric API".into()],
             figure: Some(("2.1M".into(), "downloads")),
         };
         assert_eq!(
             view.badges(true),
             [
-                Badge::Figure("2.1M".into()),
-                Badge::Pill("Modrinth".into(), Color32::GREEN),
+                Badge::Pill("Download in browser".into(), Color32::YELLOW),
                 Badge::Compat("1.21.1".into(), Color32::GRAY),
+                Badge::Site("Modrinth".into(), Color32::GREEN),
                 Badge::Chip("Optimization".into()),
+                Badge::Chip("Utility".into()),
+                Badge::More("+2".into(), "Library, Fabric API".into()),
+                Badge::Figure("2.1M".into()),
             ]
         );
-        assert_eq!(view.badges(false).len(), 3);
+        assert_eq!(view.badges(false).len(), 6);
+        // two categories are both shown, with nothing counted after them
+        let two = ResultView { tags: vec!["A".into(), "B".into()], ..view };
+        assert!(!two.badges(false).iter().any(|b| matches!(b, Badge::More(..))));
     }
 
     #[test]
@@ -2663,9 +2831,35 @@ mod tests {
         }
         // Modrinth has no worlds: the kind shown stays as it was
         assert_eq!(super::super::discover_both::kind_for(crate::curseforge::api::Section::Worlds), None);
-        // the sources are one row: the sites first, then the modpack platforms
-        assert_eq!(Source::ALL.len(), 6);
-        assert_eq!(Source::ALL[2], Source::Everywhere);
+    }
+
+    #[test]
+    fn each_kind_offers_only_the_sources_that_have_it() {
+        for kind in EXPLORE_KINDS {
+            let (sites, catalogs) = sources_for(kind);
+            assert!(!sites.is_empty(), "{kind:?} is somewhere");
+            // the platforms with modpacks only, for modpacks only
+            assert_eq!(!catalogs.is_empty(), kind == Section::Modpacks, "{kind:?}");
+            assert!(catalogs.iter().all(|s| s.is_catalog()) && sites.iter().all(|s| !s.is_catalog()));
+        }
+        assert_eq!(sources_for(Section::Worlds).0, &[Source::CurseForge]);
+        // the list of every site says it has Smithed in it for data packs, and is "Both" elsewhere
+        assert_eq!(Source::Everywhere.label_for(Section::DataPacks), "All sources");
+        assert_eq!(Source::Everywhere.label_for(Section::Mods), "Both");
+        assert_eq!(Source::Everywhere.label_for(Section::Modpacks), "Both");
+    }
+
+    #[test]
+    fn another_kind_keeps_the_source_where_it_can() {
+        use Source::*;
+        // the same source when the kind has it
+        assert_eq!(source_for_kind(Section::ShaderPacks, CurseForge, Modrinth), CurseForge);
+        assert_eq!(source_for_kind(Section::DataPacks, Everywhere, Everywhere), Everywhere);
+        // a modpack platform goes back to the site mods were last looked for on
+        assert_eq!(source_for_kind(Section::Mods, Ftb, Everywhere), Everywhere);
+        assert_eq!(source_for_kind(Section::Modpacks, Technic, Modrinth), Technic);
+        // worlds are on CurseForge only
+        assert_eq!(source_for_kind(Section::Worlds, Modrinth, Modrinth), CurseForge);
     }
 
     #[test]

@@ -463,9 +463,26 @@ fn loader_blurb(l: Loader) -> &'static str {
 
 /// One mod loader in the list, chosen the way a radio button is: a ring that fills with a check in the brand
 /// gradient, the loader's letter on a tile of its colour, its name and a line about it. The chosen one sits on the
-/// brand's soft tint.
-fn loader_row(ui: &mut Ui, l: Loader, selected: bool) -> egui::Response {
-    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 56.0), egui::Sense::click());
+/// brand's soft tint, a little taller with the line under the name, and holds `body` under its name (the loader's
+/// version); the others are one compact line each, so the version stays in view in a small window.
+fn loader_row(ui: &mut Ui, l: Loader, selected: bool, body: Option<&mut dyn FnMut(&mut Ui)>) -> egui::Response {
+    let head_h = if selected { LOADER_ROW_OPEN } else { LOADER_ROW };
+    let bg = ui.painter().add(egui::Shape::Noop);
+    let (head, resp) = ui.allocate_exact_size(vec2(ui.available_width(), head_h), egui::Sense::click());
+    let mut rect = head;
+    if let Some(body) = body {
+        // the body lines up with the name, inside the row's tint
+        let inner = ui.horizontal(|ui| {
+            ui.add_space(LOADER_TEXT_X);
+            ui.vertical(|ui| {
+                ui.set_max_width((head.width() - LOADER_TEXT_X - 14.0).max(120.0));
+                ui.spacing_mut().item_spacing.y = 6.0;
+                body(ui);
+                ui.add_space(6.0);
+            });
+        });
+        rect = rect.union(inner.response.rect);
+    }
     if ui.is_rect_visible(rect) {
         let t = motion::hover(ui, resp.id, resp.hovered());
         let s = motion::toward(ui.ctx(), resp.id.with("on"), selected, motion::MEDIUM);
@@ -473,9 +490,16 @@ fn loader_row(ui: &mut Ui, l: Loader, selected: bool) -> egui::Response {
         let fill = motion::mix(motion::mix(c_card(), c_hover(), t), c_accent_soft(), s);
         let line =
             motion::mix(motion::mix(c_border(), c_control().gamma_multiply(0.7), t), c_accent().gamma_multiply(0.8), s);
-        p.rect(rect, CornerRadius::same(R_CARD), fill, Stroke::new(1.0, line), egui::StrokeKind::Inside);
+        let pane = egui::epaint::RectShape::new(
+            rect,
+            CornerRadius::same(R_CARD),
+            fill,
+            Stroke::new(1.0, line),
+            egui::StrokeKind::Inside,
+        );
+        p.set(bg, pane);
         // the ring at the left, a check in the brand gradient when chosen
-        let ring = egui::Rect::from_center_size(egui::pos2(rect.left() + 26.0, rect.center().y), vec2(20.0, 20.0));
+        let ring = egui::Rect::from_center_size(egui::pos2(head.left() + 26.0, head.center().y), vec2(20.0, 20.0));
         p.rect_stroke(
             ring,
             CornerRadius::same(10),
@@ -487,25 +511,47 @@ fn loader_row(ui: &mut Ui, l: Loader, selected: bool) -> egui::Response {
             super::discover::paint_check(p, ring.center(), 10.0, c_on_accent().gamma_multiply(s));
         }
         let hue = loader_color(l.label());
-        let tile = egui::Rect::from_center_size(egui::pos2(ring.right() + 28.0, rect.center().y), vec2(30.0, 30.0));
+        let tile = egui::Rect::from_center_size(egui::pos2(ring.right() + 28.0, head.center().y), vec2(28.0, 28.0));
         p.rect_filled(tile, CornerRadius::same(R_CONTROL), hue.gamma_multiply(0.18));
         let letter = l.label().chars().next().unwrap_or('?').to_string();
         p.text(tile.center(), egui::Align2::CENTER_CENTER, letter, super::fonts::semibold(FS_BODY + 1.0), hue);
-        let left = tile.right() + 12.0;
-        let room = (rect.right() - left - 12.0).max(40.0);
+        let left = head.left() + LOADER_TEXT_X;
         let name = p.layout_no_wrap(l.label().to_string(), super::fonts::semibold(FS_BODY), c_text());
-        p.galley(egui::pos2(left, rect.center().y - 17.0), name, c_text());
+        let name_w = name.size().x;
+        // the line about it: under the name on the chosen row, after it on the others
+        let (name_y, blurb_at) = if selected {
+            (head.center().y - 17.0, egui::pos2(left, head.center().y + 2.0))
+        } else {
+            let y = head.center().y - name.size().y / 2.0;
+            (y, egui::pos2(left + name_w + 10.0, y + 1.0))
+        };
+        p.galley(egui::pos2(left, name_y), name, c_text());
+        let room = (head.right() - blurb_at.x - 12.0).max(40.0);
         let mut job = egui::text::LayoutJob::single_section(
             loader_blurb(l).to_string(),
             egui::TextFormat::simple(egui::FontId::proportional(FS_META), c_muted()),
         );
         job.wrap = egui::text::TextWrapping::truncate_at_width(room);
-        p.galley(egui::pos2(left, rect.center().y + 2.0), p.layout_job(job), c_muted());
+        p.galley(blurb_at, p.layout_job(job), c_muted());
     }
-    focus_ring(ui, &resp, rect, R_CARD);
+    focus_ring(ui, &resp, head, R_CARD);
     resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::RadioButton, true, selected, l.label()));
     resp.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
+
+/// The heights of a loader's row (the chosen one's head is taller: its line goes under the name), and where its
+/// name starts.
+const LOADER_ROW: f32 = 44.0;
+const LOADER_ROW_OPEN: f32 = 56.0;
+const LOADER_TEXT_X: f32 = 91.0;
+
+/// The width of the label in front of the name field.
+const NAME_LABEL_W: f32 = 64.0;
+
+/// The size of the cover's picture on the Configure step, and the size of the gallery of themes that opens from it.
+const COVER_PREVIEW: egui::Vec2 = egui::Vec2::new(96.0, 54.0);
+const COVER_GALLERY_W: f32 = 408.0;
+const COVER_GALLERY_H: f32 = 260.0;
 
 /// A cover theme to pick: a small picture of the landscape it draws, its name under it, the chosen one outlined in
 /// the brand colour.
@@ -970,121 +1016,142 @@ impl App {
         ui.spacing_mut().item_spacing.y = 8.0;
         for l in LOADER_ORDER {
             let on = l == self.create.loader;
-            if loader_row(ui, l, on).clicked() && !on {
+            // the chosen loader's version goes right under its name, so it is in view wherever the loader is
+            let mut version = |ui: &mut Ui| self.loader_version(ui, changed_version);
+            let body: Option<&mut dyn FnMut(&mut Ui)> = (on && l != Loader::Vanilla).then_some(&mut version);
+            if loader_row(ui, l, on, body).clicked() && !on {
                 self.create.loader = l;
                 *changed_version = true;
             }
         }
-        if self.create.loader == Loader::Vanilla {
-            return;
-        }
-        ui.add_space(10.0);
-        card(ui, |ui| {
-            ui.spacing_mut().item_spacing.y = 8.0;
-            let loader = self.create.loader.label();
-            ui.label(RichText::new(format!("{loader} version")).semibold());
-            ui.horizontal_wrapped(|ui| {
-                if self.create.loading {
-                    spinner_sized(ui, 20.0);
-                    small_muted(ui, "Looking up the versions");
-                    return;
-                }
-                let Some(recommended) = recommended_loader(&self.create.loader_versions).map(str::to_string) else {
-                    return;
-                };
-                let newest = self.create.loader_versions[0].clone();
-                let chosen = chosen_loader_version(&self.create).unwrap_or(&recommended).to_string();
-                // what each version is: the one used unless another is picked, the newest, a test build
-                let describe = |v: &str| {
-                    if v == recommended {
-                        format!("{v}  (recommended)")
-                    } else if v == newest {
-                        format!("{v}  (newest)")
-                    } else if is_test_build(v) {
-                        format!("{v}  (test build)")
-                    } else {
-                        v.to_string()
-                    }
-                };
-                egui::ComboBox::from_id_salt("loader-version")
-                    .selected_text(RichText::new(describe(&chosen)).font(super::fonts::mono(12.5)))
-                    .width(260.0)
-                    .show_ui(ui, |ui| {
-                        for v in &self.create.loader_versions {
-                            let text = RichText::new(describe(v)).font(super::fonts::mono(12.5));
-                            if ui.selectable_label(chosen == *v, text).clicked() {
-                                // the recommended one is kept as "no choice", so it follows the list
-                                self.create.loader_version = if *v == recommended { String::new() } else { v.clone() };
-                            }
-                        }
-                    });
-                if chosen == recommended {
-                    soft_tag(ui, "Recommended");
-                } else if ghost(ui, "Use the recommended one").clicked() {
-                    self.create.loader_version.clear();
-                }
-                let n = self.create.loader_versions.len();
-                small_muted(ui, if n == 1 { "1 version".to_string() } else { format!("{n} versions") });
-            });
-            if !self.create.loading {
-                if let Some(e) = self.create.error.clone() {
-                    let text = format!("Couldn't get the versions: {e}");
-                    if notice(ui, NoticeKind::Error, &text, Some("Try again")).is_some_and(|r| r.clicked()) {
-                        // forget the failed request so it is made again
-                        self.create.requested = None;
-                        self.create.error = None;
-                        *changed_version = true;
-                    }
-                } else if self.create.loader_versions.is_empty() && !mc.is_empty() {
-                    let text = format!("{loader} isn't available for Minecraft {mc}.");
-                    notice(ui, NoticeKind::Warn, &text, None);
-                }
-            }
-            if matches!(self.create.loader, Loader::Forge | Loader::NeoForge) {
-                small_muted(
-                    ui,
-                    "Forge and NeoForge run their own installer, so this takes a little longer the first time.",
-                );
-            }
-        });
     }
 
-    /// Step 3: the name, the cover and picture, the memory, the performance mods and a description.
+    /// The chosen loader's version: a drop-down of them with the recommended one marked (and picked unless another
+    /// is), or what keeps the list from coming.
+    fn loader_version(&mut self, ui: &mut Ui, changed_version: &mut bool) {
+        let mc = self.create.mc.clone();
+        let loader = self.create.loader.label();
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            if self.create.loading {
+                spinner_sized(ui, 16.0);
+                small_muted(ui, format!("Looking up the {loader} versions"));
+                return;
+            }
+            let Some(recommended) = recommended_loader(&self.create.loader_versions).map(str::to_string) else {
+                return;
+            };
+            super::discover::filter_label(ui, "Version");
+            let newest = self.create.loader_versions[0].clone();
+            let chosen = chosen_loader_version(&self.create).unwrap_or(&recommended).to_string();
+            // what each version is in the list: the one used unless another is picked, the newest, a test build. The
+            // chosen one is shown plain: the tag after it says when it is the recommended one
+            let describe = |v: &str| {
+                if v == recommended {
+                    format!("{v}  (recommended)")
+                } else if v == newest {
+                    format!("{v}  (newest)")
+                } else if is_test_build(v) {
+                    format!("{v}  (test build)")
+                } else {
+                    v.to_string()
+                }
+            };
+            // narrower in a small window, so the tag after it stays on its line
+            let combo_w = (ui.available_width() - 190.0).clamp(130.0, 200.0);
+            egui::ComboBox::from_id_salt("loader-version")
+                .selected_text(RichText::new(&chosen).font(super::fonts::mono(12.5)))
+                .width(combo_w)
+                .show_ui(ui, |ui| {
+                    for v in &self.create.loader_versions {
+                        let text = RichText::new(describe(v)).font(super::fonts::mono(12.5));
+                        if ui.selectable_label(chosen == *v, text).clicked() {
+                            // the recommended one is kept as "no choice", so it follows the list
+                            self.create.loader_version = if *v == recommended { String::new() } else { v.clone() };
+                        }
+                    }
+                });
+            if chosen == recommended {
+                soft_tag(ui, "Recommended");
+            } else if ghost(ui, "Use the recommended one").clicked() {
+                self.create.loader_version.clear();
+            }
+            let n = self.create.loader_versions.len();
+            small_muted(ui, if n == 1 { "1 version".to_string() } else { format!("{n} versions") });
+        });
+        if !self.create.loading {
+            if let Some(e) = self.create.error.clone() {
+                let text = format!("Couldn't get the versions: {e}");
+                if notice(ui, NoticeKind::Error, &text, Some("Try again")).is_some_and(|r| r.clicked()) {
+                    // forget the failed request so it is made again
+                    self.create.requested = None;
+                    self.create.error = None;
+                    *changed_version = true;
+                }
+            } else if self.create.loader_versions.is_empty() && !mc.is_empty() {
+                let text = format!("{loader} isn't available for Minecraft {mc}.");
+                notice(ui, NoticeKind::Warn, &text, None);
+            }
+        }
+        if matches!(self.create.loader, Loader::Forge | Loader::NeoForge) {
+            small_muted(
+                ui,
+                "Forge and NeoForge run their own installer, so this takes a little longer the first time.",
+            );
+        }
+    }
+
+    /// Step 3: what matters to how the game runs first (the name, the memory, the performance mods, in one card),
+    /// then the look (the cover, with its gallery a click away, and the picture), and a description.
     fn configure_step(&mut self, ui: &mut Ui, enter: &mut bool) {
         step_title(ui, "Configure", "Everything here can be changed later in the instance's settings.");
         ui.spacing_mut().item_spacing.y = 8.0;
         card(ui, |ui| {
-            ui.label(RichText::new("Name").semibold());
-            let c = &mut self.create;
-            // the hint is the name the instance gets when the field is left empty
-            let hint = if c.mc.is_empty() { "My instance".to_string() } else { default_name(&c.mc, c.loader) };
-            let name_field = ui.add_sized(
-                [ui.available_width().min(460.0), 34.0],
-                egui::TextEdit::singleline(&mut c.name)
-                    .hint_text(RichText::new(hint).color(c_faint()))
-                    .margin(egui::Margin::symmetric(10, 8))
-                    .background_color(c_field()),
-            );
-            // Enter in the name makes the instance, like the Create button
-            *enter = name_field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-        });
-        card(ui, |ui| self.cover_row(ui));
-        card(ui, |ui| {
-            self.picture_row(ui);
-        });
-        card(ui, |ui| self.memory_row(ui));
-        let key = self.create.loader.modrinth_name();
-        if performance::offered_for(key) {
-            card(ui, |ui| {
+            ui.spacing_mut().item_spacing.y = 8.0;
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 12.0;
+                ui.allocate_ui_with_layout(
+                    vec2(NAME_LABEL_W, 34.0),
+                    egui::Layout::left_to_right(egui::Align::Center),
+                    |ui| {
+                        ui.set_min_width(NAME_LABEL_W);
+                        ui.label(RichText::new("Name").semibold());
+                    },
+                );
+                let c = &mut self.create;
+                // the hint is the name the instance gets when the field is left empty
+                let hint = if c.mc.is_empty() { "My instance".to_string() } else { default_name(&c.mc, c.loader) };
+                let name_field = ui.add_sized(
+                    [ui.available_width().min(420.0), 34.0],
+                    egui::TextEdit::singleline(&mut c.name)
+                        .hint_text(RichText::new(hint).color(c_faint()))
+                        .margin(egui::Margin::symmetric(10, 8))
+                        .background_color(c_field()),
+                );
+                // Enter in the name makes the instance, like the Create button
+                *enter = name_field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            });
+            rule(ui);
+            self.memory_row(ui);
+            let key = self.create.loader.modrinth_name();
+            if performance::offered_for(key) {
+                rule(ui);
                 let hint = format!(
-                    "{} from Modrinth, for a smoother game. Anything not made for this Minecraft version yet is left out.",
+                    "{} from Modrinth, for a smoother game. Those not out for this version yet are left out.",
                     performance::describe(key)
                 );
-                setting_row(ui, "Add performance mods", &hint, |ui| {
-                    toggle(ui, &mut self.create.performance);
+                let title = "Add performance mods";
+                setting_row(ui, title, &hint, |ui| {
+                    toggle_named(ui, &mut self.create.performance, title);
                 });
-            });
-        }
+            }
+        });
+        card(ui, |ui| {
+            ui.spacing_mut().item_spacing.y = 10.0;
+            self.cover_row(ui);
+            rule(ui);
+            self.picture_row(ui);
+        });
         card(ui, |ui| {
             ui.label(RichText::new("Description").semibold());
             small_muted(ui, "A few words about this instance, shown on its page.");
@@ -1100,29 +1167,68 @@ impl App {
         });
     }
 
-    /// The cover's landscape: a small picture of each theme to pick from, drawn for the instance as it will be.
+    /// The cover's landscape, in one row: a small picture of the cover as it will be, its theme, and "Change cover",
+    /// which opens the gallery of themes (each drawn for the instance as it will be) beside it.
     fn cover_row(&mut self, ui: &mut Ui) {
-        ui.label(RichText::new("Cover").semibold());
-        small_muted(ui, "The picture behind the instance on Home and in the Library. Automatic picks one for it.");
-        ui.add_space(6.0);
         let (name, mc, loader) = self.create_identity();
         let key = self.create_cover_key(&name);
-        let gap = 8.0;
-        let (cols, w) = grid_columns(ui.available_width(), 92.0, gap);
+        let chosen = self.create.extras.cover;
         let mut picked = None;
-        for row in CoverTheme::ALL.chunks(cols) {
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = gap;
-                for theme in row {
-                    let spec = CoverSpec::new(&key, &mc, loader, *theme);
-                    let tex = self.covers.texture(&self.ctx, &spec, 160, 90);
-                    if theme_tile(ui, &tex, theme.label(), self.create.extras.cover == *theme, w).clicked() {
-                        picked = Some(*theme);
-                    }
-                }
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 14.0;
+            let (rect, _) = ui.allocate_exact_size(COVER_PREVIEW, egui::Sense::hover());
+            let spec = CoverSpec::new(&key, &mc, loader, chosen);
+            let (tw, th) = super::workbench::cover_size(rect.size());
+            let tex = self.covers.texture(&self.ctx, &spec, tw, th);
+            egui::Image::from_texture((tex.id(), vec2(tw as f32, th as f32)))
+                .uv(super::workbench::cover_uv((tw, th), rect.size()))
+                .corner_radius(R_CONTROL)
+                .paint_at(ui, rect);
+            ui.painter().rect_stroke(
+                rect,
+                CornerRadius::same(R_CONTROL),
+                Stroke::new(1.0, c_border()),
+                egui::StrokeKind::Inside,
+            );
+            ui.vertical(|ui| {
+                ui.set_max_width((ui.available_width() - 150.0).max(120.0));
+                ui.spacing_mut().item_spacing.y = 2.0;
+                ui.label(RichText::new("Cover").semibold());
+                small_muted(ui, format!("{} \u{00B7} on Home and in the Library", chosen.label()));
             });
-            ui.add_space(4.0);
-        }
+            let id = ui.scope_id().with("cover-button");
+            super::discover::end_aligned(ui, id, |ui| {
+                let r = secondary(ui, "Change cover");
+                // it opens over the form, never over the summary, which shows the cover picked
+                egui::Popup::from_toggle_button_response(&r)
+                    .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                    .align(egui::RectAlign::TOP_END)
+                    .align_alternatives(&[egui::RectAlign::BOTTOM_END, egui::RectAlign::LEFT_END])
+                    .gap(6.0)
+                    .show(|ui| {
+                        ui.set_width(COVER_GALLERY_W);
+                        small_muted(ui, "Automatic picks one for the instance. Pick another to see it in the summary.");
+                        ui.add_space(6.0);
+                        egui::ScrollArea::vertical().max_height(COVER_GALLERY_H).show(ui, |ui| {
+                            let gap = 8.0;
+                            let (cols, w) = grid_columns(ui.available_width(), 92.0, gap);
+                            for row in CoverTheme::ALL.chunks(cols) {
+                                ui.horizontal(|ui| {
+                                    ui.spacing_mut().item_spacing.x = gap;
+                                    for theme in row {
+                                        let spec = CoverSpec::new(&key, &mc, loader, *theme);
+                                        let tex = self.covers.texture(&self.ctx, &spec, 160, 90);
+                                        if theme_tile(ui, &tex, theme.label(), chosen == *theme, w).clicked() {
+                                            picked = Some(*theme);
+                                        }
+                                    }
+                                });
+                                ui.add_space(4.0);
+                            }
+                        });
+                    });
+            });
+        });
         if let Some(t) = picked {
             self.create.extras.cover = t;
         }
@@ -1231,8 +1337,7 @@ impl App {
         }
         let hint = match e.memory {
             Memory::Follow if launcher_auto => {
-                "As in Settings: picked automatically each time the game starts. A change there applies here too."
-                    .to_string()
+                "As in Settings: picked when the game starts. A change there applies here too.".to_string()
             }
             Memory::Follow => format!(
                 "As in Settings: {}. A change there applies here too.",
@@ -1243,16 +1348,24 @@ impl App {
             }
             Memory::Custom => "Always this much, whatever Settings say.".into(),
         };
-        super::settings::wide_row(ui, "Memory", &hint, 300.0, |ui| {
-            let labels: Vec<&str> = choices.iter().map(|c| c.1).collect();
-            let current = choices.iter().position(|c| c.0 == e.memory).unwrap_or(0);
-            if let Some(i) = segmented(ui, &labels, current) {
-                e.memory = choices[i].0;
-                if e.memory == Memory::Custom && e.memory_mb == 0 {
-                    e.memory_mb = launcher_mb.max(1024);
-                }
-            }
+        // the choice on the title's line and what it means under both, so the row stays short in a small window
+        let mut pick = None;
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("Memory").semibold());
+            let id = ui.scope_id().with("memory-choice");
+            super::discover::end_aligned(ui, id, |ui| {
+                let labels: Vec<&str> = choices.iter().map(|c| c.1).collect();
+                let current = choices.iter().position(|c| c.0 == e.memory).unwrap_or(0);
+                pick = segmented(ui, &labels, current);
+            });
         });
+        small_muted(ui, hint);
+        if let Some(i) = pick {
+            e.memory = choices[i].0;
+            if e.memory == Memory::Custom && e.memory_mb == 0 {
+                e.memory_mb = launcher_mb.max(1024);
+            }
+        }
         if e.memory == Memory::Custom {
             ui.add_space(6.0);
             ui.horizontal(|ui| {

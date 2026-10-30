@@ -196,6 +196,33 @@ pub fn ranked_assets(release: &Release, loader: Option<&str>, mc: &str) -> Vec<A
     v
 }
 
+/// What a file's name says about whether it fits an instance. Only a hint: a GitHub file carries nothing the launcher
+/// could check, so a name can suggest a fit but never prove one, and a different spelling of a version (`1.21` for
+/// `1.21.1`) says nothing either way.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NameFit {
+    /// The name names the instance's loader (Fabric, for a Quilt instance), its Minecraft version, or both.
+    Suggests { loader: bool, mc: bool },
+    /// The name doesn't say which loader or version it is for.
+    Silent,
+    /// The name names a loader the instance doesn't run (`neoforge`, `fabric`...).
+    OtherLoader(&'static str),
+}
+
+/// What the name of a file says about an instance running `loader` (`fabric`, `neoforge`..., none for plain
+/// Minecraft) and Minecraft `mc`.
+pub fn name_fit(name: &str, loader: Option<&str>, mc: &str) -> NameFit {
+    let mc_named = !mc.is_empty() && mentions(name, mc);
+    match (loader_in(name), loader) {
+        (Some(l), Some(want)) if l == want || (l == "fabric" && want == "quilt") => {
+            NameFit::Suggests { loader: true, mc: mc_named }
+        }
+        (Some(l), _) => NameFit::OtherLoader(l),
+        (None, _) if mc_named => NameFit::Suggests { loader: false, mc: true },
+        (None, _) => NameFit::Silent,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -261,5 +288,20 @@ mod tests {
         assert!(!mentions("mod-1.21.1.jar", "1.21"));
         assert!(!mentions("mod-11.21.jar", "1.21"));
         assert!(mentions("mod+mc1.21.1.jar", "1.21.1"));
+    }
+
+    #[test]
+    fn a_file_name_suggests_a_fit_but_a_version_spelling_is_no_mismatch() {
+        use NameFit::*;
+        assert_eq!(
+            name_fit("sodium-fabric-0.6+mc1.21.1.jar", Some("fabric"), "1.21.1"),
+            Suggests { loader: true, mc: true }
+        );
+        assert_eq!(name_fit("sodium-fabric-0.6.jar", Some("quilt"), "1.21.1"), Suggests { loader: true, mc: false });
+        assert_eq!(name_fit("mod-1.21.1.jar", Some("fabric"), "1.21.1"), Suggests { loader: false, mc: true });
+        // Iris names Minecraft 1.21 for a 1.21.1 instance: that proves nothing either way
+        assert_eq!(name_fit("iris-1.7.3+mc1.21.jar", Some("fabric"), "1.21.1"), Silent);
+        assert_eq!(name_fit("mod-neoforge-1.21.1.jar", Some("fabric"), "1.21.1"), OtherLoader("neoforge"));
+        assert_eq!(name_fit("mod-fabric.jar", None, "1.21.1"), OtherLoader("fabric"));
     }
 }

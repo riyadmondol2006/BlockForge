@@ -457,6 +457,34 @@ impl App {
         self.page = Page::Library;
     }
 
+    /// For the screenshot tour: a catalog's list still on its way (`atl-loading`, `technic-loading`) or failed to
+    /// come (`atl-error`), as the page shows it.
+    pub(super) fn shot_packs_state(&mut self, state: &str) {
+        let p = &mut self.packs;
+        p.detail = None;
+        match state {
+            "atl-loading" => {
+                p.tab = PackTab::Atl;
+                (p.atl, p.atl_view, p.atl_loading, p.atl_error) = (None, None, true, None);
+            }
+            "atl-error" => {
+                p.tab = PackTab::Atl;
+                (p.atl, p.atl_view, p.atl_loading) = (None, None, false);
+                p.atl_error = Some(
+                    "error sending request for url (https://cdn.atlauncher.com/launcher/json/packsnew.json)".into(),
+                );
+            }
+            "technic-loading" => {
+                p.tab = PackTab::Technic;
+                // an answer already on its way is for an older search
+                p.tech_seq += 1;
+                (p.tech_loading, p.tech_started, p.tech_error) = (true, true, None);
+                p.tech.clear();
+            }
+            _ => {}
+        }
+    }
+
     /// Open the page on ATLauncher's packs, or with `technic` on Technic's (searched the first time).
     pub(super) fn packs_show(&mut self, technic: bool) {
         self.packs.tab = if technic { PackTab::Technic } else { PackTab::Atl };
@@ -475,14 +503,8 @@ impl App {
             self.packs_detail_ui(ui);
             return;
         }
-        // the platforms have modpacks only; another kind opens the site mods were last looked for on
-        let labels: Vec<&str> = crate::modrinth::Kind::ALL.iter().map(|k| k.label()).collect();
-        let modpacks = crate::modrinth::Kind::ALL.iter().position(|k| *k == crate::modrinth::Kind::Modpack);
-        if let Some(i) = self.explore_header(ui, &labels, modpacks.unwrap_or(0)) {
-            self.explore_kind_elsewhere(crate::modrinth::Kind::ALL[i]);
-            return;
-        }
-        if self.page != Page::Packs {
+        // the platforms have modpacks only; another kind opens on a site that has it
+        if self.explore_header(ui) {
             return;
         }
         match self.packs.tab {
@@ -585,7 +607,7 @@ impl App {
             return;
         }
         let Some(list) = self.packs.atl.clone() else {
-            result_skeleton(ui, 6);
+            result_skeleton(ui, 4, "Loading ATLauncher packs\u{2026}");
             return;
         };
         let user = self.packs_user();
@@ -659,6 +681,7 @@ impl App {
                 summary: description,
                 pills,
                 compat,
+                sites: Vec::new(),
                 tags: Vec::new(),
                 figure: None,
             };
@@ -757,7 +780,8 @@ impl App {
             self.packs_search_technic();
         }
         if self.packs.tech_loading && self.packs.tech.is_empty() {
-            result_skeleton(ui, 6);
+            let status = if trending { "Loading Technic packs\u{2026}" } else { "Searching Technic\u{2026}" };
+            result_skeleton(ui, 4, status);
         } else if self.packs.tech.is_empty() && self.packs.tech_error.is_none() && self.packs.tech_started {
             let query = self.packs.tech_query.trim().to_string();
             let text = if query.is_empty() {
@@ -784,6 +808,7 @@ impl App {
                     summary: "",
                     pills: Vec::new(),
                     compat: vec![(m.slug.clone(), c_muted())],
+                    sites: Vec::new(),
                     tags: Vec::new(),
                     figure: None,
                 };
@@ -849,7 +874,7 @@ impl App {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 16.0;
             if let Some((url, name)) = &icon {
-                self.result_icon(ui, Some(url), name, 56.0);
+                self.result_icon(ui, Some(url), name, 96.0);
             }
             ui.vertical(|ui| {
                 ui.spacing_mut().item_spacing.y = 4.0;
@@ -883,8 +908,8 @@ impl App {
             ui.set_max_width(ui.available_width().min(DETAIL_W));
             ui.spacing_mut().item_spacing.y = 8.0;
             if !d.description.is_empty() {
-                ui.add(egui::Label::new(RichText::new(plain_text(&d.description)).color(c_muted())).wrap());
-                ui.add_space(10.0);
+                description_ui(ui, &plain_text(&d.description));
+                ui.add_space(16.0);
             }
             // what to install, on a card of its own
             card(ui, |ui| {
@@ -941,7 +966,7 @@ impl App {
                     "Keep my mods",
                     "If the update changes the Minecraft version, mods you added may stop working. Keep them, or leave this off to remove them.",
                     |ui| {
-                        toggle(ui, &mut d.save_mods);
+                        toggle_named(ui, &mut d.save_mods, "Keep my mods");
                     },
                 );
             }
@@ -1091,11 +1116,16 @@ pub(super) fn pack_version(version: &str) -> String {
 /// The widest the text of a pack's page gets.
 const DETAIL_W: f32 = 720.0;
 
-/// Pack descriptions come with HTML and line breaks; show them as plain text.
+/// Pack descriptions come with HTML and line breaks; show them as plain text. The end of a paragraph or a heading is
+/// a blank line and a list item a line of its own with a bullet, so [`description_blocks`] still finds them.
 fn plain_text(s: &str) -> String {
+    let mut s = s.replace("<br/>", "\n").replace("<br>", "\n").replace("<br />", "\n").replace("<li>", "\n\u{2022} ");
+    for end in ["</p>", "</div>", "</ul>", "</ol>", "</h1>", "</h2>", "</h3>", "</h4>", "</h5>", "</h6>"] {
+        s = s.replace(end, "\n\n");
+    }
     let mut out = String::with_capacity(s.len());
     let mut in_tag = false;
-    for c in s.replace("<br/>", "\n").replace("<br>", "\n").chars() {
+    for c in s.chars() {
         match c {
             '<' => in_tag = true,
             '>' if in_tag => in_tag = false,
@@ -1104,4 +1134,213 @@ fn plain_text(s: &str) -> String {
         }
     }
     out.replace("&amp;", "&").replace("&nbsp;", " ").trim().to_string()
+}
+
+/// A part of a pack's description as its page lays it out.
+#[derive(Clone, Debug, PartialEq)]
+enum Block {
+    /// A short line of its own that names what comes after it ("Included Mods").
+    Heading(String),
+    /// Lines that belong together (their own line breaks kept).
+    Paragraph(String),
+    /// An item of a list, without the character it was marked with: the page draws its own bullet.
+    Item(String),
+}
+
+/// What a line of a description is a list item of, when it is one: it starts with a bullet-like mark ("•", "-", "☑",
+/// "✔", "➤"…) and a space. Returns the rest of the line.
+fn list_item(line: &str) -> Option<&str> {
+    let mut chars = line.char_indices();
+    let (_, first) = chars.next()?;
+    let marker = matches!(first, '-' | '*' | '+')
+        || (!first.is_ascii()
+            && !first.is_alphanumeric()
+            && !matches!(
+                first,
+                '\u{201C}' | '\u{2018}' | '\u{00AB}' | '\u{300C}' | '\u{300E}' | '\u{FF08}' | '\u{2026}'
+            ));
+    if !marker {
+        return None;
+    }
+    // a mark may be drawn as an emoji (a variation selector after it); a run of marks ("⚠︎⚠︎ Note") is not a bullet
+    let mut rest = &line[first.len_utf8()..];
+    rest = rest.trim_start_matches(['\u{FE0E}', '\u{FE0F}']);
+    let item = rest.strip_prefix(char::is_whitespace)?.trim();
+    (!item.is_empty()).then_some(item)
+}
+
+/// Whether a paragraph of one line is a heading: short, not a sentence (no full stop at its end), and written like a
+/// title, every word capitalised ("Included Mods", "SETUP & INSTALLATION", "Features:").
+fn is_heading(line: &str) -> bool {
+    const SMALL: [&str; 12] = ["a", "an", "and", "the", "of", "for", "to", "in", "on", "with", "&", "or"];
+    let line = line.trim_end_matches(':');
+    let words: Vec<&str> = line.split_whitespace().collect();
+    if words.is_empty() || words.len() > 6 || line.chars().count() > 48 || line.ends_with(['.', ',', ';', '!', '?']) {
+        return false;
+    }
+    if line.contains("://") {
+        return false;
+    }
+    words.iter().enumerate().all(|(i, w)| {
+        let first = w.chars().next().unwrap_or(' ');
+        first.is_uppercase() || first.is_ascii_digit() || (i > 0 && SMALL.contains(&w.to_lowercase().as_str()))
+    })
+}
+
+/// A pack's description (already [`plain_text`]) as headings, paragraphs and list items: blank lines end a
+/// paragraph, a line with a bullet-like mark is an item, and a paragraph of one title-like line before more text is a
+/// heading.
+fn description_blocks(text: &str) -> Vec<Block> {
+    let mut out = Vec::new();
+    let mut para: Vec<&str> = Vec::new();
+    let flush = |para: &mut Vec<&str>, out: &mut Vec<Block>| {
+        if !para.is_empty() {
+            out.push(Block::Paragraph(para.join("\n")));
+            para.clear();
+        }
+    };
+    for line in text.lines().map(str::trim) {
+        if line.is_empty() {
+            flush(&mut para, &mut out);
+        } else if let Some(item) = list_item(line) {
+            flush(&mut para, &mut out);
+            out.push(Block::Item(item.to_string()));
+        } else {
+            para.push(line);
+        }
+    }
+    flush(&mut para, &mut out);
+    // a one-line paragraph that reads as a title is a heading, when text or a list comes after it (not another
+    // heading: two title-like lines in a row are the end of one thing and the name of the next)
+    for i in (0..out.len().saturating_sub(1)).rev() {
+        let next_is_heading = matches!(out[i + 1], Block::Heading(_));
+        if let Block::Paragraph(p) = &out[i] {
+            if !next_is_heading && !p.contains('\n') && is_heading(p) {
+                out[i] = Block::Heading(p.trim_end_matches(':').to_string());
+            }
+        }
+    }
+    out
+}
+
+/// A pack's description laid out to be read: headings in the section size, paragraphs with room between them and
+/// between their lines, list items behind a drawn bullet.
+fn description_ui(ui: &mut Ui, text: &str) {
+    let blocks = description_blocks(text);
+    let body = |text: &str, width: f32, color: egui::Color32| {
+        let mut job = egui::text::LayoutJob::default();
+        job.append(
+            text,
+            0.0,
+            egui::TextFormat {
+                font_id: egui::FontId::proportional(FS_BODY),
+                color,
+                line_height: Some(20.0),
+                ..Default::default()
+            },
+        );
+        job.wrap.max_width = width;
+        job
+    };
+    ui.scope(|ui| {
+        ui.spacing_mut().item_spacing.y = 0.0;
+        for (i, b) in blocks.iter().enumerate() {
+            let after_item = i > 0 && matches!(blocks[i - 1], Block::Item(_));
+            match b {
+                Block::Heading(t) => {
+                    if i > 0 {
+                        ui.add_space(18.0);
+                    }
+                    ui.add(egui::Label::new(RichText::new(t).size(FS_SECTION).semibold().color(c_text())).wrap());
+                    ui.add_space(8.0);
+                }
+                Block::Paragraph(t) => {
+                    if i > 0 && !matches!(blocks[i - 1], Block::Heading(_)) {
+                        ui.add_space(12.0);
+                    }
+                    let job = body(t, ui.available_width(), c_muted());
+                    ui.add(egui::Label::new(job));
+                }
+                Block::Item(t) => {
+                    // items of one list sit close together; a list starts with the room of a paragraph
+                    if i > 0 {
+                        ui.add_space(if after_item { 4.0 } else { 10.0 });
+                    }
+                    ui.horizontal_top(|ui| {
+                        ui.spacing_mut().item_spacing.x = 0.0;
+                        let (dot, _) = ui.allocate_exact_size(egui::vec2(20.0, 20.0), egui::Sense::hover());
+                        ui.painter().circle_filled(egui::pos2(dot.left() + 7.0, dot.center().y), 2.5, c_faint());
+                        let job = body(t, ui.available_width(), c_muted());
+                        ui.add(egui::Label::new(job));
+                    });
+                }
+            }
+        }
+    });
+}
+
+#[cfg(test)]
+mod description_tests {
+    use super::*;
+
+    #[test]
+    fn a_description_falls_into_headings_paragraphs_and_items() {
+        let text = "Welcome to the pack.\nIt has a lot.\n\nIncluded Mods\n\n\u{2611} Create\n\n\u{2611} Mekanism\n\nAnd so much more.\n\nSETUP & INSTALLATION\n\nForge works.";
+        assert_eq!(
+            description_blocks(text),
+            [
+                Block::Paragraph("Welcome to the pack.\nIt has a lot.".into()),
+                Block::Heading("Included Mods".into()),
+                Block::Item("Create".into()),
+                Block::Item("Mekanism".into()),
+                Block::Paragraph("And so much more.".into()),
+                Block::Heading("SETUP & INSTALLATION".into()),
+                Block::Paragraph("Forge works.".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn list_marks_are_found_and_other_first_characters_are_not() {
+        for line in
+            ["- Create", "* Create", "\u{2022} Create", "\u{2714}\u{FE0F} Create", "\u{27A4} Create", "\u{2611} Create"]
+        {
+            assert_eq!(list_item(line), Some("Create"), "{line}");
+        }
+        // a warning made of marks, a quote, a word, a mark with nothing after it
+        for line in
+            ["\u{26A0}\u{FE0E}\u{26A0}\u{FE0E} Note", "\u{201C}Quoted\u{201D} text", "Create", "-", "-5 degrees"]
+        {
+            assert_eq!(list_item(line), None, "{line}");
+        }
+    }
+
+    #[test]
+    fn headings_are_short_title_lines_and_never_the_last_block() {
+        assert!(is_heading("Included Mods"));
+        assert!(is_heading("Features:"));
+        assert!(is_heading("Lots of Building Blocks"));
+        assert!(!is_heading("And so much more."));
+        assert!(!is_heading("this is a sentence without a stop"));
+        assert!(!is_heading("https://example.com/Pack"));
+        // a last line on its own is the end of the text, not the name of what follows
+        assert_eq!(
+            description_blocks("Some text.\n\nThe End"),
+            [Block::Paragraph("Some text.".into()), Block::Paragraph("The End".into())]
+        );
+    }
+
+    #[test]
+    fn html_lists_and_paragraphs_become_lines() {
+        let text = plain_text("<p>Hello</p><h3>Mods</h3><ul><li>Create</li><li>Mekanism</li></ul>");
+        assert_eq!(
+            description_blocks(&text),
+            [
+                Block::Paragraph("Hello".into()),
+                Block::Heading("Mods".into()),
+                Block::Item("Create".into()),
+                Block::Item("Mekanism".into()),
+            ]
+        );
+    }
 }
