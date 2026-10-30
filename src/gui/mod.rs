@@ -36,6 +36,7 @@ mod settings;
 mod startup;
 mod strip;
 mod theme;
+mod titlebar;
 mod tray;
 mod updates;
 mod whoplays;
@@ -395,7 +396,9 @@ pub fn run(dirs: Dirs, open_files: Vec<std::path::PathBuf>) -> anyhow::Result<()
         .with_title(crate::NAME)
         .with_app_id("blockforge")
         .with_inner_size([(size.width as f32).max(MIN_WINDOW.x), (size.height as f32).max(MIN_WINDOW.y)])
-        .with_min_inner_size(MIN_WINDOW);
+        .with_min_inner_size(MIN_WINDOW)
+        // on Linux the window draws its own title bar (see `titlebar`), unless the system's was asked for
+        .with_decorations(!titlebar::own(&saved));
     if let Some(p) = saved.launcher_position.filter(|_| saved.remember_window_size_position) {
         viewport = viewport.with_position([p.x as f32, p.y as f32]);
     }
@@ -2167,6 +2170,10 @@ impl eframe::App for App {
         self.follow_system_theme(&ctx);
         // the ground with its soft glow, under the glass of the sidebar and the pages
         motion::backdrop(ui.painter(), ctx.content_rect());
+        let own_bar = titlebar::own(&self.settings);
+        if own_bar {
+            titlebar::drag_strip(ui, ctx.content_rect());
+        }
         let glass = c_surface();
         // a narrow window folds the sidebar to a rail of icons; it eases from one width to the other
         let window_w = ctx.content_rect().width();
@@ -2192,7 +2199,11 @@ impl eframe::App for App {
         }
         let arrived = motion::arrival(&ctx, self.page_since.1);
         // the same room around every page, a little more on a big screen
-        let margin = page_margin(window_w - nav_w);
+        let mut margin = page_margin(window_w - nav_w);
+        if own_bar {
+            // the page starts below the window's buttons
+            margin.top = margin.top.max(titlebar::PAGE_TOP);
+        }
         egui::CentralPanel::default().frame(egui::Frame::new().inner_margin(margin)).show(ui, |ui| {
             self.page_rect = ui.max_rect();
             if arrived < 1.0 {
@@ -2202,6 +2213,9 @@ impl eframe::App for App {
             readable_column(ui, page_column(self.page), |ui| self.page_ui(ui))
         });
         self.windows_ui(&ctx);
+        if own_bar {
+            titlebar::window_controls(&ctx);
+        }
     }
 
     /// The screenshot tour's pointer (see `shot_pointer`) goes in with the input, as a real one would.

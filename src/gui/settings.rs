@@ -165,7 +165,7 @@ const fn entry(
 use Group as G;
 
 /// Every setting of the page, section by section in the order they are listed.
-const ENTRIES: [Entry; 31] = [
+const ENTRIES: [Entry; 32] = [
     entry(
         "theme",
         G::Appearance,
@@ -189,6 +189,14 @@ const ENTRIES: [Entry; 31] = [
         "Show background artwork",
         "A faint pattern of blocks behind the pages",
         "pattern background blocks wallpaper decoration picture",
+    ),
+    entry(
+        "title-bar",
+        G::Appearance,
+        false,
+        "Use the system's title bar",
+        "The desktop's own frame around the window instead of BlockForge's title bar",
+        "title bar window frame decorations border minimize maximize close gnome wayland",
     ),
     entry(
         "light-mode",
@@ -1490,6 +1498,14 @@ impl App {
                         if c.switch(ui, "artwork", &mut artwork, true) {
                             set_artwork(s, artwork);
                             dirty = true;
+                        }
+                        if cfg!(target_os = "linux") {
+                            let mut system = !super::titlebar::own(s);
+                            if c.switch(ui, "title-bar", &mut system, false) {
+                                super::titlebar::set_system(s, system);
+                                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Decorations(system));
+                                dirty = true;
+                            }
                         }
                         let low_end = super::low_end_pc();
                         let hint = if low_end {

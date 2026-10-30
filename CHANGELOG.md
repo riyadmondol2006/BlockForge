@@ -3,6 +3,16 @@
 The section for a version is used as the text of its release on GitHub. Older releases (the Java versions, up to
 3.4.42.x) are on the [releases page](https://github.com/riyadmondol2006/BlockForge/releases).
 
+## 5.0.1
+
+### What is new
+
+- **A title bar of BlockForge's own on Linux.** GNOME on Wayland leaves the frame of a window to the app, and
+  BlockForge used to get a plain grey strip there. Now the window draws its top itself, in the launcher's colours:
+  drag the top of the window to move it, double-click it to maximize, and minimize, maximize and close sit in the top
+  right corner. The edges and corners resize the window. Prefer your desktop's frame? Settings > Appearance > Use the
+  system's title bar switches it back at once. Windows and macOS keep their own title bars.
+
 ## 5.0.0
 
 **The Workbench.** BlockForge is rebuilt around playing: the game you play comes first, every instance has a face of
