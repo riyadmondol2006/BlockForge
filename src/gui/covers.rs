@@ -192,8 +192,10 @@ impl Covers {
 /// Draw the cover for `spec` at exactly `w` × `h` pixels. The same spec and size always give the same pixels.
 pub fn render(spec: &CoverSpec, w: usize, h: usize) -> ColorImage {
     let (w, h) = (w.max(1), h.max(1));
-    // the whole number each scene pixel is blown up by: about 160 × 90 scene pixels for a wide cover
-    let scale = (w.div_ceil(160)).max(h.div_ceil(90)).max(1);
+    // the whole number each scene pixel is blown up by: about 160 × 90 scene pixels for a wide cover, and more of
+    // the landscape (about 240 across) on a banner, which is shown far wider than a tile
+    let banner = w > h * 2;
+    let scale = if banner { w.div_ceil(240).max(h.div_ceil(100)) } else { w.div_ceil(160).max(h.div_ceil(90)) }.max(1);
     let (iw, ih) = (w.div_ceil(scale), h.div_ceil(scale));
     let mut scene = Scene::new(spec, iw, ih);
     scene.paint();
