@@ -343,6 +343,7 @@ dependencies = [
  "image",
  "indexmap",
  "ksni",
+ "libc",
  "lz4_flex",
  "md-5",
  "open",
