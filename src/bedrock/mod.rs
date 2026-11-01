@@ -174,6 +174,69 @@ pub enum SignInState {
 pub struct AccountStatus {
     pub target: AccountTarget,
     pub state: SignInState,
+    /// Who it is, as far as is known on this computer (empty when signed out or not known yet).
+    pub identity: AccountIdentity,
+}
+/// Who a Microsoft account is, from what its sign-ins left on this computer: the Store's sign-in name, the Xbox
+/// account's XUID, gamertag and user hash. For telling whether a Bedrock sign-in is the same person as one of
+/// BlockForge's own Microsoft accounts (their sign-ins can't be shared: they are different Microsoft apps).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AccountIdentity {
+    /// The sign-in name: an e-mail address (or phone number).
+    pub email: Option<String>,
+    pub gamertag: Option<String>,
+    pub xuid: Option<String>,
+    /// Xbox Live's user hash (`uhs`).
+    pub user_hash: Option<String>,
+}
+impl AccountIdentity {
+    pub fn is_empty(&self) -> bool {
+        self == &AccountIdentity::default()
+    }
+    /// Fill in what `self` doesn't know from `other` (the Store's name and the Xbox account's IDs, say).
+    pub fn merged(mut self, other: &AccountIdentity) -> AccountIdentity {
+        for (mine, theirs) in [
+            (&mut self.email, &other.email),
+            (&mut self.gamertag, &other.gamertag),
+            (&mut self.xuid, &other.xuid),
+            (&mut self.user_hash, &other.user_hash),
+        ] {
+            if mine.is_none() {
+                mine.clone_from(theirs);
+            }
+        }
+        self
+    }
+    /// Whether both are the same person: `Some(false)` only on proof (different XUIDs, or different sign-in
+    /// names), `Some(true)` on any shared ID, `None` when nothing can be compared. A user hash or a gamertag can
+    /// only confirm: either may change, so a difference proves nothing.
+    pub fn same_person(&self, other: &AccountIdentity) -> Option<bool> {
+        fn both<'a>(a: &'a Option<String>, b: &'a Option<String>) -> Option<(&'a str, &'a str)> {
+            Some((a.as_deref().filter(|s| !s.is_empty())?, b.as_deref().filter(|s| !s.is_empty())?))
+        }
+        if let Some((a, b)) = both(&self.xuid, &other.xuid) {
+            return Some(a == b);
+        }
+        if let Some((a, b)) = both(&self.email, &other.email) {
+            if a.eq_ignore_ascii_case(b) {
+                return Some(true);
+            }
+            // A phone number on one side and an address on the other prove nothing.
+            if a.contains('@') && b.contains('@') {
+                return Some(false);
+            }
+        }
+        if both(&self.user_hash, &other.user_hash).is_some_and(|(a, b)| a == b)
+            || both(&self.gamertag, &other.gamertag).is_some_and(|(a, b)| a.eq_ignore_ascii_case(b))
+        {
+            return Some(true);
+        }
+        None
+    }
+    /// The name to show for it: the gamertag, else the sign-in name.
+    pub fn name(&self) -> Option<&str> {
+        self.gamertag.as_deref().or(self.email.as_deref()).filter(|s| !s.is_empty())
+    }
 }
 #[derive(Clone, Debug)]
 pub struct BuildInfo {
@@ -361,12 +424,29 @@ impl Backend {
     pub async fn select_build(&self, instance: InstanceId, selection: BuildSelection) -> Result<()> {
         self.inner.select_build(instance, selection).await
     }
-    /// Signs into only the named Store slot or Xbox game profile.
+    /// The one Microsoft sign-in for a Store target: one window signs in to the Store slot and then, in the same
+    /// session, links Xbox for every game profile using that slot (falling back to the device code, as
+    /// `AccountTarget::Xbox` does, for any it couldn't); a Store slot signed in already only links Xbox. Both
+    /// states are in the snapshot after. An error only when the Store part fails. `AccountTarget::Xbox` signs in
+    /// only that profile, by device code.
     pub async fn sign_in(&self, target: AccountTarget, progress: Arc<Progress>, cancel: Cancel) -> Result<()> {
-        self.inner.sign_in(target, progress, cancel).await
+        self.inner.sign_in(target, None, progress, cancel).await
+    }
+    /// [`Backend::sign_in`] with the sign-in name of the BlockForge account the player plays with prefilled in the
+    /// window (ignored unless it is an e-mail address, and for `AccountTarget::Xbox`).
+    pub async fn sign_in_as(
+        &self,
+        target: AccountTarget,
+        login_hint: Option<String>,
+        progress: Arc<Progress>,
+        cancel: Cancel,
+    ) -> Result<()> {
+        self.inner.sign_in(target, login_hint, progress, cancel).await
     }
     /// Idle-only. Rotates epoch and clears durable hive/cache copies safely.
     /// UserAndDevice is valid only for a Store target; otherwise InvalidRequest.
+    /// A Store target signs the whole Microsoft account out: each of its profiles' Xbox sign-in (the registry copy
+    /// first, then the account), then the Store user; the Store device stays unless UserAndDevice.
     pub async fn sign_out(&self, target: AccountTarget, mode: SignOutMode) -> Result<()> {
         self.inner.sign_out(target, mode).await
     }

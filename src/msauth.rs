@@ -195,12 +195,17 @@ async fn account_from_oauth(oauth: OAuthToken, previous: Option<&Account>) -> Re
     let uhs = xsts["DisplayClaims"]["xui"][0]["uhs"].as_str().context("Xbox returned no user hash")?.to_string();
     let xsts_token = xsts["Token"].as_str().context("Xbox returned no token")?.to_string();
 
-    let mc = post_json(
-        MC_LOGIN_URL,
-        json!({"xtoken": format!("XBL3.0 x={uhs};{xsts_token}"), "platform": "PC_LAUNCHER"}),
-        "Minecraft sign-in",
-    )
-    .await?;
+    // Alongside the Minecraft sign-in, and never in its way: who the Xbox account is (Xbox Live's own audience
+    // carries the XUID and gamertag), so Bedrock can show whether its sign-in is the same person.
+    let (mc, xbox_id) = tokio::join!(
+        post_json(
+            MC_LOGIN_URL,
+            json!({"xtoken": format!("XBL3.0 x={uhs};{xsts_token}"), "platform": "PC_LAUNCHER"}),
+            "Minecraft sign-in",
+        ),
+        xbox_identity(&xbl_token)
+    );
+    let mc = mc?;
     let mc_token = mc["access_token"].as_str().context("Minecraft returned no token")?.to_string();
     let mc_expires = mc["expires_in"].as_i64().unwrap_or(86400);
 
@@ -229,6 +234,10 @@ async fn account_from_oauth(oauth: OAuthToken, previous: Option<&Account>) -> Re
         (chrono::Utc::now() + chrono::Duration::seconds(mc_expires)).to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
     );
     account.oauth_token = Some(oauth);
+    if let Some((xuid, gamertag)) = xbox_id {
+        account.xuid = Some(xuid);
+        account.gamertag = gamertag.or(account.gamertag.take());
+    }
     account.xsts_auth = Some(XstsAuth {
         issue_instant: xsts["IssueInstant"].as_str().unwrap_or_default().to_string(),
         not_after: xsts["NotAfter"].as_str().unwrap_or_default().to_string(),
@@ -236,6 +245,35 @@ async fn account_from_oauth(oauth: OAuthToken, previous: Option<&Account>) -> Re
         display_claims: xsts["DisplayClaims"].clone(),
     });
     Ok(account)
+}
+
+/// The XUID and gamertag of the Xbox account behind `xbl_token`, from an XSTS token for Xbox Live itself. Best
+/// effort: anything going wrong gives None, and the sign-in goes on without it.
+async fn xbox_identity(xbl_token: &str) -> Option<(String, Option<String>)> {
+    let sent = client()
+        .post(XSTS_URL)
+        .timeout(std::time::Duration::from_secs(10))
+        .header("Accept", "application/json")
+        .json(&json!({
+            "Properties": {"SandboxId": "RETAIL", "UserTokens": [xbl_token]},
+            "RelyingParty": "http://xboxlive.com",
+            "TokenType": "JWT"
+        }))
+        .send()
+        .await
+        .ok()?;
+    if !sent.status().is_success() {
+        return None;
+    }
+    let v: Value = sent.json().await.ok()?;
+    identity_of(&v)
+}
+
+fn identity_of(xsts: &Value) -> Option<(String, Option<String>)> {
+    let xui = &xsts["DisplayClaims"]["xui"][0];
+    let xuid = xui["xid"].as_str().filter(|x| !x.is_empty() && x.bytes().all(|b| b.is_ascii_digit()))?;
+    let gamertag = xui["gtg"].as_str().filter(|g| !g.is_empty()).map(str::to_string);
+    Some((xuid.to_string(), gamertag))
 }
 
 fn dashed(id: &str) -> String {
@@ -263,6 +301,15 @@ mod refresh_answer_tests {
         ] {
             assert!(!sign_in_rejected(status, error), "{status} {error}");
         }
+    }
+
+    #[test]
+    fn the_xbox_identity_is_read_from_xbox_lives_own_claims() {
+        let v = json!({"DisplayClaims": {"xui": [{"uhs": "123", "xid": "2535400000000001", "gtg": "Steve"}]}});
+        assert_eq!(identity_of(&v), Some(("2535400000000001".into(), Some("Steve".into()))));
+        // Minecraft's audience carries the hash only; a malformed XUID is no XUID
+        assert_eq!(identity_of(&json!({"DisplayClaims": {"xui": [{"uhs": "123"}]}})), None);
+        assert_eq!(identity_of(&json!({"DisplayClaims": {"xui": [{"xid": "12a"}]}})), None);
     }
 
     #[tokio::test]

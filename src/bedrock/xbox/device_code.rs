@@ -17,6 +17,9 @@ use crate::bedrock::{Cancel, ErrorKind, Result};
 pub(super) const CLIENT_ID: &str = "0000000048183522";
 pub(super) const SCOPE: &str = "service::user.auth.xboxlive.com::MBI_SSL";
 const FALLBACK_VERIFICATION_URI: &str = "https://www.microsoft.com/link";
+/// Where the sign-in window's authorisation page redirects with its code (`store/ipc.rs` asks for it). The exchange
+/// must name the same address.
+pub(super) const DESKTOP_REDIRECT: &str = "https://login.live.com/oauth20_desktop.srf";
 
 /// What the player is shown. Never the `device_code` itself, which is the polling credential.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -151,20 +154,63 @@ pub(super) async fn sign_in(
             None => {}
         }
         let Some(refresh) = text(&body, "refresh_token") else { continue };
-        let saved = MsaToken { refresh_token: Secret::new(refresh), obtained: now_unix() };
-        let dir = x.dir.clone();
-        let kept = blocking(move || cache::save_token_for_epoch(&dir, &saved, &epoch))
-            .await?
-            .map_err(|e| io_err("saving the Xbox sign-in", e))?;
-        if !kept {
-            return Err(err(
-                ErrorKind::Cancelled,
-                "The profile was signed out of Xbox while this sign-in was waiting, so its answer was not kept.",
-            ));
-        }
-        return Ok(SignedIn::Linked);
+        return keep(x, MsaToken { refresh_token: Secret::new(refresh), obtained: now_unix() }, epoch).await;
     }
     Err(err(ErrorKind::SignInRequired, "The Xbox sign-in code ran out before it was entered. Start the sign-in again."))
+}
+
+/// Finish the Xbox sign-in with the authorisation code the one Microsoft sign-in window got from the same session
+/// (`store::XboxStep::Code`): exchanged at oauth20_token.srf for the refresh token, which is then kept exactly like
+/// the device code's (the same file, only for the account generation this started under). The code is single use
+/// and never logged. An error means "use the device code instead"; nothing is kept then.
+pub(super) async fn sign_in_with_code(x: &Xbox, code: &Secret, cancel: &Cancel) -> Result<SignedIn> {
+    let dir = x.dir.clone();
+    let (token, epoch) =
+        blocking(move || cache::session_snapshot(&dir)).await?.map_err(|e| io_err("reading the Xbox sign-in", e))?;
+    if token.is_some() {
+        return Ok(SignedIn::AlreadyLinked);
+    }
+    let Some(epoch) = epoch else {
+        return Err(err(
+            ErrorKind::SignInRequired,
+            "This profile's Xbox sign-in record is damaged. Sign out of Xbox for this profile, then sign in again.",
+        ));
+    };
+    let form = [
+        ("client_id", CLIENT_ID),
+        ("grant_type", "authorization_code"),
+        ("code", code.expose()),
+        ("redirect_uri", DESKTOP_REDIRECT),
+        ("scope", SCOPE),
+    ];
+    let answer = tokio::select! {
+        r = post_form(x, &x.endpoints.msa_token, &form) => r,
+        _ = cancel.cancelled() => return Err(cancelled()),
+    };
+    let (status, body) = answer.map_err(|_| {
+        err(ErrorKind::Network, "Microsoft's sign-in service could not be reached to finish the Xbox sign-in.")
+    })?;
+    let Some(refresh) = text(&body, "refresh_token").filter(|_| status < 400) else {
+        // Only the bare error code: the description may quote the request.
+        let why = text(&body, "error").unwrap_or_else(|| format!("HTTP {status}"));
+        return Err(err(ErrorKind::SignInRequired, format!("Microsoft didn't accept the Xbox sign-in ({why}).")));
+    };
+    keep(x, MsaToken { refresh_token: Secret::new(refresh), obtained: now_unix() }, epoch).await
+}
+
+/// Save a new sign-in's refresh token, unless the profile was signed out since `epoch` was read.
+async fn keep(x: &Xbox, saved: MsaToken, epoch: super::Epoch) -> Result<SignedIn> {
+    let dir = x.dir.clone();
+    let kept = blocking(move || cache::save_token_for_epoch(&dir, &saved, &epoch))
+        .await?
+        .map_err(|e| io_err("saving the Xbox sign-in", e))?;
+    if !kept {
+        return Err(err(
+            ErrorKind::Cancelled,
+            "The profile was signed out of Xbox while this sign-in was waiting, so its answer was not kept.",
+        ));
+    }
+    Ok(SignedIn::Linked)
 }
 
 /// How renewing the saved sign-in went.
@@ -370,6 +416,69 @@ mod tests {
         let e = sign_in(&x, |_| {}, &Cancel::default()).await.unwrap_err();
         assert!(matches!(e.kind, ErrorKind::Cancelled), "{e}");
         assert!(cache::session_snapshot(&x.dir).unwrap().0.is_none(), "the old flow's token was not resurrected");
+    }
+
+    #[tokio::test]
+    async fn the_windows_code_is_exchanged_and_kept_like_the_device_codes() {
+        let mock = Mock::start(|req, _| match req.path() {
+            "/oauth20_token.srf" => {
+                let form = req.form();
+                if form["code"] == "fake-auth-code" {
+                    Resp::json(200, json!({"access_token": "fake-access", "refresh_token": "fake-refresh-from-code"}))
+                } else {
+                    Resp::json(400, json!({"error": "invalid_grant", "error_description": "code fake-used-code"}))
+                }
+            }
+            _ => Resp::status(404),
+        })
+        .await;
+        let x = test_xbox(&mock, "code");
+        let got = sign_in_with_code(&x, &Secret::new("fake-auth-code"), &Cancel::default()).await.unwrap();
+        assert_eq!(got, SignedIn::Linked);
+        let form = mock.requests()[0].form();
+        assert_eq!(form["client_id"], CLIENT_ID, "WineGDK's XUser app, as for the device code");
+        assert_eq!(form["grant_type"], "authorization_code");
+        assert_eq!(form["redirect_uri"], DESKTOP_REDIRECT);
+        assert_eq!(form["scope"], SCOPE);
+        let (token, epoch) = cache::session_snapshot(&x.dir).unwrap();
+        assert_eq!(token.unwrap().refresh_token.expose(), "fake-refresh-from-code");
+        assert!(epoch.is_some());
+        // Signed in already: the code isn't spent.
+        let before = mock.total();
+        assert_eq!(
+            sign_in_with_code(&x, &Secret::new("fake-auth-code"), &Cancel::default()).await.unwrap(),
+            SignedIn::AlreadyLinked
+        );
+        assert_eq!(mock.total(), before);
+
+        // A refused code keeps nothing, and the message has the error code, not what Microsoft quoted.
+        let y = test_xbox(&mock, "code-refused");
+        let e = sign_in_with_code(&y, &Secret::new("fake-used-code"), &Cancel::default()).await.unwrap_err();
+        assert!(matches!(e.kind, ErrorKind::SignInRequired), "{e}");
+        assert!(e.message.contains("invalid_grant") && !e.message.contains("fake-used-code"), "{e}");
+        assert!(cache::session_snapshot(&y.dir).unwrap().0.is_none());
+
+        // Unreachable is a network error, nothing kept.
+        let gone = Xbox { endpoints: Arc::new(super::super::Endpoints::local("http://127.0.0.1:9")), ..y };
+        let e = sign_in_with_code(&gone, &Secret::new("fake-auth-code"), &Cancel::default()).await.unwrap_err();
+        assert!(matches!(e.kind, ErrorKind::Network), "{e}");
+        assert!(cache::session_snapshot(&gone.dir).unwrap().0.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_sign_out_during_the_code_exchange_discards_the_answer() {
+        let x_dir: Arc<Mutex<Option<std::path::PathBuf>>> = Arc::default();
+        let d = x_dir.clone();
+        let mock = Mock::start(move |_, _| {
+            cache::purge(d.lock().unwrap().as_ref().unwrap()).unwrap();
+            Resp::json(200, json!({"refresh_token": "fake-refresh-of-the-old-account"}))
+        })
+        .await;
+        let x = test_xbox(&mock, "code-out");
+        *x_dir.lock().unwrap() = Some(x.dir.clone());
+        let e = sign_in_with_code(&x, &Secret::new("fake-auth-code"), &Cancel::default()).await.unwrap_err();
+        assert!(matches!(e.kind, ErrorKind::Cancelled), "{e}");
+        assert!(cache::session_snapshot(&x.dir).unwrap().0.is_none());
     }
 
     #[tokio::test]

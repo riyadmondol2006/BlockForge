@@ -1,5 +1,7 @@
 //! Ported from Xodus webview.rs and BedrockOnLinux's hosted-login patch 0004.
 //! Only this process links GTK/WebKit; broker HTTP exchanges run in the parent.
+//! One window signs in to both: the Store's hosted sign-in, then (same webview, same login.live.com session) Xbox's
+//! authorisation page, whose redirect code goes to the parent. Nothing secret is printed or kept here.
 #![cfg_attr(not(target_os = "linux"), allow(dead_code))]
 #[cfg(target_os = "linux")]
 #[path = "../../../src/bedrock/store/ipc.rs"]
@@ -11,7 +13,10 @@ mod linux {
         io::{Read, Write},
         os::unix::{fs::MetadataExt, net::UnixStream},
         path::PathBuf,
-        sync::mpsc::{self, SyncSender},
+        sync::{
+            Arc, Mutex,
+            mpsc::{self, SyncSender},
+        },
         time::{Duration, Instant},
     };
     use tao::{
@@ -24,7 +29,18 @@ mod linux {
     enum Command {
         Message(Message),
         Context(String),
+        /// The window reached the Xbox redirect: what to hand the parent.
+        Xbox(Message),
         Disconnected,
+    }
+    /// The `state` of the Xbox authorisation under way, taken by the first redirect that answers it.
+    type Pending = Arc<Mutex<Option<String>>>;
+    fn capture(pending: &Pending, url: &str) -> Option<Message> {
+        if !ipc::is_xbox_redirect(url) {
+            return None;
+        }
+        let state = pending.lock().ok()?.take()?;
+        ipc::xbox_capture(url, &state)
     }
     fn send(sender: &SyncSender<Message>, message: Message) {
         let _ = sender.try_send(message);
@@ -90,13 +106,14 @@ mod linux {
             Some(sender)
         };
         let window = WindowBuilder::new()
-            .with_title("Microsoft Store sign-in — BlockForge")
+            .with_title("Microsoft account sign-in — BlockForge")
             .with_inner_size(tao::dpi::LogicalSize::new(500.0, 700.0))
             .build(&event_loop)?;
         let mut webview: Option<wry::WebView> = None;
         let mut context = wry::WebContext::new(None); // ephemeral cookies; durable identity belongs to parent's slot
         let mut loaded = false;
         let mut opened = false;
+        let pending: Pending = Arc::default();
         let deadline = Instant::now() + Duration::from_secs(15);
         if self_test {
             proxy
@@ -106,23 +123,45 @@ mod linux {
         event_loop.run_return(|event, _, flow| {
             *flow = if self_test { ControlFlow::WaitUntil(deadline) } else { ControlFlow::Wait };
             match event {
-                Event::UserEvent(Command::Message(Message::Open { url })) => {
-                    if !self_test && !opened && url != ipc::LOGIN { *flow = ControlFlow::Exit; return; }
+                Event::UserEvent(Command::Message(first @ (Message::Open { .. } | Message::XboxAuthorize { .. }))) => {
+                    // The Store pages get the hosted-login headers; Xbox's authorisation page is a plain page.
+                    let (url, hosted) = match first {
+                        Message::Open { url } => {
+                            if !self_test && !opened && !ipc::is_login_url(&url) { *flow = ControlFlow::Exit; return; }
+                            if !(self_test && url == "about:blank" || ipc::allowed_url(&url)) { *flow = ControlFlow::Exit; return; }
+                            (url, true)
+                        }
+                        Message::XboxAuthorize { state, login_hint } => {
+                            if !ipc::valid_state(&state) { *flow = ControlFlow::Exit; return; }
+                            let url = ipc::xbox_authorize_url(&state, login_hint.as_deref());
+                            if let Ok(mut p) = pending.lock() { *p = Some(state); } else { *flow = ControlFlow::Exit; return; }
+                            (url, false)
+                        }
+                        _ => return,
+                    };
                     opened = true;
-                    if !(self_test && url == "about:blank" || ipc::allowed_url(&url)) { *flow = ControlFlow::Exit; return; }
-                    let headers = ipc::headers(&uuid::Uuid::new_v4().to_string()).into_iter().map(|(k,v)| Ok((wry::http::HeaderName::from_bytes(k.as_bytes())?, wry::http::HeaderValue::from_str(&v)?))).collect::<Result<wry::http::HeaderMap, Box<dyn std::error::Error>>>();
+                    let headers = if hosted { ipc::headers(&uuid::Uuid::new_v4().to_string()) } else { Vec::new() }.into_iter().map(|(k,v)| Ok((wry::http::HeaderName::from_bytes(k.as_bytes())?, wry::http::HeaderValue::from_str(&v)?))).collect::<Result<wry::http::HeaderMap, Box<dyn std::error::Error>>>();
                     let Ok(headers) = headers else { *flow = ControlFlow::Exit; return; };
                     if let Some(view) = &webview {
-                        if view.load_url_with_headers(&url, headers).is_err() { *flow = ControlFlow::Exit; }
+                        let loaded = if hosted { view.load_url_with_headers(&url, headers) } else { view.load_url(&url) };
+                        if loaded.is_err() { *flow = ControlFlow::Exit; }
                         return;
                     }
                     let connection = connection.clone();
                     let proxy_load = proxy.clone();
+                    let (proxy_nav, pending_nav) = (proxy.clone(), pending.clone());
                     let builder = WebViewBuilder::new_with_web_context(&mut context)
                         .with_url(&url).with_headers(headers).with_incognito(true)
                         .with_user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64; MSAppHost/3.0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/70.0.3538.102 Safari/537.36 Edge/18.26100")
                         .with_initialization_script("window.external = {notify: window.ipc.postMessage}")
-                        .with_navigation_handler(|url: String| ipc::allowed_navigation(&url))
+                        .with_navigation_handler(move |url: String| {
+                            // The desktop redirect is read, never loaded: its code goes to the parent alone.
+                            if ipc::is_xbox_redirect(&url) {
+                                if let Some(message) = capture(&pending_nav, &url) { let _ = proxy_nav.send_event(Command::Xbox(message)); }
+                                return false;
+                            }
+                            ipc::allowed_navigation(&url)
+                        })
                         .with_new_window_req_handler(|_, _| wry::NewWindowResponse::Deny)
                         .with_ipc_handler(move |request| {
                             if request.body().len() > ipc::LIMIT || !ipc::allowed_url(&request.uri().to_string()) { return; }
@@ -137,7 +176,9 @@ mod linux {
                                 let _ = proxy_load.send_event(Command::Context(context.into()));
                             }
                         })
-                        .with_on_page_load_handler({ let proxy = proxy.clone(); move |event, url| {
+                        .with_on_page_load_handler({ let (proxy, pending) = (proxy.clone(), pending.clone()); move |event, url| {
+                            // Should a redirect ever get past the navigation policy, its load is caught here.
+                            if let Some(message) = capture(&pending, &url) { let _ = proxy.send_event(Command::Xbox(message)); return; }
                             if matches!(event, PageLoadEvent::Finished) {
                                 let _ = proxy.send_event(Command::Message(if self_test { Message::Complete } else if ipc::credential_origin(&url) { Message::Credentials { data: serde_json::Value::Null } } else { return; }));
                             }
@@ -147,6 +188,7 @@ mod linux {
                         Err(_) => { *flow = ControlFlow::Exit; },
                     }
                 },
+                Event::UserEvent(Command::Xbox(message)) => { if let Some(stream) = &connection { send(stream, message); } },
                 Event::UserEvent(Command::Context(context)) => {
                     if let Some(view) = &webview { let _ = view.evaluate_script(&ipc::host_context(&context)); }
                 },

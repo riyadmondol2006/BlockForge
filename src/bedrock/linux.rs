@@ -10,8 +10,8 @@
 //!
 //! Everything here runs on the runtime's workers; file work goes to blocking workers.
 use super::{
-    BedrockError, BedrockInstance, BuildId, BuildInfo, BuildSelection, Cancel, Edition, ErrorKind, Event, InstanceId,
-    ProfileId, Result, SignInState, SignOutMode, StopMode, StoreId, diagnostics,
+    AccountIdentity, BedrockError, BedrockInstance, BuildId, BuildInfo, BuildSelection, Cancel, Edition, ErrorKind,
+    Event, InstanceId, ProfileId, Result, SignInState, SignOutMode, StopMode, StoreId, diagnostics,
     engine::{self, Check, Engine},
     fixups, gpu_safety, helpers, payloads, prefix, proton,
     runtime::{self, InnerPlan, Program, Runtime},
@@ -1202,6 +1202,19 @@ impl Parts for Linux {
         xbox::cached_state(&Xbox::for_profile(&ctx.paths.profile(profile)))
     }
 
+    fn store_identity(&self, ctx: &Ctx, store: &StoreId) -> AccountIdentity {
+        match store::cached_state(ctx.paths.root(), store) {
+            SignInState::Linked { display_name: Some(name) } => {
+                AccountIdentity { email: Some(name), ..Default::default() }
+            }
+            _ => AccountIdentity::default(),
+        }
+    }
+
+    fn xbox_identity(&self, ctx: &Ctx, profile: &ProfileId) -> AccountIdentity {
+        xbox::cached_identity(&Xbox::for_profile(&ctx.paths.profile(profile)))
+    }
+
     fn store_sign_in<'a>(
         &'a self,
         ctx: &'a Ctx,
@@ -1209,7 +1222,63 @@ impl Parts for Linux {
         progress: Arc<Progress>,
         cancel: Cancel,
     ) -> Job<'a, ()> {
-        Box::pin(async move { store::sign_in(&store_ctx(ctx, true)?, store.clone(), progress, cancel).await })
+        Box::pin(async move {
+            let window = store::Window { login_hint: None, xbox_codes: 0 };
+            store::sign_in_with(&store_ctx(ctx, true)?, Some(store.clone()), window, progress, cancel).await.map(|_| ())
+        })
+    }
+
+    fn microsoft_sign_in<'a>(
+        &'a self,
+        ctx: &'a Ctx,
+        store: Option<&'a StoreId>,
+        profiles: &'a [ProfileId],
+        login_hint: Option<&'a str>,
+        progress: Arc<Progress>,
+        cancel: Cancel,
+    ) -> Job<'a, Vec<bool>> {
+        Box::pin(async move {
+            // one window: the Store's sign-in (A), then Xbox's authorisation in the same session, one code per profile
+            let window = store::Window { login_hint: login_hint.map(str::to_string), xbox_codes: profiles.len() };
+            let steps =
+                store::sign_in_with(&store_ctx(ctx, true)?, store.cloned(), window, progress.clone(), cancel.clone())
+                    .await?;
+            let mut linked = vec![false; profiles.len()];
+            for ((profile, step), linked) in profiles.iter().zip(steps).zip(linked.iter_mut()) {
+                let account = Xbox::for_profile(&ctx.paths.profile(profile));
+                // each code becomes the profile's refresh token exactly as a device code's would (D)
+                *linked = match step {
+                    store::XboxStep::Code(code) => {
+                        progress.stage("Linking Xbox Live");
+                        match xbox::sign_in_with_code(&account, &code, &cancel).await {
+                            Ok(_) => true,
+                            Err(e) => {
+                                crate::logs::info(format!(
+                                    "Bedrock: the sign-in window's Xbox code was not taken ({e}); the device code \
+                                     follows"
+                                ));
+                                false
+                            }
+                        }
+                    }
+                    store::XboxStep::Unavailable(why) => {
+                        crate::logs::info(format!(
+                            "Bedrock: the sign-in window gave no Xbox code ({why}); the device code follows"
+                        ));
+                        false
+                    }
+                };
+                if *linked {
+                    // Xbox Live's chain now, so the window can tell who signed in and Play finds a fresh payload; an
+                    // offline answer is no failure of the sign-in
+                    progress.stage("Checking Xbox Live");
+                    if let Err(e) = xbox::prepare(&account, &cancel).await {
+                        crate::logs::info(format!("Bedrock: Xbox Live wasn't checked after the sign-in: {e}"));
+                    }
+                }
+            }
+            Ok(linked)
+        })
     }
 
     fn store_sign_out<'a>(&'a self, ctx: &'a Ctx, store: &'a StoreId, mode: SignOutMode) -> Job<'a, ()> {
@@ -1358,116 +1427,93 @@ mod tests {
         assert!(gpu.iter().all(|(k, _)| bedrock_runtime::allowed_env(k)), "{gpu:?}");
     }
 
-    /// Play and Stop, for real, with the game installed in BLOCKFORGE_DIR (see `real_install_with_saved_sign_in`):
-    /// the first instance is started, left running for BF_PLAY_SECONDS (default 60), then stopped as the Stop
-    /// button does, and what is left behind is checked. Needs the built program and helpers:
-    /// `BF_BEDROCK_SESSION_EXE=target/debug/blockforge BF_BEDROCK_RUNTIME_HELPER=target/debug/bedrock-runtime
-    /// BLOCKFORGE_DIR=<root> cargo test --locked --lib real_play_and_stop -- --ignored --nocapture`
+    /// The real check of the one Microsoft sign-in, which needs the player: the helper window (BF_BEDROCK_AUTH_HELPER)
+    /// opens the Store's hosted sign-in, prefilled with BF_BEDROCK_LOGIN_HINT if set; after it, the same window goes
+    /// to Xbox's authorisation page in the same session; the code is exchanged for the Xbox refresh token and the
+    /// Xbox Live chain is run. Then, with the Store signed in already, an Xbox-only window (the "Link Xbox Live"
+    /// button) is checked the same way. Prints redacted results only: which step gave a code or why not, signed-in
+    /// states, whether the chain went online and a gamertag came. Everything is kept under BF_BEDROCK_ONE_LOGIN_DIR
+    /// (by default `~/.cache/bf-bedrock-onelogin-real`), never in BlockForge's data folder. See
+    /// src/bedrock/store/INTEGRATION.md, "One Microsoft sign-in".
     #[test]
-    #[ignore = "starts Minecraft for real from BLOCKFORGE_DIR; needs a display"]
-    fn real_play_and_stop() {
-        use crate::bedrock::{Backend, PlayOptions, Readiness, RefreshPolicy, StopMode};
-        let Some(root) = std::env::var_os("BLOCKFORGE_DIR").map(PathBuf::from) else {
-            eprintln!("skipped: set BLOCKFORGE_DIR to a data folder with Bedrock installed");
-            return;
-        };
-        let seconds: u64 = std::env::var("BF_PLAY_SECONDS").ok().and_then(|s| s.parse().ok()).unwrap_or(60);
-        let gpu = crate::gpu::Choice::parse(&std::env::var("BF_GPU").unwrap_or_default());
-        let dirs = crate::paths::Dirs::at(&root);
-        let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
+    #[ignore = "needs a person to sign in with a real Microsoft account; needs BF_BEDROCK_AUTH_HELPER"]
+    fn real_one_microsoft_sign_in() {
+        let home = PathBuf::from(std::env::var_os("HOME").expect("HOME"));
+        let root = std::env::var_os("BF_BEDROCK_ONE_LOGIN_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home.join(".cache/bf-bedrock-onelogin-real"));
+        let helper = PathBuf::from(std::env::var_os("BF_BEDROCK_AUTH_HELPER").expect("BF_BEDROCK_AUTH_HELPER"));
+        let hint = std::env::var("BF_BEDROCK_LOGIN_HINT").ok().filter(|h| !h.is_empty());
+        let ctx = store::Context { root: root.join("bedrock"), client: client(), auth_helper: helper };
+        // fixed ids, so a rerun keeps the Store device registered the first time
+        let id = StoreId(uuid::Uuid::from_u128(0x0e1091));
+        let profile = root.join("bedrock/profiles/one-login");
+        let rt = crate::testutil::runtime();
         rt.block_on(async {
-            let backend = Backend::new(&dirs, tokio::runtime::Handle::current());
-            backend.refresh(RefreshPolicy::LocalOnly, Cancel::default()).await.unwrap();
-            let status = backend.snapshot().instances.first().cloned().expect("a Bedrock instance");
-            let id = status.instance.id.clone();
-            println!("{}: {:?}", status.instance.name, status.readiness);
-            let progress = Progress::new();
-            let watch = {
-                let p = progress.clone();
-                tokio::spawn(async move {
-                    let mut last = String::new();
-                    loop {
-                        let now = p.stage_text();
-                        if now != last {
-                            println!("  {now}");
-                            last = now;
+            let account = Xbox::for_profile(&profile);
+            xbox::sign_out(&account).await.expect("clear the scratch Xbox sign-in");
+            let report = |label: &str, steps: Vec<store::XboxStep>| -> Option<xbox::Secret> {
+                let mut code = None;
+                for step in steps {
+                    match step {
+                        store::XboxStep::Code(c) => {
+                            eprintln!("{label}: the window gave an Xbox code ({} chars)", c.expose().len());
+                            code = Some(c);
                         }
-                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                        store::XboxStep::Unavailable(why) => eprintln!("{label}: no Xbox code ({why})"),
                     }
-                })
-            };
-            let started = std::time::Instant::now();
-            let diagnostics = std::env::var_os("BF_DIAG").is_some();
-            let options = PlayOptions { gpu, diagnostics, require_xbox_online: false };
-            let session = match backend.play(id.clone(), options, progress, Cancel::default()).await {
-                Ok(s) => s,
-                Err(e) => {
-                    watch.abort();
-                    panic!("play failed: {:?}: {}", e.kind, e.message);
                 }
+                code
             };
-            watch.abort();
-            println!("started in {:.0} s; logs in {}", started.elapsed().as_secs_f32(), session.log_dir.display());
-            let until = std::time::Instant::now() + std::time::Duration::from_secs(seconds);
-            while std::time::Instant::now() < until {
-                let r = backend.snapshot().instances.iter().find(|i| i.instance.id == id).map(|i| i.readiness.clone());
-                if !matches!(r, Some(Readiness::Starting(_) | Readiness::Running(_))) {
-                    println!("the game ended by itself: {r:?}");
-                    break;
-                }
-                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-            }
-            let stopping = std::time::Instant::now();
-            let stopped = session.control.stop(StopMode::Graceful).await;
-            println!(
-                "stop: {:?} in {:.1} s",
-                stopped.as_ref().map_err(|e| &e.message),
-                stopping.elapsed().as_secs_f32()
-            );
-            stopped.unwrap();
-        });
-    }
-
-    /// The download, for real, with a Store sign-in already saved in BLOCKFORGE_DIR (made in the window): every
-    /// instance there is installed and the result printed. Run with the window closed (they share the locks):
-    /// `BLOCKFORGE_DIR=<root> cargo test --locked --lib real_install_with_saved_sign_in -- --ignored --nocapture`
-    #[test]
-    #[ignore = "downloads Minecraft for real (~2 GB) with a sign-in saved in BLOCKFORGE_DIR"]
-    fn real_install_with_saved_sign_in() {
-        use crate::bedrock::{Backend, RefreshPolicy};
-        let Some(root) = std::env::var_os("BLOCKFORGE_DIR").map(PathBuf::from) else {
-            eprintln!("skipped: set BLOCKFORGE_DIR to a data folder with a Bedrock instance signed in to the Store");
-            return;
-        };
-        let dirs = crate::paths::Dirs::at(&root);
-        let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
-        rt.block_on(async {
-            let backend = Backend::new(&dirs, tokio::runtime::Handle::current());
-            backend.refresh(RefreshPolicy::LocalOnly, Cancel::default()).await.unwrap();
-            for status in backend.snapshot().instances.iter() {
-                let id = status.instance.id.clone();
-                println!("{}: {:?}", status.instance.name, status.readiness);
-                let progress = Progress::new();
-                let watch = {
-                    let p = progress.clone();
-                    tokio::spawn(async move {
-                        let mut last = String::new();
-                        loop {
-                            let now = format!("{} {:.0}%", p.stage_text(), p.fraction() * 100.0);
-                            if now != last {
-                                println!("  {now}");
-                                last = now;
-                            }
-                            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            let chain = |label: &'static str| {
+                let account = account.clone();
+                async move {
+                    let p = xbox::prepare(&account, &Cancel::default()).await.expect("prepare");
+                    match &p.readiness {
+                        xbox::OnlineReadiness::Online { gamertag, .. } => {
+                            eprintln!(
+                                "{label}: ONLINE, gamertag {}",
+                                if gamertag.is_some() { "present" } else { "missing" }
+                            )
                         }
-                    })
-                };
-                let started = std::time::Instant::now();
-                let result = backend.install(id, progress, Cancel::default()).await;
-                watch.abort();
-                match result {
-                    Ok(build) => println!("installed {build:?} in {:.0} s", started.elapsed().as_secs_f32()),
-                    Err(e) => println!("install failed: {:?}: {}", e.kind, e.message),
+                        xbox::OnlineReadiness::Offline(o) => eprintln!("{label}: OFFLINE: {}", o.notice()),
+                    }
+                    let who = xbox::cached_identity(&account);
+                    eprintln!("{label}: xuid {}", if who.xuid.is_some() { "present" } else { "missing" });
+                }
+            };
+
+            eprintln!("\n==> Sign in in the window that opens (Store, then Xbox in the same window).\n");
+            let window = store::Window { login_hint: hint.clone(), xbox_codes: 1 };
+            let steps = store::sign_in_with(&ctx, Some(id.clone()), window, Progress::new(), Cancel::default())
+                .await
+                .expect("the Store part of the one sign-in");
+            let store_state = store::cached_state(&ctx.root, &id);
+            eprintln!(
+                "store: {}",
+                if matches!(store_state, SignInState::Linked { .. }) { "signed in" } else { "NOT signed in" }
+            );
+            match report("one window", steps) {
+                Some(code) => {
+                    let got = xbox::sign_in_with_code(&account, &code, &Cancel::default()).await;
+                    eprintln!("one window: code exchange {}", if got.is_ok() { "accepted" } else { "REFUSED" });
+                    if got.is_ok() {
+                        chain("one window").await;
+                    }
+                }
+                None => eprintln!("one window: BlockForge would fall back to the device code here"),
+            }
+
+            // the "Link Xbox Live" path: the Store is signed in, the window links Xbox only
+            xbox::sign_out(&account).await.unwrap();
+            eprintln!("\n==> A second window opens for Xbox only: sign in (or allow) there.\n");
+            let window = store::Window { login_hint: hint, xbox_codes: 1 };
+            let steps = store::sign_in_with(&ctx, None, window, Progress::new(), Cancel::default()).await.unwrap();
+            if let Some(code) = report("xbox-only window", steps) {
+                let got = xbox::sign_in_with_code(&account, &code, &Cancel::default()).await;
+                eprintln!("xbox-only window: code exchange {}", if got.is_ok() { "accepted" } else { "REFUSED" });
+                if got.is_ok() {
+                    chain("xbox-only window").await;
                 }
             }
         });
@@ -1639,5 +1685,120 @@ mod tests {
         drop(held);
         take_launch_lease(&profile).unwrap();
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Play and Stop, for real, with the game installed in BLOCKFORGE_DIR (see `real_install_with_saved_sign_in`):
+    /// the first instance is started, left running for BF_PLAY_SECONDS (default 60), then stopped as the Stop
+    /// button does, and what is left behind is checked. Needs the built program and helpers:
+    /// `BF_BEDROCK_SESSION_EXE=target/debug/blockforge BF_BEDROCK_RUNTIME_HELPER=target/debug/bedrock-runtime
+    /// BLOCKFORGE_DIR=<root> cargo test --locked --lib real_play_and_stop -- --ignored --nocapture`
+    #[test]
+    #[ignore = "starts Minecraft for real from BLOCKFORGE_DIR; needs a display"]
+    fn real_play_and_stop() {
+        use crate::bedrock::{Backend, PlayOptions, Readiness, RefreshPolicy, StopMode};
+        let Some(root) = std::env::var_os("BLOCKFORGE_DIR").map(PathBuf::from) else {
+            eprintln!("skipped: set BLOCKFORGE_DIR to a data folder with Bedrock installed");
+            return;
+        };
+        let seconds: u64 = std::env::var("BF_PLAY_SECONDS").ok().and_then(|s| s.parse().ok()).unwrap_or(60);
+        let gpu = crate::gpu::Choice::parse(&std::env::var("BF_GPU").unwrap_or_default());
+        let dirs = crate::paths::Dirs::at(&root);
+        let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
+        rt.block_on(async {
+            let backend = Backend::new(&dirs, tokio::runtime::Handle::current());
+            backend.refresh(RefreshPolicy::LocalOnly, Cancel::default()).await.unwrap();
+            let status = backend.snapshot().instances.first().cloned().expect("a Bedrock instance");
+            let id = status.instance.id.clone();
+            println!("{}: {:?}", status.instance.name, status.readiness);
+            let progress = Progress::new();
+            let watch = {
+                let p = progress.clone();
+                tokio::spawn(async move {
+                    let mut last = String::new();
+                    loop {
+                        let now = p.stage_text();
+                        if now != last {
+                            println!("  {now}");
+                            last = now;
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    }
+                })
+            };
+            let started = std::time::Instant::now();
+            let diagnostics = std::env::var_os("BF_DIAG").is_some();
+            let options = PlayOptions { gpu, diagnostics, require_xbox_online: false };
+            let session = match backend.play(id.clone(), options, progress, Cancel::default()).await {
+                Ok(s) => s,
+                Err(e) => {
+                    watch.abort();
+                    panic!("play failed: {:?}: {}", e.kind, e.message);
+                }
+            };
+            watch.abort();
+            println!("started in {:.0} s; logs in {}", started.elapsed().as_secs_f32(), session.log_dir.display());
+            let until = std::time::Instant::now() + std::time::Duration::from_secs(seconds);
+            while std::time::Instant::now() < until {
+                let r = backend.snapshot().instances.iter().find(|i| i.instance.id == id).map(|i| i.readiness.clone());
+                if !matches!(r, Some(Readiness::Starting(_) | Readiness::Running(_))) {
+                    println!("the game ended by itself: {r:?}");
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            }
+            let stopping = std::time::Instant::now();
+            let stopped = session.control.stop(StopMode::Graceful).await;
+            println!(
+                "stop: {:?} in {:.1} s",
+                stopped.as_ref().map_err(|e| &e.message),
+                stopping.elapsed().as_secs_f32()
+            );
+            stopped.unwrap();
+        });
+    }
+
+    /// The download, for real, with a Store sign-in already saved in BLOCKFORGE_DIR (made in the window): every
+    /// instance there is installed and the result printed. Run with the window closed (they share the locks):
+    /// `BLOCKFORGE_DIR=<root> cargo test --locked --lib real_install_with_saved_sign_in -- --ignored --nocapture`
+    #[test]
+    #[ignore = "downloads Minecraft for real (~2 GB) with a sign-in saved in BLOCKFORGE_DIR"]
+    fn real_install_with_saved_sign_in() {
+        use crate::bedrock::{Backend, RefreshPolicy};
+        let Some(root) = std::env::var_os("BLOCKFORGE_DIR").map(PathBuf::from) else {
+            eprintln!("skipped: set BLOCKFORGE_DIR to a data folder with a Bedrock instance signed in to the Store");
+            return;
+        };
+        let dirs = crate::paths::Dirs::at(&root);
+        let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
+        rt.block_on(async {
+            let backend = Backend::new(&dirs, tokio::runtime::Handle::current());
+            backend.refresh(RefreshPolicy::LocalOnly, Cancel::default()).await.unwrap();
+            for status in backend.snapshot().instances.iter() {
+                let id = status.instance.id.clone();
+                println!("{}: {:?}", status.instance.name, status.readiness);
+                let progress = Progress::new();
+                let watch = {
+                    let p = progress.clone();
+                    tokio::spawn(async move {
+                        let mut last = String::new();
+                        loop {
+                            let now = format!("{} {:.0}%", p.stage_text(), p.fraction() * 100.0);
+                            if now != last {
+                                println!("  {now}");
+                                last = now;
+                            }
+                            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                        }
+                    })
+                };
+                let started = std::time::Instant::now();
+                let result = backend.install(id, progress, Cancel::default()).await;
+                watch.abort();
+                match result {
+                    Ok(build) => println!("installed {build:?} in {:.0} s", started.elapsed().as_secs_f32()),
+                    Err(e) => println!("install failed: {:?}: {}", e.kind, e.message),
+                }
+            }
+        });
     }
 }

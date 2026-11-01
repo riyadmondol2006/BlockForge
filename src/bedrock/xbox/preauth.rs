@@ -1267,7 +1267,7 @@ pub(super) mod tests {
         let (kx, ky) = key.public_xy();
         let public = [&[4u8][..], &kx, &ky].concat();
         let reqs = mock.requests();
-        assert_eq!(reqs.len(), 8, "device, user, achievements and five SISU, and nothing else");
+        assert_eq!(reqs.len(), 8, "device, user, achievements and five SISU, and nothing else: {:?}", reqs.iter().map(|r| r.path().to_string()).collect::<Vec<_>>());
         for r in &reqs {
             let header = r.header("signature").expect("every auth request is signed");
             assert!(super::super::signature::tests::verify_header(&public, header, r.path(), &r.body), "{}", r.path());

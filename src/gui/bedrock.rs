@@ -201,10 +201,12 @@ pub fn status_of(r: &Readiness, job: Option<Op>, support: Support) -> (Status, S
             (Status::Warn, "Minecraft for Windows isn't installed".into())
         }
         Readiness::NeedsInstall => (Status::Warn, "Not downloaded yet".into()),
-        Readiness::NeedsStoreSignIn => (Status::Warn, "Sign in to the Microsoft Store to download and play".into()),
+        Readiness::NeedsStoreSignIn => {
+            (Status::Warn, "Sign in with your Microsoft account to download and play".into())
+        }
         Readiness::NeedsRepair { reason } => (Status::Error, format!("Needs a repair: {reason}")),
         Readiness::Ready { xbox_online_cached } if support == Support::Linux && !xbox_online_cached => {
-            (Status::Good, "Ready to play \u{00B7} sign in to Xbox to play online".into())
+            (Status::Good, "Ready to play \u{00B7} link Xbox Live to play online".into())
         }
         Readiness::Ready { .. } => (Status::Good, "Ready to play".into()),
         Readiness::Starting(_) => (Status::Busy, "Starting".into()),
@@ -234,7 +236,7 @@ impl Primary {
             Primary::Play => "Play",
             Primary::Download => "Download",
             Primary::GetFromStore => "Get it from the Store",
-            Primary::SignInStore => "Sign in to the Store",
+            Primary::SignInStore => "Sign in to play",
             Primary::Repair => "Repair",
             Primary::Stop => "Stop",
             Primary::Wait => "Working",
@@ -270,6 +272,51 @@ pub fn account_state(snap: &br::Snapshot, target: &AccountTarget) -> SignInState
         })
         .map(|a| a.state.clone())
         .unwrap_or(SignInState::Unknown)
+}
+
+/// Who `target` is, as far as the snapshot knows.
+pub fn account_identity(snap: &br::Snapshot, target: &AccountTarget) -> br::AccountIdentity {
+    snap.accounts
+        .iter()
+        .find(|a| match (&a.target, target) {
+            (AccountTarget::Store(a), AccountTarget::Store(b)) => a == b,
+            (AccountTarget::Xbox(a), AccountTarget::Xbox(b)) => a == b,
+            _ => false,
+        })
+        .map(|a| a.identity.clone())
+        .unwrap_or_default()
+}
+
+/// The Microsoft account an instance signs in with: its Store slot's name and its profile's Xbox IDs together.
+pub fn instance_identity(snap: &br::Snapshot, i: &br::BedrockInstance) -> br::AccountIdentity {
+    account_identity(snap, &AccountTarget::Store(i.store.clone()))
+        .merged(&account_identity(snap, &AccountTarget::Xbox(i.profile.clone())))
+}
+
+/// Who a BlockForge (Java) Microsoft account is, for matching it with a Bedrock sign-in. Offline players are no one.
+pub fn blockforge_identity(acc: &crate::accounts::Account) -> br::AccountIdentity {
+    if acc.offline {
+        return br::AccountIdentity::default();
+    }
+    br::AccountIdentity {
+        email: acc.email().map(str::to_string),
+        gamertag: acc.gamertag.clone(),
+        xuid: acc.xuid.clone(),
+        user_hash: acc.user_hash().map(str::to_string),
+    }
+}
+
+/// The Bedrock instances signed in as the same person as BlockForge account `acc` (from the snapshot alone).
+pub fn linked_instances<'a>(snap: &'a br::Snapshot, acc: &crate::accounts::Account) -> Vec<&'a str> {
+    let me = blockforge_identity(acc);
+    if me.is_empty() {
+        return Vec::new();
+    }
+    snap.instances
+        .iter()
+        .filter(|st| instance_identity(snap, &st.instance).same_person(&me) == Some(true))
+        .map(|st| st.instance.name.as_str())
+        .collect()
 }
 
 fn target_key(t: &AccountTarget) -> String {
@@ -633,14 +680,32 @@ impl App {
                 }
                 let cancel = br::Cancel::default();
                 self.bedrock.sign_ins.insert(key.clone(), cancel.clone());
+                // the window opens with the name of the BlockForge account that plays, so it's one click for them
+                let hint = self.current_account().and_then(|a| a.email()).map(str::to_string);
                 let (b, n) = (self.bedrock.backend.clone(), self.notifier());
                 self.rt.spawn(async move {
-                    let result = b.sign_in(target, Progress::new(), cancel).await;
+                    let result = b.sign_in_as(target, hint, Progress::new(), cancel).await;
                     n.send(Msg::Bedrock(BedrockMsg::SignedIn { key, result }));
                 });
             }
             BAct::CancelSignIn(target) => {
-                if let Some(c) = self.bedrock.sign_ins.get(&target_key(&target)) {
+                // a device code that came after the sign-in window belongs to its slot's sign-in
+                let slot = match &target {
+                    AccountTarget::Xbox(p) => self
+                        .bedrock
+                        .snap
+                        .instances
+                        .iter()
+                        .find(|st| st.instance.profile == *p)
+                        .map(|st| target_key(&AccountTarget::Store(st.instance.store.clone()))),
+                    AccountTarget::Store(_) => None,
+                };
+                let cancel = self
+                    .bedrock
+                    .sign_ins
+                    .get(&target_key(&target))
+                    .or_else(|| slot.and_then(|k| self.bedrock.sign_ins.get(&k)));
+                if let Some(c) = cancel {
                     c.cancel();
                 }
             }
@@ -900,13 +965,14 @@ impl App {
                     card(ui, |ui| {
                         ui.horizontal(|ui| {
                             spinner_sized(ui, 18.0);
-                            ui.label(RichText::new("Finish signing in to the Microsoft Store").semibold());
+                            ui.label(RichText::new("Finish signing in to your Microsoft account").semibold());
                         });
                         ui.add_space(4.0);
                         muted(
                             ui,
                             "A Microsoft sign-in window is open. Sign in with the account that owns Minecraft for \
-                             Windows; BlockForge never sees your password.",
+                             Windows: the same window links Xbox Live, so there is nothing else to sign in to. \
+                             BlockForge never sees your password.",
                         );
                         ui.add_space(8.0);
                         if secondary(ui, "Cancel").clicked() {
@@ -1050,20 +1116,13 @@ impl App {
                 );
                 return;
             }
-            ui.label(RichText::new("Sign-ins").size(FS_SECTION).semibold());
-            muted(ui, "Two, and they can be different accounts.");
+            ui.label(RichText::new("Microsoft account").size(FS_SECTION).semibold());
+            muted(ui, "One sign-in: the download, and Xbox Live for friends, Realms and servers.");
             ui.add_space(2.0);
-            let store = AccountTarget::Store(st.instance.store.clone());
-            let xbox = AccountTarget::Xbox(st.instance.profile.clone());
-            for (target, title, why) in [
-                (store, "Microsoft Store", "The account that owns Minecraft for Windows, to download and start it"),
-                (xbox, "Xbox", "Your Xbox profile, to play online: friends, Realms, servers, Marketplace"),
-            ] {
-                rule(ui);
-                let state = account_state(snap, &target);
-                let pending = self.bedrock.sign_ins.contains_key(&target_key(&target));
-                sign_in_row(ui, &target, title, why, &state, pending, act);
-            }
+            rule(ui);
+            let mine = self.current_account().filter(|a| !a.offline).cloned();
+            let row = AccountRow::of(snap, &st.instance, mine.as_ref(), &self.bedrock.sign_ins);
+            account_row(ui, &row, act);
         });
     }
 
@@ -1199,6 +1258,19 @@ impl App {
         }
     }
 
+    /// For the Accounts page: whether a BlockForge Microsoft account is the one Bedrock is signed in with, from the
+    /// snapshot alone. None where Bedrock isn't played through BlockForge or has no instance.
+    pub(super) fn bedrock_link_line(&self, acc: &crate::accounts::Account) -> Option<(bool, String)> {
+        if acc.offline || br::support() != Support::Linux || self.bedrock.snap.instances.is_empty() {
+            return None;
+        }
+        let linked = linked_instances(&self.bedrock.snap, acc);
+        Some(match linked.as_slice() {
+            [] => (false, "Bedrock: not linked. Sign in on a Bedrock instance with this account".into()),
+            names => (true, format!("Bedrock: linked ({})", names.join(", "))),
+        })
+    }
+
     /// For the screenshot tour: two Bedrock instances in memory (nothing is written), one ready to play with both
     /// sign-ins, one waiting for its Xbox code, and a game log.
     pub(super) fn shot_bedrock(&mut self, state: &str) {
@@ -1224,26 +1296,30 @@ impl App {
             selection: br::BuildSelection::Latest(Edition::Preview),
             installed: None,
         };
-        let (ready, xbox) = match state {
-            "signin" => (Readiness::NeedsStoreSignIn, SignInState::SigningIn),
+        // the one sign-in window open (signin), or signed in to both as the BlockForge account's owner
+        let (ready, xbox, store_state) = match state {
+            "signin" => (Readiness::NeedsStoreSignIn, SignInState::SigningIn, SignInState::SigningIn),
             _ => (
                 Readiness::Ready { xbox_online_cached: true },
                 SignInState::Linked { display_name: Some("Steve".into()) },
+                SignInState::Linked { display_name: Some("owner@outlook.com".into()) },
             ),
         };
-        let store_state = if state == "signin" {
-            SignInState::NeedsSignIn { reason: "Sign in again: the Store asked for it".into() }
+        let (store_who, xbox_who) = if state == "signin" {
+            Default::default()
         } else {
-            SignInState::Linked { display_name: Some("owner@outlook.com".into()) }
+            (
+                br::AccountIdentity { email: Some("owner@outlook.com".into()), ..Default::default() },
+                br::AccountIdentity {
+                    gamertag: Some("Steve".into()),
+                    xuid: Some("2535400000000001".into()),
+                    ..Default::default()
+                },
+            )
         };
         let mut prompts = Vec::new();
         if state == "signin" {
-            prompts.push(AuthPrompt::DeviceCode {
-                profile: first.profile.clone(),
-                url: "https://www.microsoft.com/link".into(),
-                user_code: "BX7K-QW2P".into(),
-                expires_at_unix: chrono::Utc::now().timestamp() + 14 * 60,
-            });
+            prompts.push(AuthPrompt::StoreWindow { store: store.clone() });
         }
         self.bedrock.snap = Arc::new(br::Snapshot {
             instances: vec![
@@ -1251,11 +1327,16 @@ impl App {
                 InstanceStatus { instance: second.clone(), readiness: Readiness::NeedsInstall },
             ],
             accounts: vec![
-                br::AccountStatus { target: AccountTarget::Store(store), state: store_state },
-                br::AccountStatus { target: AccountTarget::Xbox(first.profile.clone()), state: xbox },
+                br::AccountStatus { target: AccountTarget::Store(store), state: store_state, identity: store_who },
+                br::AccountStatus {
+                    target: AccountTarget::Xbox(first.profile.clone()),
+                    state: xbox.clone(),
+                    identity: xbox_who.clone(),
+                },
                 br::AccountStatus {
                     target: AccountTarget::Xbox(second.profile.clone()),
-                    state: SignInState::SignedOut,
+                    state: xbox,
+                    identity: xbox_who,
                 },
             ],
             auth_prompts: prompts,
@@ -1420,7 +1501,7 @@ fn device_code_card(
     act: &mut Option<BAct>,
 ) {
     ui.spacing_mut().item_spacing.y = 8.0;
-    ui.label(RichText::new("Sign in to Xbox").size(FS_SECTION).semibold());
+    ui.label(RichText::new("Link Xbox Live with a code").size(FS_SECTION).semibold());
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing.x = 12.0;
         egui::Frame::new()
@@ -1455,46 +1536,126 @@ fn device_code_card(
     });
 }
 
-/// One sign-in of the page: what it is, how it stands and what it is for, with the button that changes it at the
-/// right.
-fn sign_in_row(
-    ui: &mut Ui,
-    target: &AccountTarget,
-    title: &str,
-    why: &str,
-    state: &SignInState,
-    pending: bool,
-    act: &mut Option<BAct>,
-) {
-    let (kind, text) = match state {
-        SignInState::Linked { display_name: Some(n) } => (Status::Good, format!("Signed in as {n}")),
-        SignInState::Linked { display_name: None } => (Status::Good, "Signed in".to_string()),
-        SignInState::SigningIn => (Status::Busy, "Signing in".to_string()),
+/// The instance's one Microsoft account, as the page shows it: how its two halves (the Store, Xbox Live) stand,
+/// and how it compares with the BlockForge account that plays.
+pub struct AccountRow {
+    store: AccountTarget,
+    xbox: AccountTarget,
+    store_state: SignInState,
+    xbox_state: SignInState,
+    who: br::AccountIdentity,
+    /// The BlockForge account's name to show, and whether it is the same person (None: can't tell).
+    blockforge: Option<(String, Option<bool>)>,
+    busy: bool,
+}
+
+impl AccountRow {
+    pub fn of(
+        snap: &br::Snapshot,
+        i: &br::BedrockInstance,
+        mine: Option<&crate::accounts::Account>,
+        sign_ins: &HashMap<String, br::Cancel>,
+    ) -> AccountRow {
+        let store = AccountTarget::Store(i.store.clone());
+        let xbox = AccountTarget::Xbox(i.profile.clone());
+        let (store_state, xbox_state) = (account_state(snap, &store), account_state(snap, &xbox));
+        let busy = sign_ins.contains_key(&target_key(&store))
+            || sign_ins.contains_key(&target_key(&xbox))
+            || matches!(store_state, SignInState::SigningIn)
+            || matches!(xbox_state, SignInState::SigningIn);
+        let who = instance_identity(snap, i);
+        let blockforge = mine.map(|a| {
+            let name = a.email().map(str::to_string).unwrap_or_else(|| a.name().to_string());
+            (name, who.same_person(&blockforge_identity(a)))
+        });
+        AccountRow { store, xbox, store_state, xbox_state, who, blockforge, busy }
+    }
+}
+
+/// The one Microsoft account row: how it stands, the Xbox Live half, the link to the BlockForge account, and the one
+/// button (Sign in to play Bedrock, or Sign out of both).
+fn account_row(ui: &mut Ui, row: &AccountRow, act: &mut Option<BAct>) {
+    let signed_in = matches!(row.store_state, SignInState::Linked { .. });
+    let name = match &row.store_state {
+        SignInState::Linked { display_name: Some(n) } => Some(n.clone()),
+        _ => row.who.email.clone().or_else(|| row.who.gamertag.clone()),
+    };
+    let (kind, text) = match &row.store_state {
+        _ if row.busy => (Status::Busy, "Signing in".to_string()),
+        SignInState::Linked { .. } => {
+            (Status::Good, name.as_ref().map(|n| format!("Signed in as {n}")).unwrap_or_else(|| "Signed in".into()))
+        }
         SignInState::NeedsSignIn { reason } => (Status::Warn, reason.clone()),
-        SignInState::SignedOut => (Status::Warn, "Not signed in".to_string()),
+        SignInState::SignedOut | SignInState::SigningIn => (Status::Warn, "Not signed in".to_string()),
         SignInState::Unknown => (Status::Warn, "Not checked yet".to_string()),
     };
-    const BUTTON_W: f32 = 104.0;
+    const BUTTON_W: f32 = 164.0;
     ui.horizontal_top(|ui| {
         let words = (ui.available_width() - BUTTON_W - 12.0).max(120.0);
         ui.allocate_ui_with_layout(vec2(words, 0.0), Layout::top_down(Align::Min), |ui| {
             ui.spacing_mut().item_spacing.y = 4.0;
-            ui.label(RichText::new(title).semibold());
             status_line(ui, kind, &text);
-            ui.add(egui::Label::new(RichText::new(why).size(FS_META).color(c_muted())).wrap());
+            if signed_in && !row.busy {
+                let _ = match &row.xbox_state {
+                    SignInState::Linked { display_name: Some(tag) } => {
+                        status_line(ui, Status::Good, &format!("Xbox Live: {tag}"))
+                    }
+                    SignInState::Linked { display_name: None } => status_line(ui, Status::Good, "Xbox Live: linked"),
+                    _ => status_line(ui, Status::Warn, "Xbox Live isn't linked: single-player and LAN only"),
+                };
+            }
+            match &row.blockforge {
+                Some((mine, Some(true))) if signed_in => {
+                    let text = format!("The same account as BlockForge's {mine}");
+                    ui.add(egui::Label::new(RichText::new(text).size(FS_META).color(c_muted())).wrap());
+                }
+                Some((mine, Some(false))) if signed_in => {
+                    let them = name.clone().or_else(|| row.who.name().map(str::to_string)).unwrap_or_default();
+                    let text = format!(
+                        "Signed in as {them}, but your BlockForge account is {mine}. Both work; sign out here to \
+                         use {mine} for Bedrock too."
+                    );
+                    status_line(ui, Status::Warn, &text);
+                }
+                Some((mine, _)) if !signed_in && !row.busy => {
+                    let text = format!("Sign in with {mine} to use the same account as in Java Edition.");
+                    ui.add(egui::Label::new(RichText::new(text).size(FS_META).color(c_muted())).wrap());
+                }
+                _ => {}
+            }
+            if !signed_in && !row.busy {
+                let why = "The account that owns Minecraft for Windows. One window signs you in to both the \
+                           download and Xbox Live.";
+                ui.add(egui::Label::new(RichText::new(why).size(FS_META).color(c_muted())).wrap());
+            }
         });
         ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
-            let busy = pending || matches!(state, SignInState::SigningIn);
-            if busy {
+            if row.busy {
                 if secondary(ui, "Cancel").clicked() {
-                    *act = Some(BAct::CancelSignIn(target.clone()));
+                    *act = Some(BAct::CancelSignIn(row.store.clone()));
                 }
-            } else if matches!(state, SignInState::Linked { .. }) {
-                if ghost(ui, "Sign out").clicked() {
-                    *act = Some(BAct::SignOut(target.clone(), br::SignOutMode::User));
-                }
-            } else if primary(ui, "Sign in").clicked() {
-                *act = Some(BAct::SignIn(target.clone()));
+            } else if signed_in {
+                ui.vertical(|ui| {
+                    ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
+                        if ghost(ui, "Sign out").on_hover_text("Signs out of the Store and Xbox Live here").clicked() {
+                            *act = Some(BAct::SignOut(row.store.clone(), br::SignOutMode::User));
+                        }
+                    });
+                    if !matches!(row.xbox_state, SignInState::Linked { .. }) {
+                        ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
+                            if secondary(ui, "Link Xbox Live").clicked() {
+                                *act = Some(BAct::SignIn(row.store.clone()));
+                            }
+                        });
+                        ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
+                            if ghost(ui, "Use a code instead").clicked() {
+                                *act = Some(BAct::SignIn(row.xbox.clone()));
+                            }
+                        });
+                    }
+                });
+            } else if primary(ui, "Sign in to play Bedrock").clicked() {
+                *act = Some(BAct::SignIn(row.store.clone()));
             }
         });
     });

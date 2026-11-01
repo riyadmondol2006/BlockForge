@@ -17,6 +17,7 @@ mod login;
 mod stage;
 mod tokens;
 pub use download::InstalledBuild;
+pub use login::{Window, XboxStep};
 pub use stage::StagedImages;
 pub use tokens::Slot;
 
@@ -34,11 +35,33 @@ impl Context {
         tokio::task::spawn_blocking(move || Slot::open(path)).await.map_err(internal)?
     }
 }
+/// The Store sign-in alone (the window closes once the Store has the account).
+#[cfg(test)]
 pub async fn sign_in(ctx: &Context, id: StoreId, progress: Arc<Progress>, cancel: Cancel) -> Result<()> {
-    let slot = ctx.slot(&id).await?;
-    progress.stage("Signing in to the Microsoft Store");
-    device::ensure(&ctx.client, &slot, &cancel).await?;
-    login::run(ctx, &slot, &cancel).await
+    sign_in_with(ctx, Some(id), Window { login_hint: None, xbox_codes: 0 }, progress, cancel).await.map(|_| ())
+}
+/// The one Microsoft sign-in window: the Store sign-in of slot `id` (None: the Store is signed in already, the
+/// window only links Xbox), then `window.xbox_codes` Xbox authorisation codes from the same login.live.com session.
+/// An error only for the Store part; the Xbox codes that couldn't be had are `XboxStep::Unavailable`.
+pub async fn sign_in_with(
+    ctx: &Context,
+    id: Option<StoreId>,
+    window: Window,
+    progress: Arc<Progress>,
+    cancel: Cancel,
+) -> Result<Vec<XboxStep>> {
+    match id {
+        Some(id) => {
+            let slot = ctx.slot(&id).await?;
+            progress.stage("Signing in to your Microsoft account");
+            device::ensure(&ctx.client, &slot, &cancel).await?;
+            login::run(ctx, Some(&slot), &window, &cancel).await
+        }
+        None => {
+            progress.stage("Signing in to Xbox Live");
+            login::run(ctx, None, &window, &cancel).await
+        }
+    }
 }
 pub async fn sign_out(ctx: &Context, id: StoreId, mode: SignOutMode) -> Result<()> {
     let slot = if matches!(mode, SignOutMode::UserAndDevice) {

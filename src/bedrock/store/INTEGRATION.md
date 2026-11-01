@@ -62,7 +62,7 @@ packages and protoc; root acquisition uses no WebKit. `--self-test` opens a shor
 blank-page WebKit window, waits for page load, exits without any sign-in/network.
 
 IPC schema is `ipc.rs`, compiled verbatim into both packages: a big-endian u32
-length plus JSON `{version:1,message:{type:...}}`, maximum 128 KiB. Parent creates
+length plus JSON `{version:2,message:{type:...}}`, maximum 128 KiB (version 2 added the Xbox step, below). Parent creates
 an unpredictable 0700 socket directory in /dev/shm with 0600 Unix socket; verifies
 child PID and UID. Only the socket path is in argv. Helper verifies socket owner
 and mode. Parent sends Open/Complete; helper sends Credentials/Cancelled. No
@@ -86,6 +86,78 @@ Device registration writes a `provisioning` marker before the request. If the
 request provably never left (no connection, or it could not be built) the marker is
 removed so an offline first sign-in can simply be retried; any later failure keeps it
 and asks for explicit repair (sign-out UserAndDevice), since a device may exist.
+
+## One Microsoft sign-in (Store and Xbox in one window)
+
+Bedrock needs two tokens from two Microsoft apps: the Store's DA/Passport tokens (client `000000004424da1f`, the
+hosted InlineLogin above) and WineGDK's XUser refresh token (client `0000000048183522`, scope
+`service::user.auth.xboxlive.com::MBI_SSL`, the token `xbox/` keeps). BlockForge's Java/Horizon account
+(`src/msauth.rs`) belongs to a third app (Azure client `90890812-…`, `XboxLive.signin` on
+login.microsoftonline.com); its refresh token can't mint either, so it is not reused. What is shared is the browser
+session: after the Store's sign-in the window is still signed in to login.live.com, so it goes on to
+
+```
+https://login.live.com/oauth20_authorize.srf?client_id=0000000048183522
+  &scope=service%3A%3Auser.auth.xboxlive.com%3A%3AMBI_SSL&response_type=code
+  &redirect_uri=https%3A%2F%2Flogin.live.com%2Foauth20_desktop.srf&state=<64 random hex>[&login_hint=<address>]
+```
+
+and reads the code off the redirect to `https://login.live.com/oauth20_desktop.srf` (`ipc::xbox_capture`: exact
+scheme, host and path, the `state` it was given, the bare OAuth error code on refusal; the redirect is never loaded
+and the code is never logged). The parent exchanges it at `oauth20_token.srf` (`grant_type=authorization_code`, same
+`redirect_uri` and scope) in `xbox::sign_in_with_code`, which keeps the refresh token exactly like the device code
+(same file, account epoch, then the preauth chain). There is no `prompt=none`: when the app was allowed before the
+page redirects at once, otherwise Microsoft shows its "allow" page in the same window. Whatever goes wrong there (no
+session, a refusal, the window closed, ten minutes without an answer, a refused exchange) is not an error: the
+facade starts the device code for that profile, as `AccountTarget::Xbox` does.
+
+IPC version 2 (both binaries are built from the same `ipc.rs`; a version 1 helper is refused): parent `Open` (the
+first must be `ipc::login_url(hint)`: `LOGIN` alone or with `&username=<percent-encoded address>`),
+`XboxAuthorize { state, login_hint }` (may come first, for an Xbox-only window when the Store is already signed
+in), `Complete`; helper `Credentials`, `Cancelled`, `XboxCode { code, state }`, `XboxUnavailable { error }`. The
+helper builds the authorisation URL itself from constants, so the parent can't point it anywhere else, and loads it
+without the hosted-login headers. Navigation rules are unchanged: login.live.com (and so its `oauth20_*` pages) was
+already allowed; `Credentials` seen during the Xbox step are ignored by the parent.
+
+`Backend::sign_in(AccountTarget::Store(id))` (and `sign_in_as`, with the BlockForge account's address as the hint)
+runs one window for the Store and one code per game profile on that slot without an Xbox sign-in; a slot already
+signed in gets an Xbox-only window. `Backend::sign_out(AccountTarget::Store(id), User)` signs out each of those
+profiles' Xbox (registry copy first, then the account) and then the Store user, keeping the device.
+`AccountStatus::identity` carries the Store's sign-in name and the Xbox XUID/gamertag/user hash from local records;
+the window compares them with the BlockForge account (`msauth` now also reads its XUID and gamertag, best effort,
+from an XSTS token for `http://xboxlive.com`) and only says so when they differ.
+
+### Run book: the real check (the user signs in; the agent never does)
+
+```sh
+. <the env of "Interactive Release scratch check" below>
+cargo build --locked -p blockforge-bedrock-auth
+export BF_BEDROCK_AUTH_HELPER=$CARGO_TARGET_DIR/debug/blockforge-bedrock-auth
+export BF_BEDROCK_LOGIN_HINT=you@example.com      # optional: checks the prefilled name
+cargo test --locked -p blockforge --lib bedrock::linux::tests::real_one_microsoft_sign_in -- --ignored --exact --nocapture
+```
+
+It keeps everything under `~/.cache/bf-bedrock-onelogin-real` (BF_BEDROCK_ONE_LOGIN_DIR), never BlockForge's data,
+BedrockOnLinux or ~/.minecraft. What to look at, in order:
+
+1. The window's first page has the address filled in (if a hint was set). Sign in to the Store as usual (MFA, the
+   "press and hold" challenge). If the address is not filled in, `username=` is not honoured by InlineLogin: harmless,
+   drop it from `ipc::login_url`.
+2. Without signing in again, the window shows either nothing new (it closes by itself) or Microsoft's "Let this app
+   access your info?" page for "Minecraft"/"Xbox": allow it in the window. The log must say `one window: the window
+   gave an Xbox code`, `code exchange accepted`, `ONLINE, gamertag present`, `xuid present`.
+   - `no Xbox code (state_mismatch)`, `(no_code)` or the window asking for the password again means the hosted
+     InlineLogin does not leave a session the authorisation page accepts; BlockForge then falls back to the device
+     code (which still works), and the window step needs another look (e.g. a non-hosted login page first).
+   - `no Xbox code (timeout)` with a page stuck: note the page's address and add its host to
+     `ipc::allowed_navigation` if it is outside it.
+   - `code exchange REFUSED`: the `redirect_uri` or scope sent by `sign_in_with_code` is not what Microsoft
+     expects for this app; compare with `ipc::xbox_authorize_url`.
+3. A second window opens for Xbox only (the Store stays signed in): sign in there and allow; the same lines with
+   `xbox-only window:` must appear. (Its webview is fresh, so it asks for the account again.)
+4. In BlockForge itself: an instance page's Microsoft account row says "Signed in as <address>", "Xbox Live:
+   <gamertag>", and, when the Java account is the same person, "The same account as BlockForge's …"; Play starts
+   online. Sign out clears both rows; the Store device stays (no new device registration on the next sign-in).
 
 ## Download notes
 

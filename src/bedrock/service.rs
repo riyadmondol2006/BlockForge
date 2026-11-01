@@ -19,10 +19,10 @@ use tokio::sync::broadcast;
 
 use super::storage::{self, InstanceRecord, Paths};
 use super::{
-    AccountStatus, AccountTarget, AuthPrompt, BedrockError, BedrockInstance, BuildId, BuildInfo, BuildSelection,
-    Cancel, CreateRequest, DiagnosticReport, Edition, ErrorKind, Event, InstanceId, InstanceStatus, PlayOptions,
-    ProfileId, Readiness, RefreshPolicy, Result, Session, SessionControl, SessionId, SignInState, SignOutMode,
-    Snapshot, StopMode, StoreId, Support,
+    AccountIdentity, AccountStatus, AccountTarget, AuthPrompt, BedrockError, BedrockInstance, BuildId, BuildInfo,
+    BuildSelection, Cancel, CreateRequest, DiagnosticReport, Edition, ErrorKind, Event, InstanceId, InstanceStatus,
+    PlayOptions, ProfileId, Readiness, RefreshPolicy, Result, Session, SessionControl, SessionId, SignInState,
+    SignOutMode, Snapshot, StopMode, StoreId, Support,
 };
 use crate::install::Progress;
 use crate::launch::Running;
@@ -106,6 +106,34 @@ pub(super) trait Parts: Send + Sync + 'static {
     fn store_state(&self, ctx: &Ctx, store: &StoreId) -> SignInState;
     /// The cached Xbox sign-in of a game profile.
     fn xbox_state(&self, ctx: &Ctx, profile: &ProfileId) -> SignInState;
+    /// Who a Store slot's account is, from its local record (no network).
+    fn store_identity(&self, _ctx: &Ctx, _store: &StoreId) -> AccountIdentity {
+        AccountIdentity::default()
+    }
+    /// Who a game profile's Xbox account is, from its local record (no network).
+    fn xbox_identity(&self, _ctx: &Ctx, _profile: &ProfileId) -> AccountIdentity {
+        AccountIdentity::default()
+    }
+    /// The one Microsoft sign-in window: the Store sign-in of `store` (None: it's signed in already), then the
+    /// Xbox sign-in of each of `profiles` from the same session. Says, per profile, whether its Xbox sign-in was
+    /// linked; the facade falls back to the device code for the others. An error only for the Store part.
+    fn microsoft_sign_in<'a>(
+        &'a self,
+        ctx: &'a Ctx,
+        store: Option<&'a StoreId>,
+        profiles: &'a [ProfileId],
+        login_hint: Option<&'a str>,
+        progress: Arc<Progress>,
+        cancel: Cancel,
+    ) -> Job<'a, Vec<bool>> {
+        let _ = login_hint;
+        Box::pin(async move {
+            if let Some(store) = store {
+                self.store_sign_in(ctx, store, progress, cancel).await?;
+            }
+            Ok(vec![false; profiles.len()])
+        })
+    }
     fn store_sign_in<'a>(
         &'a self,
         ctx: &'a Ctx,
@@ -289,6 +317,8 @@ struct State {
     stores: Vec<StoreId>,
     store_states: HashMap<StoreId, SignInState>,
     xbox_states: HashMap<ProfileId, SignInState>,
+    store_ids: HashMap<StoreId, AccountIdentity>,
+    xbox_ids: HashMap<ProfileId, AccountIdentity>,
     prompts: Vec<AuthPrompt>,
     latest: HashMap<Edition, BuildInfo>,
     /// Minecraft for Windows as the package API found it (Windows only).
@@ -418,11 +448,13 @@ fn snapshot_of(support: Support, s: &State) -> Snapshot {
         .map(|id| AccountStatus {
             target: AccountTarget::Store(id.clone()),
             state: s.store_states.get(id).cloned().unwrap_or(SignInState::Unknown),
+            identity: s.store_ids.get(id).cloned().unwrap_or_default(),
         })
         .collect();
     accounts.extend(s.instances.iter().map(|rec| AccountStatus {
         target: AccountTarget::Xbox(rec.profile.clone()),
         state: s.xbox_states.get(&rec.profile).cloned().unwrap_or(SignInState::Unknown),
+        identity: s.xbox_ids.get(&rec.profile).cloned().unwrap_or_default(),
     }));
     let mut builds: Vec<BuildInfo> = Vec::new();
     let mut add = |info: BuildInfo| {
@@ -597,10 +629,14 @@ impl Service {
                 let (mut stores, mut xbox) = (HashMap::new(), HashMap::new());
                 if support == Support::Linux {
                     for id in &loaded.stores {
-                        stores.insert(id.clone(), parts.store_state(&ctx, id));
+                        stores.insert(id.clone(), (parts.store_state(&ctx, id), parts.store_identity(&ctx, id)));
                     }
                     for rec in &loaded.instances {
-                        xbox.insert(rec.profile.clone(), parts.xbox_state(&ctx, &rec.profile));
+                        let profile = &rec.profile;
+                        xbox.insert(
+                            profile.clone(),
+                            (parts.xbox_state(&ctx, profile), parts.xbox_identity(&ctx, profile)),
+                        );
                     }
                 }
                 #[allow(unused_mut)]
@@ -628,14 +664,16 @@ impl Service {
             s.instances = loaded.instances;
             s.stores = loaded.stores;
             // a sign-in under way keeps showing as one
-            for (id, st) in store_states {
+            for (id, (st, who)) in store_states {
                 if !matches!(s.store_states.get(&id), Some(SignInState::SigningIn)) {
-                    s.store_states.insert(id, st);
+                    s.store_states.insert(id.clone(), st);
+                    s.store_ids.insert(id, who);
                 }
             }
-            for (id, st) in xbox_states {
+            for (id, (st, who)) in xbox_states {
                 if !matches!(s.xbox_states.get(&id), Some(SignInState::SigningIn)) {
-                    s.xbox_states.insert(id, st);
+                    s.xbox_states.insert(id.clone(), st);
+                    s.xbox_ids.insert(id, who);
                 }
             }
             s.native = native;
@@ -741,6 +779,7 @@ impl Service {
         self.shared.update(|s| {
             s.instances.retain(|r| r.id != rec.id);
             s.xbox_states.remove(&rec.profile);
+            s.xbox_ids.remove(&rec.profile);
             s.repair.remove(&rec.id);
             s.prompts.retain(|p| !matches!(p, AuthPrompt::DeviceCode { profile, .. } if *profile == rec.profile));
         });
@@ -766,7 +805,13 @@ impl Service {
         Ok(())
     }
 
-    pub async fn sign_in(&self, target: AccountTarget, progress: Arc<Progress>, cancel: Cancel) -> Result<()> {
+    pub async fn sign_in(
+        &self,
+        target: AccountTarget,
+        login_hint: Option<String>,
+        progress: Arc<Progress>,
+        cancel: Cancel,
+    ) -> Result<()> {
         self.available()?;
         if self.support() == Support::Windows {
             return Err(BedrockError::new(
@@ -777,24 +822,7 @@ impl Service {
         self.ensure_loaded().await?;
         let ctx = self.ctx();
         match &target {
-            AccountTarget::Store(store) => {
-                if !self.shared.lock().stores.contains(store) {
-                    return Err(BedrockError::new(ErrorKind::InvalidRequest, "That Store sign-in is gone"));
-                }
-                let _guard = self.begin(vec![JobKey::Store(store.0)])?;
-                let before = self.shared.update(|s| {
-                    s.prompts.push(AuthPrompt::StoreWindow { store: store.clone() });
-                    s.store_states.insert(store.clone(), SignInState::SigningIn).unwrap_or(SignInState::SignedOut)
-                });
-                self.shared.send(Event::StoreWindowOpened(store.clone()));
-                let result = self.parts.store_sign_in(&ctx, store, progress, cancel).await;
-                let after = self.after_sign_in(&result, before, || self.parts.store_state(&ctx, store));
-                self.shared.update(|s| {
-                    s.prompts.retain(|p| !matches!(p, AuthPrompt::StoreWindow { store: id } if id == store));
-                    s.store_states.insert(store.clone(), after);
-                });
-                result
-            }
+            AccountTarget::Store(store) => self.microsoft_sign_in(&ctx, store, login_hint, progress, cancel).await,
             AccountTarget::Xbox(profile) => {
                 if !self.shared.lock().instances.iter().any(|r| &r.profile == profile) {
                     return Err(BedrockError::new(ErrorKind::InvalidRequest, "That Bedrock instance is gone"));
@@ -806,13 +834,140 @@ impl Service {
                 let prompts = Prompts { shared: self.shared.clone() };
                 let result = self.parts.xbox_sign_in(&ctx, profile, prompts, cancel).await;
                 let after = self.after_sign_in(&result, before, || self.parts.xbox_state(&ctx, profile));
+                let who = self.parts.xbox_identity(&ctx, profile);
                 self.shared.update(|s| {
                     s.prompts.retain(|p| !matches!(p, AuthPrompt::DeviceCode { profile: id, .. } if id == profile));
                     s.xbox_states.insert(profile.clone(), after);
+                    s.xbox_ids.insert(profile.clone(), who);
                 });
                 result
             }
         }
+    }
+
+    /// The one Microsoft sign-in of a Store slot: one window for the Store and the Xbox sign-in of every game
+    /// profile on the slot that hasn't got one (a slot signed in already only links those), then the device code
+    /// for any profile the window couldn't link. Only the Store part can fail the whole; an Xbox profile that
+    /// couldn't be linked is told in its state and a notice, and plays offline meanwhile.
+    async fn microsoft_sign_in(
+        &self,
+        ctx: &Ctx,
+        store: &StoreId,
+        login_hint: Option<String>,
+        progress: Arc<Progress>,
+        cancel: Cancel,
+    ) -> Result<()> {
+        let (store_too, profiles) = {
+            let s = self.shared.lock();
+            if !s.stores.contains(store) {
+                return Err(BedrockError::new(ErrorKind::InvalidRequest, "That Store sign-in is gone"));
+            }
+            let mut profiles: Vec<ProfileId> = Vec::new();
+            for rec in s.instances.iter().filter(|r| &r.store == store) {
+                let linked = matches!(s.xbox_states.get(&rec.profile), Some(SignInState::Linked { .. }));
+                // a profile with its own (device-code) sign-in under way is left to it
+                if !linked && !s.jobs.contains(&JobKey::Xbox(rec.profile.0)) && !profiles.contains(&rec.profile) {
+                    profiles.push(rec.profile.clone());
+                }
+            }
+            let store_linked = matches!(s.store_states.get(store), Some(SignInState::Linked { .. }));
+            // signed in to both already: this is a fresh Store sign-in, as asked
+            (!store_linked || profiles.is_empty(), profiles)
+        };
+        let store_guard = self.begin(vec![JobKey::Store(store.0)])?;
+        let _xbox_guard = self.begin(profiles.iter().map(|p| JobKey::Xbox(p.0)).collect())?;
+        let (store_before, xbox_before) = self.shared.update(|s| {
+            s.prompts.push(AuthPrompt::StoreWindow { store: store.clone() });
+            let store_before = if store_too {
+                s.store_states.insert(store.clone(), SignInState::SigningIn).unwrap_or(SignInState::SignedOut)
+            } else {
+                s.store_states.get(store).cloned().unwrap_or(SignInState::Unknown)
+            };
+            let xbox_before: Vec<SignInState> = profiles
+                .iter()
+                .map(|p| s.xbox_states.insert(p.clone(), SignInState::SigningIn).unwrap_or(SignInState::SignedOut))
+                .collect();
+            (store_before, xbox_before)
+        });
+        self.shared.send(Event::StoreWindowOpened(store.clone()));
+        let hint = login_hint.as_deref().filter(|h| h.contains('@'));
+        let window = self
+            .parts
+            .microsoft_sign_in(ctx, store_too.then_some(store), &profiles, hint, progress.clone(), cancel.clone())
+            .await;
+        let linked = match window {
+            Ok(linked) => linked,
+            Err(e) => {
+                let after = self.after_sign_in(&Err(e.clone()), store_before, || SignInState::Unknown);
+                self.shared.update(|s| {
+                    s.prompts.retain(|p| !matches!(p, AuthPrompt::StoreWindow { store: id } if id == store));
+                    if store_too {
+                        s.store_states.insert(store.clone(), after);
+                    }
+                    for (p, before) in profiles.iter().zip(&xbox_before) {
+                        s.xbox_states.insert(p.clone(), before.clone());
+                    }
+                });
+                return Err(e);
+            }
+        };
+        let store_after = self.after_sign_in(&Ok(()), store_before, || self.parts.store_state(ctx, store));
+        let store_who = self.parts.store_identity(ctx, store);
+        // what each linked profile's record says now (a few small reads, before the state is locked)
+        let now: Vec<Option<(SignInState, AccountIdentity)>> = profiles
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                linked.get(i).copied().unwrap_or(false).then(|| {
+                    let state = self.after_sign_in(&Ok(()), SignInState::SignedOut, || self.parts.xbox_state(ctx, p));
+                    (state, self.parts.xbox_identity(ctx, p))
+                })
+            })
+            .collect();
+        let mut waiting = Vec::new();
+        self.shared.update(|s| {
+            s.prompts.retain(|p| !matches!(p, AuthPrompt::StoreWindow { store: id } if id == store));
+            s.store_states.insert(store.clone(), store_after);
+            s.store_ids.insert(store.clone(), store_who);
+            for ((p, before), now) in profiles.iter().zip(&xbox_before).zip(now) {
+                match now {
+                    Some((state, who)) => {
+                        s.xbox_states.insert(p.clone(), state);
+                        s.xbox_ids.insert(p.clone(), who);
+                    }
+                    None if cancel.is_cancelled() => {
+                        s.xbox_states.insert(p.clone(), before.clone());
+                    }
+                    None => waiting.push(p.clone()),
+                }
+            }
+        });
+        // the Store is done: installs may go ahead while a device code waits for the player
+        drop(store_guard);
+        for profile in waiting {
+            // the window couldn't link this profile (no session, a refusal, the window closed): the device code
+            let prompts = Prompts { shared: self.shared.clone() };
+            let result = self.parts.xbox_sign_in(ctx, &profile, prompts, cancel.clone()).await;
+            let after = self.after_sign_in(&result, SignInState::SignedOut, || self.parts.xbox_state(ctx, &profile));
+            let who = self.parts.xbox_identity(ctx, &profile);
+            self.shared.update(|s| {
+                s.prompts.retain(|p| !matches!(p, AuthPrompt::DeviceCode { profile: id, .. } if *id == profile));
+                s.xbox_states.insert(profile.clone(), after);
+                s.xbox_ids.insert(profile.clone(), who);
+            });
+            match result {
+                Ok(()) => {}
+                Err(e) if matches!(e.kind, ErrorKind::Cancelled) => break,
+                Err(e) => self.shared.notice(
+                    None,
+                    format!(
+                        "Xbox Live wasn't linked: {e} Single-player and LAN still work; sign in again from the \
+                         instance page to play online."
+                    ),
+                ),
+            }
+        }
+        Ok(())
     }
 
     /// The sign-in state after a sign-in ended: what the part says now when it worked, the one before when it was
@@ -852,17 +1007,37 @@ impl Service {
             AccountTarget::Store(store) => {
                 let _guard = self.begin(vec![JobKey::Store(store.0)])?;
                 // idle only: no game of an instance signing in with this slot may be live
-                let live = {
+                let (live, profiles) = {
                     let s = self.shared.lock();
-                    s.instances.iter().any(|r| &r.store == store && s.live.contains_key(&r.id))
-                        || s.instances.iter().any(|r| &r.store == store && s.jobs.contains(&JobKey::Instance(r.id.0)))
+                    let live = s.instances.iter().any(|r| &r.store == store && s.live.contains_key(&r.id))
+                        || s.instances.iter().any(|r| &r.store == store && s.jobs.contains(&JobKey::Instance(r.id.0)));
+                    // the one Microsoft account signs out of everything it signed in to: each profile's Xbox
+                    let mut profiles: Vec<ProfileId> = Vec::new();
+                    for rec in s.instances.iter().filter(|r| &r.store == store) {
+                        let out = matches!(s.xbox_states.get(&rec.profile), Some(SignInState::SignedOut));
+                        if !out && !profiles.contains(&rec.profile) {
+                            profiles.push(rec.profile.clone());
+                        }
+                    }
+                    (live, profiles)
                 };
                 if live {
                     return Err(BedrockError::new(ErrorKind::Busy, "Close the game and wait for its jobs first."));
                 }
+                let _xbox_guard = self.begin(profiles.iter().map(|p| JobKey::Xbox(p.0)).collect())?;
+                // Xbox first (each one's registry copy, then its account), and the Store user only when they all
+                // went: a failure leaves the Store signed in, so what the window shows stays true
+                for profile in &profiles {
+                    self.parts.xbox_sign_out(&ctx, profile).await?;
+                    self.shared.update(|s| {
+                        s.xbox_states.insert(profile.clone(), SignInState::SignedOut);
+                        s.xbox_ids.remove(profile);
+                    });
+                }
                 self.parts.store_sign_out(&ctx, store, mode).await?;
                 self.shared.update(|s| {
                     s.store_states.insert(store.clone(), SignInState::SignedOut);
+                    s.store_ids.remove(store);
                 });
             }
             AccountTarget::Xbox(profile) => {
@@ -883,6 +1058,7 @@ impl Service {
                 self.parts.xbox_sign_out(&ctx, profile).await?;
                 self.shared.update(|s| {
                     s.xbox_states.insert(profile.clone(), SignInState::SignedOut);
+                    s.xbox_ids.remove(profile);
                 });
             }
         }
@@ -1272,6 +1448,19 @@ mod tests {
         /// The ends of the started and exited futures of the last launch.
         ends: Mutex<Option<(oneshot::Sender<()>, oneshot::Sender<Option<i32>>)>>,
         stop_calls: AtomicUsize,
+        /// The sign-in window gives no Xbox code (so the device code follows).
+        window_refuses: std::sync::atomic::AtomicBool,
+        /// The device code is entered at once (otherwise it waits for a cancel).
+        device_code_ok: std::sync::atomic::AtomicBool,
+        xbox_linked: Mutex<HashSet<ProfileId>>,
+        /// What was asked of the sign-ins, in order.
+        calls: Mutex<Vec<String>>,
+    }
+
+    impl Fake {
+        fn calls(&self) -> Vec<String> {
+            self.calls.lock().unwrap().clone()
+        }
     }
 
     struct FakeStop(Arc<Fake>);
@@ -1289,8 +1478,50 @@ mod tests {
         fn store_state(&self, _: &Ctx, _: &StoreId) -> SignInState {
             SignInState::Linked { display_name: Some("Owner".into()) }
         }
-        fn xbox_state(&self, _: &Ctx, _: &ProfileId) -> SignInState {
-            SignInState::SignedOut
+        fn xbox_state(&self, _: &Ctx, p: &ProfileId) -> SignInState {
+            if self.0.xbox_linked.lock().unwrap().contains(p) {
+                SignInState::Linked { display_name: Some("FakeTag".into()) }
+            } else {
+                SignInState::SignedOut
+            }
+        }
+        fn store_identity(&self, _: &Ctx, _: &StoreId) -> AccountIdentity {
+            AccountIdentity { email: Some("owner@outlook.com".into()), ..Default::default() }
+        }
+        fn xbox_identity(&self, _: &Ctx, p: &ProfileId) -> AccountIdentity {
+            if !self.0.xbox_linked.lock().unwrap().contains(p) {
+                return AccountIdentity::default();
+            }
+            AccountIdentity {
+                gamertag: Some("FakeTag".into()),
+                xuid: Some("2535400000000001".into()),
+                ..Default::default()
+            }
+        }
+        fn microsoft_sign_in<'a>(
+            &'a self,
+            _: &'a Ctx,
+            store: Option<&'a StoreId>,
+            profiles: &'a [ProfileId],
+            hint: Option<&'a str>,
+            _: Arc<Progress>,
+            c: Cancel,
+        ) -> Job<'a, Vec<bool>> {
+            self.0.calls.lock().unwrap().push(format!(
+                "window store={} xbox={} hint={hint:?}",
+                store.is_some(),
+                profiles.len()
+            ));
+            Box::pin(async move {
+                if c.is_cancelled() {
+                    return Err(BedrockError::new(ErrorKind::Cancelled, "cancelled"));
+                }
+                let links = !self.0.window_refuses.load(Ordering::SeqCst);
+                if links {
+                    self.0.xbox_linked.lock().unwrap().extend(profiles.iter().cloned());
+                }
+                Ok(vec![links; profiles.len()])
+            })
         }
         fn store_sign_in<'a>(&'a self, _: &'a Ctx, _: &'a StoreId, _: Arc<Progress>, c: Cancel) -> Job<'a, ()> {
             Box::pin(async move {
@@ -1299,6 +1530,7 @@ mod tests {
         }
         fn store_sign_out<'a>(&'a self, _: &'a Ctx, _: &'a StoreId, mode: SignOutMode) -> Job<'a, ()> {
             self.0.store_outs.lock().unwrap().push(mode);
+            self.0.calls.lock().unwrap().push("store-out".into());
             Box::pin(async { Ok(()) })
         }
         fn store_latest<'a>(&'a self, _: &'a Ctx, _: &'a StoreId, e: Edition, _: Cancel) -> Job<'a, BuildInfo> {
@@ -1326,13 +1558,20 @@ mod tests {
             Box::pin(async move { Ok(BuildId { edition, version: "1.26.60.5".into(), package_id: "pkg".into() }) })
         }
         fn xbox_sign_in<'a>(&'a self, _: &'a Ctx, p: &'a ProfileId, prompts: Prompts, c: Cancel) -> Job<'a, ()> {
+            self.0.calls.lock().unwrap().push("device-code".into());
             Box::pin(async move {
                 prompts.device_code(p, "https://www.microsoft.com/link", "ABCD-1234", 4_000_000_000);
+                if self.0.device_code_ok.load(Ordering::SeqCst) {
+                    self.0.xbox_linked.lock().unwrap().insert(p.clone());
+                    return Ok(());
+                }
                 c.cancelled().await;
                 Err(BedrockError::new(ErrorKind::Cancelled, "cancelled"))
             })
         }
-        fn xbox_sign_out<'a>(&'a self, _: &'a Ctx, _: &'a ProfileId) -> Job<'a, ()> {
+        fn xbox_sign_out<'a>(&'a self, _: &'a Ctx, p: &'a ProfileId) -> Job<'a, ()> {
+            self.0.xbox_linked.lock().unwrap().remove(p);
+            self.0.calls.lock().unwrap().push(format!("xbox-out {}", p.0));
             Box::pin(async { Ok(()) })
         }
         fn launch<'a>(&'a self, _: &'a Ctx, _: LaunchRequest, _: Arc<Progress>, _: Cancel) -> Job<'a, Launched> {
@@ -1524,7 +1763,7 @@ mod tests {
         let cancel = Cancel::default();
         let job = {
             let (svc, cancel, profile) = (svc.clone(), cancel.clone(), a.profile.clone());
-            tokio::spawn(async move { svc.sign_in(AccountTarget::Xbox(profile), Progress::new(), cancel).await })
+            tokio::spawn(async move { svc.sign_in(AccountTarget::Xbox(profile), None, Progress::new(), cancel).await })
         };
         loop {
             if let Event::DeviceCode { user_code, .. } = events.recv().await.unwrap() {
@@ -1538,7 +1777,7 @@ mod tests {
             matches!(&snap.auth_prompts[..], [AuthPrompt::DeviceCode { user_code, .. }] if user_code == "ABCD-1234")
         );
         // a second sign-in for the same profile is refused while the first is open
-        let again = svc.sign_in(AccountTarget::Xbox(a.profile.clone()), Progress::new(), Cancel::default()).await;
+        let again = svc.sign_in(AccountTarget::Xbox(a.profile.clone()), None, Progress::new(), Cancel::default()).await;
         assert!(matches!(again.unwrap_err().kind, ErrorKind::Busy));
         cancel.cancel();
         let e = job.await.unwrap().unwrap_err();
@@ -1557,7 +1796,7 @@ mod tests {
         let a = svc.create_instance(create("First", None)).await.unwrap();
         // a new slot starts signed out: Play and Install wait for the Store
         assert!(matches!(readiness_of(&svc, &a.id), Readiness::NeedsStoreSignIn));
-        svc.sign_in(AccountTarget::Store(a.store.clone()), Progress::new(), Cancel::default()).await.unwrap();
+        svc.sign_in(AccountTarget::Store(a.store.clone()), None, Progress::new(), Cancel::default()).await.unwrap();
         let state = |svc: &Service| {
             svc.snapshot()
                 .accounts
@@ -1575,6 +1814,141 @@ mod tests {
         assert!(matches!(state(&svc), SignInState::SignedOut));
         assert!(matches!(fake.store_outs.lock().unwrap()[..], [SignOutMode::User]));
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    fn account<'a>(snap: &'a Snapshot, target: &AccountTarget) -> &'a AccountStatus {
+        snap.accounts
+            .iter()
+            .find(|s| match (&s.target, target) {
+                (AccountTarget::Store(a), AccountTarget::Store(b)) => a == b,
+                (AccountTarget::Xbox(a), AccountTarget::Xbox(b)) => a == b,
+                _ => false,
+            })
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn one_sign_in_links_the_store_and_every_profile_on_its_slot() {
+        let fake = Arc::new(Fake::default());
+        let (svc, root) = service("bedrock-one", &fake);
+        let a = svc.create_instance(create("First", None)).await.unwrap();
+        let b = svc.create_instance(create("Second", Some(a.store.clone()))).await.unwrap();
+        let other = svc.create_instance(create("Other", None)).await.unwrap();
+        let target = AccountTarget::Store(a.store.clone());
+        svc.sign_in(target.clone(), Some("owner@outlook.com".into()), Progress::new(), Cancel::default())
+            .await
+            .unwrap();
+        // one window, both profiles of the slot, the BlockForge account's name prefilled; no device code
+        assert_eq!(fake.calls(), ["window store=true xbox=2 hint=Some(\"owner@outlook.com\")"]);
+        let snap = svc.snapshot();
+        assert!(snap.auth_prompts.is_empty());
+        assert!(matches!(account(&snap, &target).state, SignInState::Linked { .. }));
+        assert_eq!(account(&snap, &target).identity.email.as_deref(), Some("owner@outlook.com"));
+        for p in [&a.profile, &b.profile] {
+            let x = account(&snap, &AccountTarget::Xbox(p.clone()));
+            assert!(matches!(&x.state, SignInState::Linked { display_name: Some(n) } if n == "FakeTag"));
+            assert_eq!(x.identity.xuid.as_deref(), Some("2535400000000001"));
+        }
+        // the other slot's profile is left alone, and Play waits only for this one sign-in (then the download)
+        assert!(matches!(account(&snap, &AccountTarget::Xbox(other.profile.clone())).state, SignInState::SignedOut));
+        assert!(matches!(readiness_of(&svc, &a.id), Readiness::NeedsInstall));
+        assert!(matches!(readiness_of(&svc, &other.id), Readiness::NeedsStoreSignIn));
+
+        // with the Store signed in, a profile without Xbox gets a window for Xbox only
+        svc.sign_out(AccountTarget::Xbox(b.profile.clone()), SignOutMode::User).await.unwrap();
+        svc.sign_in(target.clone(), Some("not an address".into()), Progress::new(), Cancel::default()).await.unwrap();
+        assert_eq!(fake.calls().last().unwrap(), "window store=false xbox=1 hint=None");
+        assert!(matches!(
+            account(&svc.snapshot(), &AccountTarget::Xbox(b.profile.clone())).state,
+            SignInState::Linked { .. }
+        ));
+
+        // signing the account out signs out each profile's Xbox first, then the Store user (the device stays)
+        fake.calls.lock().unwrap().clear();
+        svc.sign_out(target.clone(), SignOutMode::User).await.unwrap();
+        let calls = fake.calls();
+        assert_eq!(calls.len(), 3, "{calls:?}");
+        assert!(calls[..2].iter().all(|c| c.starts_with("xbox-out ")) && calls[2] == "store-out", "{calls:?}");
+        let snap = svc.snapshot();
+        for t in [target, AccountTarget::Xbox(a.profile.clone()), AccountTarget::Xbox(b.profile.clone())] {
+            assert!(matches!(account(&snap, &t).state, SignInState::SignedOut));
+            assert!(account(&snap, &t).identity.is_empty());
+        }
+        assert!(matches!(fake.store_outs.lock().unwrap()[..], [SignOutMode::User]));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn without_a_code_from_the_window_the_device_code_follows_and_nothing_fails() {
+        let fake = Arc::new(Fake::default());
+        fake.window_refuses.store(true, Ordering::SeqCst);
+        fake.device_code_ok.store(true, Ordering::SeqCst);
+        let (svc, root) = service("bedrock-fallback", &fake);
+        let a = svc.create_instance(create("First", None)).await.unwrap();
+        let mut events = svc.subscribe();
+        svc.sign_in(AccountTarget::Store(a.store.clone()), None, Progress::new(), Cancel::default()).await.unwrap();
+        assert_eq!(fake.calls(), ["window store=true xbox=1 hint=None", "device-code"]);
+        let mut saw_code = false;
+        while let Ok(e) = events.try_recv() {
+            saw_code |= matches!(e, Event::DeviceCode { ref user_code, .. } if user_code == "ABCD-1234");
+            assert!(!matches!(e, Event::Notice { .. }), "a fallback that worked is no news");
+        }
+        assert!(saw_code);
+        let snap = svc.snapshot();
+        assert!(snap.auth_prompts.is_empty());
+        assert!(matches!(account(&snap, &AccountTarget::Xbox(a.profile.clone())).state, SignInState::Linked { .. }));
+
+        // the player cancels the device code: the Store sign-in still stands, Xbox stays signed out
+        fake.device_code_ok.store(false, Ordering::SeqCst);
+        let b = svc.create_instance(create("Second", Some(a.store.clone()))).await.unwrap();
+        let cancel = Cancel::default();
+        let job = {
+            let (svc, cancel, store) = (svc.clone(), cancel.clone(), a.store.clone());
+            tokio::spawn(async move { svc.sign_in(AccountTarget::Store(store), None, Progress::new(), cancel).await })
+        };
+        while !svc.snapshot().auth_prompts.iter().any(|p| matches!(p, AuthPrompt::DeviceCode { .. })) {
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        // installs aren't held up by a device code waiting for the player
+        svc.install(a.id.clone(), Progress::new(), Cancel::default()).await.unwrap();
+        cancel.cancel();
+        job.await.unwrap().unwrap();
+        let snap = svc.snapshot();
+        assert!(snap.auth_prompts.is_empty());
+        assert!(matches!(account(&snap, &AccountTarget::Store(a.store.clone())).state, SignInState::Linked { .. }));
+        assert!(matches!(account(&snap, &AccountTarget::Xbox(b.profile.clone())).state, SignInState::SignedOut));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn identities_match_on_proof_and_differ_only_on_proof() {
+        let id = |email: Option<&str>, xuid: Option<&str>, uhs: Option<&str>, gt: Option<&str>| AccountIdentity {
+            email: email.map(Into::into),
+            xuid: xuid.map(Into::into),
+            user_hash: uhs.map(Into::into),
+            gamertag: gt.map(Into::into),
+        };
+        let bedrock = id(Some("Owner@Outlook.com"), Some("1"), Some("h1"), Some("Steve"));
+        assert_eq!(bedrock.same_person(&id(None, Some("1"), None, None)), Some(true));
+        assert_eq!(
+            bedrock.same_person(&id(Some("owner@outlook.com"), Some("2"), None, None)),
+            Some(false),
+            "XUID wins"
+        );
+        assert_eq!(bedrock.same_person(&id(Some("owner@outlook.com"), None, None, None)), Some(true));
+        assert_eq!(bedrock.same_person(&id(Some("someone@else.com"), None, None, None)), Some(false));
+        assert_eq!(bedrock.same_person(&id(Some("+15550100"), None, None, None)), None, "a phone and an address");
+        assert_eq!(bedrock.same_person(&id(None, None, Some("h1"), None)), Some(true));
+        assert_eq!(
+            bedrock.same_person(&id(None, None, Some("h2"), Some("Alex"))),
+            None,
+            "hashes and tags only confirm"
+        );
+        assert_eq!(bedrock.same_person(&id(None, None, None, Some("steve"))), Some(true));
+        assert_eq!(bedrock.same_person(&AccountIdentity::default()), None);
+        let merged = id(Some("a@b.c"), None, None, None).merged(&id(Some("x@y.z"), Some("9"), None, Some("T")));
+        assert_eq!(merged, id(Some("a@b.c"), Some("9"), None, Some("T")));
+        assert_eq!(merged.name(), Some("T"));
     }
 
     #[tokio::test]

@@ -1,13 +1,16 @@
-//! Package D of PORT-PLAN.md: the Xbox game sign-in (the second sign-in, separate from the Store's) and the
-//! online session, all done on the host.
+//! Package D of PORT-PLAN.md: the Xbox game sign-in and the online session, all done on the host. The player signs
+//! in once: the Store's sign-in window goes on, in the same login.live.com session, to WineGDK's own app's
+//! authorisation page, and its code ([`sign_in_with_code`]) gives the same refresh token a device code would. The
+//! device code ([`sign_in_with`]) stays as the fallback when the window can't give one.
 //!
 //! Ported from BedrockOnLinux (MIT, BedrockOnLinux contributors, https://github.com/Wyze3306/BedrockOnLinux, commit
 //! cc6ac323): bol/auth.py (`NativeAuth`, the account cache and epoch, `xbl_preauth`) and bol/presence.py.
 //!
 //! The flow, per profile:
 //!
-//! 1. [`sign_in`]: Microsoft's legacy Live device-code sign-in (microsoft.com/link and a code), with WineGDK's own
-//!    client ID and scope. Only the refresh token is kept, 0600 in the profile's 0700 `xbox/` folder.
+//! 1. [`sign_in_with_code`] (the code from the one sign-in window) or [`sign_in_with`] (Microsoft's legacy Live
+//!    device-code sign-in, microsoft.com/link and a code), both with WineGDK's own client ID and scope. Only the
+//!    refresh token is kept, 0600 in the profile's 0700 `xbox/` folder.
 //! 2. [`prepare`], on every Play, alongside the prefix work: renew the refresh token (the rotated one is saved
 //!    first, whatever happens next), then run the signed Xbox Live chain on the host and write the payload WineGDK
 //!    reads. It answers [`OnlineReadiness`]: online with the validated payload's path, or offline with the most
@@ -16,8 +19,8 @@
 //! 3. [`start_presence`] while the game runs; [`PresenceSession::stop`] when it ends.
 //! 4. [`sign_out`] rotates the account epoch and deletes the account's files, keeping the device key.
 //!
-//! None of this shares anything with the Java sign-in in `src/msauth.rs` (another app, other endpoints) or with the
-//! Store sign-in.
+//! None of this shares a token with the Java sign-in in `src/msauth.rs` (another app, other endpoints, whose refresh
+//! token can't mint this app's), and only the browser session with the Store sign-in: the window, not its tokens.
 
 mod cache;
 mod device_code;
@@ -224,6 +227,32 @@ pub(crate) async fn sign_in_with(
     cancel: &Cancel,
 ) -> Result<SignedIn> {
     device_code::sign_in(x, on_prompt, cancel).await
+}
+
+/// Sign this profile into Xbox with the code the one Microsoft sign-in window got (the Store's session, WineGDK's
+/// app): from there on exactly like [`sign_in_with`]. An error means the device code is the way left.
+pub(crate) async fn sign_in_with_code(x: &Xbox, code: &Secret, cancel: &Cancel) -> Result<SignedIn> {
+    device_code::sign_in_with_code(x, code, cancel).await
+}
+
+/// Who the profile's Xbox account is, from its cached payload (only when the payload is the current account's):
+/// XUID, gamertag and user hash. No network.
+pub(crate) fn cached_identity(x: &Xbox) -> super::AccountIdentity {
+    let dir = &x.dir;
+    let Ok(Some(epoch)) = cache::current_epoch(dir) else { return Default::default() };
+    if !dir.join(cache::TOKEN_FILE).exists() {
+        return Default::default();
+    }
+    let Some(p) = cache::load_payload(dir).filter(|p| p.account_epoch.as_ref() == Some(&epoch)) else {
+        return Default::default();
+    };
+    let some = |v: Option<String>| v.filter(|s| !s.is_empty());
+    super::AccountIdentity {
+        email: None,
+        gamertag: some(p.xbl_gamertag),
+        xuid: some(p.xbl_xuid),
+        user_hash: some(p.xbl_uhs.or(p.sisu_uhs)),
+    }
 }
 
 /// Forget this profile's Xbox account: the epoch rotates first, so nothing in flight can bring it back, then the

@@ -84,8 +84,11 @@ fn rejects_credential_symlinks_and_unsafe_package_paths() {
 fn helper_protocol_is_bounded_versioned_and_cancel_is_not_success() {
     let bytes = ipc::encode(ipc::Message::Cancelled).unwrap();
     assert!(matches!(ipc::decode(&bytes[4..]).unwrap(), ipc::Message::Cancelled));
-    assert!(ipc::decode(br#"{"version":2,"message":{"type":"Complete"}}"#).is_err());
-    assert!(ipc::decode(br#"{"version":1,"message":{"type":"Unknown"}}"#).is_err());
+    assert!(matches!(ipc::decode(br#"{"version":2,"message":{"type":"Complete"}}"#).unwrap(), ipc::Message::Complete));
+    // A helper of another version (one without the Xbox step, say) is refused, not half understood.
+    assert!(ipc::decode(br#"{"version":1,"message":{"type":"Complete"}}"#).is_err());
+    assert!(ipc::decode(br#"{"version":3,"message":{"type":"Complete"}}"#).is_err());
+    assert!(ipc::decode(br#"{"version":2,"message":{"type":"Unknown"}}"#).is_err());
     assert!(ipc::decode(&vec![b' '; ipc::LIMIT + 1]).is_err());
     for url in [
         "http://login.live.com/",
@@ -380,6 +383,161 @@ async fn mid_download_cancel_removes_pending_generation_and_missing_metadata_ref
     std::fs::remove_dir_all(root).unwrap();
 }
 
+const STATE: &str = "0123456789abcdef0123456789abcdef";
+
+#[test]
+fn the_xbox_redirect_gives_only_its_own_code() {
+    let at = |rest: &str| format!("{}{rest}", ipc::XBOX_REDIRECT);
+    let code = |m: Option<ipc::Message>| match m {
+        Some(ipc::Message::XboxCode { code, state }) => Ok((code, state)),
+        Some(ipc::Message::XboxUnavailable { error }) => Err(error),
+        None => Err("not the redirect".into()),
+        Some(_) => Err("another message".into()),
+    };
+    // the code, decoded, with the state asked for
+    let good = at(&format!("?code=M.C5_BAY.2.U.fake-code%21&state={STATE}&lc=1033"));
+    assert_eq!(code(ipc::xbox_capture(&good, STATE)), Ok(("M.C5_BAY.2.U.fake-code!".into(), STATE.into())));
+    // another state, none, or a state the parent can't have made: no code, whatever the redirect carries
+    let other = "fedcba9876543210fedcba9876543210";
+    assert_eq!(code(ipc::xbox_capture(&good, other)), Err("state_mismatch".into()));
+    assert_eq!(code(ipc::xbox_capture(&at("?code=fake-code"), STATE)), Err("state_mismatch".into()));
+    assert_eq!(code(ipc::xbox_capture(&at("?code=c&state=short"), "short")), Err("state_mismatch".into()));
+    // Microsoft's refusals come back as their bare code, never the description (which can quote the request)
+    let consent = at(&format!("?error=consent_required&error_description=The+user+fake-code&state={STATE}"));
+    assert_eq!(code(ipc::xbox_capture(&consent, STATE)), Err("consent_required".into()));
+    let odd = at(&format!("?error=%3Cscript%3E&state={STATE}"));
+    assert_eq!(code(ipc::xbox_capture(&odd, STATE)), Err("script".into()));
+    assert_eq!(code(ipc::xbox_capture(&at(&format!("?state={STATE}")), STATE)), Err("no_code".into()));
+    assert_eq!(code(ipc::xbox_capture(&at(&format!("#code=c&state={STATE}")), STATE)), Ok(("c".into(), STATE.into())));
+    // only the exact desktop redirect is read: other hosts, schemes, paths, user-info and ports are just pages
+    for url in [
+        format!("https://login.live.com.evil.example/oauth20_desktop.srf?code=c&state={STATE}"),
+        format!("https://evil.example/https://login.live.com/oauth20_desktop.srf?code=c&state={STATE}"),
+        format!("http://login.live.com/oauth20_desktop.srf?code=c&state={STATE}"),
+        format!("https://user@login.live.com/oauth20_desktop.srf?code=c&state={STATE}"),
+        format!("https://login.live.com:443/oauth20_desktop.srf?code=c&state={STATE}"),
+        format!("https://login.live.com/oauth20_desktop.srfx?code=c&state={STATE}"),
+        format!("https://login.live.com/oauth20_authorize.srf?code=c&state={STATE}"),
+        format!("https://account.live.com/oauth20_desktop.srf?code=c&state={STATE}"),
+    ] {
+        assert!(ipc::xbox_capture(&url, STATE).is_none(), "{url}");
+    }
+    assert!(ipc::is_xbox_redirect(&at("")) && !ipc::is_xbox_redirect("about:blank"));
+}
+
+#[test]
+fn the_window_asks_xbox_with_winegdks_app_and_prefills_only_an_address() {
+    let url = ipc::xbox_authorize_url(STATE, Some("owner+bf@outlook.com"));
+    assert_eq!(
+        url,
+        format!(
+            "https://login.live.com/oauth20_authorize.srf?client_id=0000000048183522\
+             &scope=service%3A%3Auser.auth.xboxlive.com%3A%3AMBI_SSL&response_type=code\
+             &redirect_uri=https%3A%2F%2Flogin.live.com%2Foauth20_desktop.srf&state={STATE}\
+             &login_hint=owner%2Bbf%40outlook.com"
+        )
+    );
+    assert!(ipc::allowed_url(&url) && ipc::allowed_navigation(&url) && !url.contains("prompt="));
+    assert!(!ipc::xbox_authorize_url(STATE, Some("Steve")).contains("login_hint"));
+    assert!(ipc::valid_state(STATE) && !ipc::valid_state("a&b=0123456789abcdef") && !ipc::valid_state("abc"));
+    // the Store page: the bare page, or the page with a prefilled address, and nothing else may be opened first
+    assert_eq!(ipc::login_url(None), ipc::LOGIN);
+    assert_eq!(ipc::login_url(Some("<b>@x")), ipc::LOGIN);
+    let hinted = ipc::login_url(Some("owner@outlook.com"));
+    assert_eq!(hinted, format!("{}&username=owner%40outlook.com", ipc::LOGIN));
+    assert!(ipc::is_login_url(ipc::LOGIN) && ipc::is_login_url(&hinted));
+    for url in [
+        format!("{}&username=owner@outlook.com", ipc::LOGIN),
+        format!("{}&username=a%40b.c&redirect=https://evil", ipc::LOGIN),
+        format!("{}&username=", ipc::LOGIN),
+        format!("{}&other=x", ipc::LOGIN),
+        "https://login.live.com/".to_string(),
+    ] {
+        assert!(!ipc::is_login_url(&url), "{url}");
+    }
+    assert_eq!(ipc::decode_component("a%2"), None);
+    assert_eq!(ipc::decode_component("a+b%21").as_deref(), Some("a b!"));
+}
+
+#[tokio::test]
+async fn the_xbox_step_round_trips_and_every_failure_is_a_fallback() {
+    use tokio::io::AsyncWriteExt;
+    // The helper's side: answers each XboxAuthorize as told, after a stray Store message.
+    async fn helper(mut stream: tokio::net::UnixStream, answers: Vec<&'static str>) -> Vec<Option<String>> {
+        let mut hints = Vec::new();
+        for answer in answers {
+            let Ok(ipc::Message::XboxAuthorize { state, login_hint }) = login::receive(&mut stream).await else {
+                panic!("expected an XboxAuthorize");
+            };
+            assert!(ipc::valid_state(&state));
+            hints.push(login_hint);
+            let stray = ipc::Message::Credentials { data: serde_json::Value::Null };
+            stream.write_all(&ipc::encode(stray).unwrap()).await.unwrap();
+            let reply = match answer {
+                "code" => {
+                    ipc::xbox_capture(&format!("{}?code=fake-code-{state}&state={state}", ipc::XBOX_REDIRECT), &state)
+                }
+                "consent" => Some(ipc::Message::XboxUnavailable { error: "consent_required".into() }),
+                "wrong-state" => Some(ipc::Message::XboxCode { code: "fake-code".into(), state: "x".repeat(32) }),
+                "close" => Some(ipc::Message::Cancelled),
+                _ => None,
+            };
+            if let Some(reply) = reply {
+                stream.write_all(&ipc::encode(reply).unwrap()).await.unwrap();
+            }
+        }
+        // what the parent sends after the last code
+        let end = login::receive(&mut stream).await;
+        assert!(matches!(end, Ok(ipc::Message::Complete) | Err(_)));
+        hints
+    }
+    let names = |steps: &[XboxStep]| -> Vec<String> {
+        steps
+            .iter()
+            .map(|s| match s {
+                XboxStep::Code(c) => format!("code:{}", c.expose().starts_with("fake-code-")),
+                XboxStep::Unavailable(why) => why.clone(),
+            })
+            .collect()
+    };
+    let (mut parent, child) = tokio::net::UnixStream::pair().unwrap();
+    let h = tokio::spawn(helper(child, vec!["code", "consent", "wrong-state", "code"]));
+    let steps = login::xbox_steps(&mut parent, Some("owner@outlook.com"), 4, &Cancel::default()).await;
+    parent.write_all(&ipc::encode(ipc::Message::Complete).unwrap()).await.unwrap();
+    assert_eq!(names(&steps), ["code:true", "consent_required", "state_mismatch", "code:true"]);
+    assert!(h.await.unwrap().iter().all(|h| h.as_deref() == Some("owner@outlook.com")));
+
+    // the window closed: that code and the ones after it are unavailable, and nothing more is asked
+    let (mut parent, child) = tokio::net::UnixStream::pair().unwrap();
+    let h = tokio::spawn(helper(child, vec!["close"]));
+    let steps = login::xbox_steps(&mut parent, None, 3, &Cancel::default()).await;
+    drop(parent);
+    assert_eq!(names(&steps), ["closed", "closed", "closed"]);
+    assert_eq!(h.await.unwrap(), [None]);
+
+    // a cancel while the page waits for the player ends the step at once, with no error
+    let (mut parent, child) = tokio::net::UnixStream::pair().unwrap();
+    let h = tokio::spawn(async move {
+        let mut child = child;
+        let _ = login::receive(&mut child).await;
+        let _ = login::receive(&mut child).await;
+    });
+    let cancel = Cancel::default();
+    let c = cancel.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        c.cancel();
+    });
+    let steps = login::xbox_steps(&mut parent, None, 2, &cancel).await;
+    assert_eq!(names(&steps), ["cancelled", "cancelled"]);
+    drop(parent);
+    h.await.unwrap();
+
+    // asked for none (the Store sign-in alone): nothing goes to the window
+    let (mut parent, _child) = tokio::net::UnixStream::pair().unwrap();
+    assert!(login::xbox_steps(&mut parent, None, 0, &Cancel::default()).await.is_empty());
+}
+
 #[tokio::test]
 async fn helper_close_without_credentials_is_cancelled() {
     let (mut parent, helper) = tokio::net::UnixStream::pair().unwrap();
@@ -612,6 +770,13 @@ fn operations_can_run_on_tokio_workers() {
     let ctx =
         Context { root: PathBuf::from("unused"), client: reqwest::Client::new(), auth_helper: PathBuf::from("unused") };
     send(sign_in(&ctx, StoreId(uuid::Uuid::new_v4()), Arc::new(Progress::default()), Cancel::default()));
+    send(sign_in_with(
+        &ctx,
+        None,
+        Window { login_hint: Some("a@b.c".into()), xbox_codes: 1 },
+        Arc::new(Progress::default()),
+        Cancel::default(),
+    ));
     send(install(
         &ctx,
         StoreId(uuid::Uuid::new_v4()),

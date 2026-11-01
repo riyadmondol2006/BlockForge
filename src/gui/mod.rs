@@ -2425,7 +2425,7 @@ static SHOT_HOVER: std::sync::LazyLock<Option<egui::Pos2>> = std::sync::LazyLock
 /// The ids of the jobs the tour makes up to show the sidebar busy; no real job gets ids this high.
 const SHOT_TASK: u64 = u64::MAX - 8;
 
-const SHOT_PAGES: [&str; 92] = [
+const SHOT_PAGES: [&str; 93] = [
     "home",
     "library",
     "instance",
@@ -2444,6 +2444,7 @@ const SHOT_PAGES: [&str; 92] = [
     "github-add",
     "create",
     "accounts",
+    "accounts-bedrock",
     "settings",
     "create-fabric",
     "create-configure",
@@ -2763,7 +2764,7 @@ impl App {
                     self.discover.query.clear();
                     self.explore_open(crate::curseforge::api::Section::Worlds, discover::Source::CurseForge);
                 }
-                "accounts" => self.page = Page::Accounts,
+                "accounts" | "accounts-bedrock" => self.page = Page::Accounts,
                 v if v.starts_with("settings") => self.shot_settings(ctx, v),
                 "who" => {
                     self.page = Page::Home;

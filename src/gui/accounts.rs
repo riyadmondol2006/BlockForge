@@ -190,6 +190,14 @@ impl App {
                                 }
                             });
                             account_meta(ui, acc.offline, acc.must_login, &acc.uuid);
+                            // Bedrock signs in apart (another Microsoft app); this says whether it's this account
+                            if let Some((linked, line)) = self.bedrock_link_line(acc) {
+                                if linked {
+                                    status_line(ui, Status::Good, &line);
+                                } else {
+                                    small_muted(ui, &line);
+                                }
+                            }
                         });
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             // removing asks once more: a Microsoft account has to be signed in again afterwards

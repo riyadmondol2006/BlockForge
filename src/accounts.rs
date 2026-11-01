@@ -19,6 +19,12 @@ pub struct Account {
     pub username: String,
     pub minecraft_username: Option<String>,
     pub uuid: String,
+    /// The Xbox account's XUID and gamertag, read at sign-in (best effort), so a Bedrock sign-in, which can't share
+    /// this one, can still be told to be the same person.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub xuid: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gamertag: Option<String>,
     #[serde(flatten)]
     pub extras: Map<String, Value>,
 }
@@ -85,6 +91,17 @@ impl Account {
             Some(t) => t.timestamp() - seconds < chrono::Utc::now().timestamp(),
             None => true,
         }
+    }
+
+    /// The sign-in name to prefill in another Microsoft sign-in (Bedrock's): the saved name when it is an e-mail
+    /// address (as accounts from the official launcher have), else none.
+    pub fn email(&self) -> Option<&str> {
+        (!self.offline && self.username.contains('@')).then_some(self.username.as_str())
+    }
+
+    /// The Xbox user hash of the saved Minecraft sign-in, when there is one.
+    pub fn user_hash(&self) -> Option<&str> {
+        self.xsts_auth.as_ref()?.display_claims["xui"][0]["uhs"].as_str().filter(|s| !s.is_empty())
     }
 
     pub fn kind(&self) -> &'static str {

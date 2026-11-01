@@ -1215,8 +1215,8 @@ impl App {
                 fact_line(
                     ui,
                     Icon::User,
-                    "Two sign-ins, which can be different accounts: the Microsoft Store account that owns the game, \
-                     to download it, and Xbox, to play online. BlockForge never sees your password.",
+                    "One Microsoft sign-in, with the account that owns the game: one window signs you in to the \
+                     download and to Xbox Live, to play online. BlockForge never sees your password.",
                 );
                 fact_line(
                     ui,
@@ -1812,7 +1812,7 @@ impl App {
                     rows.push(("Installed by", "Microsoft Store".to_string(), false));
                 } else {
                     let store = if shared { "Shared" } else { "New" };
-                    rows.push(("Store sign-in", store.to_string(), false));
+                    rows.push(("Microsoft account", store.to_string(), false));
                     rows.push(("Download", "~3 GB".to_string(), true));
                 }
                 rows
