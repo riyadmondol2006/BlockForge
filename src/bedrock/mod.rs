@@ -26,6 +26,7 @@ mod engine;
 mod fixups;
 #[cfg(target_os = "linux")]
 mod gpu_safety;
+mod native;
 #[cfg(target_os = "linux")]
 mod pins;
 #[cfg(target_os = "linux")]
@@ -45,6 +46,25 @@ mod supervisor;
 mod xbox;
 
 pub type Result<T> = std::result::Result<T, BedrockError>;
+
+pub use native::store_page;
+pub use service::{UNAVAILABLE, support};
+
+/// How Bedrock is played on this system: through BlockForge's own backend (Linux), as the native Store package the
+/// system runs (Windows), or not yet (macOS and the rest; [`UNAVAILABLE`] says why).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Support {
+    Linux,
+    Windows,
+    Unavailable,
+}
+
+/// What BlockForge's Bedrock support follows and uses, shown wherever Bedrock is offered.
+pub const CREDIT: &str = "BlockForge plays Bedrock Edition the way BedrockOnLinux does (by Wyze3306 and its \
+                          contributors, MIT licence), ported to Rust, and downloads your own copy from the Microsoft \
+                          Store with the Xodus libraries (GPL-3.0). Neither is affiliated with Mojang or Microsoft.";
+pub const BOL_REPOSITORY: &str = "https://github.com/Wyze3306/BedrockOnLinux";
+pub const XODUS_REPOSITORY: &str = "https://github.com/xodus-gaming/xodus";
 
 /// Stable UUID-backed identifiers; validate deserialized input before path use.
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
@@ -286,29 +306,38 @@ impl Backend {
     }
     /// Background reload/detection; network only when explicitly requested.
     pub async fn refresh(&self, policy: RefreshPolicy, cancel: Cancel) -> Result<Arc<Snapshot>> {
-        Err(BedrockError::not_implemented())
+        self.inner.refresh(policy, cancel).await
     }
     /// Creates metadata and an empty profile, not a Wine or GPU process.
     pub async fn create_instance(&self, request: CreateRequest) -> Result<BedrockInstance> {
-        Err(BedrockError::not_implemented())
+        self.inner.create_instance(request).await
+    }
+    /// Idle-only. The name only; the profile and its worlds stay where they are.
+    pub async fn rename_instance(&self, instance: InstanceId, name: String) -> Result<()> {
+        self.inner.rename_instance(&instance, &name).await
+    }
+    /// Idle-only. Removes the instance and its profile (its Wine prefix with the worlds in it on Linux; on Windows
+    /// the game's own worlds folder is left alone). The Store slot stays for other instances.
+    pub async fn delete_instance(&self, instance: InstanceId) -> Result<()> {
+        self.inner.delete_instance(&instance).await
     }
     /// Changes this idle instance's selection; preserves prefix and snapshots
     /// same-edition user data before the new build is first launched.
     pub async fn select_build(&self, instance: InstanceId, selection: BuildSelection) -> Result<()> {
-        Err(BedrockError::not_implemented())
+        self.inner.select_build(instance, selection).await
     }
     /// Signs into only the named Store slot or Xbox game profile.
     pub async fn sign_in(&self, target: AccountTarget, progress: Arc<Progress>, cancel: Cancel) -> Result<()> {
-        Err(BedrockError::not_implemented())
+        self.inner.sign_in(target, progress, cancel).await
     }
     /// Idle-only. Rotates epoch and clears durable hive/cache copies safely.
     /// UserAndDevice is valid only for a Store target; otherwise InvalidRequest.
     pub async fn sign_out(&self, target: AccountTarget, mode: SignOutMode) -> Result<()> {
-        Err(BedrockError::not_implemented())
+        self.inner.sign_out(target, mode).await
     }
     /// Resolves selection, validates entitlement and atomically installs assets.
     pub async fn install(&self, instance: InstanceId, progress: Arc<Progress>, cancel: Cancel) -> Result<BuildId> {
-        Err(BedrockError::not_implemented())
+        self.inner.install(instance, progress, cancel).await
     }
     /// Prepares cached assets/prefix/auth, obtains launch license, spawns supervisor.
     /// Missing install is NeedsInstall; caller chains install then play explicitly.
@@ -319,15 +348,23 @@ impl Backend {
         progress: Arc<Progress>,
         cancel: Cancel,
     ) -> Result<Session> {
-        Err(BedrockError::not_implemented())
+        self.inner.play(instance, options, progress, cancel).await
     }
     /// Revalidates owned assets/prefix while idle; preserves all user data.
     pub async fn repair(&self, instance: InstanceId, progress: Arc<Progress>, cancel: Cancel) -> Result<()> {
-        Err(BedrockError::not_implemented())
+        self.inner.repair(instance, progress, cancel).await
     }
     /// Does file/process/sysfs inspection on workers; no automatic game relaunch.
     pub async fn diagnose(&self, instance: InstanceId) -> Result<DiagnosticReport> {
-        Err(BedrockError::not_implemented())
+        self.inner.diagnose(instance).await
+    }
+    /// Where the instance's worlds are kept (each player's folder, and Shared). Computed from memory, not checked.
+    pub fn worlds_folder(&self, instance: &InstanceId) -> Option<PathBuf> {
+        self.inner.worlds_folder(instance)
+    }
+    /// Idle-only. Copies the worlds into the profile's backups and returns the folder of the copy.
+    pub async fn back_up_worlds(&self, instance: InstanceId) -> Result<PathBuf> {
+        self.inner.back_up_worlds(instance).await
     }
 }
 
@@ -335,19 +372,21 @@ impl Backend {
 /// GUI may drain lines/wait child, but must use control.stop for ordinary Stop.
 pub struct Session {
     pub id: SessionId,
-    pub running: Running,
+    /// The supervisor's process, whose output is the game's log. None where the system runs the game itself (a
+    /// Windows package): its state comes in the snapshot and the events.
+    pub running: Option<Running>,
     pub control: SessionControl,
     pub log_dir: PathBuf,
 }
 #[derive(Clone)]
 pub struct SessionControl {
-    inner: Arc<supervisor::Control>,
+    inner: Arc<service::Control>,
 }
 impl SessionControl {
     /// Graceful requests prefix-scoped TERM, wait, then bounded escalation.
     /// Success means teardown completed and prefix idleness was checked.
     pub async fn stop(&self, mode: StopMode) -> Result<()> {
-        Err(BedrockError::not_implemented())
+        self.inner.stop(mode).await
     }
 }
 #[derive(Clone, Debug)]
