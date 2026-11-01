@@ -7,7 +7,10 @@
 
 <p align="center">
   <b>A fast, modern Minecraft launcher, written in Rust. It opens instantly, uses a fraction of the memory of a Java
-  launcher, plays offline without an account and installs mods in one click.</b>
+  launcher, plays offline without an account and installs mods in one click.</b><br>
+  <b>Three games in one launcher: Minecraft: Java Edition, <a href="#horizon-minecraft-rewritten-in-rust">Horizon</a>
+  (Minecraft rewritten in Rust) and <a href="#minecraft-bedrock-edition-on-linux">Minecraft: Bedrock Edition on
+  Linux</a>.</b>
 </p>
 
 <p align="center">
@@ -25,6 +28,11 @@
   Windows &middot; macOS (Apple Silicon) &middot; Debian/Ubuntu &middot; Fedora &middot; any Linux (AppImage)
 </p>
 
+<p align="center">
+  <a href="#horizon-minecraft-rewritten-in-rust"><img src="https://img.shields.io/badge/Horizon-Minecraft_in_Rust-B7410E?logo=rust&logoColor=white" alt="Horizon: Minecraft rewritten in Rust"></a>
+  <a href="#minecraft-bedrock-edition-on-linux"><img src="https://img.shields.io/badge/Bedrock_Edition-on_Linux-2DD4AA?logo=linux&logoColor=white" alt="Minecraft: Bedrock Edition on Linux"></a>
+</p>
+
 > **BlockForge is a fork of [ATLauncher](https://github.com/ATLauncher/ATLauncher)** (GPL-3.0), rewritten in Rust. The
 > way instances, accounts and modpacks are stored and how games are launched follow ATLauncher's, and ATLauncher's
 > authors and contributors keep their copyright. See [What changed from ATLauncher](#what-changed-from-atlauncher).
@@ -34,11 +42,40 @@
   <img src="docs/screenshots/home.png" alt="BlockForge home screen" width="860">
 </p>
 
+## Three games, one launcher
+
+<table>
+  <tr>
+    <td width="33%" valign="top"><b>Minecraft: Java Edition</b><br><br>Every version since the first, with Fabric,
+    Quilt, Forge and NeoForge, modpacks from five sources, and mods in one click.</td>
+    <td width="33%" valign="top"><b>Horizon</b> &nbsp;<sub>Rust rewrite</sub><br><br>Minecraft: Java Edition
+    rewritten in Rust by the Horizon project: a native game, no Java while playing, worlds in Minecraft's own format.
+    <a href="#horizon-minecraft-rewritten-in-rust">More</a></td>
+    <td width="33%" valign="top"><b>Minecraft: Bedrock Edition</b> &nbsp;<sub>Linux</sub><br><br>Your own copy of
+    Minecraft for Windows, downloaded from the Microsoft Store and played on Linux, with friends on phones and
+    consoles. All in Rust, no Python. <a href="#minecraft-bedrock-edition-on-linux">More</a></td>
+  </tr>
+</table>
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/bedrock-create.png" alt="New instance with Bedrock Edition chosen" width="100%"><br><sub>New instance: Java Edition, Horizon or Bedrock Edition</sub></td>
+    <td width="50%"><img src="docs/screenshots/bedrock-instance.png" alt="A Bedrock instance" width="100%"><br><sub>A Bedrock instance: one Microsoft sign-in, updates and world backups</sub></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/horizon-instance.png" alt="A Horizon instance" width="100%"><br><sub>A Horizon instance: Minecraft in native Rust</sub></td>
+    <td width="50%"><img src="docs/screenshots/bedrock-library.png" alt="Library with Java and Bedrock instances" width="100%"><br><sub>Java and Bedrock instances side by side in the Library</sub></td>
+  </tr>
+</table>
+
 ## Why BlockForge?
 
 - **Native and fast.** The launcher is a single small Rust program: no Java to start up first, so the window is there in
   a fifth of a second. Minecraft itself still runs on Java, and BlockForge downloads the right Java for each game for
   you.
+- **Minecraft three ways.** Java Edition with every version and loader; [Horizon](#horizon-minecraft-rewritten-in-rust),
+  Minecraft rewritten in Rust; and [Bedrock Edition on Linux](#minecraft-bedrock-edition-on-linux), downloaded with
+  your own licence and played in a Windows compatibility engine that BlockForge sets up and runs itself, in Rust.
 - **Built around playing.** Home opens on the instance you played last, with one big Play button. Every instance gets
   its own pixel-art landscape as its cover, drawn from its version, loader and a theme you can pick, so your
   instances look like games, not rows in a table. Everything else sits in five places: Home, Library, Explore,
@@ -74,7 +111,7 @@
 - **Updates itself, in one click.** BlockForge checks its GitHub releases and installs the new version in the way that
   fits how you installed it.
 
-## Horizon (Rust rewrite)
+## Horizon: Minecraft rewritten in Rust
 
 BlockForge can also play [Horizon](https://playhorizon.dev), Minecraft: Java Edition rewritten in Rust by the Horizon
 project. In New instance, choose **Horizon** instead of Minecraft: Java Edition. There is no version or mod loader to
@@ -97,30 +134,37 @@ Horizon is made by the Horizon project and its contributors and shared under the
 ([source on GitHub](https://github.com/horizon-rust/horizon)). It is an unofficial fan project, not affiliated with
 Mojang or Microsoft. BlockForge only downloads and starts it.
 
-## Minecraft: Bedrock Edition
+## Minecraft: Bedrock Edition on Linux
 
 New instance also offers **Minecraft: Bedrock Edition**, the version that plays with friends on phones, consoles and
-other computers. It is your own copy of Minecraft for Windows: you need to have bought it on a Microsoft account (a
-console or phone copy doesn't count). Choose Release or Preview; each keeps its own worlds.
+other computers, on Linux. It is your own copy of Minecraft for Windows: you need to have bought it on a Microsoft
+account (a console or phone copy doesn't count). Choose Release or Preview; each keeps its own worlds.
 
-- **Linux (experimental):** BlockForge downloads your copy from the Microsoft Store with your licence and plays it in
-  a Windows compatibility engine, all from BlockForge itself, without Python or another launcher. It needs one sign-in:
-  the Microsoft Store account that owns the game, in a small sign-in window, which also links Xbox Live for playing
-  online (if Microsoft asks for it separately, Xbox shows a code to type at microsoft.com/link instead). The first download is about 2 GB for the game and about
-  1 GB for the engine. Each instance has its own game profile, so its worlds are its own; everything lives in the
-  `bedrock` folder of BlockForge's data folder, and other Bedrock launchers are left alone.
-  The Store sends the game over plain HTTP, so BlockForge checks it: it fetches the package's header over HTTPS from
-  Microsoft's download network and checks every page of the download against the package's own hash tree, which that
-  header vouches for, before anything is installed or decrypted. A download that differs anywhere is refused. One
-  thing can't be checked: Microsoft's signature on the header, whose key isn't public, so the header is trusted as
-  Microsoft's download network serves it over HTTPS. A build downloaded by an earlier test version of BlockForge, before
-  this check, must be repaired (downloaded again) before it plays. The sign-in window uses the system's WebKitGTK 4.1
-  (`webkit2gtk4.1` on Fedora, `libwebkit2gtk-4.1-0` on Debian and Ubuntu); BlockForge itself starts without it.
+- **All in BlockForge, all in Rust.** BlockForge downloads your copy from the Microsoft Store with your licence and
+  plays it in a Windows compatibility engine (WineGDK in the Steam Linux Runtime) that it sets up and runs itself:
+  no Python, no other launcher, nothing to install by hand.
+- **One sign-in.** A small sign-in window signs you in to the Microsoft Store account that owns the game, and links
+  Xbox Live in the same go for friends, Realms and servers (if Microsoft asks for it separately, Xbox shows a code to
+  type at microsoft.com/link instead).
+- **Your graphics card.** The game plays on the card chosen in Settings, through Vulkan.
+- **Its own worlds.** Each instance has its own game profile; Back up copies its worlds, and BlockForge backs them up
+  before a new version first opens them. A game that keeps running after BlockForge closes is found again by the next
+  BlockForge and can be stopped from it.
+- **A checked download.** The Store sends the game over plain HTTP, so BlockForge fetches the package's header over
+  HTTPS from Microsoft's download network and checks every page of the download against the package's own hash tree,
+  which that header vouches for, before anything is installed or decrypted. A download that differs anywhere is
+  refused. (Microsoft's signature on the header can't be checked, as its key isn't public, so the header is trusted
+  as Microsoft's download network serves it over HTTPS.)
+- **What it takes:** about 2 GB for the game and about 1 GB for the engine the first time. The sign-in window uses the
+  system's WebKitGTK 4.1 (`webkit2gtk4.1` on Fedora, `libwebkit2gtk-4.1-0` on Debian and Ubuntu); BlockForge itself
+  starts without it. Everything lives in the `bedrock` folder of BlockForge's data folder, and other Bedrock
+  launchers are left alone.
 - **Windows and macOS:** not yet. Bedrock is offered on Linux only for now; on other systems New instance doesn't
-  show it.
+  show it. It is experimental.
 
-The instance's page shows how it stands, both sign-ins with Sign in and Sign out, Download, Play and Stop, Repair and
-Diagnose, the game's log and its worlds folder. The Library and Home show Bedrock instances with a Bedrock tag.
+The instance's page shows how it stands, the Microsoft account with Sign in and Sign out, Download, Update, Play and
+Stop, Repair and Diagnose, the game's log and its worlds. The Library and Home show Bedrock instances with a Bedrock
+tag.
 
 BlockForge plays Bedrock Edition the way [BedrockOnLinux](https://github.com/Wyze3306/BedrockOnLinux) does (by Wyze3306
 and its contributors, MIT licence), ported to Rust, and downloads your own copy from the Microsoft Store with the
