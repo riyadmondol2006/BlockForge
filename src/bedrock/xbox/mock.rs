@@ -120,6 +120,14 @@ async fn serve(mut socket: tokio::net::TcpStream, handler: Handler, log: Arc<Mut
         }
     }
     let req = Req { method, target, headers, body: data[head_end..head_end + length].to_vec(), at: Instant::now() };
+    // No endpoint of these tests is `/`: a request for it is something else on the computer probing a newly opened
+    // local port (development tools look for web servers that way), and counting it would fail the tests that check
+    // exactly which requests were made.
+    if req.path() == "/" {
+        let _ = socket.write_all(b"HTTP/1.1 404 X\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await;
+        let _ = socket.shutdown().await;
+        return;
+    }
     let nth = {
         let mut log = log.lock().unwrap();
         log.push(req.clone());
