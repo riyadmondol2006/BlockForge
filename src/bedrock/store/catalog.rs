@@ -57,12 +57,12 @@ fn package(details: PackageDetails, edition: Edition) -> Result<Package> {
     if !details.content_id.eq_ignore_ascii_case(content_id(edition)) {
         return Err(integrity("Unexpected content identity"));
     }
-    uuid::Uuid::parse_str(&details.version_id).map_err(integrity)?;
-    if details.version.split('.').count() != 4
-        || !details.version.split('.').all(|s| !s.is_empty() && s.parse::<u32>().is_ok())
-    {
-        return Err(integrity("Invalid version"));
+    if !super::download::valid_package_id(&details.version_id) {
+        return Err(integrity(format!("Invalid package version ID {:?}", details.version_id)));
     }
+    let Some(version) = numeric_version(&details.version) else {
+        return Err(integrity("Invalid version"));
+    };
     let file = details
         .package_files
         .iter()
@@ -87,8 +87,20 @@ fn package(details: PackageDetails, edition: Edition) -> Result<Package> {
         return Err(integrity("Unexpected Xbox CDN URL"));
     }
     Ok(Package {
-        build: BuildId { edition, version: details.version, package_id: details.version_id },
+        build: BuildId { edition, version, package_id: details.version_id },
         url: parsed.to_string(),
         bytes: file.file_size.try_into().map_err(integrity)?,
     })
+}
+
+/// The four numbers of a catalogue version: it gives `1.26.6005.0.<uuid>` (the build's number, then the package's id).
+pub(super) fn numeric_version(version: &str) -> Option<String> {
+    let parts: Vec<&str> = version.splitn(5, '.').collect();
+    if parts.len() < 4 || !parts[..4].iter().all(|p| !p.is_empty() && p.parse::<u32>().is_ok()) {
+        return None;
+    }
+    if let Some(rest) = parts.get(4) {
+        uuid::Uuid::parse_str(rest).ok()?;
+    }
+    Some(parts[..4].join("."))
 }

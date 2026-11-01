@@ -1,6 +1,6 @@
 //! Ported from BedrockOnLinux bol/xodus.py: encrypted executables stay encrypted on durable storage.
 use super::*;
-use msixvc::xvd::{SegmentFile, XvdFile};
+use msixvc::xvd::{SegmentEncryption, SegmentFile, XvdFile};
 use std::fs::File;
 use tokio::io::AsyncWriteExt;
 
@@ -95,17 +95,30 @@ pub async fn stage(
             keep_encrypted: true,
             data_hashs: entry.hashes.clone(),
         };
-        if !xvd.encrypted_segment(&segment) {
-            return Err(integrity("Missing encrypted image region"));
-        }
+        // A file the licence keeps encrypted is usually in an encrypted section and decrypted here; a build may also
+        // ship one plain (Minecraft 1.26.60's own program is, outside both its sections), and it is copied as it is,
+        // like Xodus does. One that only partly overlaps a section would come out half encrypted: refused.
+        let plain = match xvd.segment_encryption(&segment) {
+            SegmentEncryption::Encrypted => false,
+            SegmentEncryption::Plain => true,
+            SegmentEncryption::Straddles => return Err(integrity("Encrypted image straddles an encrypted region")),
+        };
         interrupt(cancel, async {
             xvd.mount_mem_fd(&mut source, &mut output, &segment, key, |_, _| {}).await.map_err(integrity)
         })
         .await?;
         output.flush().await.map_err(io_error)?;
         let file = output.into_std().await;
+        // pages are copied whole: the file is cut back to its own length
+        let written = file.metadata().map_err(io_error)?.len();
+        if written > entry.length {
+            file.set_len(entry.length).map_err(io_error)?;
+        }
         if file.metadata().map_err(io_error)?.len() != entry.length {
             return Err(integrity("Truncated staged image"));
+        }
+        if plain {
+            crate::logs::info(format!("Bedrock: {name} is not encrypted in this build; staged as it is"));
         }
         staged.images.push(StagedImage { relative: name, path, file });
     }

@@ -278,15 +278,31 @@ pub struct SegmentFile {
     pub keep_encrypted: bool,
 }
 
+/// See [`XvdFile::segment_encryption`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SegmentEncryption {
+    Encrypted,
+    Plain,
+    Straddles,
+}
+
 impl XvdFile {
-    /// The adapter must refuse staging if metadata cannot identify the encrypted region.
-    pub fn encrypted_segment(&self, file: &SegmentFile) -> bool {
-        file.offset.checked_add(file.length).is_some_and(|end| {
-            self.encrypted_section_infos.iter().any(|s| {
-                file.offset >= s.section_offset
-                    && s.section_offset.checked_add(s.section_length).is_some_and(|limit| end <= limit)
-            })
-        })
+    /// Where `file` lies against the package's encrypted sections, as decrypting reads it (`extract_file_ex` picks
+    /// the section its first byte is in, else copies the pages as they are): the adapter decrypts the first, copies
+    /// the second, and refuses the third, which would copy encrypted pages as if they were plain.
+    pub fn segment_encryption(&self, file: &SegmentFile) -> SegmentEncryption {
+        let Some(end) = file.offset.checked_add(file.length) else { return SegmentEncryption::Straddles };
+        let within = |s: &EncryptedSectionInfo| {
+            file.offset >= s.section_offset && file.offset < s.section_offset.saturating_add(s.section_length)
+        };
+        if self.encrypted_section_infos.iter().any(within) {
+            return SegmentEncryption::Encrypted;
+        }
+        let touches = self
+            .encrypted_section_infos
+            .iter()
+            .any(|s| file.offset < s.section_offset.saturating_add(s.section_length) && s.section_offset < end);
+        if touches { SegmentEncryption::Straddles } else { SegmentEncryption::Plain }
     }
     pub fn content_id(&self) -> uuid::Uuid {
         self.header.vduid
@@ -997,7 +1013,7 @@ mod adapter_tests {
         package[section_offset as usize..section_offset as usize + 4096].copy_from_slice(&page);
         let segment =
             SegmentFile { offset: section_offset, length: 123, data_hashs: vec![[1; 20]], keep_encrypted: true };
-        assert!(xvd.encrypted_segment(&segment));
+        assert_eq!(xvd.segment_encryption(&segment), SegmentEncryption::Encrypted);
         let mut ciphertext = Vec::new();
         xvd.extract_file(&mut std::io::Cursor::new(package), &mut ciphertext, &segment, key, |_, _| {}).await.unwrap();
         assert_eq!(ciphertext.len(), 4096);

@@ -207,12 +207,12 @@ pub fn command(runtime: &Runtime, engine: &Engine, plan: &InnerPlan) -> Result<C
     }
     // Everything the container must see beyond the tools: the helper, its plan, the prefix, the game, BF's state and
     // staged images. Paths were validated free of ':' above.
-    let mounts = [&plan.helper, &plan.plan_path, &plan.prefix, &plan.cwd, &plan.state]
+    let shared: Vec<String> = [&plan.helper, &plan.plan_path, &plan.prefix, &plan.cwd, &plan.state]
         .into_iter()
         .chain(plan.mounts.iter())
         .map(|p| p.display().to_string())
-        .collect::<Vec<_>>()
-        .join(":");
+        .collect();
+    let mounts = shared.join(":");
     let variable = plan.state.join("pressure-vessel");
     for (key, value) in [
         ("WINEPREFIX", plan.prefix.display().to_string()),
@@ -233,13 +233,14 @@ pub fn command(runtime: &Runtime, engine: &Engine, plan: &InnerPlan) -> Result<C
     }
     Ok(CommandSpec {
         program: runtime.view.join("pressure-vessel/bin/pressure-vessel-wrap"),
-        argv: vec![
-            format!("--variable-dir={}", variable.display()),
-            "--".into(),
-            plan.helper.display().to_string(),
-            "--plan".into(),
-            plan.plan_path.display().to_string(),
-        ],
+        // pressure-vessel-wrap shares the home folder by itself, but not the rest: the staged images live in a RAM
+        // folder under /run/user or /dev/shm, which only `--filesystem` brings into the container (STEAM_COMPAT_MOUNTS
+        // is read by Steam's entry-point script, which BlockForge doesn't run)
+        argv: std::iter::once(format!("--variable-dir={}", variable.display()))
+            .chain(shared.iter().map(|p| format!("--filesystem={p}")))
+            .chain(["--".into()])
+            .chain([plan.helper.display().to_string(), "--plan".into(), plan.plan_path.display().to_string()])
+            .collect(),
         env,
         env_removals: [
             "WINEARCH",
@@ -342,8 +343,12 @@ mod tests {
                 "/owned/bedrock/runtime/steamrt3/.3.0.20261021.266025.view/pressure-vessel/bin/pressure-vessel-wrap"
             )
         );
+        // every folder the game needs is shared with the container, then the helper runs
+        assert!(outer.argv.contains(&"--filesystem=/owned/bedrock/profiles/p/compat/pfx".to_string()));
+        let tail = outer.argv.iter().position(|a| a == "--").unwrap();
+        assert!(outer.argv[1..tail].iter().all(|a| a.starts_with("--filesystem=/")));
         assert_eq!(
-            outer.argv[1..],
+            outer.argv[tail..],
             ["--", "/owned/bedrock/helpers/bedrock-runtime", "--plan", "/owned/bedrock/sessions/s/plan.json"]
         );
         assert_eq!(outer.env["PRESSURE_VESSEL_RUNTIME"], "sniper_platform_3.0.20261021.266025");

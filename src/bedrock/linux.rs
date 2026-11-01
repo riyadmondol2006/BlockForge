@@ -386,6 +386,11 @@ async fn fix_build(build: &mut store::InstalledBuild, sources: &fixups::DllSourc
 }
 
 /// `\??\Z:\abs\path\content\<relative with backslashes>`: the name Wine's loader asks for an image by.
+/// `relative` under `content` as Wine's `Z:` drive names it.
+fn dos_name(content: &Path, relative: &str) -> String {
+    format!("Z:{}\\{}", content.to_string_lossy().replace('/', "\\"), relative.replace('/', "\\"))
+}
+
 fn nt_name(content: &Path, relative: &str) -> String {
     format!("\\??\\Z:{}\\{}", content.to_string_lossy().replace('/', "\\"), relative.replace('/', "\\"))
 }
@@ -749,7 +754,7 @@ impl Linux {
         if let Some((k, v)) = readiness.wine_env() {
             env.insert(k.to_string(), v);
         }
-        if !map.is_empty() {
+        if !map.is_empty() && std::env::var_os("BF_EXPERIMENT_NO_MAP").is_none() {
             env.insert("WINE_DLL_FILE_MAP".into(), map.value());
         }
         // X11 through XWayland by default; Vulkan's present-wait path misbehaves there under a Wayland session
@@ -762,7 +767,11 @@ impl Linux {
         }
         let session_dir = base.join("sessions").join(session.0.to_string());
         let wine_plan = session_dir.join("wine-plan.json");
-        let exe = nt_name(&build.content, GAME_EXE);
+        // The program is named by its DOS path: Wine's launcher resolves that like any path (the file is there on
+        // disk, encrypted or not) and opens it under the NT name the map gives the staged image, which the loader
+        // then reads instead. Handed the NT name itself, this engine's launcher couldn't find the program and passed
+        // it to start.exe ("ShellExecuteEx failed: Invalid name").
+        let exe = dos_name(&build.content, GAME_EXE);
         let mut plan = inner_plan(
             &engine,
             &profile,
@@ -855,8 +864,13 @@ impl Linux {
             .and_then(|p| p.registry_refresh_token.as_ref())
             .map(|t| vec![t.expose().to_string()])
             .unwrap_or_default();
-        let exe = std::env::current_exe()
-            .map_err(|e| err(ErrorKind::Runtime, format!("Couldn't find the BlockForge program: {e}")))?;
+        // the session runs as `blockforge --bedrock-session`; BF_BEDROCK_SESSION_EXE names the program for a run
+        // that isn't BlockForge itself (the real-world tests, which are the test program)
+        let exe = match std::env::var_os("BF_BEDROCK_SESSION_EXE").filter(|v| !v.is_empty()) {
+            Some(exe) => PathBuf::from(exe),
+            None => std::env::current_exe()
+                .map_err(|e| err(ErrorKind::Runtime, format!("Couldn't find the BlockForge program: {e}")))?,
+        };
         let spawned = match supervisor::spawn(&exe, &launch, &secrets) {
             Ok(s) => s,
             Err(e) => {
@@ -1307,6 +1321,121 @@ mod tests {
         assert!(session_env().keys().all(|k| bedrock_runtime::allowed_env(k)));
         let (_, gpu) = gpu_env(&crate::gpu::Choice::Auto, &[]);
         assert!(gpu.iter().all(|(k, _)| bedrock_runtime::allowed_env(k)), "{gpu:?}");
+    }
+
+    /// Play and Stop, for real, with the game installed in BLOCKFORGE_DIR (see `real_install_with_saved_sign_in`):
+    /// the first instance is started, left running for BF_PLAY_SECONDS (default 60), then stopped as the Stop
+    /// button does, and what is left behind is checked. Needs the built program and helpers:
+    /// `BF_BEDROCK_SESSION_EXE=target/debug/blockforge BF_BEDROCK_RUNTIME_HELPER=target/debug/bedrock-runtime
+    /// BLOCKFORGE_DIR=<root> cargo test --locked --lib real_play_and_stop -- --ignored --nocapture`
+    #[test]
+    #[ignore = "starts Minecraft for real from BLOCKFORGE_DIR; needs a display"]
+    fn real_play_and_stop() {
+        use crate::bedrock::{Backend, PlayOptions, Readiness, RefreshPolicy, StopMode};
+        let Some(root) = std::env::var_os("BLOCKFORGE_DIR").map(PathBuf::from) else {
+            eprintln!("skipped: set BLOCKFORGE_DIR to a data folder with Bedrock installed");
+            return;
+        };
+        let seconds: u64 = std::env::var("BF_PLAY_SECONDS").ok().and_then(|s| s.parse().ok()).unwrap_or(60);
+        let gpu = crate::gpu::Choice::parse(&std::env::var("BF_GPU").unwrap_or_default());
+        let dirs = crate::paths::Dirs::at(&root);
+        let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
+        rt.block_on(async {
+            let backend = Backend::new(&dirs, tokio::runtime::Handle::current());
+            backend.refresh(RefreshPolicy::LocalOnly, Cancel::default()).await.unwrap();
+            let status = backend.snapshot().instances.first().cloned().expect("a Bedrock instance");
+            let id = status.instance.id.clone();
+            println!("{}: {:?}", status.instance.name, status.readiness);
+            let progress = Progress::new();
+            let watch = {
+                let p = progress.clone();
+                tokio::spawn(async move {
+                    let mut last = String::new();
+                    loop {
+                        let now = p.stage_text();
+                        if now != last {
+                            println!("  {now}");
+                            last = now;
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    }
+                })
+            };
+            let started = std::time::Instant::now();
+            let diagnostics = std::env::var_os("BF_DIAG").is_some();
+            let options = PlayOptions { gpu, diagnostics, require_xbox_online: false };
+            let session = match backend.play(id.clone(), options, progress, Cancel::default()).await {
+                Ok(s) => s,
+                Err(e) => {
+                    watch.abort();
+                    panic!("play failed: {:?}: {}", e.kind, e.message);
+                }
+            };
+            watch.abort();
+            println!("started in {:.0} s; logs in {}", started.elapsed().as_secs_f32(), session.log_dir.display());
+            let until = std::time::Instant::now() + std::time::Duration::from_secs(seconds);
+            while std::time::Instant::now() < until {
+                let r = backend.snapshot().instances.iter().find(|i| i.instance.id == id).map(|i| i.readiness.clone());
+                if !matches!(r, Some(Readiness::Starting(_) | Readiness::Running(_))) {
+                    println!("the game ended by itself: {r:?}");
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            }
+            let stopping = std::time::Instant::now();
+            let stopped = session.control.stop(StopMode::Graceful).await;
+            println!(
+                "stop: {:?} in {:.1} s",
+                stopped.as_ref().map_err(|e| &e.message),
+                stopping.elapsed().as_secs_f32()
+            );
+            stopped.unwrap();
+        });
+    }
+
+    /// The download, for real, with a Store sign-in already saved in BLOCKFORGE_DIR (made in the window): every
+    /// instance there is installed and the result printed. Run with the window closed (they share the locks):
+    /// `BLOCKFORGE_DIR=<root> cargo test --locked --lib real_install_with_saved_sign_in -- --ignored --nocapture`
+    #[test]
+    #[ignore = "downloads Minecraft for real (~2 GB) with a sign-in saved in BLOCKFORGE_DIR"]
+    fn real_install_with_saved_sign_in() {
+        use crate::bedrock::{Backend, RefreshPolicy};
+        let Some(root) = std::env::var_os("BLOCKFORGE_DIR").map(PathBuf::from) else {
+            eprintln!("skipped: set BLOCKFORGE_DIR to a data folder with a Bedrock instance signed in to the Store");
+            return;
+        };
+        let dirs = crate::paths::Dirs::at(&root);
+        let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
+        rt.block_on(async {
+            let backend = Backend::new(&dirs, tokio::runtime::Handle::current());
+            backend.refresh(RefreshPolicy::LocalOnly, Cancel::default()).await.unwrap();
+            for status in backend.snapshot().instances.iter() {
+                let id = status.instance.id.clone();
+                println!("{}: {:?}", status.instance.name, status.readiness);
+                let progress = Progress::new();
+                let watch = {
+                    let p = progress.clone();
+                    tokio::spawn(async move {
+                        let mut last = String::new();
+                        loop {
+                            let now = format!("{} {:.0}%", p.stage_text(), p.fraction() * 100.0);
+                            if now != last {
+                                println!("  {now}");
+                                last = now;
+                            }
+                            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                        }
+                    })
+                };
+                let started = std::time::Instant::now();
+                let result = backend.install(id, progress, Cancel::default()).await;
+                watch.abort();
+                match result {
+                    Ok(build) => println!("installed {build:?} in {:.0} s", started.elapsed().as_secs_f32()),
+                    Err(e) => println!("install failed: {:?}: {}", e.kind, e.message),
+                }
+            }
+        });
     }
 
     /// The real local check, without any sign-in, on a scratch data root (`BLOCKFORGE_DIR`, by default

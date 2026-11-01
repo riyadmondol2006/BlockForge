@@ -39,6 +39,21 @@ async fn corrupt_or_lost_credentials_never_reprovision() {
     std::fs::remove_dir_all(root).unwrap();
 }
 #[test]
+fn a_saved_registration_is_never_reported_as_interrupted() {
+    // A slot whose marker outlived a registration that was saved (as every successful sign-in left it before the
+    // marker was cleared on success): signed in, not "registration interrupted".
+    let base = scratch("store-marker");
+    let id = StoreId(uuid::Uuid::new_v4());
+    let root = base.join("stores").join(id.0.to_string());
+    std::fs::create_dir_all(&root).unwrap();
+    let slot = Slot::open(root.clone()).unwrap();
+    tokens::atomic(&root.join("provisioning"), b"1").unwrap();
+    assert!(matches!(super::cached_state(&base, &id), SignInState::NeedsSignIn { .. }), "nothing saved yet");
+    slot.backend.set("dev_license", b"device-fixture").unwrap();
+    assert!(!matches!(super::cached_state(&base, &id), SignInState::NeedsSignIn { .. }));
+    std::fs::remove_dir_all(base).unwrap();
+}
+#[test]
 fn rejects_credential_symlinks_and_unsafe_package_paths() {
     let root = scratch("store-symlink");
     drop(Slot::open(root.clone()).unwrap());
@@ -654,4 +669,24 @@ async fn unchanged_files_are_hashed_once_and_changed_ones_refetched() {
     ));
     drop(old);
     std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn a_package_version_id_is_a_safe_folder_name_not_necessarily_a_uuid() {
+    use super::download::valid_package_id;
+    assert!(valid_package_id("7792d9ce-355a-493c-afbd-768f4a77c3b0"));
+    assert!(valid_package_id(&"a1b2c3d4".repeat(6)), "the 48-character IDs the catalogue gives now");
+    for bad in ["", "..", ".hidden", "a/b", "a\\b", "a b", &"x".repeat(65)] {
+        assert!(!valid_package_id(bad), "{bad:?}");
+    }
+}
+
+#[test]
+fn a_catalogue_version_is_four_numbers_with_or_without_the_package_id_after_them() {
+    use super::catalog::numeric_version;
+    assert_eq!(numeric_version("1.26.6005.0.ea989132-19db-44c9-98a4-949e064552c7").as_deref(), Some("1.26.6005.0"));
+    assert_eq!(numeric_version("1.21.4402.0").as_deref(), Some("1.21.4402.0"));
+    for bad in ["1.26.6005", "1.26.x.0", "1.26.6005.0.not-a-uuid", "", "1..2.3"] {
+        assert_eq!(numeric_version(bad), None, "{bad:?}");
+    }
 }

@@ -114,8 +114,18 @@ impl std::fmt::Debug for InstalledBuild {
         f.debug_struct("InstalledBuild").field("id", &self.id).finish_non_exhaustive()
     }
 }
+/// Whether the catalogue's version ID of a package can name its build folder. It is an opaque ID (48 characters
+/// for Minecraft now, not a UUID); it only has to be a safe, short path component.
+pub(super) fn valid_package_id(id: &str) -> bool {
+    (1..=64).contains(&id.len())
+        && !id.starts_with('.')
+        && id.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+}
+
 fn build_root(ctx: &Context, id: &BuildId) -> Result<PathBuf> {
-    uuid::Uuid::parse_str(&id.package_id).map_err(integrity)?;
+    if !valid_package_id(&id.package_id) {
+        return Err(integrity("Invalid package version ID"));
+    }
     if id.version.split('.').count() != 4
         || !id.version.split('.').all(|part| !part.is_empty() && part.parse::<u32>().is_ok())
     {

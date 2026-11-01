@@ -118,6 +118,11 @@ impl Slot {
     }
 }
 
+/// Whether the slot's credentials hold a saved device registration (no lock, no network).
+pub fn has_device_license(root: &Path) -> bool {
+    PathBackend { path: root.join("credentials.json") }.read().is_ok_and(|entries| entries.contains_key("dev_license"))
+}
+
 /// A slot's sign-in from its credentials file alone (no lock, no network): linked with the account's name, signed
 /// out, or damaged.
 pub fn cached_state(root: &Path) -> SignInState {
@@ -169,6 +174,11 @@ pub fn atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     }
     result
 }
-pub fn store_error(_: impl std::fmt::Display) -> BedrockError {
-    err(ErrorKind::SignInRequired, "Store credentials are missing, expired or invalid; sign in or repair this slot")
+pub fn store_error(cause: impl std::fmt::Display) -> BedrockError {
+    let cause = super::redact_cause(&cause.to_string());
+    crate::logs::warn(format!("Bedrock Store credentials: {cause}"));
+    err(
+        ErrorKind::SignInRequired,
+        format!("Store credentials are missing, expired or invalid; sign in or repair this slot ({cause})"),
+    )
 }

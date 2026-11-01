@@ -2,6 +2,11 @@
   "program": "/owned/bedrock/runtime/steamrt3/.3.0.20261021.266025.view/pressure-vessel/bin/pressure-vessel-wrap",
   "argv": [
     "--variable-dir=/owned/bedrock/profiles/p/compat/state/pressure-vessel",
+    "--filesystem=/owned/bedrock/helpers/bedrock-runtime",
+    "--filesystem=/owned/bedrock/sessions/s/plan.json",
+    "--filesystem=/owned/bedrock/profiles/p/compat/pfx",
+    "--filesystem=/owned/bedrock/profiles/p/compat",
+    "--filesystem=/owned/bedrock/profiles/p/compat/state",
     "--",
     "/owned/bedrock/helpers/bedrock-runtime",
     "--plan",

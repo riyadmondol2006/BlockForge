@@ -81,6 +81,13 @@ pub async fn ensure(client: &reqwest::Client, slot: &Slot, cancel: &Cancel) -> R
             };
             // Persist before authenticating: retries must reuse this registration.
             slot.tokens.save_device_license(&device).map_err(store_error)?;
+            // The registration is saved, so it is no longer interrupted: leaving the marker would have the slot
+            // asking for a repair after every successful sign-in.
+            match std::fs::remove_file(&marker) {
+                Ok(()) => (),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
+                Err(e) => return Err(io_error(e)),
+            }
             device
         }
         Err(e) => return Err(store_error(e)),

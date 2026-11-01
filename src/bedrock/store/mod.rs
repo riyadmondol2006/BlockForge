@@ -100,7 +100,9 @@ pub fn cached_state(root: &Path, id: &StoreId) -> SignInState {
     if !dir.join("initialized").exists() {
         return SignInState::SignedOut;
     }
-    if dir.join("provisioning").exists() {
+    // The marker means a registration may have been spent without being saved; once one is saved (a slot from
+    // before the marker was cleared on success has both), it is not interrupted.
+    if dir.join("provisioning").exists() && !tokens::has_device_license(&dir) {
         return SignInState::NeedsSignIn {
             reason: "Registering this computer with the Microsoft Store was interrupted. Sign out with \"forget this \
                      computer\" and sign in again."
@@ -112,18 +114,40 @@ pub fn cached_state(root: &Path, id: &StoreId) -> SignInState {
 fn err(kind: ErrorKind, message: impl Into<String>) -> BedrockError {
     BedrockError::new(kind, message)
 }
-fn integrity(_: impl std::fmt::Display) -> BedrockError {
-    err(ErrorKind::Integrity, "Invalid or incomplete Store package data")
+/// A Store error with its cause: the cause goes into BlockForge's log and, cut short and with anything that looks
+/// like a token or key taken out, after the message, so a failure can be told apart from the others that share it.
+fn with_cause(kind: ErrorKind, message: &str, cause: impl std::fmt::Display) -> BedrockError {
+    let cause = redact_cause(&cause.to_string());
+    crate::logs::warn(format!("Bedrock Store: {message}: {cause}"));
+    err(kind, format!("{message} ({cause})"))
 }
-fn internal(_: impl std::fmt::Display) -> BedrockError {
-    err(ErrorKind::Internal, "Store worker failed")
+
+/// `cause` without its long unbroken runs of letters and digits (tokens, keys, licence blobs), at most 200 characters.
+pub(super) fn redact_cause(cause: &str) -> String {
+    let mut out = String::new();
+    for word in cause.split_inclusive(|c: char| c.is_whitespace() || matches!(c, ',' | ';' | '"' | '\'' | '=')) {
+        let token_like =
+            word.chars().filter(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '/' | '-' | '_')).count();
+        if token_like >= 32 { out.push_str("[…] ") } else { out.push_str(word) }
+    }
+    let mut out: String = out.trim().chars().take(200).collect();
+    if out.is_empty() {
+        out.push_str("no detail");
+    }
+    out
+}
+fn integrity(cause: impl std::fmt::Display) -> BedrockError {
+    with_cause(ErrorKind::Integrity, "Invalid or incomplete Store package data", cause)
+}
+fn internal(cause: impl std::fmt::Display) -> BedrockError {
+    with_cause(ErrorKind::Internal, "Store worker failed", cause)
 }
 fn io_error(e: std::io::Error) -> BedrockError {
     let kind = if e.raw_os_error() == Some(28) { ErrorKind::NoSpace } else { ErrorKind::Integrity };
-    err(kind, "Store storage operation failed")
+    with_cause(kind, "Store storage operation failed", e)
 }
-fn network(_: impl std::fmt::Display) -> BedrockError {
-    err(ErrorKind::Network, "Microsoft Store request failed")
+fn network(cause: impl std::fmt::Display) -> BedrockError {
+    with_cause(ErrorKind::Network, "Microsoft Store request failed", cause)
 }
 fn cancelled(cancel: &Cancel) -> Result<()> {
     if cancel.is_cancelled() { Err(err(ErrorKind::Cancelled, "Store operation cancelled")) } else { Ok(()) }
