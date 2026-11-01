@@ -3,6 +3,29 @@
 The section for a version is used as the text of its release on GitHub. Older releases (the Java versions, up to
 3.4.42.x) are on the [releases page](https://github.com/riyadmondol2006/BlockForge/releases).
 
+## Unreleased
+
+### What is new
+
+- **Minecraft: Bedrock Edition.** New instance now offers three games: Minecraft: Java Edition, Horizon and
+  Minecraft: Bedrock Edition. Bedrock is your own copy of Minecraft for Windows (bought on a Microsoft account; a
+  console or phone copy doesn't count), as Release or Preview, each with its own worlds. The card says what it needs:
+  the game, two sign-ins (the Microsoft Store account that owns it, to download it, and Xbox, to play online; they can
+  be different accounts) and about 3 GB the first time.
+- **On Linux (experimental)** BlockForge downloads the game from the Microsoft Store with your licence and plays it in
+  a Windows compatibility engine, in a game profile of the instance's own, all from BlockForge in Rust: no Python, and
+  no other launcher. Everything lives in the `bedrock` folder of BlockForge's data folder.
+- **On Windows** the game is native: a Bedrock instance finds Minecraft for Windows or Preview installed for your
+  Windows user, starts it, opens its Microsoft Store page when it isn't installed, and backs up its worlds from
+  `%APPDATA%\Minecraft Bedrock`. On macOS Bedrock isn't available yet, and New instance says so.
+- **A Bedrock instance has a page of its own:** how it stands, both sign-ins with Sign in and Sign out (Xbox's code
+  is shown large, with Copy and Open), Download, Play, Stop, Repair and Diagnose, progress with Cancel, the game's log,
+  and its worlds with Open folder and Back up. The Library (grid and list, with a Bedrock filter) and Home show
+  Bedrock instances with a Bedrock tag. Nothing of it reads the disk or the network while the window draws.
+- **Credit:** Bedrock support follows [BedrockOnLinux](https://github.com/Wyze3306/BedrockOnLinux) by Wyze3306 and its
+  contributors (MIT licence), ported to Rust, and uses the [Xodus](https://github.com/xodus-gaming/xodus) libraries
+  (GPL-3.0). Neither is affiliated with Mojang or Microsoft.
+
 ## 5.1.0
 
 ### What is new

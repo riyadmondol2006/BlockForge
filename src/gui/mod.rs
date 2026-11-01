@@ -3,6 +3,7 @@
 
 mod about;
 mod accounts;
+mod bedrock;
 mod console;
 #[cfg(feature = "converter")]
 mod convert;
@@ -108,6 +109,8 @@ pub enum Page {
     Convert,
     Servers,
     About,
+    /// A Minecraft: Bedrock Edition instance (see `bedrock`); opened from the Library and Home.
+    Bedrock,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -128,6 +131,8 @@ pub enum Msg {
     Reload,
     /// The newest Horizon build installed, looked at off the window's thread.
     HorizonBuild(Option<crate::horizon::Build>),
+    /// The Bedrock backend changed, or a job on it ended.
+    Bedrock(bedrock::BedrockMsg),
     Deleted(String),
     InstanceImage(String, Result<(), String>),
     Manifest(Result<Manifest, String>),
@@ -385,6 +390,8 @@ pub struct App {
     last_account_check: Instant,
     /// The newest Horizon build installed, read with the instances (see `edition`).
     horizon_build: Option<crate::horizon::Build>,
+    /// Minecraft: Bedrock Edition: the backend, its snapshot and the jobs started on it.
+    bedrock: bedrock::BedrockUi,
 }
 
 pub fn run(dirs: Dirs, open_files: Vec<std::path::PathBuf>) -> anyhow::Result<()> {
@@ -459,6 +466,7 @@ impl App {
                 crate::backups::backups_dir(&dirs, &crate::svcsettings::ServiceSettings::from_settings(&settings));
             std::thread::spawn(move || crate::leftovers::sweep(&dirs, &backups, crate::leftovers::MIN_AGE));
         }
+        let bedrock = bedrock::BedrockUi::new(&dirs, rt.handle().clone());
         let mut app = App {
             dirs,
             rt,
@@ -543,8 +551,10 @@ impl App {
             pending_open: open_files,
             last_account_check: Instant::now() - Duration::from_secs(3600),
             horizon_build: None,
+            bedrock,
         };
         app.refresh_horizon_build();
+        app.bedrock_start();
         app.refresh_manifest();
         app.ftb_check_updates();
         if app.shot.is_none() {
@@ -1076,6 +1086,7 @@ impl App {
     fn handle(&mut self, msg: Msg) {
         match msg {
             Msg::Reload => self.reload_instances(),
+            Msg::Bedrock(m) => self.bedrock_msg(m),
             Msg::HorizonBuild(build) => {
                 if self.shot.is_none() {
                     self.horizon_build = build;
@@ -2348,6 +2359,7 @@ impl App {
             Page::Convert => self.convert_ui(ui),
             Page::Servers => self.servers_ui(ui),
             Page::About => self.about_ui(ui),
+            Page::Bedrock => self.bedrock_ui(ui),
         }
     }
 
@@ -2361,6 +2373,7 @@ impl App {
         self.export_modal(&ctx);
         self.toasts_ui(&ctx);
         self.confirm_ui(&ctx);
+        self.bedrock_confirm_ui(&ctx);
         self.stop_confirm_ui(&ctx);
         self.play_unsaved_ui(&ctx);
         self.quit_confirm_ui(&ctx);
@@ -2412,7 +2425,7 @@ static SHOT_HOVER: std::sync::LazyLock<Option<egui::Pos2>> = std::sync::LazyLock
 /// The ids of the jobs the tour makes up to show the sidebar busy; no real job gets ids this high.
 const SHOT_TASK: u64 = u64::MAX - 8;
 
-const SHOT_PAGES: [&str; 82] = [
+const SHOT_PAGES: [&str; 92] = [
     "home",
     "library",
     "instance",
@@ -2502,6 +2515,17 @@ const SHOT_PAGES: [&str; 82] = [
     "instance-horizon-resourcepacks",
     "instance-horizon-settings",
     "library-horizon",
+    // Minecraft: Bedrock Edition: offered in New instance, its page in its states, and its cards
+    "create-bedrock",
+    "create-bedrock-light",
+    "create-bedrock-configure",
+    "instance-bedrock",
+    "instance-bedrock-light",
+    "instance-bedrock-signin",
+    "instance-bedrock-download",
+    "library-bedrock",
+    "library-bedrock-list",
+    "home-bedrock",
 ];
 
 impl Shot {
@@ -2565,6 +2589,14 @@ impl App {
             if let Some(shot) = self.shot.as_mut().filter(|s| s.horizon != horizon) {
                 shot.horizon = horizon;
                 self.reload_instances();
+            }
+            // only the Bedrock pages show Bedrock instances (in memory, see `shot_bedrock`)
+            let plain = name.trim_end_matches("-light");
+            if plain.contains("bedrock") {
+                let state = plain.rsplit('-').next().unwrap_or("");
+                self.shot_bedrock(state);
+            } else {
+                self.shot_no_bedrock();
             }
             let first = self.instances.first().map(|i| i.folder.clone());
             if name != "who" && name != "who-new" {
@@ -2690,6 +2722,17 @@ impl App {
                     self.shot_create(create::Step::Configure);
                     self.shot_press("Change cover");
                 }
+                "create-bedrock" => self.shot_create_bedrock(create::Step::Version),
+                "create-bedrock-configure" => self.shot_create_bedrock(create::Step::Configure),
+                "instance-bedrock" | "instance-bedrock-signin" | "instance-bedrock-download" => {
+                    self.page = Page::Bedrock;
+                }
+                "library-bedrock" | "library-bedrock-list" => {
+                    self.page = Page::Library;
+                    let list = name.trim_end_matches("-light") == "library-bedrock-list";
+                    self.settings.library_view = if list { "list" } else { "grid" }.to_string();
+                }
+                "home-bedrock" => self.page = Page::Home,
                 "create-horizon" => self.shot_create_horizon(create::Step::Version),
                 "create-horizon-configure" => self.shot_create_horizon(create::Step::Configure),
                 "library-horizon" => {

@@ -2,6 +2,7 @@
 
 use egui::{Align, Color32, CornerRadius, Layout, RichText, ScrollArea, Sense, Stroke, Ui, UiBuilder, vec2};
 
+use super::bedrock::{self as bed, BAct};
 use super::icons::{self, Icon};
 use super::instance_menu::{Act, BLOCK_TITLE_H, SplitRow, block_title, menu_items};
 use super::motion;
@@ -247,7 +248,10 @@ impl App {
         // the instances are looked up by position, not copied: an instance carries its whole version file. The banner
         // is the one played last (the first one when none has been played yet)
         let hero = (0..self.instances.len()).max_by_key(|&i| (self.instances[i].last_played(), std::cmp::Reverse(i)));
+        // Bedrock instances have tiles in the row, not the banner (their covers and play times are their own)
+        let any = hero.is_some() || !self.bedrock.snap.instances.is_empty();
         let mut action = None;
+        let mut bedrock = None;
         ScrollArea::vertical().id_salt("home").auto_shrink(false).show(ui, |ui| {
             self.low_end_hint(ui);
             if self.accounts.is_empty() {
@@ -272,28 +276,31 @@ impl App {
 
             match hero {
                 Some(h) => self.home_banner(ui, h, &mut action),
+                None if any => {}
                 None => self.home_empty(ui),
             }
-            ui.add_space(HOME_SECTION_GAP);
+            if hero.is_some() || !any {
+                ui.add_space(HOME_SECTION_GAP);
+            }
             // in a wide window the news sits beside the instances instead of under them
             let news = self.settings.home_news;
             let room = ui.available_width();
-            if news && hero.is_some() && room >= HOME_SPLIT {
+            if news && any && room >= HOME_SPLIT {
                 let news_w = (room * 0.34).clamp(340.0, 480.0);
                 two_columns(
                     ui,
                     room - news_w - HOME_GAP,
                     HOME_GAP,
                     self,
-                    |ui, this| this.home_main(ui, hero, &mut action),
+                    |ui, this| this.home_main(ui, hero, &mut action, &mut bedrock),
                     |ui, this| this.news_section(ui),
                 );
             } else {
-                if hero.is_some() {
-                    self.home_main(ui, hero, &mut action);
+                if any {
+                    self.home_main(ui, hero, &mut action, &mut bedrock);
                 }
                 if news {
-                    if hero.is_some() {
+                    if any {
                         ui.add_space(HOME_SECTION_GAP);
                     }
                     self.news_section(ui);
@@ -311,6 +318,9 @@ impl App {
         });
         if let Some(a) = action {
             self.apply(a);
+        }
+        if let Some(a) = bedrock {
+            self.bedrock_apply(a);
         }
     }
 
@@ -377,7 +387,7 @@ impl App {
 
     /// "Your instances" under the banner: a row of tiles, most recently played first, as many as fit on one line,
     /// with the ways to more (a new instance, mods, an import, the whole Library) at the end of the title.
-    fn home_main(&mut self, ui: &mut Ui, hero: Option<usize>, action: &mut Option<Act>) {
+    fn home_main(&mut self, ui: &mut Ui, hero: Option<usize>, action: &mut Option<Act>, bedrock: &mut Option<BAct>) {
         let mut order: Vec<usize> = (0..self.instances.len()).collect();
         order.sort_by(|&a, &b| {
             let (a, b) = (&self.instances[a], &self.instances[b]);
@@ -399,7 +409,7 @@ impl App {
             if ghost(ui, "Import").on_hover_text("From another launcher, or a modpack file").clicked() {
                 self.open_import(None);
             }
-            let all = format!("View library ({}) \u{2192}", self.instances.len());
+            let all = format!("View library ({}) \u{2192}", self.instances.len() + self.bedrock.snap.instances.len());
             if ghost(ui, &all).on_hover_text("Every instance, in the Library").clicked() {
                 self.go(Page::Library);
             }
@@ -407,9 +417,13 @@ impl App {
         head.finish(ui);
         ui.add_space(10.0);
         let (cols, width) = grid_columns(ui.available_width(), HOME_TILE_MIN, HOME_TILE_GAP);
-        let shown: Vec<usize> = order.into_iter().take(cols).collect();
+        let (java_n, bedrock_n) = home_split(cols, order.len(), self.bedrock.snap.instances.len());
+        let shown: Vec<usize> = order.into_iter().take(java_n).collect();
         let size = vec2(width, tile_cover_h(width));
         let covers: Vec<egui::TextureHandle> = shown.iter().map(|&i| self.cover_at(i, size, false)).collect();
+        let snap = self.bedrock.snap.clone();
+        let btiles: Vec<(&crate::bedrock::InstanceStatus, egui::TextureHandle)> =
+            snap.instances.iter().take(bedrock_n).map(|st| (st, self.bedrock_cover(&st.instance.id, size))).collect();
         // the outlined tile is the instance last opened, else the one on the banner
         let picked = self.selected.as_deref().and_then(|f| self.instances.iter().position(|i| i.folder == f)).or(hero);
         ui.horizontal(|ui| {
@@ -419,7 +433,83 @@ impl App {
                     *action = Some(a);
                 }
             }
+            for (st, cover) in &btiles {
+                if let Some(a) = self.bedrock_tile(ui, st, cover, width) {
+                    *bedrock = Some(a);
+                }
+            }
         });
+    }
+
+    /// The cover of a Bedrock instance for a place of `size` points.
+    fn bedrock_cover(&mut self, id: &crate::bedrock::InstanceId, size: egui::Vec2) -> egui::TextureHandle {
+        let (w, h) = super::workbench::cover_size(size);
+        self.covers.texture(&self.ctx, &bed::cover_spec(id), w, h)
+    }
+
+    /// A Bedrock instance as a tile of Home's row, like a Java one: its cover, the name, what it plays and how it
+    /// stands, and its main button in the corner.
+    fn bedrock_tile(
+        &self,
+        ui: &mut Ui,
+        st: &crate::bedrock::InstanceStatus,
+        cover: &egui::TextureHandle,
+        width: f32,
+    ) -> Option<BAct> {
+        let id = &st.instance.id;
+        let cover_h = tile_cover_h(width);
+        let (slot, resp) = ui.allocate_exact_size(vec2(width, cover_h + TILE_INFO_H), Sense::click());
+        let hot = ui.rect_contains_pointer(slot);
+        let t = motion::hover(ui, resp.id, hot);
+        let rect = slot.translate(vec2(0.0, -3.0 * t));
+        let pic = egui::Rect::from_min_size(rect.min, vec2(rect.width(), cover_h));
+        let round = CornerRadius::same(R_CARD);
+        let live = bed::is_live(&st.readiness);
+        if ui.is_rect_visible(slot) {
+            let p = ui.painter();
+            p.add(lifted_shadow(t).as_shape(rect, round));
+            p.rect_filled(rect, round, motion::mix(c_card(), c_raised(), t));
+            paint_cover_tex(ui, cover, pic, CornerRadius { nw: R_CARD, ne: R_CARD, sw: 0, se: 0 });
+            let (w, edge) = if live {
+                (1.5, c_accent())
+            } else {
+                (1.0, motion::mix(c_border(), c_control().gamma_multiply(0.7), t))
+            };
+            p.rect_stroke(rect, round, Stroke::new(w, edge), egui::StrokeKind::Inside);
+        }
+        focus_ring(ui, &resp, rect, R_CARD);
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &st.instance.name));
+        let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+        let inner = egui::Rect::from_min_max(
+            egui::pos2(rect.left() + 14.0, pic.bottom() + 10.0),
+            rect.right_bottom() - vec2(8.0, 10.0),
+        );
+        let mut text = ui.new_child(
+            UiBuilder::new()
+                .max_rect(egui::Rect::from_min_max(inner.min, egui::pos2(inner.right() - 40.0, inner.bottom())))
+                .layout(Layout::top_down(Align::Min)),
+        );
+        text.spacing_mut().item_spacing.y = 4.0;
+        text.add(egui::Label::new(RichText::new(&st.instance.name).font(super::fonts::semibold(FS_BODY))).truncate());
+        text.add(egui::Label::new(bedrock_job(st, FS_META)).truncate());
+        let (kind, words) = bed::status_of(&st.readiness, self.bedrock.job(id), crate::bedrock::support());
+        text.add(egui::Label::new(RichText::new(words).size(FS_META).color(status_ink(kind))).truncate());
+        let mut corner = ui.new_child(
+            UiBuilder::new()
+                .max_rect(egui::Rect::from_min_max(inner.right_bottom() - vec2(34.0, 34.0), inner.right_bottom()))
+                .layout(Layout::top_down(Align::Min)),
+        );
+        let mut act = None;
+        let primary = bed::primary_of(&st.readiness, self.bedrock.job(id), crate::bedrock::support());
+        if matches!(primary, bed::Primary::Play | bed::Primary::Stop) {
+            if play_chip(&mut corner, primary == bed::Primary::Stop, hot).clicked() {
+                act = Some(BAct::Primary(id.clone()));
+            }
+        }
+        if act.is_none() && resp.clicked() {
+            act = Some(BAct::Open(id.clone()));
+        }
+        act
     }
 
     /// The cover of the instance at position `i` for a place of `size` points, drawn once and then kept. By position,
@@ -453,7 +543,7 @@ impl App {
 
     pub(super) fn library_ui(&mut self, ui: &mut Ui) {
         // the title with how many there are, and on the right the search, the view and the ways to more instances
-        PageHeader::new("Library").count(self.instances.len()).show(ui, |ui| {
+        PageHeader::new("Library").count(self.instances.len() + self.bedrock.snap.instances.len()).show(ui, |ui| {
             if primary_icon(ui, Icon::Plus, "New instance").clicked() {
                 self.page = Page::Create;
             }
@@ -478,9 +568,10 @@ impl App {
         // none left, or for running games when none runs, is dropped
         let gone = match &show {
             Show::All => false,
+            Show::Loader(kind) if kind == bed::TAG => self.bedrock.snap.instances.is_empty(),
             Show::Loader(kind) => !self.instances.iter().any(|i| loader_kind(i) == kind),
             Show::Favorites => !self.instances.iter().any(is_favorite),
-            Show::Running => !self.instances.iter().any(|i| self.is_playing(&i.folder)),
+            Show::Running => !self.instances.iter().any(|i| self.is_playing(&i.folder)) && !self.bedrock_running(),
         };
         if gone {
             show = Show::All;
@@ -527,6 +618,37 @@ impl App {
         if let Some(a) = out.act {
             self.apply(a);
         }
+        if let Some(a) = out.bedrock {
+            self.bedrock_apply(a);
+        }
+    }
+
+    /// Whether a Bedrock game is starting, running or closing.
+    fn bedrock_running(&self) -> bool {
+        self.bedrock.snap.instances.iter().any(|s| bed::is_live(&s.readiness))
+    }
+
+    /// The Bedrock instances the Library shows for the search `q` (lower case) and the filter, as positions in the
+    /// snapshot: they come after the Java instances, in the order they were made.
+    fn bedrock_shown(&self, q: &str, show: &Show) -> Vec<usize> {
+        let admitted = match show {
+            Show::All => true,
+            Show::Loader(kind) => kind == bed::TAG,
+            Show::Favorites => false,
+            Show::Running => true,
+        };
+        if !admitted {
+            return Vec::new();
+        }
+        self.bedrock
+            .snap
+            .instances
+            .iter()
+            .enumerate()
+            .filter(|(_, st)| *show != Show::Running || bed::is_live(&st.readiness))
+            .filter(|(_, st)| bedrock_matches(st, q))
+            .map(|(i, _)| i)
+            .collect()
     }
 
     /// Remember how the Library is sorted. The sortings the Java edition knows go in the setting it shares; the others
@@ -594,21 +716,30 @@ impl App {
         let q = self.library_search.trim().to_lowercase();
         let found: Vec<&Instance> = self.instances.iter().filter(|i| matches_search(i, &q)).collect();
         let mut kinds: Vec<&str> = self.instances.iter().map(loader_kind).collect();
+        let bedrock_found = self.bedrock.snap.instances.iter().filter(|st| bedrock_matches(st, &q)).count();
+        if !self.bedrock.snap.instances.is_empty() {
+            kinds.push(bed::TAG);
+        }
         kinds.sort_by_key(|k| loader_rank(k));
         kinds.dedup();
-        let mut chips = vec![(Show::All, format!("All ({})", found.len()))];
+        let mut chips = vec![(Show::All, format!("All ({})", found.len() + bedrock_found))];
         if self.instances.iter().any(is_favorite) {
             let n = found.iter().filter(|i| is_favorite(i)).count();
             chips.push((Show::Favorites, format!("Favourites ({n})")));
         }
         if kinds.len() >= 2 {
             for kind in kinds {
-                let n = found.iter().filter(|i| loader_kind(i) == kind).count();
+                let n = if kind == bed::TAG {
+                    bedrock_found
+                } else {
+                    found.iter().filter(|i| loader_kind(i) == kind).count()
+                };
                 chips.push((Show::Loader(kind.to_string()), format!("{kind} ({n})")));
             }
         }
-        if self.instances.iter().any(|i| self.is_playing(&i.folder)) {
-            let n = found.iter().filter(|i| self.is_playing(&i.folder)).count();
+        if self.instances.iter().any(|i| self.is_playing(&i.folder)) || self.bedrock_running() {
+            let bedrock_live = self.bedrock.snap.instances.iter().filter(|st| bed::is_live(&st.readiness)).count();
+            let n = found.iter().filter(|i| self.is_playing(&i.folder)).count() + bedrock_live;
             chips.push((Show::Running, format!("Running ({n})")));
         }
         chips
@@ -631,9 +762,10 @@ impl App {
             sort_instances(&mut list, sort, |i| added.get(&i.folder).copied().unwrap_or(0));
             list.iter().filter_map(|i| self.instances.iter().position(|x| std::ptr::eq(x, *i))).collect()
         };
-        if order.is_empty() {
+        let bedrock = self.bedrock_shown(&q, show);
+        if order.is_empty() && bedrock.is_empty() {
             card(ui, |ui| {
-                if self.instances.is_empty() {
+                if self.instances.is_empty() && self.bedrock.snap.instances.is_empty() {
                     ui.label(RichText::new("Nothing here yet").size(FS_SECTION).semibold());
                     muted(ui, "Create an instance, or drop a Modrinth modpack (.mrpack) onto this window.");
                 } else {
@@ -647,24 +779,40 @@ impl App {
             });
             return out;
         }
+        let snap = self.bedrock.snap.clone();
         if self.settings.library_view == "list" {
             let size = vec2(LIST_ICON, LIST_ICON);
             let covers: Vec<egui::TextureHandle> = order.iter().map(|&i| self.cover_at(i, size, false)).collect();
-            self.library_rows(ui, &order, &covers, sort, &mut out);
+            let bcovers: Vec<(&crate::bedrock::InstanceStatus, egui::TextureHandle)> = bedrock
+                .iter()
+                .map(|&b| (&snap.instances[b], self.bedrock_cover(&snap.instances[b].instance.id, size)))
+                .collect();
+            self.library_rows(ui, &order, &covers, &bcovers, sort, &mut out);
             return out;
         }
         let size = vec2(LIB_CARD_H * 0.8, LIB_CARD_H - 2.0 * LIB_CARD_PAD);
         let covers: Vec<egui::TextureHandle> = order.iter().map(|&i| self.cover_at(i, size, false)).collect();
+        let bcovers: Vec<egui::TextureHandle> =
+            bedrock.iter().map(|&b| self.bedrock_cover(&snap.instances[b].instance.id, size)).collect();
+        // the Java instances first, then the Bedrock ones, in one grid
+        let items: Vec<(bool, usize)> =
+            (0..order.len()).map(|k| (false, k)).chain((0..bedrock.len()).map(|k| (true, k))).collect();
         ScrollArea::vertical().id_salt("library").auto_shrink(false).show(ui, |ui| {
             // room above the first row for a card that rises
             ui.add_space(4.0);
             let (per_row, width) = grid_columns(ui.available_width(), LIB_CARD_MIN, LIB_CARD_GAP);
             ui.spacing_mut().item_spacing = vec2(LIB_CARD_GAP, LIB_CARD_GAP);
-            for (r, row) in order.chunks(per_row).enumerate() {
+            for row in items.chunks(per_row) {
                 ui.horizontal(|ui| {
-                    for (k, &i) in row.iter().enumerate() {
-                        let cover = &covers[r * per_row + k];
-                        if let Some(a) = self.library_card(ui, &self.instances[i], cover, width, &mut out) {
+                    for &(is_bedrock, k) in row {
+                        if is_bedrock {
+                            let st = &snap.instances[bedrock[k]];
+                            if let Some(a) = self.bedrock_library_card(ui, st, &bcovers[k], width) {
+                                out.bedrock = Some(a);
+                            }
+                        } else if let Some(a) =
+                            self.library_card(ui, &self.instances[order[k]], &covers[k], width, &mut out)
+                        {
                             out.act = Some(a);
                         }
                     }
@@ -780,6 +928,181 @@ impl App {
         act
     }
 
+    /// A Bedrock instance as a card of the Library's grid, like a Java one: its cover, the name, what it plays, how
+    /// it stands, and its main button (Play, or what comes before playing). Opens its page when clicked.
+    fn bedrock_library_card(
+        &self,
+        ui: &mut Ui,
+        st: &crate::bedrock::InstanceStatus,
+        cover: &egui::TextureHandle,
+        width: f32,
+    ) -> Option<BAct> {
+        let id = &st.instance.id;
+        let support = crate::bedrock::support();
+        let job = self.bedrock.job(id);
+        let (slot, resp) = ui.allocate_exact_size(vec2(width, LIB_CARD_H), Sense::click());
+        let hot = ui.rect_contains_pointer(slot);
+        let live = bed::is_live(&st.readiness);
+        let t = motion::hover(ui, resp.id, hot);
+        let rect = slot.translate(vec2(0.0, -2.0 * t));
+        let side = rect.height() - 2.0 * LIB_CARD_PAD;
+        let pic = egui::Rect::from_min_size(
+            rect.min + vec2(LIB_CARD_PAD, LIB_CARD_PAD),
+            vec2((side * 0.86).min(rect.width() * 0.34).round(), side),
+        );
+        if ui.is_rect_visible(slot) {
+            let p = ui.painter();
+            let round = CornerRadius::same(R_CARD);
+            p.add(lifted_shadow(t).as_shape(rect, round));
+            p.rect_filled(rect, round, motion::mix(c_card(), c_raised(), t));
+            let edge = if live { c_accent() } else { motion::mix(c_border(), c_control().gamma_multiply(0.7), t) };
+            p.rect_stroke(rect, round, Stroke::new(1.0, edge), egui::StrokeKind::Inside);
+            glass_edge(p, rect, R_CARD);
+            paint_cover_tex(ui, cover, pic, CornerRadius::same(R_CONTROL + 2));
+        }
+        focus_ring(ui, &resp, rect, R_CARD);
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &st.instance.name));
+        let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+        let inner = egui::Rect::from_min_max(
+            egui::pos2(pic.right() + 16.0, rect.top() + LIB_CARD_PAD + 2.0),
+            rect.right_bottom() - vec2(LIB_CARD_PAD, LIB_CARD_PAD),
+        );
+        let mut text = ui.new_child(UiBuilder::new().max_rect(inner).layout(Layout::top_down(Align::Min)));
+        text.spacing_mut().item_spacing.y = 6.0;
+        text.add(egui::Label::new(RichText::new(&st.instance.name).font(super::fonts::semibold(16.0))).truncate());
+        text.add(egui::Label::new(bedrock_job(st, FS_META)).truncate());
+        let (kind, words) = bed::status_of(&st.readiness, job, support);
+        text.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            if live {
+                live_dot(ui);
+            }
+            ui.add(egui::Label::new(RichText::new(words).size(FS_META).color(status_ink(kind))).truncate());
+        });
+        let mut foot = ui.new_child(
+            UiBuilder::new()
+                .max_rect(egui::Rect::from_min_max(
+                    egui::pos2(inner.left(), inner.bottom() - 32.0),
+                    inner.right_bottom(),
+                ))
+                .layout(Layout::left_to_right(Align::Center)),
+        );
+        foot.spacing_mut().item_spacing.x = 6.0;
+        let mut act = None;
+        match bed::primary_of(&st.readiness, job, support) {
+            bed::Primary::Play | bed::Primary::Stop => {
+                if play_pill(&mut foot, live, hot).clicked() {
+                    act = Some(BAct::Primary(id.clone()));
+                }
+            }
+            bed::Primary::Wait => {
+                spinner_sized(&mut foot, 18.0);
+            }
+            bed::Primary::Unavailable => {}
+            p => {
+                if secondary(&mut foot, p.label()).clicked() {
+                    act = Some(BAct::Primary(id.clone()));
+                }
+            }
+        }
+        if act.is_none() && resp.clicked() {
+            act = Some(BAct::Open(id.clone()));
+        }
+        act
+    }
+
+    /// A Bedrock instance as a row of the Library's list: its cover and name, what it plays where the version and
+    /// the loader are, how it stands, and Play at the end.
+    fn bedrock_row(
+        &self,
+        ui: &mut Ui,
+        st: &crate::bedrock::InstanceStatus,
+        cover: &egui::TextureHandle,
+        cols: &ListColumns,
+        width: f32,
+    ) -> Option<BAct> {
+        let id = &st.instance.id;
+        let support = crate::bedrock::support();
+        let job = self.bedrock.job(id);
+        let (row, resp) = ui.allocate_exact_size(vec2(width, LIST_ROW_H), Sense::click());
+        let hot = ui.rect_contains_pointer(row);
+        let live = bed::is_live(&st.readiness);
+        let t = motion::hover(ui, resp.id, hot);
+        let spans = cols.spans(row.left(), row.right());
+        let thumb = egui::Rect::from_center_size(
+            egui::pos2(spans.icon + LIST_ICON / 2.0, row.center().y),
+            vec2(LIST_ICON, LIST_ICON),
+        );
+        if ui.is_rect_visible(row) {
+            if t > 0.0 {
+                ui.painter().rect_filled(row, CornerRadius::same(R_CONTROL), c_hover().gamma_multiply(t));
+            }
+            if live {
+                let mark =
+                    egui::Rect::from_min_size(egui::pos2(row.left() + 1.0, row.center().y - 10.0), vec2(3.0, 20.0));
+                ui.painter().rect_filled(mark, CornerRadius::same(2), c_accent());
+            }
+            paint_cover_tex(ui, cover, thumb, CornerRadius::same(R_TAG + 1));
+        }
+        focus_ring(ui, &resp, row, R_CONTROL);
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &st.instance.name));
+        let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+        list_cell(ui, row, spans.name, |ui| {
+            let text = RichText::new(&st.instance.name).font(super::fonts::semibold(FS_BODY));
+            ui.add(egui::Label::new(text).truncate());
+        });
+        if let Some(x) = spans.version {
+            list_cell(ui, row, x, |ui| {
+                let v = st
+                    .instance
+                    .installed
+                    .as_ref()
+                    .map(|b| bed::display_version(&b.version))
+                    .unwrap_or_else(|| "\u{2014}".into());
+                ui.add(egui::Label::new(RichText::new(v).font(super::fonts::mono(13.0)).color(c_muted())).truncate());
+            });
+        }
+        if let Some(x) = spans.loader {
+            list_cell(ui, row, x, |ui| {
+                let text = format!("{} {}", bed::TAG, bed::edition_name(bed::edition_of(&st.instance)));
+                let text = RichText::new(text).font(super::fonts::mono(13.0)).color(loader_color(bed::TAG));
+                ui.add(egui::Label::new(text).truncate());
+            });
+        }
+        if let Some(x) = spans.mods {
+            list_cell(ui, row, x, |ui| {
+                ui.label(RichText::new("\u{2014}").font(super::fonts::mono(13.0)).color(c_muted()));
+            });
+        }
+        if let Some(x) = spans.played {
+            list_cell(ui, row, x, |ui| {
+                let (kind, words) = bed::status_of(&st.readiness, job, support);
+                if live {
+                    live_dot(ui);
+                }
+                ui.add(egui::Label::new(RichText::new(words).size(FS_META).color(status_ink(kind))).truncate());
+            });
+        }
+        let mut end = ui.new_child(
+            UiBuilder::new()
+                .max_rect(egui::Rect::from_min_max(
+                    egui::pos2(spans.actions.0, row.top()),
+                    egui::pos2(spans.actions.1, row.bottom()),
+                ))
+                .layout(Layout::left_to_right(Align::Center)),
+        );
+        end.spacing_mut().item_spacing.x = LIST_ACTION_GAP;
+        let mut act = None;
+        let primary = bed::primary_of(&st.readiness, job, support);
+        if matches!(primary, bed::Primary::Play | bed::Primary::Stop) && play_chip(&mut end, live, hot).clicked() {
+            act = Some(BAct::Primary(id.clone()));
+        }
+        if act.is_none() && resp.clicked() {
+            act = Some(BAct::Open(id.clone()));
+        }
+        act
+    }
+
     /// The Library as a list: one panel with a head that names the columns (and sorts by one when it is clicked) and
     /// a row per instance under it. The head stays put while the rows scroll.
     fn library_rows(
@@ -787,6 +1110,7 @@ impl App {
         ui: &mut Ui,
         order: &[usize],
         covers: &[egui::TextureHandle],
+        bedrock: &[(&crate::bedrock::InstanceStatus, egui::TextureHandle)],
         sort: Sort,
         out: &mut LibraryOut,
     ) {
@@ -812,6 +1136,14 @@ impl App {
                         }
                         if let Some(a) = self.instance_row(ui, &self.instances[i], &covers[n], &cols, width, out) {
                             out.act = Some(a);
+                        }
+                    }
+                    for (n, (st, cover)) in bedrock.iter().enumerate() {
+                        if n > 0 || !order.is_empty() {
+                            ui.add_space(2.0);
+                        }
+                        if let Some(a) = self.bedrock_row(ui, st, cover, &cols, width) {
+                            out.bedrock = Some(a);
                         }
                     }
                     ui.add_space(2.0);
@@ -1578,6 +1910,7 @@ fn loader_rank(kind: &str) -> (u8, String) {
         "NeoForge" => 2,
         "Quilt" => 3,
         "Horizon" => 4,
+        "Bedrock" => 8,
         "Vanilla" => 9,
         _ => 5,
     };
@@ -1590,6 +1923,15 @@ fn matches_search(inst: &Instance, q: &str) -> bool {
         || inst.name().to_lowercase().contains(q)
         || inst.mc_version().to_lowercase().contains(q)
         || loader_kind(inst).to_lowercase().contains(q)
+}
+
+/// Whether a Bedrock instance matches the search (already in lower case): its name, its version or "bedrock".
+fn bedrock_matches(st: &crate::bedrock::InstanceStatus, q: &str) -> bool {
+    q.is_empty()
+        || st.instance.name.to_lowercase().contains(q)
+        || st.instance.installed.as_ref().is_some_and(|b| b.version.contains(q))
+        || bed::TAG.to_lowercase().contains(q)
+        || bed::edition_name(bed::edition_of(&st.instance)).to_lowercase().contains(q)
 }
 
 /// The ways the Library can be sorted.
@@ -1721,6 +2063,8 @@ struct LibraryOut {
     clear: bool,
     /// A star was clicked: make this instance (its folder) a favourite, or not.
     favorite: Option<(String, bool)>,
+    /// What a Bedrock instance's card asked for.
+    bedrock: Option<BAct>,
 }
 
 /// The filter chips in a row; the chosen one is lit, and choosing it again goes back to All. Returns how wide the
@@ -2183,7 +2527,38 @@ const OVERVIEW_SPLIT: f32 = 860.0;
 
 /// Two columns side by side, both starting at the same height: the left one `left_w` wide, the right one what is left
 /// after `gap`. The page goes on under the taller of the two. What both columns change (`state`) is handed to each.
-fn two_columns<S, L, R>(ui: &mut Ui, left_w: f32, gap: f32, state: &mut S, left: L, right: R)
+/// How Home's row of `cols` tiles is shared between `java` and `bedrock` instances: Bedrock gets a third of the row
+/// (at least one tile) when there are Java instances too, and any room the other leaves.
+fn home_split(cols: usize, java: usize, bedrock: usize) -> (usize, usize) {
+    let b = bedrock.min(if java == 0 { cols } else { (cols / 3).max(1) });
+    let j = java.min(cols - b.min(cols));
+    (j, bedrock.min(cols - j))
+}
+
+/// "1.26.5004.0 · Bedrock" (or "Preview · Bedrock" before it is installed) in the monospace face, Bedrock in its
+/// colour.
+fn bedrock_job(st: &crate::bedrock::InstanceStatus, size: f32) -> egui::text::LayoutJob {
+    let mut job = egui::text::LayoutJob::default();
+    let font = super::fonts::mono(size);
+    let first = match &st.instance.installed {
+        Some(b) => bed::display_version(&b.version),
+        None => bed::edition_name(bed::edition_of(&st.instance)).to_string(),
+    };
+    job.append(&first, 0.0, egui::TextFormat::simple(font.clone(), c_muted()));
+    job.append(" \u{00B7} ", 0.0, egui::TextFormat::simple(font.clone(), c_faint()));
+    job.append(bed::TAG, 0.0, egui::TextFormat::simple(font, loader_color(bed::TAG)));
+    job
+}
+
+/// The colour of a status in small words on a card: calm for good news, the status colour otherwise.
+fn status_ink(kind: Status) -> Color32 {
+    match kind {
+        Status::Good => c_faint(),
+        other => other.color(),
+    }
+}
+
+pub(super) fn two_columns<S, L, R>(ui: &mut Ui, left_w: f32, gap: f32, state: &mut S, left: L, right: R)
 where
     L: FnOnce(&mut Ui, &mut S),
     R: FnOnce(&mut Ui, &mut S),
@@ -2237,7 +2612,7 @@ const INSTANCE_COLUMN: f32 = 1040.0;
 pub(super) const FORM_COLUMN: f32 = INSTANCE_COLUMN;
 
 /// The panel the log is read in: a well a step below the page, so the lines sit in it rather than on a card.
-fn log_panel(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
+pub(super) fn log_panel(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
     let well = if is_dark() { motion::mix(c_bg(), c_card(), 0.55) } else { c_field() };
     let out = egui::Frame::new()
         .fill(well)

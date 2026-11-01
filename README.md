@@ -97,6 +97,31 @@ Horizon is made by the Horizon project and its contributors and shared under the
 ([source on GitHub](https://github.com/horizon-rust/horizon)). It is an unofficial fan project, not affiliated with
 Mojang or Microsoft. BlockForge only downloads and starts it.
 
+## Minecraft: Bedrock Edition
+
+New instance also offers **Minecraft: Bedrock Edition**, the version that plays with friends on phones, consoles and
+other computers. It is your own copy of Minecraft for Windows: you need to have bought it on a Microsoft account (a
+console or phone copy doesn't count). Choose Release or Preview; each keeps its own worlds.
+
+- **Linux (experimental):** BlockForge downloads your copy from the Microsoft Store with your licence and plays it in
+  a Windows compatibility engine, all from BlockForge itself, without Python or another launcher. It needs two sign-ins,
+  which can be different accounts: the Microsoft Store account that owns the game, to download it, and Xbox, to play
+  online (Xbox shows a code to type at microsoft.com/link). The first download is about 2 GB for the game and about
+  1 GB for the engine. Each instance has its own game profile, so its worlds are its own; everything lives in the
+  `bedrock` folder of BlockForge's data folder, and other Bedrock launchers are left alone.
+- **Windows:** the game is native, so BlockForge finds Minecraft for Windows (or Preview) installed for your Windows
+  user, starts it, opens its Microsoft Store page when it isn't installed, and backs up its worlds from
+  `%APPDATA%\Minecraft Bedrock`. Windows and the game sign you in.
+- **macOS:** not available yet.
+
+The instance's page shows how it stands, both sign-ins with Sign in and Sign out, Download, Play and Stop, Repair and
+Diagnose, the game's log and its worlds folder. The Library and Home show Bedrock instances with a Bedrock tag.
+
+BlockForge plays Bedrock Edition the way [BedrockOnLinux](https://github.com/Wyze3306/BedrockOnLinux) does (by Wyze3306
+and its contributors, MIT licence), ported to Rust, and downloads your own copy from the Microsoft Store with the
+[Xodus](https://github.com/xodus-gaming/xodus) libraries (GPL-3.0). Neither project, nor BlockForge, is affiliated with
+Mojang or Microsoft, and BlockForge never includes or shares the game's files.
+
 ## Screenshots
 
 <table>
@@ -300,3 +325,9 @@ not affiliated with or endorsed by Hive Games.
 project and its contributors and shared under the MIT licence. BlockForge doesn't include it; it downloads Horizon's own
 signed releases. Horizon is an unofficial fan project, not affiliated with Mojang or Microsoft, and BlockForge is not
 affiliated with the Horizon project.
+
+Bedrock Edition support follows [BedrockOnLinux](https://github.com/Wyze3306/BedrockOnLinux) by Wyze3306 and its
+contributors (MIT licence): the parts of it BlockForge ports to Rust say so in their header and keep its copyright
+notice. It uses the [Xodus](https://github.com/xodus-gaming/xodus) libraries (GPL-3.0) to download the player's own copy
+of the game from the Microsoft Store. The game itself is never included: it comes from Microsoft with the player's
+licence.

@@ -1,5 +1,6 @@
-//! The two games an instance can play: Minecraft: Java Edition, and Horizon, Minecraft rewritten in Rust by the
-//! Horizon project (see `crate::horizon`). What differs between them in the window is here: how an instance's game is
+//! The games an instance can play: Minecraft: Java Edition, Horizon, Minecraft rewritten in Rust by the Horizon
+//! project (see `crate::horizon`), and Bedrock Edition, whose instances are the Bedrock backend's own (see `bedrock`
+//! and `crate::bedrock`). What differs between them in the window is here: how an instance's game is
 //! named where its loader would be, what of BlockForge applies to a Horizon instance, the credit shown wherever Horizon
 //! is offered, and the one start both games go through, so the log, Stop, the play time and the end are the same.
 
@@ -72,6 +73,8 @@ pub enum Edition {
     #[default]
     Java,
     Horizon,
+    /// Minecraft: Bedrock Edition, the player's own copy of Minecraft for Windows (see `crate::bedrock`).
+    Bedrock,
 }
 
 /// What Explore (or a dropped file, or Add from GitHub) can put into an instance: the same kinds the command line

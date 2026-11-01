@@ -560,6 +560,8 @@ pub fn loader_color(name: &str) -> Color32 {
         "NeoForge" => ((0xF0, 0x9A, 0x4F), (0x9A, 0x4E, 0x0E)),
         // Horizon, the Rust rewrite, plays where a loader would be: a sunset rose
         "Horizon" => ((0xF2, 0x8B, 0xA8), (0xA8, 0x2E, 0x58)),
+        // Bedrock Edition, played where a loader would be named: a grass green
+        "Bedrock" => ((0x9B, 0xD3, 0x6A), (0x3F, 0x7A, 0x1E)),
         _ => return c_muted(),
     };
     let (r, g, b) = if dark { d } else { l };

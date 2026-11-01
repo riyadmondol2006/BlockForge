@@ -32,7 +32,7 @@ impl Section {
     pub fn of(page: Page) -> Section {
         match page {
             Page::Home => Section::Home,
-            Page::Library | Page::Instance | Page::Create => Section::Library,
+            Page::Library | Page::Instance | Page::Create | Page::Bedrock => Section::Library,
             Page::Discover | Page::Packs | Page::Ftb => Section::Explore,
             Page::Craft => Section::Workshop,
             #[cfg(feature = "converter")]

@@ -341,6 +341,8 @@ impl App {
                 );
                 // the game BlockForge can download and start besides Minecraft: Java Edition
                 bullet(ui, &format!("{} ({}). {}", crate::horizon::NAME, crate::horizon::TAGLINE, crate::horizon::CREDIT));
+                // where Bedrock Edition's support comes from
+                bullet(ui, &format!("Minecraft: Bedrock Edition. {}", crate::bedrock::CREDIT));
                 #[cfg(feature = "converter")]
                 {
                     bullet(
@@ -368,6 +370,15 @@ impl App {
                 &[
                     ("Horizon website", crate::horizon::WEBSITE.to_string()),
                     ("Horizon on GitHub", crate::horizon::REPOSITORY.to_string()),
+                ],
+            ) {
+                link = Some(url);
+            }
+            if let Some(url) = links(
+                ui,
+                &[
+                    ("BedrockOnLinux on GitHub", crate::bedrock::BOL_REPOSITORY.to_string()),
+                    ("Xodus on GitHub", crate::bedrock::XODUS_REPOSITORY.to_string()),
                 ],
             ) {
                 link = Some(url);

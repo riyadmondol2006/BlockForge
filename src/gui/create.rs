@@ -1,5 +1,6 @@
 //! Create: pick a Minecraft version and a loader, then download it all. Or pick Horizon, the Rust rewrite, which
-//! plays the version it is made for and needs no loader.
+//! plays the version it is made for and needs no loader, or Minecraft: Bedrock Edition, the player's own copy of
+//! Minecraft for Windows, made by the Bedrock backend (see `bedrock`).
 
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender, channel};
@@ -95,9 +96,9 @@ impl Step {
         }
     }
 
-    /// Whether the step is left out for `edition`: Horizon has no loader to choose.
+    /// Whether the step is left out for `edition`: Horizon and Bedrock have no loader to choose.
     fn skipped(self, edition: Edition) -> bool {
-        edition == Edition::Horizon && self == Step::Loader
+        edition != Edition::Java && self == Step::Loader
     }
 
     /// The step after this one for `edition`, if there is one.
@@ -117,7 +118,7 @@ impl Step {
     fn reachable(self, mc: &str, edition: Edition) -> bool {
         match edition {
             Edition::Java => self == Step::Version || !mc.is_empty(),
-            Edition::Horizon => !self.skipped(edition),
+            Edition::Horizon | Edition::Bedrock => !self.skipped(edition),
         }
     }
 }
@@ -781,6 +782,10 @@ impl App {
         let subtitle = match self.create.edition {
             Edition::Java => "Pick a Minecraft version and a mod loader, then BlockForge downloads it all.",
             Edition::Horizon => "Horizon plays the version it is made for. BlockForge gets it ready.",
+            Edition::Bedrock if crate::bedrock::support() == crate::bedrock::Support::Windows => {
+                "Minecraft for Windows from the Microsoft Store, found and started by BlockForge."
+            }
+            Edition::Bedrock => "Your own copy of Minecraft for Windows, downloaded and set up by BlockForge.",
         };
         PageHeader::new("New instance").subtitle(subtitle).show(ui, |ui| {
             // a modpack file or another launcher's instance is made into an instance from the import window
@@ -856,6 +861,15 @@ impl App {
     /// What Create waits for, said when the greyed-out button is pointed at; `None` when it can be pressed.
     fn create_blocker(&self) -> Option<String> {
         let c = &self.create;
+        if c.edition == Edition::Bedrock {
+            return if crate::bedrock::support() == crate::bedrock::Support::Unavailable {
+                Some(crate::bedrock::UNAVAILABLE.to_string())
+            } else if self.create_running() {
+                Some("The instance is being made. Its progress is in the sidebar".to_string())
+            } else {
+                None
+            };
+        }
         if c.edition == Edition::Horizon {
             // its version is its own, and it has no loader to wait for
             return if !horizon::supported() {
@@ -884,7 +898,7 @@ impl App {
     fn step_blocker(&self) -> Option<String> {
         let c = &self.create;
         match c.step {
-            Step::Version if c.edition == Edition::Horizon => self.create_blocker().filter(|_| !self.create_running()),
+            Step::Version if c.edition != Edition::Java => self.create_blocker().filter(|_| !self.create_running()),
             Step::Version if c.mc.is_empty() => Some("Pick a Minecraft version first".to_string()),
             Step::Version => None,
             Step::Loader => self.create_blocker().filter(|_| !self.create_running()),
@@ -920,6 +934,14 @@ impl App {
     fn version_step(&mut self, ui: &mut Ui, width: f32, changed_version: &mut bool) {
         self.edition_choice(ui, width);
         ui.add_space(14.0);
+        if self.create.edition == Edition::Bedrock {
+            ScrollArea::vertical().id_salt("create-bedrock").auto_shrink([false, false]).show(ui, |ui| {
+                ui.set_max_width(ui.available_width() - 14.0);
+                self.bedrock_step(ui);
+                ui.add_space(8.0);
+            });
+            return;
+        }
         if self.create.edition == Edition::Horizon {
             ScrollArea::vertical().id_salt("create-horizon").auto_shrink([false, false]).show(ui, |ui| {
                 ui.set_max_width(ui.available_width() - 14.0);
@@ -1058,44 +1080,70 @@ impl App {
         }
     }
 
-    /// The game a new instance plays, as two cards side by side: Mojang's, and Horizon (greyed out where it has no
-    /// build for this computer).
+    /// The game a new instance plays, as three cards side by side: Mojang's Java Edition, Horizon (greyed out where it
+    /// has no build for this computer) and Bedrock Edition (greyed out where BlockForge can't play it yet). On a narrow
+    /// page the cards keep only their names; what they are is said when one is pointed at.
     fn edition_choice(&mut self, ui: &mut Ui, width: f32) {
         const GAP: f32 = 10.0;
-        let w = ((width - 14.0 - GAP) / 2.0).floor().max(120.0);
+        let w = ((width - 14.0 - 2.0 * GAP) / 3.0).floor().max(90.0);
         let supported = horizon::supported();
+        let bedrock = crate::bedrock::support();
+        let bedrock_ok = bedrock != crate::bedrock::Support::Unavailable;
         let mc = self.horizon_minecraft();
         let on = self.create.edition;
         let mut picked = None;
-        // shorter words on narrow cards, so nothing is cut
-        let narrow = w < EDITION_ROOMY;
+        // shorter words on narrow cards, and only the names on the narrowest, so nothing is cut
+        let size = if w >= EDITION_ROOMY {
+            CardSize::Roomy
+        } else if w >= EDITION_COMPACT {
+            CardSize::Narrow
+        } else {
+            CardSize::Compact
+        };
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = GAP;
-            let (title, line) = if narrow {
-                ("Java Edition", "Every version, mods")
-            } else {
-                ("Minecraft: Java Edition", "Every version, with mod loaders")
+            let (title, line) = match size {
+                CardSize::Roomy => ("Minecraft: Java Edition", "Every version, with mod loaders"),
+                CardSize::Narrow => ("Java Edition", "Every version, mods"),
+                CardSize::Compact => ("Java", ""),
             };
-            let java = edition_card(ui, title, line, false, on == Edition::Java, true, w)
+            let java = edition_card(ui, title, line, None, on == Edition::Java, true, w)
                 .on_hover_text("Minecraft: Java Edition, Mojang's game: every version, with mod loaders");
             if java.clicked() {
                 picked = Some(Edition::Java);
             }
             // what it is in full when pointed at; on the card, the version it plays
             let (line, hint) = if supported {
-                let line = if narrow {
-                    format!("Plays Minecraft {mc}")
-                } else {
-                    format!("Experimental \u{00B7} plays Minecraft {mc}")
+                let line = match size {
+                    CardSize::Roomy => format!("Experimental \u{00B7} plays Minecraft {mc}"),
+                    CardSize::Narrow => format!("Plays Minecraft {mc}"),
+                    CardSize::Compact => String::new(),
                 };
                 (line, format!("{}, plays Minecraft {mc}", horizon::TAGLINE))
             } else {
-                (NO_HORIZON_BUILD.to_string(), NO_HORIZON_BUILD.to_string())
+                let line = if size == CardSize::Compact { String::new() } else { NO_HORIZON_BUILD.to_string() };
+                (line, NO_HORIZON_BUILD.to_string())
             };
-            let hz = edition_card(ui, horizon::NAME, &line, true, on == Edition::Horizon, supported, w);
+            let hz_tag = (size == CardSize::Roomy).then(|| ("Rust rewrite", loader_color(horizon::NAME)));
+            let hz = edition_card(ui, horizon::NAME, &line, hz_tag, on == Edition::Horizon, supported, w);
             let hz = hz.on_hover_text(hint);
             if hz.clicked() && supported {
                 picked = Some(Edition::Horizon);
+            }
+            let (title, line, hint) = match (bedrock, size) {
+                (crate::bedrock::Support::Unavailable, CardSize::Compact) => {
+                    ("Bedrock", "", crate::bedrock::UNAVAILABLE)
+                }
+                (crate::bedrock::Support::Unavailable, _) => {
+                    ("Bedrock Edition", "Not on macOS yet", crate::bedrock::UNAVAILABLE)
+                }
+                (_, CardSize::Roomy) => ("Minecraft: Bedrock Edition", "Your own copy, from the Store", BEDROCK_HINT),
+                (_, CardSize::Narrow) => ("Bedrock Edition", "Your own copy", BEDROCK_HINT),
+                (_, CardSize::Compact) => ("Bedrock", "", BEDROCK_HINT),
+            };
+            let bd = edition_card(ui, title, line, None, on == Edition::Bedrock, bedrock_ok, w).on_hover_text(hint);
+            if bd.clicked() && bedrock_ok {
+                picked = Some(Edition::Bedrock);
             }
         });
         if let Some(e) = picked.filter(|e| *e != on) {
@@ -1103,6 +1151,88 @@ impl App {
             if self.create.step.skipped(e) {
                 self.create.step = Step::Version;
             }
+        }
+    }
+
+    /// Bedrock Edition chosen on the first step: what it is, what it needs (a copy of Minecraft for Windows, two
+    /// sign-ins, room on the disk), Release or Preview, and whose approach and libraries it uses.
+    fn bedrock_step(&mut self, ui: &mut Ui) {
+        use crate::bedrock::{Edition as Channel, Support};
+        let support = crate::bedrock::support();
+        let mut link = None;
+        let mut channel = self.bedrock.channel;
+        card(ui, |ui| {
+            ui.spacing_mut().item_spacing.y = 6.0;
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                ui.label(RichText::new("Minecraft: Bedrock Edition").size(FS_FIGURE).semibold());
+                super::bedrock::tags(ui);
+            });
+            let about = match support {
+                Support::Windows => {
+                    "Minecraft for Windows, Mojang's Bedrock Edition, played as it is: BlockForge finds it, starts it \
+                     and backs up its worlds. It plays with friends on phones, consoles and other computers."
+                }
+                _ => {
+                    "Mojang's Bedrock Edition: your own copy of Minecraft for Windows, played on Linux in a Windows \
+                     compatibility engine. It plays with friends on phones, consoles and other computers."
+                }
+            };
+            ui.add(egui::Label::new(RichText::new(about).color(c_muted())).wrap());
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 12.0;
+                ui.label(RichText::new("Plays").semibold());
+                let on = if channel == Channel::Release { 0 } else { 1 };
+                if let Some(i) = segmented(ui, &["Release", "Preview"], on) {
+                    channel = if i == 0 { Channel::Release } else { Channel::Preview };
+                }
+            });
+            let which = if channel == Channel::Release {
+                "Release: the game everyone plays, updated by Mojang every few weeks."
+            } else {
+                "Preview: what comes next, for players who own the game. It keeps its own worlds, apart from Release's."
+            };
+            small_muted(ui, which);
+            ui.add_space(4.0);
+            rule(ui);
+            ui.add_space(6.0);
+            ui.label(RichText::new("What it needs").semibold());
+            fact_line(
+                ui,
+                Icon::Cube,
+                "Minecraft for Windows (Bedrock Edition) bought on a Microsoft account. A copy for a console or a \
+                 phone doesn't count.",
+            );
+            if support == Support::Windows {
+                fact_line(
+                    ui,
+                    Icon::Download,
+                    "Installed from the Microsoft Store: BlockForge opens its page when it isn't there yet. Windows \
+                     signs you in, and in the game you sign in with Xbox to play online.",
+                );
+            } else {
+                fact_line(
+                    ui,
+                    Icon::User,
+                    "Two sign-ins, which can be different accounts: the Microsoft Store account that owns the game, \
+                     to download it, and Xbox, to play online. BlockForge never sees your password.",
+                );
+                fact_line(
+                    ui,
+                    Icon::Download,
+                    "About 2 GB for the game and about 1 GB for the compatibility engine, the first time. Your Java \
+                     instances, and any other Bedrock launcher, are left as they are.",
+                );
+            }
+            ui.add_space(6.0);
+            rule(ui);
+            ui.add_space(6.0);
+            link = super::bedrock::credit(ui);
+        });
+        self.bedrock.channel = channel;
+        if let Some(url) = link {
+            self.open_link(&url);
         }
     }
 
@@ -1280,7 +1410,12 @@ impl App {
     /// Step 3: what matters to how the game runs first (the name, the memory, the performance mods, in one card),
     /// then the look (the cover, with its gallery a click away, and the picture), and a description.
     fn configure_step(&mut self, ui: &mut Ui, enter: &mut bool) {
-        step_title(ui, "Configure", "Everything here can be changed later in the instance's settings.");
+        let line = if self.create.edition == Edition::Bedrock {
+            "Give it a name. The game and your sign-ins are set up on its page once it is made."
+        } else {
+            "Everything here can be changed later in the instance's settings."
+        };
+        step_title(ui, "Configure", line);
         ui.spacing_mut().item_spacing.y = 8.0;
         card(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 8.0;
@@ -1308,6 +1443,11 @@ impl App {
                 *enter = name_field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
             });
             rule(ui);
+            if self.create.edition == Edition::Bedrock {
+                let plays = super::bedrock::edition_name(self.bedrock.channel);
+                small_muted(ui, format!("It plays the newest {plays} build the Microsoft Store has."));
+                return;
+            }
             if self.create.edition == Edition::Horizon {
                 // Horizon isn't Java: no performance mods, and its memory budget is set in its settings later
                 small_muted(
@@ -1331,6 +1471,10 @@ impl App {
                 });
             }
         });
+        // a Bedrock instance's cover, picture and description aren't kept (yet): it has the name only
+        if self.create.edition == Edition::Bedrock {
+            return;
+        }
         card(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 10.0;
             self.cover_row(ui);
@@ -1426,6 +1570,9 @@ impl App {
         if c.edition == Edition::Horizon {
             return (self.create_name(), self.horizon_minecraft(), Some(horizon::NAME));
         }
+        if c.edition == Edition::Bedrock {
+            return (self.create_name(), "1.21".to_string(), Some(super::bedrock::TAG));
+        }
         let loader = (c.loader != Loader::Vanilla).then(|| c.loader.label());
         (self.create_name(), c.mc.clone(), loader)
     }
@@ -1448,6 +1595,11 @@ impl App {
         let c = &self.create;
         if c.edition == Edition::Horizon {
             horizon::NAME.to_string()
+        } else if c.edition == Edition::Bedrock {
+            match self.bedrock.channel {
+                crate::bedrock::Edition::Release => "Bedrock".to_string(),
+                crate::bedrock::Edition::Preview => "Bedrock Preview".to_string(),
+            }
         } else if c.mc.is_empty() {
             "My instance".to_string()
         } else {
@@ -1626,9 +1778,12 @@ impl App {
             ui.add(egui::Label::new(RichText::new(&name).font(super::fonts::semibold(FS_BODY + 1.0))).wrap());
             let c = &self.create;
             let horizon = c.edition == Edition::Horizon;
+            let bedrock = c.edition == Edition::Bedrock;
+            let channel = super::bedrock::edition_name(self.bedrock.channel);
             let latest = self.manifest.as_ref().and_then(|m| m.latest.get("release")).is_some_and(|l| *l == c.mc);
             let line = match (c.mc.is_empty(), latest) {
                 _ if horizon => format!("{} \u{00B7} Minecraft {mc}", horizon::NAME),
+                _ if bedrock => format!("Bedrock Edition \u{00B7} {channel}"),
                 (true, _) => "No version picked yet".to_string(),
                 (false, true) => format!("Minecraft {} \u{00B7} Latest release", c.mc),
                 (false, false) => format!("Minecraft {}", c.mc),
@@ -1644,7 +1799,24 @@ impl App {
             };
             let taken: Vec<&str> = self.instances.iter().map(|i| i.folder.as_str()).collect();
             let folder = preview_folder(&name, &taken);
-            let mut rows: Vec<(&str, String, bool)> = if horizon {
+            let mut rows: Vec<(&str, String, bool)> = if bedrock {
+                let windows = crate::bedrock::support() == crate::bedrock::Support::Windows;
+                let shared = self
+                    .bedrock
+                    .snap
+                    .accounts
+                    .iter()
+                    .any(|a| matches!(a.target, crate::bedrock::AccountTarget::Store(_)));
+                let mut rows = vec![("Edition", "Bedrock".to_string(), false), ("Plays", channel.to_string(), false)];
+                if windows {
+                    rows.push(("Installed by", "Microsoft Store".to_string(), false));
+                } else {
+                    let store = if shared { "Shared" } else { "New" };
+                    rows.push(("Store sign-in", store.to_string(), false));
+                    rows.push(("Download", "~3 GB".to_string(), true));
+                }
+                rows
+            } else if horizon {
                 let build = self.horizon_tag().map(str::to_string).unwrap_or_else(|| "Newest".into());
                 vec![
                     ("Edition", horizon::NAME.to_string(), false),
@@ -1660,7 +1832,7 @@ impl App {
                     ("Memory", memory_summary(&c.extras), false),
                 ]
             };
-            if !horizon && performance::offered_for(c.loader.modrinth_name()) {
+            if !horizon && !bedrock && performance::offered_for(c.loader.modrinth_name()) {
                 rows.push(("Performance mods", if c.performance { "Added" } else { "None" }.to_string(), false));
             }
             for (key, value, mono) in rows {
@@ -1728,6 +1900,9 @@ impl App {
         let (name, mc, loader) = self.create_identity();
         let summary = match self.create.edition {
             Edition::Horizon => format!("{} \u{00B7} Minecraft {mc}", horizon::NAME),
+            Edition::Bedrock => {
+                format!("Bedrock Edition \u{00B7} {}", super::bedrock::edition_name(self.bedrock.channel))
+            }
             Edition::Java => summary(&self.create),
         };
         let spec = CoverSpec::new(&self.create_cover_key(&name), &mc, loader, self.create.extras.cover);
@@ -1795,6 +1970,32 @@ impl App {
         }
     }
 
+    /// The screenshot tour's New instance with Bedrock Edition chosen, on `step`.
+    pub(super) fn shot_create_bedrock(&mut self, step: Step) {
+        self.page = Page::Create;
+        let c = &mut self.create;
+        c.edition = Edition::Bedrock;
+        c.step = step;
+        if step == Step::Configure {
+            c.name = "Bedrock survival".into();
+        }
+    }
+
+    /// Make a Bedrock instance as the form says: the backend writes it, then its page opens, where the game is
+    /// downloaded and the sign-ins are made.
+    fn start_create_bedrock(&mut self) {
+        let wanted = self.create_name();
+        let channel = self.bedrock.channel;
+        self.bedrock_create(&wanted, channel);
+        self.create.task_label = self.bedrock.creating.clone();
+        let c = &mut self.create;
+        c.name.clear();
+        c.step = Step::Version;
+        c.extras = Extras::default();
+        c.picture_preview = None;
+        c.picture_error = None;
+    }
+
     /// Make a Horizon instance as the form says: Horizon installs it (its build, the Minecraft it prepares from, the
     /// instance), then the form's description, cover and picture go into it.
     fn start_create_horizon(&mut self) {
@@ -1823,6 +2024,10 @@ impl App {
     fn start_create(&mut self) {
         if self.create.edition == Edition::Horizon {
             self.start_create_horizon();
+            return;
+        }
+        if self.create.edition == Edition::Bedrock {
+            self.start_create_bedrock();
             return;
         }
         let c = &self.create;
@@ -1904,21 +2109,37 @@ const HORIZON_DOESNT: [&str; 2] = [
 /// How tall a card of the choice of game is, and from what width it has room for the long words.
 const EDITION_H: f32 = 64.0;
 const EDITION_ROOMY: f32 = 270.0;
+/// Below this a card has room for its name only, on one line.
+const EDITION_COMPACT: f32 = 176.0;
+const EDITION_COMPACT_H: f32 = 48.0;
+
+/// How much an edition's card says, by its width.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CardSize {
+    Roomy,
+    Narrow,
+    Compact,
+}
+
+/// What Bedrock's card says when pointed at.
+const BEDROCK_HINT: &str =
+    "Minecraft: Bedrock Edition: your own copy of Minecraft for Windows, from the Microsoft Store";
 
 /// A game to make an instance of, chosen the way a radio button is (like a loader's row): a ring that fills in the
-/// brand gradient, the name with Horizon's label after it (`horizon`), and a line under it. Greyed out and not
-/// pressable when not `enabled`.
+/// brand gradient, the name with a label after it (`tag`, Horizon's "Rust rewrite"), and a line under it. With no line
+/// the card is lower and has the name alone. Greyed out and not pressable when not `enabled`.
 fn edition_card(
     ui: &mut Ui,
     title: &str,
     line: &str,
-    horizon: bool,
+    tag: Option<(&str, Color32)>,
     selected: bool,
     enabled: bool,
     width: f32,
 ) -> egui::Response {
     let sense = if enabled { egui::Sense::click() } else { egui::Sense::hover() };
-    let (rect, resp) = ui.allocate_exact_size(vec2(width, EDITION_H), sense);
+    let height = if line.is_empty() { EDITION_COMPACT_H } else { EDITION_H };
+    let (rect, resp) = ui.allocate_exact_size(vec2(width, height), sense);
     if ui.is_rect_visible(rect) {
         let t = motion::hover(ui, resp.id, enabled && resp.hovered());
         let s = motion::toward(ui.ctx(), resp.id.with("on"), selected, motion::MEDIUM);
@@ -1927,7 +2148,9 @@ fn edition_card(
         let edge =
             motion::mix(motion::mix(c_border(), c_control().gamma_multiply(0.7), t), c_accent().gamma_multiply(0.8), s);
         p.rect(rect, CornerRadius::same(R_CARD), fill, Stroke::new(1.0, edge), egui::StrokeKind::Inside);
-        let ring = egui::Rect::from_center_size(egui::pos2(rect.left() + 26.0, rect.center().y), vec2(20.0, 20.0));
+        let compact = line.is_empty();
+        let ring_x = if compact { 22.0 } else { 26.0 };
+        let ring = egui::Rect::from_center_size(egui::pos2(rect.left() + ring_x, rect.center().y), vec2(20.0, 20.0));
         let ring_ink = if enabled { c_control() } else { c_border() };
         p.rect_stroke(
             ring,
@@ -1939,7 +2162,7 @@ fn edition_card(
             motion::gradient_rect(p, ring, 10, c_accent().gamma_multiply(s), c_accent2().gamma_multiply(s));
             super::discover::paint_check(p, ring.center(), 10.0, c_on_accent().gamma_multiply(s));
         }
-        let left = rect.left() + 50.0;
+        let left = rect.left() + if compact { 42.0 } else { 50.0 };
         let room = rect.right() - left - 12.0;
         let (ink, sub) = if enabled { (c_text(), c_muted()) } else { (c_faint(), c_faint()) };
         let mut job = egui::text::LayoutJob::single_section(
@@ -1948,13 +2171,13 @@ fn edition_card(
         );
         job.wrap = egui::text::TextWrapping::truncate_at_width(room);
         let name = p.layout_job(job);
-        let name_y = rect.center().y - 19.0;
+        let name_y = if compact { rect.center().y - name.size().y / 2.0 } else { rect.center().y - 19.0 };
         let name_w = name.size().x;
         p.galley(egui::pos2(left, name_y), name, ink);
-        if horizon {
+        if let Some((text, color)) = tag {
             // what it is, on a label after the name when there is room for it
-            let color = if enabled { loader_color(horizon::NAME) } else { c_faint() };
-            let g = p.layout_no_wrap("Rust rewrite".to_string(), super::fonts::medium(11.5), color);
+            let color = if enabled { color } else { c_faint() };
+            let g = p.layout_no_wrap(text.to_string(), super::fonts::medium(11.5), color);
             let tag =
                 egui::Rect::from_min_size(egui::pos2(left + name_w + 8.0, name_y + 1.0), vec2(g.size().x + 12.0, 19.0));
             if tag.right() <= rect.right() - 12.0 {
@@ -1962,12 +2185,14 @@ fn edition_card(
                 p.galley(tag.center() - g.size() / 2.0, g, color);
             }
         }
-        let mut job = egui::text::LayoutJob::single_section(
-            line.to_string(),
-            egui::TextFormat::simple(egui::FontId::proportional(FS_META), sub),
-        );
-        job.wrap = egui::text::TextWrapping::truncate_at_width(room);
-        p.galley(egui::pos2(left, rect.center().y + 4.0), p.layout_job(job), sub);
+        if !compact {
+            let mut job = egui::text::LayoutJob::single_section(
+                line.to_string(),
+                egui::TextFormat::simple(egui::FontId::proportional(FS_META), sub),
+            );
+            job.wrap = egui::text::TextWrapping::truncate_at_width(room);
+            p.galley(egui::pos2(left, rect.center().y + 4.0), p.layout_job(job), sub);
+        }
     }
     focus_ring(ui, &resp, rect, R_CARD);
     resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::RadioButton, enabled, selected, title));
@@ -2209,6 +2434,10 @@ mod tests {
         assert!(Step::Version.reachable("", hz) && Step::Configure.reachable("", hz));
         assert!(!Step::Loader.reachable("", hz) && !Step::Loader.reachable("1.21.1", hz));
         assert_eq!(CreateState::default().edition, Edition::Java);
+        // nor has Bedrock: it plays the build the Store has
+        let bd = Edition::Bedrock;
+        assert_eq!(Step::Version.next(bd), Some(Step::Configure));
+        assert!(Step::Loader.skipped(bd) && Step::Configure.reachable("", bd));
     }
 
     #[test]
