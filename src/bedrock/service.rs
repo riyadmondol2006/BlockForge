@@ -332,6 +332,8 @@ struct State {
     /// How to stop a game this process found already running (a closed window's), by instance. The window holds the
     /// control of the games it started itself.
     adopted: HashMap<InstanceId, SessionControl>,
+    /// The instance whose download holds each Store slot (by the slot's id) while it runs.
+    downloads: HashMap<uuid::Uuid, InstanceId>,
     repair: HashMap<InstanceId, String>,
     jobs: HashSet<JobKey>,
     refreshing: bool,
@@ -368,6 +370,19 @@ impl Shared {
 
     fn notice(&self, instance: Option<InstanceId>, text: impl Into<String>) {
         self.send(Event::Notice { instance, text: text.into() });
+    }
+}
+
+/// Says which instance's download holds a Store slot, until dropped (so Play of another instance of the slot can
+/// name it instead of failing late on the slot's lock).
+struct DownloadMark {
+    shared: Arc<Shared>,
+    store: uuid::Uuid,
+}
+
+impl Drop for DownloadMark {
+    fn drop(&mut self) {
+        self.shared.lock().downloads.remove(&self.store);
     }
 }
 
@@ -584,6 +599,22 @@ impl Service {
             return Err(BedrockError::new(ErrorKind::Busy, "Close the game first."));
         }
         Ok(())
+    }
+
+    /// Why the instance's Store slot can't be used for Play right now, in words for the player: the name of the other
+    /// instance whose download holds it, or the sign-in that does. None when the slot is free.
+    fn store_busy(&self, rec: &InstanceRecord) -> Option<BedrockError> {
+        let s = self.shared.lock();
+        if !s.jobs.contains(&JobKey::Store(rec.store.0)) {
+            return None;
+        }
+        let message = match s.downloads.get(&rec.store.0).and_then(|d| s.instances.iter().find(|i| &i.id == d)) {
+            Some(other) if other.id != rec.id => {
+                format!("Wait for the download of {} to finish: it uses the same Microsoft account.", other.name)
+            }
+            _ => JobKey::Store(rec.store.0).busy().to_string(),
+        };
+        Some(BedrockError::new(ErrorKind::Busy, message))
     }
 
     /// The other BlockForge processes are kept off this instance while the returned lock is held.
@@ -1127,6 +1158,8 @@ impl Service {
         self.writable()?;
         let rec = self.record(&id)?;
         let _guard = self.begin(vec![JobKey::Instance(id.0), JobKey::Store(rec.store.0)])?;
+        self.shared.lock().downloads.insert(rec.store.0, id.clone());
+        let _mark = DownloadMark { shared: self.shared.clone(), store: rec.store.0 };
         self.idle(&id)?;
         let _lock = self.lock_instance(&id).await?;
         let ctx = self.ctx();
@@ -1185,6 +1218,11 @@ impl Service {
             }
             Readiness::UnsupportedPlatform => return Err(unavailable()),
             Readiness::Unknown | Readiness::Ready { .. } => {}
+        }
+        // The Store slot is held by another instance's download or a sign-in: the game would only fail late on the
+        // slot's lock, after minutes of engine and prefix checks.
+        if let Some(e) = self.store_busy(&rec) {
+            return Err(e);
         }
         let build = rec.installed.clone();
         if self.support() == Support::Linux && build.is_none() {
@@ -1508,6 +1546,8 @@ mod tests {
         calls: Mutex<Vec<String>>,
         /// The instance whose game "an earlier window left running": the next refresh finds it once.
         attachable: Mutex<Option<InstanceId>>,
+        /// A download that waits for this before it finishes.
+        install_gate: Mutex<Option<oneshot::Receiver<()>>>,
     }
 
     impl Fake {
@@ -1608,7 +1648,13 @@ mod tests {
                 BuildSelection::Latest(e) => *e,
                 BuildSelection::Installed(b) => b.edition,
             };
-            Box::pin(async move { Ok(BuildId { edition, version: "1.26.60.5".into(), package_id: "pkg".into() }) })
+            let gate = self.0.install_gate.lock().unwrap().take();
+            Box::pin(async move {
+                if let Some(gate) = gate {
+                    let _ = gate.await;
+                }
+                Ok(BuildId { edition, version: "1.26.60.5".into(), package_id: "pkg".into() })
+            })
         }
         fn xbox_sign_in<'a>(&'a self, _: &'a Ctx, p: &'a ProfileId, prompts: Prompts, c: Cancel) -> Job<'a, ()> {
             self.0.calls.lock().unwrap().push("device-code".into());
@@ -1883,6 +1929,68 @@ mod tests {
         drop(held);
         svc.delete_instance(&a.id).await.unwrap();
         assert!(svc.snapshot().instances.is_empty() && !paths.profile(&a.profile).exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Two instances share a Store account while one downloads: Play of the other says so at once, naming the
+    /// download, instead of failing late; it works again when the download is over.
+    #[tokio::test]
+    async fn play_waits_for_the_download_that_holds_its_store_slot() {
+        let fake = Arc::new(Fake::default());
+        let (svc, root) = service("bedrock-play-vs-download", &fake);
+        let a = svc.create_instance(create("First", None)).await.unwrap();
+        let b = svc.create_instance(create("Second World", Some(a.store.clone()))).await.unwrap();
+        let c = svc.create_instance(create("Elsewhere", None)).await.unwrap();
+        svc.refresh(RefreshPolicy::LocalOnly, Cancel::default()).await.unwrap();
+        for i in [&a, &c] {
+            svc.install(i.id.clone(), Progress::new(), Cancel::default()).await.unwrap();
+        }
+        // B's download is under way: it holds the slot's key (the instance's and the slot's) and says whose it is
+        let hold = svc.begin(vec![JobKey::Instance(b.id.0), JobKey::Store(b.store.0)]).unwrap();
+        svc.shared.lock().downloads.insert(b.store.0, b.id.clone());
+        let e = svc.play(a.id.clone(), options(), Progress::new(), Cancel::default()).await.err().unwrap();
+        assert!(matches!(e.kind, ErrorKind::Busy), "{e:?}");
+        assert!(e.message.contains("Wait for the download of Second World to finish"), "{}", e.message);
+        assert_eq!(fake.launches.load(Ordering::SeqCst), 0, "nothing was started");
+        assert!(matches!(readiness_of(&svc, &a.id), Readiness::Ready { .. }), "and nothing is left live");
+        // an instance of another Store account plays meanwhile
+        assert!(svc.play(c.id.clone(), options(), Progress::new(), Cancel::default()).await.is_ok());
+        // a sign-in holding the slot is named as that, not as a download
+        svc.shared.lock().downloads.clear();
+        let e = svc.store_busy(&svc.record(&a.id).unwrap()).unwrap();
+        assert!(e.message.contains("Microsoft Store sign-in is busy"), "{}", e.message);
+        // the download ends: the slot is free
+        drop(hold);
+        assert!(svc.store_busy(&svc.record(&a.id).unwrap()).is_none());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// A real download marks its slot while it runs, frees it when it ends, and meanwhile Play of the instance that
+    /// shares the slot is refused naming it.
+    #[tokio::test]
+    async fn a_running_download_holds_its_slot_against_play() {
+        let fake = Arc::new(Fake::default());
+        let (svc, root) = service("bedrock-download-mark", &fake);
+        let a = svc.create_instance(create("First", None)).await.unwrap();
+        let b = svc.create_instance(create("Second World", Some(a.store.clone()))).await.unwrap();
+        svc.refresh(RefreshPolicy::LocalOnly, Cancel::default()).await.unwrap();
+        svc.install(a.id.clone(), Progress::new(), Cancel::default()).await.unwrap();
+        let (open, gate) = oneshot::channel();
+        *fake.install_gate.lock().unwrap() = Some(gate);
+        let download = {
+            let (svc, id) = (svc.clone(), b.id.clone());
+            tokio::spawn(async move { svc.install(id, Progress::new(), Cancel::default()).await })
+        };
+        while svc.shared.lock().downloads.is_empty() {
+            tokio::task::yield_now().await;
+        }
+        let e = svc.play(a.id.clone(), options(), Progress::new(), Cancel::default()).await.err().unwrap();
+        assert!(matches!(e.kind, ErrorKind::Busy), "{e:?}");
+        assert!(e.message.contains("Wait for the download of Second World to finish"), "{}", e.message);
+        open.send(()).unwrap();
+        download.await.unwrap().unwrap();
+        assert!(svc.shared.lock().downloads.is_empty());
+        assert!(svc.play(a.id.clone(), options(), Progress::new(), Cancel::default()).await.is_ok());
         let _ = std::fs::remove_dir_all(root);
     }
 

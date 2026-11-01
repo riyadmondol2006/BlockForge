@@ -1805,6 +1805,15 @@ mod tests {
     }
 
     #[test]
+    fn a_play_refused_for_a_download_reads_as_that_in_the_window() {
+        let e = BedrockError::new(
+            ErrorKind::Busy,
+            "Wait for the download of Second World to finish: it uses the same Microsoft account.",
+        );
+        assert_eq!(explain(&e), e.message, "said as the backend words it, with nothing added");
+    }
+
+    #[test]
     fn store_versions_read_as_minecraft_versions() {
         assert_eq!(display_version("1.26.5004.0"), "1.26.50.4");
         assert_eq!(display_version("1.21.12001.0"), "1.21.120.1");
