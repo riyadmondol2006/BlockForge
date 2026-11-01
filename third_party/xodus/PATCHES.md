@@ -79,15 +79,47 @@ lookup, the `delegationcompact` arm, the `base64url` closure, the content-key an
 `LicenseKeys { value }` builders). Each patch's own tests are kept and run with
 `cargo test --locked -p msixvc -p xodus`.
 
-## Known limit carried from upstream: no per-page hash check
+## Page verification (BlockForge addition, `msixvc::integrity`)
 
-The package CDN roots the catalogue returns are plain `http://` (for example
-`assets1.xboxlive.com`), and those hosts answer TLS with the CDN's certificate
-(`a248.e.akamai.net`), so the URL is used as given. `XvdFile::extract_file_ex`
-does not compare pages with the XVD hash tree (`data_hashs`; upstream has a
-`TODO` for unencrypted sections), and AES-XTS is not authenticated. What is checked:
-the catalogue (over HTTPS) gives the package size and URL, every range response
-is validated, the XVD content ID must match the edition, and the licence supplies
-the key. Hash-tree verification, ideally up to the signed XVD header, should be
-added once its hash format has been confirmed against a real package; it was not
-guessed here, because a wrong guess would refuse every real download.
+Upstream parses the XVD hash tree but checks no page (`TODO` for unencrypted sections; NTFS-only segments get no
+hashes). BlockForge adds `crates/msixvc/src/integrity.rs` and checks every page:
+
+- `Plan::new(header)` takes a header the caller trusts and lays out the tree; it refuses integrity-disabled,
+  resilient and dynamic XVDs (no Store package uses them; their trees are laid out differently).
+- `VerifyingReader` wraps the sequential upstream that `PrefixCacheFile` reads: the three header pages must equal
+  the trusted header byte for byte, the hash-tree levels (stored top first) are checked from the header's
+  `top_hash_block_hash` down, and every hashed page after them (user data, XVC info with the region table, dynamic
+  header, drive) against its leaf, before it is handed on. A mismatch is final.
+- `HashTree::load` does the same from a kept metadata prefix (staging, Repair).
+- `XvdFile::require_integrity(tree)`; `extract_file`, `mount_mem_fd` and `download_file_http` check every page as
+  stored (ciphertext before decryption) against the tree, refuse without one (`IntegrityError::NoTree`) and refuse a
+  file not starting on a page. `page_hashes` gives every file's leaf hashes, plain ones included.
+  `verify_plaintext_page` re-encrypts a decrypted page with the content key and data unit to check it offline.
+- `integrity::find` finds an `IntegrityError` in an error chain so callers can report a refusal as such.
+- Panics on crafted input became errors: `todo!` for key ids other than 0, `.expect("Unable to seek")`, encrypted
+  regions outside the hashed pages (unchecked subtraction), region tables larger than the XVC info, out-of-range
+  segment indices and hash slices, invalid UTF-16 names, GPT partition bounds, the unreachable block-size `todo!`;
+  the segment metadata buffer is capped at 1 MiB instead of the package's 32-bit length.
+- Feature `synthetic` exposes `integrity::synthetic`, a builder of small synthetic packages (no game bytes or keys)
+  for tests; only BlockForge's dev-dependencies enable it.
+
+The format, confirmed on Minecraft 1.26.6005.0's package (2087206912 bytes, volume flags 0x41, three levels of 1, 18
+and 2980 pages for 506569 hashed pages): `top_hash_block_hash` = SHA-256 of the top level's one page; every lower tree
+page = the first 24 bytes of SHA-256 in its entry in the level above; level-0 entry `i` covers hashed page `i` (from
+the user data on) as stored: in a region with a key id the entry is SHA-256(ciphertext)[..20] followed by the 4-byte
+XTS data unit, elsewhere SHA-256(page)[..24]. Leaves are compared on 20 bytes. Region headers' `hash` field is
+SHA-256(region)[..8] as a little-endian u64 for FS-MD; it is not used.
+
+What anchors the header (BlockForge side, `src/bedrock/store/verify.rs`): the catalogue gives no content hash
+(`FileHash` is empty for every file and `HashOfHashes` null, checked for Release and Preview), the licence's 32-byte
+entry id is SHA-256 of the package family name in UTF-16, not of content, and the header's RSA-PSS signature needs
+Microsoft's retail public key, which is not published (xvdtool knows it only by hash). The CDN hosts have no
+certificate of their own, but the CDN's TLS edge (`https://a248.e.akamai.net`, Akamai's certificate) serves them by
+`Host` over HTTP/1.1, so the header's first three pages are fetched there, must agree with the catalogue (content ID,
+version, build ID, size) and then anchor the tree. The receipt (adapter 2) records the header's SHA-256; adapter-1
+builds are not trusted (no reuse; Play refuses; Repair downloads again).
+
+Residual risk: the header is trusted as Akamai's edge serves it over TLS for Microsoft's hosts, not by Microsoft's
+signature; an attacker able to break that TLS or controlling the CDN could still serve a self-consistent package.
+If the edge stops serving these hosts over HTTPS, installs fail closed with a network error until another anchor is
+added.

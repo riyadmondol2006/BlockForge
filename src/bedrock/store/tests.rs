@@ -262,7 +262,12 @@ async fn cancellation_never_stamps_complete_and_metadata_is_required() {
     let error = download::install(
         &ctx,
         &slot,
-        catalog::Package { build: build.clone(), url: "http://127.0.0.1:1/unused".into(), bytes: 8192 },
+        catalog::Package {
+            build: build.clone(),
+            url: "http://127.0.0.1:1/unused".into(),
+            bytes: 8192,
+            origin: origin("http://127.0.0.1:1", "/unused"),
+        },
         Arc::new(Progress::default()),
         &cancel,
     )
@@ -408,7 +413,7 @@ async fn mid_download_cancel_removes_pending_generation_and_missing_metadata_ref
     let error = download::install(
         &ctx,
         &slot,
-        catalog::Package { build: build.clone(), url, bytes: 16384 },
+        catalog::Package { build: build.clone(), url, bytes: 16384, origin: origin(&server.base, "/slow") },
         Arc::new(Progress::default()),
         &cancel,
     )
@@ -426,6 +431,7 @@ async fn mid_download_cancel_removes_pending_generation_and_missing_metadata_ref
         build: build.clone(),
         content_id: catalog::content_id(Edition::Release).into(),
         files: Default::default(),
+        header_sha256: None,
     };
     std::fs::write(build_root.join("install.json"), serde_json::to_vec(&receipt).unwrap()).unwrap();
     let error = download::load(&ctx, &build).await.err().unwrap();
@@ -656,6 +662,7 @@ async fn recorded_patch_hash_and_length_survive_receipt_reload() {
         build: id.clone(),
         content_id: catalog::content_id(Edition::Release).into(),
         files: [("ui.js".into(), entry)].into(),
+        header_sha256: None,
     };
     std::fs::write(build_root.join("install.json"), serde_json::to_vec(&receipt).unwrap()).unwrap();
     let mut build = download::load(&ctx, &id).await.unwrap();
@@ -707,7 +714,7 @@ async fn an_image_shipped_in_the_clear_is_not_decrypted_and_may_be_patched_on_di
     let build_root = root.join("builds/release/1.2.3.4").join(&id.package_id);
     let content = build_root.join("content");
     std::fs::create_dir_all(&content).unwrap();
-    std::fs::write(content.join(download::METADATA), b"synthetic-metadata-placeholder").unwrap();
+    let header_sha256 = verified_metadata(&content);
     std::fs::write(content.join("Game.exe"), synthetic_pe()).unwrap();
     std::fs::write(content.join("Other.dll"), [0x8c; 0x200]).unwrap();
     let mut files = std::collections::BTreeMap::new();
@@ -723,12 +730,13 @@ async fn an_image_shipped_in_the_clear_is_not_decrypted_and_may_be_patched_on_di
         };
         files.insert(name.to_string(), entry);
     }
-    let receipt = download::Receipt {
+    let mut receipt = download::Receipt {
         schema: 1,
-        adapter: 1,
+        adapter: download::VERIFIED_ADAPTER,
         build: id.clone(),
         content_id: catalog::content_id(Edition::Release).into(),
         files,
+        header_sha256: Some(header_sha256),
     };
     std::fs::write(build_root.join("install.json"), serde_json::to_vec(&receipt).unwrap()).unwrap();
     let mut build = download::load(&ctx, &id).await.unwrap();
@@ -742,8 +750,39 @@ async fn an_image_shipped_in_the_clear_is_not_decrypted_and_may_be_patched_on_di
     drop(build);
     let build = download::load(&ctx, &id).await.unwrap();
     assert_eq!(build.patch_revision("Game.exe"), Some("stack"));
+    assert!(build.verified());
     assert!(build.damaged_files(&Cancel::default()).await.unwrap().is_empty());
+    drop(build);
+    // the kept metadata changed: its hash tree no longer checks out, so Repair fetches the package again
+    let metadata = content.join(download::METADATA);
+    let mut bytes = std::fs::read(&metadata).unwrap();
+    bytes[4 * 4096 + 50] ^= 1; // the user data, in front of the region table
+    std::fs::write(&metadata, &bytes).unwrap();
+    let build = download::load(&ctx, &id).await.unwrap();
+    assert_eq!(build.damaged_files(&Cancel::default()).await.unwrap(), vec![download::METADATA.to_string()]);
+    drop(build);
+    // a build from before downloads were verified: every file counts as damaged, and it doesn't run
+    receipt = serde_json::from_slice(&std::fs::read(build_root.join("install.json")).unwrap()).unwrap();
+    receipt.adapter = 1;
+    receipt.header_sha256 = None;
+    std::fs::write(build_root.join("install.json"), serde_json::to_vec(&receipt).unwrap()).unwrap();
+    let build = download::load(&ctx, &id).await.unwrap();
+    assert!(!build.verified());
+    assert_eq!(build.damaged_files(&Cancel::default()).await.unwrap().len(), 2);
+    assert!(stage::unverified(&build.id).message.contains("Repair"));
     std::fs::remove_dir_all(root).unwrap();
+}
+
+/// Writes a synthetic package's metadata as an installed build keeps it; returns its header's SHA-256.
+fn verified_metadata(content: &Path) -> String {
+    use sha2::{Digest, Sha256};
+    let package = msixvc::integrity::synthetic::package(2, 2, false);
+    std::fs::write(content.join(download::METADATA), &package.bytes).unwrap();
+    hex::encode(Sha256::digest(package.header()))
+}
+
+fn origin(edge: &str, path: &str) -> catalog::Origin {
+    catalog::Origin { edge: edge.into(), hosts: vec!["assets1.xboxlive.com".into()], path: path.into() }
 }
 
 #[test]
@@ -911,7 +950,7 @@ async fn unchanged_files_are_hashed_once_and_changed_ones_refetched() {
     let build_root = root.join("builds/release/1.2.3.4").join(&id.package_id);
     let content = build_root.join("content");
     std::fs::create_dir_all(&content).unwrap();
-    std::fs::write(content.join(download::METADATA), b"synthetic-metadata-placeholder").unwrap();
+    let header_sha256 = verified_metadata(&content);
     let mut entries = std::collections::BTreeMap::new();
     let mut segments = std::collections::HashMap::new();
     for (i, name) in ["kept.bin", "changed.bin", "hashless.bin"].into_iter().enumerate() {
@@ -935,12 +974,13 @@ async fn unchanged_files_are_hashed_once_and_changed_ones_refetched() {
             SegmentFile { offset: i as u64 * 4096, length: 7, data_hashs, keep_encrypted: false },
         );
     }
-    let receipt = download::Receipt {
+    let mut receipt = download::Receipt {
         schema: 1,
-        adapter: 1,
+        adapter: download::VERIFIED_ADAPTER,
         build: id.clone(),
         content_id: catalog::content_id(Edition::Release).into(),
         files: entries,
+        header_sha256: Some(header_sha256),
     };
     std::fs::write(build_root.join("install.json"), serde_json::to_vec(&receipt).unwrap()).unwrap();
     let old = download::load(&ctx, &id).await.unwrap();
@@ -953,6 +993,13 @@ async fn unchanged_files_are_hashed_once_and_changed_ones_refetched() {
         download::reusable_files(Some(&old), &segments, &cancel).await.unwrap_err().kind,
         ErrorKind::Cancelled
     ));
+    drop(old);
+    // files of a build from before downloads were verified are never kept, whatever their hashes say
+    receipt.adapter = 1;
+    receipt.header_sha256 = None;
+    std::fs::write(build_root.join("install.json"), serde_json::to_vec(&receipt).unwrap()).unwrap();
+    let old = download::load(&ctx, &id).await.unwrap();
+    assert!(download::reusable_files(Some(&old), &segments, &Cancel::default()).await.unwrap().is_empty());
     drop(old);
     std::fs::remove_dir_all(root).unwrap();
 }
@@ -975,4 +1022,279 @@ fn a_catalogue_version_is_four_numbers_with_or_without_the_package_id_after_them
     for bad in ["1.26.6005", "1.26.x.0", "1.26.6005.0.not-a-uuid", "", "1..2.3"] {
         assert_eq!(numeric_version(bad), None, "{bad:?}");
     }
+}
+
+/// Installs a synthetic package served as `served` over "http", with `genuine`'s header at the stand-in for the
+/// CDN's TLS edge (none when `edge` is false); returns the error, after checking nothing was installed.
+async fn install_synthetic(served: Vec<u8>, genuine: &[u8], edge: bool) -> BedrockError {
+    let root = scratch("verify-install");
+    let cdn = Server::start().await;
+    let url = cdn.route("/pkg.msixvc", Reply::ok(served).with_ranges());
+    let tls = Server::start().await;
+    if edge {
+        tls.route("/pkg.msixvc", Reply::ok(genuine.to_vec()).with_ranges());
+    }
+    let ctx = Context { root: root.clone(), client: reqwest::Client::new(), auth_helper: PathBuf::from("unused") };
+    let slot = ctx.slot(&StoreId(uuid::Uuid::new_v4())).await.unwrap();
+    // the synthetic header's version and build ID are zero; a package ID without a UUID skips the build-ID check
+    let build = BuildId { edition: Edition::Release, version: "0.0.0.0".into(), package_id: "fixture-build".into() };
+    let package = catalog::Package {
+        build: build.clone(),
+        url,
+        bytes: genuine.len() as u64,
+        origin: origin(&tls.base, "/pkg.msixvc"),
+    };
+    let error = download::install(&ctx, &slot, package, Arc::new(Progress::default()), &Cancel::default())
+        .await
+        .expect_err("a synthetic package never installs");
+    assert!(download::load(&ctx, &build).await.is_err(), "nothing was installed");
+    let parent = root.join("builds/release/0.0.0.0");
+    assert!(std::fs::read_dir(&parent).unwrap().next().is_none(), "no pending generation is left");
+    std::fs::remove_dir_all(root).unwrap();
+    error
+}
+
+#[tokio::test]
+async fn an_install_is_refused_when_what_came_over_http_is_not_the_verified_package() {
+    use msixvc::integrity::synthetic::package;
+    let genuine = package(3, 2, false);
+    let refused =
+        |e: &BedrockError| matches!(e.kind, ErrorKind::Integrity) && e.message.contains("failed verification");
+    let cases = [
+        ("the header", 0x250),
+        ("the signature", 0x10),
+        ("the hash tree", 3 * 4096 + 40),
+        ("the user data", 4 * 4096 + 50),
+        ("the region table's key id", genuine.region_table as usize + 128 + 4),
+        ("the first plain page of the drive", genuine.plain_offset as usize + 10),
+    ];
+    for (what, at) in cases {
+        let mut served = genuine.bytes.clone();
+        served[at] ^= 0x80;
+        let error = install_synthetic(served, &genuine.bytes, true).await;
+        assert!(refused(&error), "{what}: {:?} {}", error.kind, error.message);
+    }
+    // rebuilt whole with its encrypted region declared plain and a tree to match: consistent in itself, but its
+    // header is not the one fetched over HTTPS
+    let forged = package(3, 2, true);
+    let error = install_synthetic(forged.bytes.clone(), &genuine.bytes, true).await;
+    assert!(refused(&error), "{}", error.message);
+    // the genuine package passes and gets as far as its file table, which this synthetic one doesn't have
+    let error = install_synthetic(genuine.bytes.clone(), &genuine.bytes, true).await;
+    assert!(matches!(error.kind, ErrorKind::Integrity) && !refused(&error), "{}", error.message);
+    // without the header over HTTPS nothing is downloaded
+    let error = install_synthetic(genuine.bytes.clone(), &genuine.bytes, false).await;
+    assert!(matches!(error.kind, ErrorKind::Network), "{:?}", error.kind);
+    assert!(error.message.contains("over HTTPS"), "{}", error.message);
+}
+
+#[tokio::test]
+async fn the_https_header_must_be_the_catalogues_package() {
+    use msixvc::integrity::synthetic::package;
+    let p = package(1, 1, false);
+    let header: Box<[u8; msixvc::integrity::HEADER_LEN]> = Box::new(p.header());
+    let build =
+        |version: &str, id: &str| BuildId { edition: Edition::Release, version: version.into(), package_id: id.into() };
+    let at = |build: BuildId, bytes: usize| catalog::Package {
+        build,
+        url: String::new(),
+        bytes: bytes as u64,
+        origin: origin("http://unused", "/unused"),
+    };
+    assert!(verify::plan(&header, &at(build("0.0.0.0", "fixture"), p.bytes.len())).is_ok());
+    let nil = "1.2.3.4.00000000-0000-0000-0000-000000000000";
+    assert!(verify::plan(&header, &at(build("0.0.0.0", nil), p.bytes.len())).is_ok(), "the header's build ID");
+    let other = "0.0.0.0.ea989132-19db-44c9-98a4-949e064552c7";
+    for package in [
+        at(build("1.2.3.4", "fixture"), p.bytes.len()),
+        at(build("0.0.0.0", other), p.bytes.len()),
+        at(build("0.0.0.0", "fixture"), p.bytes.len() + 4096),
+        catalog::Package {
+            build: BuildId { edition: Edition::Preview, ..build("0.0.0.0", "fixture") },
+            ..at(build("0.0.0.0", "fixture"), p.bytes.len())
+        },
+    ] {
+        let error = verify::plan(&header, &package).unwrap_err();
+        assert!(matches!(error.kind, ErrorKind::Integrity), "{}", error.message);
+    }
+}
+
+#[tokio::test]
+async fn the_https_header_is_only_the_packages_first_pages() {
+    use msixvc::integrity::synthetic::package;
+    let p = package(1, 1, false);
+    let server = Server::start().await;
+    let fetch = |path: &'static str, bytes: usize| {
+        let base = server.base.clone();
+        async move {
+            let package = catalog::Package {
+                build: BuildId { edition: Edition::Release, version: "0.0.0.0".into(), package_id: "x".into() },
+                url: String::new(),
+                bytes: bytes as u64,
+                origin: catalog::Origin {
+                    edge: base,
+                    hosts: vec!["assets1.xboxlive.com".into(), "assets2.xboxlive.com".into()],
+                    path: path.into(),
+                },
+            };
+            verify::header(crate::http::http1_client(), &package).await
+        }
+    };
+    server.route("/whole", Reply::ok(p.bytes.clone()).with_ranges());
+    assert_eq!(&fetch("/whole", p.bytes.len()).await.unwrap()[..], &p.bytes[..msixvc::integrity::HEADER_LEN]);
+    // another size than the catalogue's, a server that ignores the range, only the header, nothing
+    assert!(fetch("/whole", p.bytes.len() + 1).await.is_err());
+    server.route("/ignored", Reply::ok(p.bytes.clone()));
+    assert!(fetch("/ignored", p.bytes.len()).await.is_err());
+    server.route("/short", Reply::ok(p.bytes[..4096].to_vec()).with_ranges());
+    assert!(fetch("/short", p.bytes.len()).await.is_err());
+    assert!(matches!(fetch("/missing", p.bytes.len()).await.unwrap_err().kind, ErrorKind::Network));
+}
+
+#[tokio::test]
+async fn the_catalogue_names_every_host_that_serves_the_package_for_its_https_header() {
+    let server = Server::start().await;
+    let package_id = format!("1.2.3.4.{}", uuid::Uuid::new_v4());
+    let content = catalog::content_id(Edition::Release);
+    let relative = format!("{content}/{package_id}/fixture.msixvc");
+    let details = serde_json::json!({
+        "PackageFound":true, "ContentId":content, "VersionId":package_id,
+        "Version":package_id, "UpdatePredownload":false, "AvailabilityDate":"fixture",
+        "PackageFiles":[{"ContentId":content,"VersionId":package_id,"FileName":"fixture.msixvc", "FileSize":8192,
+            "FileHash":"", "KeyBlob":"", "CdnRootPaths":["http://assets1.xboxlive.com/11/root/", "http://assets2.xboxlive.com/11/root/", "http://evil.example/11/root/"],
+            "BackgroundCdnRootPaths":["http://d1.xboxlive.com/11/root/", "http://d2.xboxlive.com/12/other/"],
+            "RelativeUrl":relative,"UpdateType":0,"LicenseUsageType":0,"ModifiedDate":"fixture"}]
+    });
+    server.route(&format!("/GetBasePackage/{content}"), Reply::ok(details.to_string()));
+    let package =
+        catalog::resolve(&reqwest::Client::new(), &server.base, "fixture".into(), Edition::Release).await.unwrap();
+    assert_eq!(package.origin.edge, catalog::TLS_EDGE);
+    assert_eq!(package.origin.hosts, ["assets1.xboxlive.com", "assets2.xboxlive.com", "d1.xboxlive.com"]);
+    assert_eq!(package.origin.path, format!("/11/root/{relative}"));
+}
+
+/// Real data, read only: the installed Release build checks out against its package's hash tree, from the header
+/// fetched over HTTPS. Needs the signed-in Store slot (catalogue and licence, as Play uses them) and the network.
+/// Run with:
+///   BF_BEDROCK_REAL_ROOT=~/.cache/bf-bedrock-run/bedrock BF_BEDROCK_REAL_SLOT=<slot uuid> \
+///   cargo test --locked --lib real_installed_build_checks_out_against_its_hash_tree -- --ignored --nocapture
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "Needs a real installed build, its signed-in Store slot and the network"]
+async fn real_installed_build_checks_out_against_its_hash_tree() {
+    use msixvc::integrity::{HashTree, VerifyingReader};
+    use msixvc::xvd::{SegmentEncryption, XvdFile};
+    use std::time::Instant;
+    let home = PathBuf::from(std::env::var_os("HOME").unwrap());
+    let root = std::env::var_os("BF_BEDROCK_REAL_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".cache/bf-bedrock-run/bedrock"));
+    let slot_id =
+        std::env::var("BF_BEDROCK_REAL_SLOT").unwrap_or_else(|_| "c61d93cf-ebf6-495a-bad5-73a0a1423f6a".into());
+    let ctx =
+        Context { root: root.clone(), client: crate::http::client().clone(), auth_helper: PathBuf::from("unused") };
+    let slot = ctx.slot(&StoreId(uuid::Uuid::parse_str(&slot_id).unwrap())).await.unwrap();
+    let cancel = Cancel::default();
+    let package = catalog::latest(&ctx.client, &slot.tokens, Edition::Release, &cancel).await.unwrap();
+    // the installed build of that version, read only (no lease, nothing written)
+    let build_root = root.join("builds/release").join(&package.build.version).join(&package.build.package_id);
+    let receipt: download::Receipt =
+        serde_json::from_slice(&std::fs::read(build_root.join("install.json")).unwrap()).unwrap();
+    let content = build_root.join("content");
+    let metadata = content.join(download::METADATA);
+    println!("Build {} ({} bytes), {} files", package.build.package_id, package.bytes, receipt.files.len());
+
+    // 1. the header over HTTPS is the one the build kept, and agrees with the catalogue
+    let started = Instant::now();
+    let header = verify::header(crate::http::http1_client(), &package).await.unwrap();
+    let plan = verify::plan(&header, &package).unwrap();
+    let kept = std::fs::read(&metadata).unwrap();
+    assert_eq!(&header[..], &kept[..header.len()], "the kept header is the one served over HTTPS");
+    println!(
+        "HTTPS header from {} hosts: identical to the kept one ({:?})",
+        package.origin.hosts.len(),
+        started.elapsed()
+    );
+
+    // 2. the kept metadata: tree from the header, then every page of it the tree covers
+    let started = Instant::now();
+    let tree = HashTree::load(&mut tokio::io::BufReader::with_capacity(
+        1 << 20,
+        tokio::fs::File::open(&metadata).await.unwrap(),
+    ))
+    .await
+    .unwrap();
+    assert_eq!(tree.header_bytes(), &*header);
+    let tree_time = started.elapsed();
+    let started = Instant::now();
+    let mut pages = 0u64;
+    for (i, page) in kept.chunks_exact(4096).enumerate() {
+        let offset = i as u64 * 4096;
+        if tree.leaf(offset).is_ok() {
+            tree.verify_page(offset, page.try_into().unwrap()).unwrap_or_else(|e| panic!("kept metadata: {e}"));
+            pages += 1;
+        }
+    }
+    println!(
+        "Kept metadata: tree checked in {tree_time:?}; {pages} pages ({} MB) checked in {:?}",
+        (pages * 4096) >> 20,
+        started.elapsed()
+    );
+
+    // 3. every installed file, page by page: as stored where it is plain or kept encrypted, encrypted again with the
+    // licence's key where it was decrypted on disk
+    let mut xvd = XvdFile::parse(tokio::fs::File::open(&metadata).await.unwrap()).await.unwrap();
+    xvd.require_integrity(tree.clone()).unwrap();
+    let key = license::acquire(&ctx.client, &slot, xvd.content_id().to_string(), &cancel).await.unwrap();
+    let started = Instant::now();
+    let (mut checked, mut bytes, mut patched, mut tails) = (0u64, 0u64, Vec::new(), Vec::new());
+    for (name, entry) in &receipt.files {
+        if entry.patch_revision.is_some() {
+            patched.push(name.clone());
+            continue;
+        }
+        let data = std::fs::read(content.join(name)).unwrap();
+        let segment = msixvc::xvd::SegmentFile {
+            offset: entry.offset,
+            length: entry.length,
+            data_hashs: vec![],
+            keep_encrypted: entry.encrypted,
+        };
+        let decrypted = !entry.encrypted && xvd.segment_encryption(&segment) == SegmentEncryption::Encrypted;
+        for (i, chunk) in data.chunks(4096).enumerate() {
+            let mut page = [0u8; 4096];
+            page[..chunk.len()].copy_from_slice(chunk);
+            let offset = entry.offset + i as u64 * 4096;
+            let result =
+                if decrypted { xvd.verify_plaintext_page(offset, &page, key) } else { tree.verify_page(offset, &page) };
+            if let Err(e) = result {
+                // the package's bytes past a file's end are not on disk: a short last page may differ there
+                if chunk.len() < 4096 && (i + 1) * 4096 >= data.len() {
+                    tails.push(name.clone());
+                } else {
+                    panic!("{name}: {e}");
+                }
+            }
+            checked += 1;
+        }
+        bytes += data.len() as u64;
+    }
+    let elapsed = started.elapsed();
+    println!(
+        "Installed files: {checked} pages ({} MB) checked in {elapsed:?} ({:.0} MB/s); patched by fixups and skipped: {patched:?}; short last pages that differ past the file's end: {}",
+        bytes >> 20,
+        (bytes as f64 / 1048576.0) / elapsed.as_secs_f64(),
+        tails.len()
+    );
+    assert!(tails.is_empty(), "short last pages differ: {:?}", &tails[..tails.len().min(10)]);
+
+    // 4. the real package over http, through the streaming check, for its first 64 MiB
+    let started = Instant::now();
+    let http = msixvc::streaming::HttpRead::open(ctx.client.clone(), &package.url, Some(|_, _| {})).await.unwrap();
+    let (mut reader, handle) = VerifyingReader::new(http, plan);
+    let mut sink = vec![0u8; 1 << 20];
+    for _ in 0..64 {
+        tokio::io::AsyncReadExt::read_exact(&mut reader, &mut sink).await.unwrap();
+    }
+    assert!(handle.get().is_some(), "the tree came first and checked out");
+    println!("Streamed 64 MiB of the real package over http through the check in {:?}", started.elapsed());
 }

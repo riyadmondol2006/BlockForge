@@ -53,13 +53,19 @@ pub async fn stage(
     into: Option<&Path>,
     cancel: &Cancel,
 ) -> Result<StagedImages> {
+    if !build.verified() {
+        return Err(unverified(&build.id));
+    }
     let mut metadata = tokio::fs::File::open(build.content.join(download::METADATA))
         .await
         .map_err(|_| err(ErrorKind::Integrity, "Required encrypted MSIXVC metadata is missing"))?;
-    let xvd = XvdFile::parse(&mut metadata).await.map_err(integrity)?;
+    let mut xvd = XvdFile::parse(&mut metadata).await.map_err(verify::package_error)?;
     if xvd.content_id().to_string() != build.receipt.content_id {
         return Err(integrity("Mismatched metadata"));
     }
+    // the images' ciphertext is checked page by page against the tree its download was verified with, as it is
+    // decrypted: a copy changed on disk since is refused, not decrypted into garbage
+    xvd.require_integrity(download::local_tree(&build.content, &build.receipt).await?).map_err(verify::refused)?;
     let key = license::acquire(&ctx.client, slot, xvd.content_id().to_string(), cancel).await?;
     let base = match into {
         Some(dir) => dir.to_path_buf(),
@@ -121,7 +127,7 @@ pub async fn stage(
             SegmentEncryption::Straddles => return Err(integrity("Encrypted image straddles an encrypted region")),
         };
         interrupt(cancel, async {
-            xvd.mount_mem_fd(&mut source, &mut output, &segment, key, |_, _| {}).await.map_err(integrity)
+            xvd.mount_mem_fd(&mut source, &mut output, &segment, key, |_, _| {}).await.map_err(verify::package_error)
         })
         .await?;
         output.flush().await.map_err(io_error)?;
@@ -143,6 +149,18 @@ pub async fn stage(
         return Err(integrity("Package has no encrypted images"));
     }
     Ok(staged)
+}
+
+/// The refusal for a build downloaded before BlockForge checked Store downloads against the package's hash tree.
+pub fn unverified(id: &BuildId) -> BedrockError {
+    err(
+        ErrorKind::Integrity,
+        format!(
+            "Minecraft {} was downloaded before BlockForge verified Store downloads, so its files can't be trusted. \
+             Repair the instance to download it again, verified; your worlds are kept.",
+            id.version
+        ),
+    )
 }
 
 pub(super) fn memory_available(info: &str) -> Result<u64> {

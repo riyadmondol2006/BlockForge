@@ -16,9 +16,10 @@ mod license;
 mod login;
 mod stage;
 mod tokens;
+mod verify;
 pub use download::InstalledBuild;
 pub use login::{Window, XboxStep};
-pub use stage::StagedImages;
+pub use stage::{StagedImages, unverified};
 pub use tokens::Slot;
 
 #[derive(Clone)]

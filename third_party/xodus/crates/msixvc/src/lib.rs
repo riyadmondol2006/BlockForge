@@ -1,5 +1,6 @@
 pub mod crypt;
 pub mod hash_tree;
+pub mod integrity;
 pub mod layout;
 pub mod math;
 pub mod models;

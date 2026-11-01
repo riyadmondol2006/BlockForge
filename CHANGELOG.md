@@ -15,6 +15,14 @@ The section for a version is used as the text of its release on GitHub. Older re
 - **On Linux (experimental)** BlockForge downloads the game from the Microsoft Store with your licence and plays it in
   a Windows compatibility engine, in a game profile of the instance's own, all from BlockForge in Rust: no Python, and
   no other launcher. Everything lives in the `bedrock` folder of BlockForge's data folder.
+- **The Store download is checked page by page.** The Store sends the game over plain HTTP, and its catalogue gives no
+  file hashes. BlockForge fetches the package's header over HTTPS from Microsoft's download network and checks every
+  page against the package's own hash tree, which that header vouches for: the tree, the table of which parts are
+  encrypted, the file tables, the game's program (shipped unencrypted) and every other file, as it downloads, with no
+  second read. Anything that differs refuses the install, so a network that changes the download can't plant a
+  program or library. Staging checks the encrypted images against the same tree, and Repair checks the kept metadata.
+  Microsoft's signature on the header can't be checked (its key isn't public); the header is trusted as served over
+  HTTPS.
 - **On Windows** the game is native: a Bedrock instance finds Minecraft for Windows or Preview installed for your
   Windows user, starts it, opens its Microsoft Store page when it isn't installed, and backs up its worlds from
   `%APPDATA%\Minecraft Bedrock`. On macOS Bedrock isn't available yet, and New instance says so.

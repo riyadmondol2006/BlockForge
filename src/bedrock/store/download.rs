@@ -1,7 +1,9 @@
-//! Ported from Xodus CLI commands/streaming.rs; failures cannot publish an install receipt.
+//! Ported from Xodus CLI commands/streaming.rs; failures cannot publish an install receipt. Every page is checked
+//! against the package's hash tree as it is downloaded (see `verify`).
 use super::*;
 use futures::{StreamExt, TryStreamExt};
 use msixvc::{
+    integrity::{HashTree, VerifyingReader},
     streaming::{HttpRead, PrefixCacheFile},
     xvd::{SegmentFile, XvdFile},
 };
@@ -12,12 +14,15 @@ use std::{
     fs::File,
     sync::atomic::Ordering,
 };
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeek, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeek, AsyncWrite, AsyncWriteExt};
 
 pub fn disk_length(length: u64, encrypted: bool) -> u64 {
     if encrypted { length.div_ceil(4096).saturating_mul(4096) } else { length }
 }
 pub const METADATA: &str = ".xodus-streaming.msixvc";
+/// The receipt's adapter version: 2 records a build whose every page was checked against the package's hash tree
+/// (`header_sha256` names the header that was fetched over HTTPS), 1 one from before, which was not checked.
+pub const VERIFIED_ADAPTER: u32 = 2;
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Entry {
     pub offset: u64,
@@ -35,6 +40,15 @@ pub struct Receipt {
     pub build: BuildId,
     pub content_id: String,
     pub files: BTreeMap<String, Entry>,
+    /// SHA-256 of the package header the download was verified against (adapter 2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub header_sha256: Option<String>,
+}
+impl Receipt {
+    /// Whether every file was checked against the package's hash tree when it was downloaded.
+    pub fn verified(&self) -> bool {
+        self.adapter >= VERIFIED_ADAPTER && self.header_sha256.is_some()
+    }
 }
 /// Keep the build lease through prefix preparation and staging. Fields cannot be constructed by callers.
 pub struct InstalledBuild {
@@ -90,10 +104,23 @@ impl InstalledBuild {
         }
         Ok(recorded)
     }
+    /// Whether every file of this build was checked against the package's hash tree when it was downloaded. A
+    /// build from before BlockForge checked them is not, and must be downloaded again (Repair does) before it runs.
+    pub fn verified(&self) -> bool {
+        self.receipt.verified()
+    }
     /// The files whose bytes on disk differ from the receipt (missing, cut off, changed): a local check of every
-    /// file, no network. Repair uses it to decide whether the build must be fetched again.
+    /// file, no network. Repair uses it to decide whether the build must be fetched again. Every file of a build
+    /// that was never verified counts, and so does the package metadata when its hash tree no longer checks out
+    /// against the header the download was verified with.
     pub async fn damaged_files(&self, cancel: &Cancel) -> Result<Vec<String>> {
+        if !self.verified() {
+            return Ok(self.receipt.files.keys().cloned().collect());
+        }
         let mut damaged = Vec::new();
+        if local_tree(&self.content, &self.receipt).await.is_err() {
+            damaged.push(METADATA.to_string());
+        }
         for (name, entry) in &self.receipt.files {
             cancelled(cancel)?;
             let path = self.content.join(name);
@@ -178,7 +205,7 @@ async fn load_with_lease(ctx: &Context, id: &BuildId, lease: Arc<File>) -> Resul
     let receipt: Receipt = serde_json::from_slice(&tokio::fs::read(root.join("install.json")).await.map_err(io_error)?)
         .map_err(integrity)?;
     if receipt.schema != 1
-        || receipt.adapter != 1
+        || !(1..=VERIFIED_ADAPTER).contains(&receipt.adapter)
         || &receipt.build != id
         || receipt.content_id != catalog::content_id(id.edition)
     {
@@ -189,6 +216,23 @@ async fn load_with_lease(ctx: &Context, id: &BuildId, lease: Arc<File>) -> Resul
         .await
         .map_err(|_| err(ErrorKind::Integrity, "Required encrypted MSIXVC metadata is missing; repair the build"))?;
     Ok(InstalledBuild { downloaded_files: 0, id: id.clone(), content, receipt, _lease: lease })
+}
+
+/// The hash tree of an installed build, from the metadata it keeps, checked against the header its download was
+/// verified with: what staging checks the encrypted images' pages against.
+pub(super) async fn local_tree(content: &Path, receipt: &Receipt) -> Result<Arc<HashTree>> {
+    let expected = receipt.header_sha256.as_deref().ok_or_else(|| verify::refused("the build was never verified"))?;
+    let mut file = tokio::io::BufReader::with_capacity(
+        1 << 20,
+        tokio::fs::File::open(content.join(METADATA)).await.map_err(|_| {
+            err(ErrorKind::Integrity, "Required encrypted MSIXVC metadata is missing; repair the build")
+        })?,
+    );
+    let tree = HashTree::load(&mut file).await.map_err(verify::io_package_error)?;
+    if hex::encode(Sha256::digest(tree.header_bytes())) != expected {
+        return Err(verify::refused("the kept metadata is not the verified package's"));
+    }
+    Ok(tree)
 }
 
 /// Windows paths are normalized once; reject traversal, aliases, streams and special devices.
@@ -219,12 +263,12 @@ pub async fn metadata<R: AsyncRead + AsyncSeek + Unpin>(
     reader: &mut R,
 ) -> Result<HashMap<String, SegmentFile>> {
     let mut files = HashMap::new();
-    for (name, segment) in xvd.parse_user_package_files(&mut *reader).await.map_err(integrity)? {
+    for (name, segment) in xvd.parse_user_package_files(&mut *reader).await.map_err(verify::package_error)? {
         if name == "SegmentMetadata.bin" {
-            files = xvd.parse_segment_metadata(&mut *reader, &segment).await.map_err(integrity)?;
+            files = xvd.parse_segment_metadata(&mut *reader, &segment).await.map_err(verify::package_error)?;
         }
     }
-    files.extend(xvd.parse_ntfs_segment_metadata(reader, !files.is_empty()).await.map_err(integrity)?);
+    files.extend(xvd.parse_ntfs_segment_metadata(reader, !files.is_empty()).await.map_err(verify::package_error)?);
     let mut names = HashSet::new();
     let mut normalized = HashMap::new();
     for (name, segment) in files {
@@ -267,13 +311,14 @@ pub async fn reusable(path: &Path, old: &Entry, segment: &SegmentFile) -> bool {
             .is_ok_and(|m| m.is_file() && !m.file_type().is_symlink() && m.len() == old.local_length)
         && disk_hash(path).await.is_ok_and(|h| h == old.disk_sha256)
 }
-/// Names whose installed bytes still match both the new package and the old receipt.
+/// Names whose installed bytes still match both the new package and the old receipt. Only a verified build's files
+/// are kept: an older one's bytes were never checked against any hash tree, so equal hashes would prove nothing.
 pub(super) async fn reusable_files(
     old: Option<&InstalledBuild>,
     files: &HashMap<String, SegmentFile>,
     cancel: &Cancel,
 ) -> Result<HashSet<String>> {
-    let Some(old) = old else { return Ok(HashSet::new()) };
+    let Some(old) = old.filter(|old| old.verified()) else { return Ok(HashSet::new()) };
     // Owned inputs keep the stream's future Send for any caller lifetime.
     let candidates: Vec<_> = files
         .iter()
@@ -294,6 +339,37 @@ pub(super) async fn reusable_files(
         .filter_map(std::future::ready)
         .collect::<HashSet<_>>();
     interrupt(cancel, async { Ok(checks.await) }).await
+}
+/// Hashes what goes through it, so a file's SHA-256 is had as it is written instead of by reading it back.
+struct Hashing<W> {
+    inner: W,
+    hash: Sha256,
+}
+impl<W: AsyncWrite + Unpin> AsyncWrite for Hashing<W> {
+    fn poll_write(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        let this = &mut *self;
+        let poll = std::pin::Pin::new(&mut this.inner).poll_write(cx, buf);
+        if let std::task::Poll::Ready(Ok(n)) = poll {
+            this.hash.update(&buf[..n]);
+        }
+        poll
+    }
+    fn poll_flush(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.inner).poll_flush(cx)
+    }
+    fn poll_shutdown(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.inner).poll_shutdown(cx)
+    }
 }
 struct Pending(PathBuf);
 impl Drop for Pending {
@@ -320,16 +396,30 @@ pub async fn install(
     let mut old = load_with_lease(ctx, &package.build, lease.clone()).await.ok();
     *progress.stage.lock().unwrap_or_else(|e| e.into_inner()) = "Reading Store package metadata".into();
     interrupt(cancel, async {
+        // The header over HTTPS first: it holds the hash tree's root, so what comes over http can be checked.
+        let header = verify::header(crate::http::http1_client(), &package).await?;
+        let plan = verify::plan(&header, &package)?;
+        let header_sha256 = hex::encode(Sha256::digest(&header[..]));
         let http = HttpRead::open(ctx.client.clone(), &package.url, Some(|_, _| {})).await.map_err(network)?;
         if http.len() != package.bytes {
             return Err(integrity("Package size changed"));
         }
+        // The metadata is read through the check, page by page, as it streams in: header, hash tree, region table,
+        // file tables. What is kept of it on disk is what was checked.
+        let (http, tree) = VerifyingReader::new(http, plan);
         let mut reader = PrefixCacheFile::new(http, package.bytes, out.join(METADATA)).await.map_err(io_error)?;
-        let xvd = XvdFile::parse(&mut reader).await.map_err(integrity)?;
+        let mut xvd = XvdFile::parse(&mut reader).await.map_err(verify::package_error)?;
         if xvd.content_id().to_string() != catalog::content_id(package.build.edition) {
             return Err(integrity("Unexpected XVD content ID"));
         }
-        let files = metadata(&xvd, &mut reader).await?;
+        let mut files = metadata(&xvd, &mut reader).await?;
+        let tree = tree.get().ok_or_else(|| verify::refused("its hash tree was not read"))?;
+        xvd.require_integrity(tree).map_err(verify::refused)?;
+        // every file's page hashes, plain or encrypted, from the verified tree: what the receipt keeps and an update
+        // compares to reuse a file
+        for segment in files.values_mut() {
+            segment.data_hashs = xvd.page_hashes(segment).map_err(verify::refused)?;
+        }
         let needed = files
             .values()
             .try_fold(0u64, |total, s| total.checked_add(disk_length(s.length, s.keep_encrypted)))
@@ -370,6 +460,7 @@ pub async fn install(
                     tokio::fs::create_dir_all(parent).await.map_err(io_error)?;
                 }
                 let mut reused = false;
+                let mut written = None;
                 if let Some(old) = old
                     && reuse.contains(&name)
                 {
@@ -382,11 +473,16 @@ pub async fn install(
                     let mut source = HttpRead::open_at(ctx.client.clone(), url, package.bytes, segment.offset)
                         .await
                         .map_err(network)?;
-                    let mut file = tokio::fs::File::from_std(tokens::private_open(&target, true).map_err(io_error)?);
-                    // HttpRead validates every range; Xodus's CLI HTTP downloader does not.
-                    xvd.extract_file(&mut source, &mut file, &segment, key, |_, _| {}).await.map_err(integrity)?;
+                    let file = tokio::fs::File::from_std(tokens::private_open(&target, true).map_err(io_error)?);
+                    let mut file = Hashing { inner: file, hash: Sha256::new() };
+                    // HttpRead validates every range; Xodus's CLI HTTP downloader does not. Every page is checked
+                    // against the verified hash tree before it is decrypted or written.
+                    xvd.extract_file(&mut source, &mut file, &segment, key, |_, _| {})
+                        .await
+                        .map_err(verify::package_error)?;
                     file.flush().await.map_err(io_error)?;
-                    file.sync_all().await.map_err(io_error)?;
+                    file.inner.sync_all().await.map_err(io_error)?;
+                    written = Some(hex::encode(file.hash.finalize()));
                 }
                 if reused {
                     let entry = old
@@ -403,7 +499,10 @@ pub async fn install(
                 {
                     return Err(integrity("Truncated installed file"));
                 }
-                let hash = disk_hash(&target).await?;
+                let hash = match written {
+                    Some(hash) => hash,
+                    None => disk_hash(&target).await?,
+                };
                 progress.files_done.fetch_add(1, Ordering::Relaxed);
                 progress.bytes_done.fetch_add(segment.length, Ordering::Relaxed);
                 Ok((
@@ -430,10 +529,11 @@ pub async fn install(
         }
         let receipt = Receipt {
             schema: 1,
-            adapter: 1,
+            adapter: VERIFIED_ADAPTER,
             build: package.build.clone(),
             content_id: xvd.content_id().to_string(),
             files: entries,
+            header_sha256: Some(header_sha256),
         };
         tokens::atomic(&pending.join("install.json"), &serde_json::to_vec(&receipt).map_err(integrity)?)
             .map_err(io_error)?;

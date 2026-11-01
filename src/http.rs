@@ -25,6 +25,13 @@ pub fn configure(config: crate::net::NetConfig) -> bool {
     CLIENT.get().is_none() && CONFIG.set(config).is_ok()
 }
 
+/// A client that speaks only HTTP/1.1, with the same proxy and timeouts as [`client`]: for a request whose `Host`
+/// header names another site than the server it connects to (over HTTP/2 the server would go by the address instead).
+pub fn http1_client() -> &'static reqwest::Client {
+    static HTTP1: OnceLock<reqwest::Client> = OnceLock::new();
+    HTTP1.get_or_init(|| crate::net::client_builder(CONFIG.get()).http1_only().build().expect("HTTP client"))
+}
+
 /// How many files the downloader fetches at once.
 pub fn concurrency() -> usize {
     CONFIG.get().map_or(crate::net::DEFAULT_CONCURRENCY, |c| c.concurrency)

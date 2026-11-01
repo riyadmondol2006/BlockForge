@@ -2,6 +2,7 @@ use std::cmp::min;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::io::{self, Error, ErrorKind, Read, Seek, SeekFrom, Write};
+use std::sync::Arc;
 
 use aes::cipher::KeyInit;
 use aes::{Aes128Dec, Aes128Enc};
@@ -17,6 +18,7 @@ use uuid::Uuid;
 use zerocopy::IntoBytes;
 
 use crate::crypt::{TweakGenerator, decrypt_page_xts};
+use crate::integrity::{HashTree, IntegrityError, LEAF};
 use crate::layout::{Bytes, PAGE_SIZE, PAGES_PER_BLOCK, Pages};
 use crate::math::calculate_hash_block_num_and_run_for_block_num;
 use crate::models::xvd::layout::XvdLayout;
@@ -249,6 +251,8 @@ pub struct XvdFile {
     header: XvdHeader,
     layout: XvdLayout,
     encrypted_section_infos: Vec<EncryptedSectionInfo>,
+    /// BlockForge: the verified hash tree every extracted page is checked against; extraction refuses without it.
+    integrity: Option<Arc<HashTree>>,
 }
 
 #[derive(Debug)]
@@ -308,6 +312,83 @@ impl XvdFile {
         self.header.vduid
     }
 
+    pub fn header(&self) -> &XvdHeader {
+        &self.header
+    }
+
+    /// BlockForge: check every page extracted from now on against `tree`, which must have been verified from this
+    /// package's header (see [`crate::integrity`]).
+    pub fn require_integrity(&mut self, tree: Arc<HashTree>) -> Result<(), IntegrityError> {
+        if tree.header() != &self.header {
+            return Err(IntegrityError::HeaderMismatch);
+        }
+        self.integrity = Some(tree);
+        Ok(())
+    }
+
+    /// BlockForge: the tree's 20-byte hashes of every page of `file`, as stored in the package.
+    pub fn page_hashes(&self, file: &SegmentFile) -> Result<Vec<[u8; LEAF]>, IntegrityError> {
+        let tree = self.integrity.as_ref().ok_or(IntegrityError::NoTree)?;
+        let pages = file.length.div_ceil(PAGE_SIZE as u64);
+        (0..pages)
+            .map(|i| {
+                let offset = i
+                    .checked_mul(PAGE_SIZE as u64)
+                    .and_then(|o| o.checked_add(file.offset))
+                    .ok_or(IntegrityError::Unhashed { offset: file.offset })?;
+                tree.leaf(offset)
+            })
+            .collect()
+    }
+
+    /// BlockForge: the page of the package at byte `offset`, as stored, against the verified tree.
+    fn verify_page(&self, offset: u64, page: &[u8; PAGE_SIZE]) -> Result<(), IntegrityError> {
+        self.integrity.as_ref().ok_or(IntegrityError::NoTree)?.verify_page(offset, page)
+    }
+
+    /// BlockForge: checks a page of the package as it was written out, decrypted where it lies in an encrypted
+    /// section (all but the files kept encrypted): it is encrypted again with `full_key` and the data unit the
+    /// verified tree gives it, and that ciphertext is checked. Lets a build on disk be checked offline with its key.
+    pub fn verify_plaintext_page(
+        &self,
+        offset: u64,
+        page: &[u8; PAGE_SIZE],
+        full_key: [u8; 32],
+    ) -> Result<(), IntegrityError> {
+        let Some(s) = self
+            .encrypted_section_infos
+            .iter()
+            .find(|s| offset >= s.section_offset && offset < s.section_offset.saturating_add(s.section_length))
+        else {
+            return self.verify_page(offset, page);
+        };
+        let index = ((offset - s.section_offset) / PAGE_SIZE as u64) as usize;
+        let unit = match &s.data_units {
+            Some(units) => *units.get(index).ok_or(IntegrityError::Unhashed { offset })?,
+            None => index as u32,
+        };
+        let mut tweak_key = [0u8; 16];
+        let mut data_key = [0u8; 16];
+        tweak_key.copy_from_slice(&full_key[..16]);
+        data_key.copy_from_slice(&full_key[16..]);
+        let mut ciphertext = *page;
+        crate::crypt::encrypt_page_xts(
+            &mut ciphertext,
+            TweakGenerator::new(s.header_id, s.vduid).with_data_unit(unit),
+            &Aes128Enc::new((&tweak_key).into()),
+            &Aes128Enc::new((&data_key).into()),
+        );
+        self.verify_page(offset, &ciphertext)
+    }
+
+    /// BlockForge: a file is read in whole pages from its first byte, so it must start on a page.
+    fn check_aligned(sfile: &SegmentFile) -> Result<(), IntegrityError> {
+        if !sfile.offset.is_multiple_of(PAGE_SIZE as u64) {
+            return Err(IntegrityError::Unhashed { offset: sfile.offset });
+        }
+        Ok(())
+    }
+
     fn non_encrypted_prefix_len(&self, start: u64, len: u64) -> u64 {
         let end = start.saturating_add(len);
         let mut prefix_len = len;
@@ -355,7 +436,7 @@ impl XvdFile {
 
         // TODO: Check if we have proper content type
         if layout.xvc_info.len > Bytes(0) {
-            file.seek(std::io::SeekFrom::Start(layout.xvc_info.start.to_bytes().0)).await.expect("Unable to seek");
+            file.seek(std::io::SeekFrom::Start(layout.xvc_info.start.to_bytes().0)).await?;
 
             let xvc_info = {
                 let mut buf = XvcInfo::buffer();
@@ -366,6 +447,10 @@ impl XvdFile {
             let region_count = xvc_info.region_count;
 
             if xvc_info.version >= 1 {
+                // a region header is 128 bytes, and they all lie in the XVC info
+                if region_count as u64 * 128 > layout.xvc_info.len.0 {
+                    return Err(io::Error::new(io::ErrorKind::InvalidData, "Region table larger than XVC info").into());
+                }
                 let mut buf = XvcRegionHeader::buffer();
                 for _ in 0..region_count {
                     file.read_exact(&mut buf).await?;
@@ -383,10 +468,26 @@ impl XvdFile {
             match key_id.get() {
                 None => continue,
                 Some(0) => (),
-                Some(n) => todo!("KeyID other than 0 or unencrypted is not supported, found {n}"),
+                // BlockForge: an error, not upstream's todo!() panic; the licence carries one content key
+                Some(n) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("Encryption key {n} is not supported (only key 0)"),
+                    )
+                    .into());
+                }
             }
 
-            let start_page = h.offset - layout.user_data.start;
+            let hashed = xvd_header.number_of_hashed_pages().0;
+            let start_page = h
+                .offset
+                .0
+                .checked_sub(layout.user_data.start.0)
+                .filter(|start| start.checked_add(num_pages).is_some_and(|end| end <= hashed))
+                .map(Pages)
+                .ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidData, "Encrypted region outside the hashed pages")
+                })?;
             let mut data_units: Vec<u32> = Vec::with_capacity(num_pages as usize);
             let mut data_hashs: Vec<[u8; 20]> = Vec::with_capacity(num_pages as usize);
 
@@ -430,7 +531,7 @@ impl XvdFile {
                 data_hashs,
             });
         }
-        Ok(XvdFile { header: xvd_header, layout, encrypted_section_infos: enc_sections })
+        Ok(XvdFile { header: xvd_header, layout, encrypted_section_infos: enc_sections, integrity: None })
     }
 
     pub async fn parse_user_package_files<Reader>(
@@ -468,7 +569,8 @@ impl XvdFile {
                 let s: u32 = user_data_package_file_entry.size;
                 let fullname = user_data_package_file_entry.file_path;
                 let end = fullname.iter().position(|&c| c == 0).unwrap_or(fullname.len());
-                let pfull_name: String = String::from_utf16(&fullname[..end]).unwrap();
+                let pfull_name: String = String::from_utf16(&fullname[..end])
+                    .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Invalid package file name"))?;
 
                 files.insert(
                     pfull_name,
@@ -490,7 +592,8 @@ impl XvdFile {
     where
         Reader: AsyncRead + AsyncSeek + Unpin,
     {
-        let mut file = BufReader::with_capacity(segment_metadata.length as usize, file);
+        // BlockForge: the length comes from the package; a capped buffer, not one of up to 4 GiB
+        let mut file = BufReader::with_capacity((segment_metadata.length as usize).clamp(4096, 1 << 20), file);
         file.seek(SeekFrom::Start(segment_metadata.offset)).await?;
         let segment_header = {
             let mut buf = XvdSegmentMetadataHeader::buffer();
@@ -513,21 +616,27 @@ impl XvdFile {
             let segment_page_start = section.section_offset.div_ceil(PAGE_SIZE as u64);
             let mut page_offset = segment_page_start;
             for segment_no in section.first_segment_index..segment_header.segment_count {
-                let segment = &segments[segment_no as usize];
+                let segment = segments
+                    .get(segment_no as usize)
+                    .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Segment index out of range"))?;
                 let s = segment.path_length;
                 let mut buf = vec![0u16, 0];
                 buf.resize(s as usize, 0);
                 file.seek(SeekFrom::Start(segment_metadata.offset + paths_offset + segment.path_offset as u64)).await?;
                 file.read_exact(buf.as_mut_bytes()).await?;
-                let file_name: String = String::from_utf16(buf.as_slice()).unwrap();
+                let file_name: String = String::from_utf16(buf.as_slice())
+                    .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Invalid segment file name"))?;
                 let page_length = if segment.filesize == 0 { 1 } else { segment.filesize.div_ceil(PAGE_SIZE as u64) };
                 if page_offset * (PAGE_SIZE as u64) >= section.section_offset + section.section_length {
                     break;
                 }
                 let end = page_offset as usize - segment_page_start as usize
                     + segment.filesize.div_ceil(PAGE_SIZE as u64) as usize;
-                let data_hashs: Vec<[u8; 20]> =
-                    section.data_hashs[page_offset as usize - segment_page_start as usize..end].into();
+                let data_hashs: Vec<[u8; 20]> = section
+                    .data_hashs
+                    .get(page_offset as usize - segment_page_start as usize..end)
+                    .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Segment beyond its section's hashes"))?
+                    .into();
                 files.insert(
                     file_name,
                     SegmentFile {
@@ -631,10 +740,8 @@ impl XvdFile {
                 .writable(false)
                 .logical_block_size(if block_size == 512 {
                     gpt::disk::LogicalBlockSize::Lb512
-                } else if block_size == 4096 {
-                    gpt::disk::LogicalBlockSize::Lb4096
                 } else {
-                    todo!("unsupported block_size: {}", block_size)
+                    gpt::disk::LogicalBlockSize::Lb4096
                 })
                 .open_from_device(drive)?;
 
@@ -644,8 +751,12 @@ impl XvdFile {
                 .find(|(_, part)| part.is_used())
                 .ok_or_else(|| io::Error::new(ErrorKind::NotFound, "no used GPT partition found"))?;
 
-            let part_start = part.bytes_start(*gp.logical_block_size()).unwrap();
-            let part_len = part.bytes_len(*gp.logical_block_size()).unwrap();
+            let part_start = part
+                .bytes_start(*gp.logical_block_size())
+                .map_err(|_| io::Error::new(ErrorKind::InvalidData, "Invalid GPT partition start"))?;
+            let part_len = part
+                .bytes_len(*gp.logical_block_size())
+                .map_err(|_| io::Error::new(ErrorKind::InvalidData, "Invalid GPT partition length"))?;
 
             let bridge = gp.take_device().into_inner().into_inner();
             let partition_offset = drive_data_offset + part_start;
@@ -716,6 +827,7 @@ impl XvdFile {
         if sfile.length == 0 {
             return Ok(());
         }
+        Self::check_aligned(sfile)?;
 
         let s = &self
             .encrypted_section_infos
@@ -807,6 +919,8 @@ impl XvdFile {
                 }
                 let chunk = pending.split_to(4096);
                 page.copy_from_slice(&chunk);
+                // BlockForge: as stored, before any decryption
+                self.verify_page(sfile.offset + (page_in_section - page_start) * PAGE_SIZE as u64, &page)?;
                 let to_write_remaining = remaining.min(PAGE_SIZE as u64) as usize;
                 let to_write = if let Some(tweak) = &tweak {
                     let tweak = tweak.with_data_unit(match &s.unwrap().data_units {
@@ -865,6 +979,7 @@ impl XvdFile {
         if sfile.length == 0 {
             return Ok(());
         }
+        Self::check_aligned(sfile)?;
 
         let s = &self
             .encrypted_section_infos
@@ -901,6 +1016,9 @@ impl XvdFile {
         for page_in_section in page_start..page_start + page_count {
             progress(min((page_in_section - page_start) * 4096, sfile.length), sfile.length);
             i.read_exact(&mut page).await?;
+            // BlockForge: every page, as stored (ciphertext where encrypted), against the verified tree before it is
+            // decrypted or written: a download and a staging from the copy on disk alike
+            self.verify_page(sfile.offset + (page_in_section - page_start) * PAGE_SIZE as u64, &page)?;
             let to_write = min(
                 PAGE_SIZE,
                 sfile.length as usize
@@ -975,51 +1093,115 @@ impl XvdFile {
 #[cfg(test)]
 mod adapter_tests {
     use super::*;
-    use crate::crypt::encrypt_page_xts;
-    use aes::cipher::KeyInit;
+    use crate::integrity::synthetic::{KEY, package};
+
+    async fn verified(bytes: &[u8]) -> XvdFile {
+        let mut xvd = XvdFile::parse(std::io::Cursor::new(bytes.to_vec())).await.unwrap();
+        let tree = HashTree::load(&mut std::io::Cursor::new(bytes.to_vec())).await.unwrap();
+        xvd.require_integrity(tree).unwrap();
+        xvd
+    }
 
     #[tokio::test]
     async fn synthetic_xvd_encrypted_segment_retains_pages_and_stages_logical_length() {
         // Entirely synthetic header/data. No game bytes or production keys.
-        let mut header_bytes = [0u8; 4096];
-        header_bytes[512..520].copy_from_slice(b"msft-xvd");
-        header_bytes[536..544].copy_from_slice(&8192u64.to_le_bytes());
-        let header = XvdHeader::try_from_array((&header_bytes).into()).unwrap();
-        let layout = header.layout();
-        let section_offset = layout.drive_data.start.to_bytes().0;
-        let header_id = XvcRegionId::Other(1);
-        let vduid = Uuid::from_u128(42);
-        let xvd = XvdFile {
-            header,
-            layout,
-            encrypted_section_infos: vec![EncryptedSectionInfo {
-                section_offset,
-                section_length: 8192,
-                header_id,
-                vduid,
-                data_units: None,
-                first_segment_index: 0,
-                data_hashs: vec![],
-            }],
-        };
-        let key = [3; 32];
-        let tweak_key = Aes128Enc::new((&[3; 16]).into());
-        let data_key = Aes128Enc::new((&[3; 16]).into());
-        let mut page = [7u8; 4096];
-        let plaintext = page;
-        encrypt_page_xts(&mut page, TweakGenerator::new(header_id, vduid).with_data_unit(0), &tweak_key, &data_key);
-        let mut package = vec![0; section_offset as usize + 8192];
-        package[..4096].copy_from_slice(&header_bytes);
-        package[section_offset as usize..section_offset as usize + 4096].copy_from_slice(&page);
-        let segment =
-            SegmentFile { offset: section_offset, length: 123, data_hashs: vec![[1; 20]], keep_encrypted: true };
+        let p = package(1, 2, false);
+        let xvd = verified(&p.bytes).await;
+        let plaintext = &p.plaintext[PAGE_SIZE..];
+        let segment = SegmentFile { offset: p.encrypted_offset, length: 123, data_hashs: vec![], keep_encrypted: true };
         assert_eq!(xvd.segment_encryption(&segment), SegmentEncryption::Encrypted);
+        assert_eq!(xvd.page_hashes(&segment).unwrap().len(), 1);
         let mut ciphertext = Vec::new();
-        xvd.extract_file(&mut std::io::Cursor::new(package), &mut ciphertext, &segment, key, |_, _| {}).await.unwrap();
+        xvd.extract_file(&mut std::io::Cursor::new(p.bytes.clone()), &mut ciphertext, &segment, KEY, |_, _| {})
+            .await
+            .unwrap();
         assert_eq!(ciphertext.len(), 4096);
         assert_ne!(&ciphertext[..123], &plaintext[..123]);
         let mut output = Vec::new();
-        xvd.mount_mem_fd(&mut std::io::Cursor::new(ciphertext), &mut output, &segment, key, |_, _| {}).await.unwrap();
+        xvd.mount_mem_fd(&mut std::io::Cursor::new(ciphertext.clone()), &mut output, &segment, KEY, |_, _| {})
+            .await
+            .unwrap();
         assert_eq!(output, plaintext[..123]);
+        // a staged copy whose ciphertext changed on disk is refused, not decrypted into garbage
+        ciphertext[9] ^= 1;
+        let error = xvd
+            .mount_mem_fd(&mut std::io::Cursor::new(ciphertext), &mut Vec::new(), &segment, KEY, |_, _| {})
+            .await
+            .unwrap_err();
+        assert_eq!(crate::integrity::find(&*error), Some(&IntegrityError::PageMismatch { offset: p.encrypted_offset }));
+    }
+
+    async fn extract(xvd: &XvdFile, bytes: Vec<u8>, file: &SegmentFile) -> Result<Vec<u8>, Option<IntegrityError>> {
+        let mut out = Vec::new();
+        xvd.extract_file(&mut std::io::Cursor::new(bytes), &mut out, file, KEY, |_, _| {})
+            .await
+            .map(|_| out)
+            .map_err(|e| crate::integrity::find(&*e).cloned())
+    }
+
+    #[tokio::test]
+    async fn extraction_checks_every_page_and_needs_a_verified_tree() {
+        let p = package(2, 2, false);
+        let xvd = verified(&p.bytes).await;
+        // a plain file across two pages, decrypted file across two encrypted pages
+        let plain = SegmentFile { offset: p.plain_offset, length: 5000, data_hashs: vec![], keep_encrypted: false };
+        let encrypted =
+            SegmentFile { offset: p.encrypted_offset, length: 6000, data_hashs: vec![], keep_encrypted: false };
+        assert_eq!(extract(&xvd, p.bytes.clone(), &plain).await.unwrap(), p.plaintext[..5000]);
+        assert_eq!(extract(&xvd, p.bytes.clone(), &encrypted).await.unwrap(), p.plaintext[2 * PAGE_SIZE..][..6000]);
+        // a byte changed in the second page of each (past the file's end in the plain one: the page is hashed whole)
+        for (file, at) in [(&plain, p.plain_offset + PAGE_SIZE as u64 + 4095), (&encrypted, p.encrypted_offset + 4096)]
+        {
+            let mut bad = p.bytes.clone();
+            bad[at as usize] ^= 4;
+            let page = at / PAGE_SIZE as u64 * PAGE_SIZE as u64;
+            assert_eq!(
+                extract(&xvd, bad, file).await.unwrap_err(),
+                Some(IntegrityError::PageMismatch { offset: page })
+            );
+        }
+        // without a tree nothing is extracted; nor from a tree of another package
+        let bare = XvdFile::parse(std::io::Cursor::new(p.bytes.clone())).await.unwrap();
+        assert_eq!(extract(&bare, p.bytes.clone(), &plain).await.unwrap_err(), Some(IntegrityError::NoTree));
+        let other = package(3, 1, false);
+        let mut bare = XvdFile::parse(std::io::Cursor::new(p.bytes.clone())).await.unwrap();
+        let tree = HashTree::load(&mut std::io::Cursor::new(other.bytes)).await.unwrap();
+        assert_eq!(bare.require_integrity(tree).unwrap_err(), IntegrityError::HeaderMismatch);
+        // nor a file that doesn't start on a page
+        let odd = SegmentFile { offset: p.plain_offset + 1, length: 10, data_hashs: vec![], keep_encrypted: false };
+        assert!(extract(&xvd, p.bytes.clone(), &odd).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn a_decrypted_page_is_checked_by_encrypting_it_again() {
+        let p = package(1, 2, false);
+        let xvd = verified(&p.bytes).await;
+        let page = |at: usize| -> [u8; PAGE_SIZE] { p.plaintext[at..at + PAGE_SIZE].try_into().unwrap() };
+        xvd.verify_plaintext_page(p.plain_offset, &page(0), KEY).unwrap();
+        xvd.verify_plaintext_page(p.encrypted_offset + PAGE_SIZE as u64, &page(2 * PAGE_SIZE), KEY).unwrap();
+        let mut changed = page(PAGE_SIZE);
+        changed[0] ^= 1;
+        assert!(xvd.verify_plaintext_page(p.encrypted_offset, &changed, KEY).is_err());
+        assert!(xvd.verify_plaintext_page(p.encrypted_offset, &page(PAGE_SIZE), [4; 32]).is_err(), "another key");
+    }
+
+    #[tokio::test]
+    async fn crafted_region_tables_are_errors_not_panics() {
+        let p = package(1, 1, false);
+        let key_at = p.region_table as usize + 128 + 4;
+        let mut other_key = p.bytes.clone();
+        other_key[key_at..key_at + 2].copy_from_slice(&5u16.to_le_bytes());
+        assert!(XvdFile::parse(std::io::Cursor::new(other_key)).await.is_err());
+        let offset_at = p.region_table as usize + 128 + 80;
+        let mut before = p.bytes.clone();
+        before[offset_at..offset_at + 8].copy_from_slice(&0u64.to_le_bytes());
+        assert!(XvdFile::parse(std::io::Cursor::new(before)).await.is_err());
+        let mut past = p.bytes.clone();
+        past[offset_at + 8..offset_at + 16].copy_from_slice(&(1u64 << 40).to_le_bytes());
+        assert!(XvdFile::parse(std::io::Cursor::new(past)).await.is_err());
+        let count_at = p.region_table as usize - 3496 + 16 + 0xc0 * 16 + 0x104;
+        let mut many = p.bytes.clone();
+        many[count_at..count_at + 4].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(XvdFile::parse(std::io::Cursor::new(many)).await.is_err());
     }
 }

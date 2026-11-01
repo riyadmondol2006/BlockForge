@@ -100,6 +100,11 @@ pub fn user_agent() -> String {
 
 /// Build the shared client. With no config this is the client the program always had.
 pub fn build_client(config: Option<&NetConfig>) -> reqwest::Client {
+    client_builder(config).build().expect("HTTP client")
+}
+
+/// The settings every client shares (agent, timeouts, proxy), for a client that needs one more of its own.
+pub fn client_builder(config: Option<&NetConfig>) -> reqwest::ClientBuilder {
     let mut b = reqwest::Client::builder()
         .user_agent(user_agent())
         .pool_max_idle_per_host(64)
@@ -119,7 +124,7 @@ pub fn build_client(config: Option<&NetConfig>) -> reqwest::Client {
             None => b = b.no_proxy(),
         }
     }
-    b.build().expect("HTTP client")
+    b
 }
 
 static MODRINTH_KEY: Mutex<Option<String>> = Mutex::new(None);

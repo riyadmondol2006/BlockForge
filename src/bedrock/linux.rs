@@ -729,6 +729,11 @@ impl Linux {
                 cancel.clone(),
             )
             .await?;
+            // its files run in Wine as the player: only a build whose every page was checked against the package's
+            // hash tree when it was downloaded (a program the build ships in the clear runs from disk unstaged)
+            if !build.verified() {
+                return Err(store::unverified(&build.id));
+            }
             let mut notes = fix_build(&mut build, &sources).await?;
             notes.extend(raise_plain_stack(&mut build).await?);
             notes.extend(
