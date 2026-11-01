@@ -14,12 +14,16 @@ use crate::clep;
 use crate::models::devicecredential::Component;
 
 pub fn probe_provision_components() -> Vec<Component> {
+    probe_provision_components_with_smbios(load_raw_smbios().ok())
+}
+
+/// Downstream async hosts collect optional firmware data with cancellation themselves.
+pub fn probe_provision_components_with_smbios(smbios: Option<Vec<u8>>) -> Vec<Component> {
     let mut components = Vec::with_capacity(16);
     let drive_serial = BASE64_STANDARD.decode("AA==").unwrap();
     let mut smbios_buf = [0; 256];
     let mut drive_buf = [0; 64];
 
-    let smbios = load_raw_smbios().ok();
     let parsed_smbios = load_smbios_fields(smbios.as_deref()).ok();
 
     drive_buf.iter_mut().zip(drive_serial.iter()).for_each(|(place, data)| *place = *data);

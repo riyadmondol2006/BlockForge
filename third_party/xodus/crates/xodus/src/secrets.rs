@@ -11,7 +11,7 @@ pub fn init_secrets() -> Result<(), keyring_core::Error> {
 
     #[cfg(not(feature = "key-chain-file"))]
     {
-        #[cfg(target_os = "linux")]
+        #[cfg(all(target_os = "linux", feature = "native-keychain"))]
         {
             keyring_core::set_default_store(dbus_secret_service_keyring_store::Store::new()?);
         }

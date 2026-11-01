@@ -25,6 +25,12 @@ pub fn parse_bcrypt_rsa_private(blob: &BCryptRsaBlock) -> rsa::errors::Result<Rs
     const RSAPRIVATE_MAGIC: usize = 0x3241_5352; // "RSA2"
     const RSAFULLPRIVATE_MAGIC: usize = 0x3341_5352; // "RSA3"
 
+    let total = [cb_pub_exp, cb_mod, cb_p1, cb_p2, if magic == RSAFULLPRIVATE_MAGIC { cb_mod } else { 0 }]
+        .into_iter()
+        .try_fold(24usize, |n, v| n.checked_add(v));
+    if !matches!(magic, RSAPRIVATE_MAGIC | RSAFULLPRIVATE_MAGIC) || total.is_none_or(|n| n > blob.len()) {
+        return Err(rsa::errors::Error::InvalidArguments);
+    }
     let mut off = 24;
     // take returns both the parsed BigUint (for arithmetic) and a Vec<u8> copy of the raw bytes
     let mut take = |n: usize| {
@@ -58,14 +64,18 @@ pub fn parse_bcrypt_rsa_private(blob: &BCryptRsaBlock) -> rsa::errors::Result<Rs
             tracing::trace!("Got RSA Private");
             // No d in the blob — recompute it.
             let one = NbBigUint::from(1u32);
+            if p_nb <= one || q_nb <= one {
+                return Err(rsa::errors::Error::InvalidArguments);
+            }
             let p1 = &p_nb - &one;
             let p2 = &q_nb - &one;
             let lambda = p1.lcm(&p2);
-            let d_nb = e_nb.clone().mod_inverse(&lambda).expect("e not invertible");
-            let d_rsa =
-                RsaBigUint::from_bytes_be(&d_nb.to_biguint().expect("inverse should be positive").to_bytes_be());
+            let d_nb = e_nb.clone().mod_inverse(&lambda).ok_or(rsa::errors::Error::InvalidArguments)?;
+            let d_rsa = RsaBigUint::from_bytes_be(
+                &d_nb.to_biguint().ok_or(rsa::errors::Error::InvalidArguments)?.to_bytes_be(),
+            );
             RsaPrivateKey::from_components(n_rsa, e_rsa, d_rsa, vec![p_rsa, q_rsa])
         }
-        _ => panic!("not an RSA private blob"),
+        _ => Err(rsa::errors::Error::InvalidArguments),
     }
 }

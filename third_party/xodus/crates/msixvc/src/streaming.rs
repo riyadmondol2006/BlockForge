@@ -36,6 +36,7 @@ pub struct HttpRead<'t> {
     pending_chunk: Option<Bytes>,
     pending_chunk_offset: usize,
     progress: Option<Box<dyn FnMut(u64, u64) + Send + 't>>,
+    resume_failures: u8,
 }
 
 impl<'t> HttpRead<'t> {
@@ -63,7 +64,34 @@ impl<'t> HttpRead<'t> {
             }),
             pending_chunk: None,
             pending_chunk_offset: 0,
+            resume_failures: 0,
             progress: progress.map(|v| Box::new(v) as Box<dyn FnMut(u64, u64) + Send + 't>),
+        })
+    }
+
+    /// Open exactly at a segment without first starting a full-object GET.
+    pub async fn open_at(
+        client: reqwest::Client,
+        url: impl Into<String>,
+        len: u64,
+        offset: u64,
+    ) -> std::io::Result<Self> {
+        let url = url.into();
+        let opened = open_http_stream(client.clone(), url.clone(), Some(offset)).await?;
+        if opened.len != len {
+            return Err(Error::new(ErrorKind::InvalidData, "Remote size changed"));
+        }
+        Ok(Self {
+            client,
+            url,
+            len,
+            pos: offset,
+            pending_open: None,
+            active: Some(ActiveHttpStream { next_offset: offset, end_offset: len, stream: opened.stream }),
+            pending_chunk: None,
+            pending_chunk_offset: 0,
+            progress: None,
+            resume_failures: 0,
         })
     }
 
@@ -97,7 +125,9 @@ impl<'t> HttpRead<'t> {
             Poll::Ready(result) => {
                 self.pending_open = None;
                 let opened = result?;
-                self.len = opened.len;
+                if self.len != opened.len {
+                    return Poll::Ready(Err(Error::new(ErrorKind::InvalidData, "Remote size changed")));
+                }
                 self.active =
                     Some(ActiveHttpStream { next_offset: opened.start, end_offset: opened.len, stream: opened.stream });
                 Poll::Ready(Ok(()))
@@ -168,10 +198,24 @@ impl<'t> AsyncRead for HttpRead<'t> {
                     self.pending_chunk_offset = 0;
                 }
                 Poll::Ready(Some(Err(_err))) => {
+                    self.resume_failures += 1;
+                    if self.resume_failures > 3 {
+                        return Poll::Ready(Err(Error::new(
+                            ErrorKind::UnexpectedEof,
+                            "HTTP stream repeatedly truncated",
+                        )));
+                    }
                     self.active = None;
                     continue;
                 }
                 Poll::Ready(None) => {
+                    self.resume_failures += 1;
+                    if self.resume_failures > 3 {
+                        return Poll::Ready(Err(Error::new(
+                            ErrorKind::UnexpectedEof,
+                            "HTTP stream repeatedly truncated",
+                        )));
+                    }
                     self.active = None;
                     if self.pos >= self.len {
                         return Poll::Ready(Ok(()));
@@ -204,6 +248,31 @@ enum CacheWriteState {
     // cached_len"). The bytes are only cached once the flush that performs
     // that write has completed.
     Flushing { written: u64 },
+}
+
+// Downstream: seek opens a validated range on the next read, without caching game data.
+impl AsyncSeek for HttpRead<'_> {
+    fn start_seek(mut self: Pin<&mut Self>, seek: SeekFrom) -> std::io::Result<()> {
+        let next = match seek {
+            SeekFrom::Start(n) => Some(n),
+            SeekFrom::Current(n) => self.pos.checked_add_signed(n),
+            SeekFrom::End(n) => self.len.checked_add_signed(n),
+        }
+        .filter(|n| *n <= self.len)
+        .ok_or_else(|| Error::new(ErrorKind::InvalidInput, "Invalid HTTP seek"))?;
+        if next == self.pos {
+            return Ok(());
+        }
+        self.pos = next;
+        self.pending_chunk = None;
+        self.pending_chunk_offset = 0;
+        self.active = None;
+        self.begin_open_stream(next);
+        Ok(())
+    }
+    fn poll_complete(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<std::io::Result<u64>> {
+        Poll::Ready(Ok(self.pos))
+    }
 }
 
 pub struct PrefixCacheFile<R> {
@@ -578,7 +647,7 @@ async fn open_http_stream(
             let range = range
                 .strip_prefix("bytes ")
                 .ok_or_else(|| Error::new(ErrorKind::InvalidData, "invalid Content-Range prefix"))?;
-            let (start_s, _) = range
+            let (start_s, end_s) = range
                 .split_once('-')
                 .ok_or_else(|| Error::new(ErrorKind::InvalidData, "invalid Content-Range bounds"))?;
             let actual_start = start_s.parse::<u64>().map_err(|err| Error::new(ErrorKind::InvalidData, err))?;
@@ -589,6 +658,13 @@ async fn open_http_stream(
                 ));
             }
             let len = total.parse::<u64>().map_err(|err| Error::new(ErrorKind::InvalidData, err))?;
+            let end = end_s.parse::<u64>().map_err(|err| Error::new(ErrorKind::InvalidData, err))?;
+            if end.checked_add(1) != Some(len)
+                || actual_start > end
+                || response.content_length() != Some(end - actual_start + 1)
+            {
+                return Err(Error::new(ErrorKind::InvalidData, "Invalid Content-Range length/end"));
+            }
             (actual_start, len)
         }
     };

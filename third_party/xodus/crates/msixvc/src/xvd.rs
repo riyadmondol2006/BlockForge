@@ -11,7 +11,7 @@ use reqwest::header::RANGE;
 use tokio::fs::OpenOptions;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeek, AsyncSeekExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::task::block_in_place;
-use tokio::time::{sleep, timeout};
+use tokio::time::timeout;
 use tokio_util::io::SyncIoBridge;
 use uuid::Uuid;
 use zerocopy::IntoBytes;
@@ -279,6 +279,15 @@ pub struct SegmentFile {
 }
 
 impl XvdFile {
+    /// The adapter must refuse staging if metadata cannot identify the encrypted region.
+    pub fn encrypted_segment(&self, file: &SegmentFile) -> bool {
+        file.offset.checked_add(file.length).is_some_and(|end| {
+            self.encrypted_section_infos.iter().any(|s| {
+                file.offset >= s.section_offset
+                    && s.section_offset.checked_add(s.section_length).is_some_and(|limit| end <= limit)
+            })
+        })
+    }
     pub fn content_id(&self) -> uuid::Uuid {
         self.header.vduid
     }
@@ -321,6 +330,9 @@ impl XvdFile {
             XvdHeader::try_from_array(&buf)?
         };
 
+        if xvd_header.number_of_hashed_pages().0 == 0 {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "Empty XVD hash layout").into());
+        }
         let layout = xvd_header.layout();
 
         let mut region_headers: Vec<XvcRegionHeader> = Vec::new();
@@ -805,11 +817,7 @@ impl XvdFile {
                 } else {
                     to_write_remaining
                 };
-                while let Err(err) = out.write_all(&page[..to_write]).await {
-                    eprintln!("Error write file {} waiting 30s", err);
-                    println!("Error write file {} waiting 30s", err);
-                    sleep(tokio::time::Duration::from_secs(30)).await;
-                }
+                out.write_all(&page[..to_write]).await?;
                 remaining -= to_write_remaining as u64;
 
                 page_in_section += 1;
@@ -907,11 +915,7 @@ impl XvdFile {
             } else {
                 to_write
             };
-            while let Err(err) = out.write_all(&page[..to_write]).await {
-                eprintln!("Error write file {} waiting 30s", err);
-                println!("Error write file {} waiting 30s", err);
-                sleep(tokio::time::Duration::from_secs(30)).await;
-            }
+            out.write_all(&page[..to_write]).await?;
         }
         Ok(())
     }
@@ -949,5 +953,57 @@ impl XvdFile {
         Progress: FnMut(u64, u64),
     {
         self.extract_file_ex(i, out, sfile, full_key, progress, true).await
+    }
+}
+
+#[cfg(test)]
+mod adapter_tests {
+    use super::*;
+    use crate::crypt::encrypt_page_xts;
+    use aes::cipher::KeyInit;
+
+    #[tokio::test]
+    async fn synthetic_xvd_encrypted_segment_retains_pages_and_stages_logical_length() {
+        // Entirely synthetic header/data. No game bytes or production keys.
+        let mut header_bytes = [0u8; 4096];
+        header_bytes[512..520].copy_from_slice(b"msft-xvd");
+        header_bytes[536..544].copy_from_slice(&8192u64.to_le_bytes());
+        let header = XvdHeader::try_from_array((&header_bytes).into()).unwrap();
+        let layout = header.layout();
+        let section_offset = layout.drive_data.start.to_bytes().0;
+        let header_id = XvcRegionId::Other(1);
+        let vduid = Uuid::from_u128(42);
+        let xvd = XvdFile {
+            header,
+            layout,
+            encrypted_section_infos: vec![EncryptedSectionInfo {
+                section_offset,
+                section_length: 8192,
+                header_id,
+                vduid,
+                data_units: None,
+                first_segment_index: 0,
+                data_hashs: vec![],
+            }],
+        };
+        let key = [3; 32];
+        let tweak_key = Aes128Enc::new((&[3; 16]).into());
+        let data_key = Aes128Enc::new((&[3; 16]).into());
+        let mut page = [7u8; 4096];
+        let plaintext = page;
+        encrypt_page_xts(&mut page, TweakGenerator::new(header_id, vduid).with_data_unit(0), &tweak_key, &data_key);
+        let mut package = vec![0; section_offset as usize + 8192];
+        package[..4096].copy_from_slice(&header_bytes);
+        package[section_offset as usize..section_offset as usize + 4096].copy_from_slice(&page);
+        let segment =
+            SegmentFile { offset: section_offset, length: 123, data_hashs: vec![[1; 20]], keep_encrypted: true };
+        assert!(xvd.encrypted_segment(&segment));
+        let mut ciphertext = Vec::new();
+        xvd.extract_file(&mut std::io::Cursor::new(package), &mut ciphertext, &segment, key, |_, _| {}).await.unwrap();
+        assert_eq!(ciphertext.len(), 4096);
+        assert_ne!(&ciphertext[..123], &plaintext[..123]);
+        let mut output = Vec::new();
+        xvd.mount_mem_fd(&mut std::io::Cursor::new(ciphertext), &mut output, &segment, key, |_, _| {}).await.unwrap();
+        assert_eq!(output, plaintext[..123]);
     }
 }

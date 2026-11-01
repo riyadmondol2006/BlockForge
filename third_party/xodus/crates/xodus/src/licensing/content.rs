@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use base64::prelude::*;
-use xal::cvlib::CorrelationVector;
+use cvlib::CorrelationVector;
 //use xal::extensions::CorrelationVectorReqwestBuilder;
 
 use crate::licensing::utils;
@@ -60,9 +60,31 @@ pub async fn get_license_content(
     content_id: String,
     market: String,
 ) -> Result<(LicenseContent, License), LicenseContentError> {
+    get_license_content_at(
+        client,
+        "https://licensing.mp.microsoft.com/v7.0/licenses/content",
+        device_ms_token,
+        user_ms_token,
+        ticket_reference,
+        content_id,
+        market,
+    )
+    .await
+}
+
+/// Endpoint injection for the downstream adapter's offline contract tests.
+pub async fn get_license_content_at(
+    client: &reqwest::Client,
+    endpoint: &str,
+    device_ms_token: String,
+    user_ms_token: String,
+    ticket_reference: String,
+    content_id: String,
+    market: String,
+) -> Result<(LicenseContent, License), LicenseContentError> {
     let cv = CorrelationVector::new();
     let response = client
-        .post("https://licensing.mp.microsoft.com/v7.0/licenses/content")
+        .post(endpoint)
         .header("from", "XboxLicenseManager")
         .header("Authorization", device_ms_token)
         .header("user-agent", "XboxLm-PC/Microsoft.GamingServices_32.107.4002.0_x64__8wekyb3d8bbwe")

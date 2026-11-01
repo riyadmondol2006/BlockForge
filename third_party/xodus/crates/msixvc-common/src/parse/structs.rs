@@ -89,8 +89,12 @@ const fn microsoft_filetime(filetime: i64) -> DateTime<chrono::Utc> {
     /// Number of 100 nanoseconds between FILETIME epoch and Unix time
     const FILETIME_TO_UNIX: i64 = 116_444_736_000_000_000;
 
-    let unix_nanos = (filetime - FILETIME_TO_UNIX) * 100;
-    DateTime::from_timestamp_nanos(unix_nanos)
+    // Computing nanoseconds in i64 overflows for a valid zero FILETIME (1601).
+    // Split in wide arithmetic; every signed FILETIME fits chrono's year range.
+    let ticks = filetime as i128 - FILETIME_TO_UNIX as i128;
+    let seconds = ticks.div_euclid(10_000_000) as i64;
+    let nanos = ticks.rem_euclid(10_000_000) as u32 * 100;
+    DateTime::from_timestamp(seconds, nanos).expect("signed FILETIME is within chrono's supported range")
 }
 
 /// A marker type that implements [`BinaryParse`] for parsing a Microsoft FILETIME
@@ -123,5 +127,17 @@ mod tests {
         assert!(higher > lower);
         assert!(higher == other_high);
         assert!(other_high2 > other_high);
+    }
+}
+
+#[cfg(test)]
+mod filetime_tests {
+    use super::*;
+    #[test]
+    fn zero_epoch_and_extreme_filetimes_do_not_overflow() {
+        assert_eq!(microsoft_filetime(0).timestamp(), -11_644_473_600);
+        assert_eq!(microsoft_filetime(116_444_736_000_000_000).timestamp(), 0);
+        let _ = microsoft_filetime(i64::MIN);
+        let _ = microsoft_filetime(i64::MAX);
     }
 }

@@ -24,11 +24,12 @@ pub const PASSPORT_STS: &str = "http://Passport.NET/STS";
 pub struct TokenManager {
     persistent: Arc<dyn TokenBackend>,
     ephemeral: Arc<dyn ExpiringTokenBackend>,
+    merge_lock: Arc<std::sync::Mutex<()>>,
 }
 
 impl TokenManager {
     pub fn new(persistent: Arc<dyn TokenBackend>, ephemeral: Arc<dyn ExpiringTokenBackend>) -> Self {
-        Self { persistent, ephemeral }
+        Self { persistent, ephemeral, merge_lock: Arc::new(std::sync::Mutex::new(())) }
     }
 
     /// Keychain for persistent storage, in-memory for ephemeral - the default
@@ -71,6 +72,7 @@ impl TokenManager {
     }
 
     pub fn save_device_token(&self, address: String, token: Token) -> Result<(), TokenStoreError> {
+        let _merge = self.merge_lock.lock().map_err(|_| std::io::Error::other("Token merge lock poisoned"))?;
         Self::write_token_store(&*self.persistent, keys::DEVICE_TOKENS, address, token)
     }
 
@@ -85,6 +87,7 @@ impl TokenManager {
     }
 
     pub fn save_user_token(&self, address: String, token: Token) -> Result<(), TokenStoreError> {
+        let _merge = self.merge_lock.lock().map_err(|_| std::io::Error::other("Token merge lock poisoned"))?;
         Self::write_token_store(&*self.persistent, keys::USER_TOKENS, address, token)
     }
 

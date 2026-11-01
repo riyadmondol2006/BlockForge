@@ -239,6 +239,9 @@ impl SPLicense {
         };
 
         let size = read_u32(&mut reader)? as usize;
+        if size > 16 * 1024 * 1024 {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "Oversized SPLicense block").into());
+        }
 
         // Create a new reader that limits the number of bytes that can be read to `size`
         let mut reader = reader.take(size as u64);
@@ -288,7 +291,11 @@ impl SPLicense {
             Ok(BlockId::SignatureBlock) => {
                 let _unknown: [u8; 2] = read_array(&mut reader)?;
                 self.signature_origin = read_u16(&mut reader)?;
-                self.signature_block = read_vec(&mut reader, size - 4)?;
+                self.signature_block = read_vec(
+                    &mut reader,
+                    size.checked_sub(4)
+                        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Short signature block"))?,
+                )?;
             }
             Ok(BlockId::PollingTime) => {
                 self.polling_time = read_u32(&mut reader)?;
@@ -371,6 +378,16 @@ impl SPLicense {
 }
 
 impl EncryptedDeviceKey {
+    pub fn try_derive_device_key(&self) -> io::Result<DeviceKey> {
+        if self.version != 4 {
+            return Err(io::Error::other("Unsupported device key"));
+        }
+        let device_key = decrypt_cbc_zero_iv(self.key_schedule, &self.device_key);
+        if device_key != decryption_key(self.key_schedule) {
+            return Err(io::Error::other("Invalid device key"));
+        }
+        Ok(DeviceKey(device_key))
+    }
     pub fn derive_device_key(&self) -> DeviceKey {
         assert!(self.version == 4);
 
@@ -384,6 +401,12 @@ impl EncryptedDeviceKey {
 }
 
 impl ClepSignState {
+    pub fn try_get_rsa_key(&self) -> io::Result<BCryptRsaBlock> {
+        if self.version != 4 {
+            return Err(io::Error::other("Unsupported signing state"));
+        }
+        Ok(BCryptRsaBlock(decrypt_cbc_zero_iv(self.key_schedule, &self.key_data)))
+    }
     pub fn get_rsa_key(&self) -> BCryptRsaBlock {
         assert!(self.version == 4);
         BCryptRsaBlock(decrypt_cbc_zero_iv(self.key_schedule, &self.key_data))
@@ -391,6 +414,14 @@ impl ClepSignState {
 }
 
 impl ClepHmacState {
+    pub fn try_get_hmac_state(&self) -> io::Result<HmacBinarySecret> {
+        if self.version != 4 {
+            return Err(io::Error::other("Unsupported HMAC state"));
+        }
+        Ok(HmacBinarySecret(
+            decrypt_cbc_zero_iv(self.key_schedule, &self.key_data)[12..44].try_into().map_err(io::Error::other)?,
+        ))
+    }
     pub fn get_hmac_state(&self) -> HmacBinarySecret {
         assert!(self.version == 4);
         HmacBinarySecret(decrypt_cbc_zero_iv(self.key_schedule, &self.key_data)[12..44].try_into().unwrap())

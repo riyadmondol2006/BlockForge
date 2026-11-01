@@ -2,13 +2,13 @@
 name = "msixvc-common"
 version = "0.1.0"
 edition = "2024"
-rust-version = { workspace = true }
+rust-version = "1.98.0"
 
 [dependencies]
-tokio = { workspace = true }
-chrono = { workspace = true }
-thiserror = { workspace = true }
-uuid = { workspace = true }
+tokio = { version = "1.53.1", features = ["full", "tracing"] }
+chrono = "0.4.45"
+thiserror = "2.0.20"
+uuid = "1.25.0"
 typenum = { version = "1.20.1", features = ["const-generics"] }
 generic-array = "1.4.5"
 bitflags = "2.13.1"
