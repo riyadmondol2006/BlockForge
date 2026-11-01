@@ -1047,7 +1047,24 @@ pub fn spawn_process(
     stdin: Option<Vec<u8>>,
     token: Option<&str>,
 ) -> Result<Running> {
+    spawn_process_without(program, args, cwd, env, &[], stdin, token)
+}
+
+/// [`spawn_process`] for a game that must not inherit some variables of the launcher's own environment (`env_remove`
+/// names them; `env` is applied after, so a name in both is set).
+pub fn spawn_process_without(
+    program: &Path,
+    args: &[String],
+    cwd: &Path,
+    env: &[(String, String)],
+    env_remove: &[String],
+    stdin: Option<Vec<u8>>,
+    token: Option<&str>,
+) -> Result<Running> {
     let mut cmd = crate::platform::tokio_command(program);
+    for name in env_remove {
+        cmd.env_remove(name);
+    }
     cmd.args(args)
         .current_dir(cwd)
         .stdin(if stdin.is_some() { std::process::Stdio::piped() } else { std::process::Stdio::null() })
