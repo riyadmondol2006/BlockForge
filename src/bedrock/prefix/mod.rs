@@ -396,6 +396,20 @@ fn replace_dll(source: &Path, target: &Path, backup_suffix: &str) -> Result<bool
     Ok(true)
 }
 
+/// Whether a DLL is one Proton's setup puts in the prefix from DXVK, vkd3d-proton or NVAPI instead of the engine's
+/// own Wine build of it. The refresh leaves those alone: replacing DXVK's `dxgi.dll` with Wine's (which the game's
+/// native-only overrides then refuse to load) is what left the game without Direct3D.
+fn proton_owned(dll: &Path) -> bool {
+    let Some(stem) = dll.file_name().and_then(|n| n.to_str()).and_then(|n| n.strip_suffix(".dll")) else {
+        return false;
+    };
+    super::proton::GRAPHICS_DLLS
+        .iter()
+        .flat_map(|(_, names)| names.iter())
+        .chain(super::proton::NVAPI_DLLS.iter())
+        .any(|n| n.eq_ignore_ascii_case(stem))
+}
+
 /// A system folder of the prefix that is a real folder inside it, or None when the prefix does not have it.
 fn system_dir(prefix: &Path, rel: &str) -> Result<Option<PathBuf>, PrefixError> {
     let dir = prefix.join(rel);
@@ -446,7 +460,7 @@ pub fn refresh_engine_dlls(prefix: &Path, engine_root: &Path) -> Result<usize, P
         sources.sort();
         for source in sources {
             let target = dst_dir.join(source.file_name().expect("has a name"));
-            if fs::symlink_metadata(&target).is_err() {
+            if fs::symlink_metadata(&target).is_err() || proton_owned(&source) {
                 continue;
             }
             // An engine alias is a link inside the engine; anything pointing outside it is not trusted.
@@ -492,7 +506,8 @@ pub fn repair_user32(prefix: &Path, engine_root: &Path) -> Result<bool, PrefixEr
 }
 
 /// Delete the copies of Wine-built DLLs that refreshes used to leave beside what they replaced (some 1,100 of
-/// them, over a gigabyte). Copies of anything that did not come from an engine stay. Returns bytes freed.
+/// them, over a gigabyte), and copies identical to the DLL in place again. Copies of anything else that did not come
+/// from an engine stay. Returns bytes freed.
 pub fn prune_engine_dll_backups(prefix: &Path) -> u64 {
     let mut freed = 0;
     for (_, prefix_rel) in ENGINE_DLL_DIRS {
@@ -504,7 +519,10 @@ pub fn prune_engine_dll_backups(prefix: &Path) -> u64 {
                 continue;
             }
             let Ok(meta) = fs::symlink_metadata(&path) else { continue };
-            if meta.file_type().is_file() && is_wine_built_dll(&path) && fs::remove_file(&path).is_ok() {
+            // a copy of exactly what is in place again (a DXVK DLL put back by Proton's setup) saves nothing either
+            let live = path.to_string_lossy().strip_suffix(RUNTIME_BACKUP_SUFFIX).map(PathBuf::from);
+            let redundant = is_wine_built_dll(&path) || live.is_some_and(|l| same_bytes(&path, &l));
+            if meta.file_type().is_file() && redundant && fs::remove_file(&path).is_ok() {
                 freed += meta.len();
             }
         }
@@ -1037,9 +1055,30 @@ mod tests {
         let sys = pfx.join("drive_c/windows/system32");
         fs::write(sys.join("a.dll.bf-runtime-backup"), wine_dll("a", b"")).unwrap();
         fs::write(sys.join("b.dll.bf-runtime-backup"), b"someone's own DLL").unwrap();
+        fs::write(sys.join("dxgi.dll"), b"DXVK's dxgi").unwrap();
+        fs::write(sys.join("dxgi.dll.bf-runtime-backup"), b"DXVK's dxgi").unwrap();
         assert!(prune_engine_dll_backups(&pfx) > 0);
         assert!(!sys.join("a.dll.bf-runtime-backup").exists());
         assert!(sys.join("b.dll.bf-runtime-backup").exists());
+        assert!(!sys.join("dxgi.dll.bf-runtime-backup").exists(), "a copy of what is in place again goes");
+        assert_eq!(fs::read(sys.join("dxgi.dll")).unwrap(), b"DXVK's dxgi");
+    }
+
+    #[test]
+    fn engine_refresh_leaves_the_direct3d_dlls_proton_put_there() {
+        let pfx = booted_prefix("refresh-d3d");
+        let eng = engine("refresh-d3d-eng");
+        let sys = pfx.join("drive_c/windows/system32");
+        for name in ["dxgi.dll", "d3d12.dll", "nvapi64.dll", "kernel32.dll"] {
+            fs::write(eng.join("files/lib/wine/x86_64-windows").join(name), wine_dll(name, b"")).unwrap();
+            fs::write(sys.join(name), b"a native build from DXVK, vkd3d-proton or NVAPI").unwrap();
+        }
+        assert_eq!(refresh_engine_dlls(&pfx, &eng).unwrap(), 1, "only kernel32 is the engine's");
+        for name in ["dxgi.dll", "d3d12.dll", "nvapi64.dll"] {
+            assert_eq!(fs::read(sys.join(name)).unwrap(), b"a native build from DXVK, vkd3d-proton or NVAPI");
+            assert!(!sys.join(format!("{name}.bf-runtime-backup")).exists());
+        }
+        assert_eq!(fs::read(sys.join("kernel32.dll")).unwrap(), wine_dll("kernel32.dll", b""));
     }
 
     #[test]

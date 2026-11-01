@@ -36,6 +36,27 @@ const PAYLOAD: &[&str] = &[
     "windows.devices.enumeration.dll",
 ];
 
+/// The Direct3D DLLs Proton's setup puts in both system folders in place of Wine's own: DXVK's and vkd3d-proton's,
+/// by engine subfolder. The game's overrides load them as native only, so a Wine-built copy in their place (which a
+/// refresh of the engine's DLLs, or anything else that treats them as Wine's, leaves) is not loaded at all and the
+/// game finds no `dxgi.dll`.
+pub const GRAPHICS_DLLS: [(&str, &[&str]); 2] =
+    [("dxvk", &["d3d11", "d3d10core", "d3d9", "dxgi"]), ("vkd3d-proton", &["d3d12", "d3d12core"])];
+
+/// The NVAPI DLLs Proton's setup adds when NVAPI is on (also not Wine's).
+pub const NVAPI_DLLS: [&str; 3] = ["nvapi64", "nvofapi64", "nvapi"];
+
+/// Whether every DLL of [`GRAPHICS_DLLS`] in the prefix's system folders is a native build, not a Wine one. A few
+/// small reads: the warm start checks this before it skips the full pass.
+fn graphics_dlls_in_place(drive: &Path) -> bool {
+    ["system32", "syswow64"].iter().all(|dir| {
+        GRAPHICS_DLLS.iter().flat_map(|(_, names)| names.iter()).all(|name| {
+            let path = drive.join("windows").join(dir).join(format!("{name}.dll"));
+            path.is_file() && !builtin(&path)
+        })
+    })
+}
+
 /// Hold the prefix's exclusive idle lease and engine lease before calling any
 /// setup functions. Package C owns registry edits after wineboot + server wait.
 /// Without a bundled template, call native headless Wineboot once before this
@@ -88,6 +109,7 @@ pub fn prepare(engine: &Engine, prefix: &Path, nvapi: bool) -> Result<()> {
         && ["xgameruntime.dll", "xgameruntime.dll.threading", "cryptbase.dll"]
             .iter()
             .all(|f| drive.join("windows/system32").join(f).is_file())
+        && graphics_dlls_in_place(&drive)
     {
         return Ok(());
     }
@@ -112,9 +134,7 @@ pub fn prepare(engine: &Engine, prefix: &Path, nvapi: bool) -> Result<()> {
             // builtins too: Wineboot must never write through engine links.
             install_file(&entry.path(), &target, prefix, &mut tracked, false)?;
         }
-        for (sub, names) in
-            [("dxvk", &["d3d11", "d3d10core", "d3d9", "dxgi"][..]), ("vkd3d-proton", &["d3d12", "d3d12core"][..])]
-        {
+        for (sub, names) in GRAPHICS_DLLS {
             for name in names {
                 let source = lib.join(sub).join(arch).join(if sub == "vkd3d-proton" {
                     format!("{name}.dll.bol-ext-dgc")
@@ -560,6 +580,17 @@ mod cache_tests {
         prepare(&e, &p, false).unwrap();
         fs::rename(e.root().join("files/lib/wine"), e.root().join("files/lib/not-scanned")).unwrap();
         assert!(prepare(&e, &p, true).is_err(), "turning NVAPI on is a different prefix revision");
+        // A Wine-built DLL where DXVK's belongs (what an engine refresh used to leave) is not warm: the full pass
+        // puts DXVK's back.
+        fs::rename(e.root().join("files/lib/not-scanned"), e.root().join("files/lib/wine")).unwrap();
+        prepare(&e, &p, false).unwrap();
+        let dxgi = p.join("drive_c/windows/syswow64/dxgi.dll");
+        let mut wine_built = vec![0u8; 0x40];
+        wine_built.extend_from_slice(b"Wine builtin DLL");
+        wine_built.resize(0x100, 0);
+        fs::write(&dxgi, &wine_built).unwrap();
+        prepare(&e, &p, false).unwrap();
+        assert_eq!(fs::read(&dxgi).unwrap(), b"synthetic payload");
         fs::remove_dir_all(dir).unwrap();
     }
 }
