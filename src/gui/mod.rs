@@ -126,6 +126,8 @@ pub enum InstTab {
 /// one that was cancelled is not taken for a newer one's.
 pub enum Msg {
     Reload,
+    /// The newest Horizon build installed, looked at off the window's thread.
+    HorizonBuild(Option<crate::horizon::Build>),
     Deleted(String),
     InstanceImage(String, Result<(), String>),
     Manifest(Result<Manifest, String>),
@@ -1074,6 +1076,11 @@ impl App {
     fn handle(&mut self, msg: Msg) {
         match msg {
             Msg::Reload => self.reload_instances(),
+            Msg::HorizonBuild(build) => {
+                if self.shot.is_none() {
+                    self.horizon_build = build;
+                }
+            }
             Msg::Deleted(folder) => self.deleting.retain(|f| *f != folder),
             Msg::InstanceImage(folder, result) => self.instance_image_saved(&folder, result),
             Msg::Manifest(r) => match r {

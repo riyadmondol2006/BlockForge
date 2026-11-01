@@ -8,7 +8,7 @@ use egui::{RichText, Ui};
 use super::instance_menu::Act;
 use super::theme::*;
 use super::widgets::*;
-use super::{App, InstTab};
+use super::{App, InstTab, Msg};
 use crate::horizon;
 use crate::instances::Instance;
 use crate::launch;
@@ -188,12 +188,16 @@ impl App {
     }
 
     /// Look again at which Horizon build is installed (no network): after the instances are read, which is after
-    /// every job, so a build that a job installed shows at once.
+    /// every job, so a build that a job installed shows at once. On a thread of its own: the first look in a run
+    /// checks the build's programs against the record made when it was installed, tens of MB, which the window
+    /// must not wait for. The answer comes back as [`Msg::HorizonBuild`].
     pub(super) fn refresh_horizon_build(&mut self) {
         // the screenshot tour shows a build of its own (see `shot_mark_horizon`)
-        if self.shot.is_none() {
-            self.horizon_build = horizon::installed_build(&self.dirs);
+        if self.shot.is_some() {
+            return;
         }
+        let (dirs, n) = (self.dirs.clone(), self.notifier());
+        self.rt.spawn_blocking(move || n.send(Msg::HorizonBuild(horizon::installed_build(&dirs))));
     }
 
     /// The card on a Horizon instance's Overview: what it is, the build it plays, and who makes it.
