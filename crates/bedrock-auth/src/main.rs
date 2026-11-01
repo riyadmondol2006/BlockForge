@@ -114,6 +114,8 @@ mod linux {
         let mut loaded = false;
         let mut opened = false;
         let pending: Pending = Arc::default();
+        // The nonce of the ServerData read under way (see `ipc::credentials_from_page`).
+        let nonce: Pending = Arc::default();
         let deadline = Instant::now() + Duration::from_secs(15);
         if self_test {
             proxy
@@ -149,7 +151,7 @@ mod linux {
                     }
                     let connection = connection.clone();
                     let proxy_load = proxy.clone();
-                    let (proxy_nav, pending_nav) = (proxy.clone(), pending.clone());
+                    let (proxy_nav, pending_nav, nonce_ipc) = (proxy.clone(), pending.clone(), nonce.clone());
                     let builder = WebViewBuilder::new_with_web_context(&mut context)
                         .with_url(&url).with_headers(headers).with_incognito(true)
                         .with_user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64; MSAppHost/3.0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/70.0.3538.102 Safari/537.36 Edge/18.26100")
@@ -164,13 +166,19 @@ mod linux {
                         })
                         .with_new_window_req_handler(|_, _| wry::NewWindowResponse::Deny)
                         .with_ipc_handler(move |request| {
-                            if request.body().len() > ipc::LIMIT || !ipc::allowed_url(&request.uri().to_string()) { return; }
+                            let uri = request.uri().to_string();
+                            if request.body().len() > ipc::LIMIT || !ipc::allowed_url(&uri) { return; }
+                            // wry reports the main frame's address whichever frame posted, and WebKit lets every frame
+                            // reach this handler. So credentials count only with the nonce of the read this window
+                            // asked for, used once; any other page message is at most the host-bridge command below.
+                            let expected = nonce_ipc.lock().ok().and_then(|n| n.clone());
+                            if let Some(message) = ipc::credentials_from_page(request.body(), &uri, expected.as_deref()) {
+                                if let Ok(mut n) = nonce_ipc.lock() { *n = None; }
+                                if let Some(stream) = &connection { send(stream, message); }
+                                return;
+                            }
                             let Ok(data) = serde_json::from_str::<serde_json::Value>(request.body()) else { return; };
-                            if data.get("sDAToken").and_then(|v| v.as_str()).is_some() && ipc::credential_page(&request.uri().to_string()) {
-                                // Forward only the DA fields, each a string; never the rest of the page state.
-                                let fields: Option<serde_json::Map<_, _>> = ipc::DA_FIELDS.iter().map(|f| Some((f.to_string(), serde_json::Value::String(data.get(*f)?.as_str()?.into())))).collect();
-                                if let (Some(stream), Some(fields)) = (&connection, fields) { send(stream, Message::Credentials { data: fields.into() }); }
-                            } else if data.get("type").and_then(|v| v.as_str()) == Some("invoke") && data.pointer("/value/name").and_then(|v| v.as_str()) == Some("CloudExperienceHost.getContext")
+                            if data.get("type").and_then(|v| v.as_str()) == Some("invoke") && data.pointer("/value/name").and_then(|v| v.as_str()) == Some("CloudExperienceHost.getContext")
                                 && let Some(context) = data.pointer("/value/context").and_then(|v| v.as_str()) {
                                 // Post an internal UI command; never interpolate context into executable JS.
                                 let _ = proxy_load.send_event(Command::Context(context.into()));
@@ -193,7 +201,12 @@ mod linux {
                     if let Some(view) = &webview { let _ = view.evaluate_script(&ipc::host_context(&context)); }
                 },
                 Event::UserEvent(Command::Message(Message::Credentials { data })) if data.is_null() => {
-                    if let Some(view) = &webview { let _ = view.evaluate_script(&ipc::read_server_data()); }
+                    // A fresh nonce for every read: whatever answers must carry it, once.
+                    let fresh = uuid::Uuid::new_v4().simple().to_string();
+                    if let (Some(view), Some(script)) = (&webview, ipc::read_server_data(&fresh)) {
+                        if let Ok(mut n) = nonce.lock() { *n = Some(fresh); }
+                        let _ = view.evaluate_script(&script);
+                    }
                 },
                 Event::UserEvent(Command::Message(Message::Complete)) => { loaded = true; *flow = ControlFlow::Exit; },
                 Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => { if let Some(stream) = &connection { send(stream, Message::Cancelled); } *flow = ControlFlow::Exit; },

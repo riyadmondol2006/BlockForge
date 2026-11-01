@@ -106,6 +106,57 @@ fn helper_protocol_is_bounded_versioned_and_cancel_is_not_success() {
     assert_eq!(first.len(), 9);
     assert!(ipc::host_context("\";alert(1)//").contains("\\\""));
 }
+/// A frame of the sign-in page can post to the helper's IPC handler as if it were the page: only a message that
+/// carries the nonce of the helper's own ServerData read becomes `Credentials`, and only once.
+#[test]
+fn page_credentials_need_the_helpers_nonce() {
+    const PAGE: &str = "https://login.live.com/ppsecure/post.srf";
+    const NONCE: &str = "0123456789abcdef0123456789abcdef";
+    let fields = |nonce: Option<&str>| {
+        let mut m = serde_json::Map::new();
+        for f in ipc::DA_FIELDS {
+            m.insert(f.to_string(), format!("value-of-{f}").into());
+        }
+        if let Some(n) = nonce {
+            m.insert("nonce".into(), n.into());
+        }
+        serde_json::Value::Object(m).to_string()
+    };
+    // The helper's own script is what carries the nonce, and it only accepts one that is plain letters and digits.
+    let script = ipc::read_server_data(NONCE).unwrap();
+    assert!(script.contains(&format!("\"nonce\":\"{NONCE}\"")) && script.contains("ServerData[\"sDAToken\"]"));
+    assert!(ipc::read_server_data("x\"+alert(1)+\"0123456789").is_none() && ipc::read_server_data("short").is_none());
+    // With the nonce: exactly the DA fields, nothing else the page added.
+    let mut extra: serde_json::Value = serde_json::from_str(&fields(Some(NONCE))).unwrap();
+    extra["password"] = "hunter2".into();
+    for body in [fields(Some(NONCE)), extra.to_string()] {
+        let Some(ipc::Message::Credentials { data }) = ipc::credentials_from_page(&body, PAGE, Some(NONCE)) else {
+            panic!("credentials with the nonce are accepted");
+        };
+        let keys: std::collections::BTreeSet<_> = data.as_object().unwrap().keys().cloned().collect();
+        assert_eq!(keys, ipc::DA_FIELDS.iter().map(|f| f.to_string()).collect());
+    }
+    // Without a nonce, with a wrong one, with none expected, or from the wrong place: ignored.
+    assert!(ipc::credentials_from_page(&fields(None), PAGE, Some(NONCE)).is_none());
+    assert!(ipc::credentials_from_page(&fields(Some("fedcba9876543210fedcba9876543210")), PAGE, Some(NONCE)).is_none());
+    assert!(ipc::credentials_from_page(&fields(Some("")), PAGE, Some(NONCE)).is_none());
+    assert!(ipc::credentials_from_page(&fields(Some(NONCE)), PAGE, None).is_none());
+    assert!(ipc::credentials_from_page(&fields(Some(NONCE)), PAGE, Some("short")).is_none());
+    assert!(ipc::credentials_from_page(&fields(Some(NONCE)), "https://evil.example/", Some(NONCE)).is_none());
+    assert!(ipc::credentials_from_page(&fields(Some(NONCE)), "https://login.live.com.evil/", Some(NONCE)).is_none());
+    // A non-string nonce, a missing DA field, junk and an oversized body are all refused.
+    let mut number: serde_json::Value = serde_json::from_str(&fields(Some(NONCE))).unwrap();
+    number["nonce"] = 5.into();
+    assert!(ipc::credentials_from_page(&number.to_string(), PAGE, Some(NONCE)).is_none());
+    let mut missing: serde_json::Value = serde_json::from_str(&fields(Some(NONCE))).unwrap();
+    missing.as_object_mut().unwrap().remove("K");
+    assert!(ipc::credentials_from_page(&missing.to_string(), PAGE, Some(NONCE)).is_none());
+    assert!(ipc::credentials_from_page("not json", PAGE, Some(NONCE)).is_none());
+    assert!(ipc::credentials_from_page(&" ".repeat(ipc::LIMIT + 1), PAGE, Some(NONCE)).is_none());
+    // A page cannot make the helper say it has an Xbox code, whatever it posts.
+    let xbox = r#"{"type":"XboxCode","code":"c","state":"s"}"#;
+    assert!(ipc::credentials_from_page(xbox, PAGE, Some(NONCE)).is_none());
+}
 #[test]
 fn missing_token_key_requests_signin() {
     let manager = xodus::tokens::TokenManager::with_memory();
@@ -821,7 +872,7 @@ fn sign_in_frames_may_reach_challenges_but_credentials_only_come_from_login_live
     assert!(!ipc::credential_page("https://account.live.com/"));
     assert!(!ipc::credential_page("https://login.live.com.evil/"));
     // The helper never forwards the rest of ServerData, which may not even fit in a frame.
-    let script = ipc::read_server_data();
+    let script = ipc::read_server_data("0123456789abcdef0123456789abcdef").unwrap();
     for field in ipc::DA_FIELDS {
         assert!(script.contains(&format!("{field:?}:ServerData[{field:?}]")));
     }

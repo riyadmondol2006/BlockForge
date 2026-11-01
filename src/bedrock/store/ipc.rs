@@ -215,8 +215,10 @@ pub fn allowed_url(url: &str) -> bool {
 /// Where the sign-in page may navigate, frames included (WebKitGTK asks the same policy
 /// for subframes). Microsoft's account pages pull in their CDNs, the account site and the
 /// human-verification challenges (Arkose Labs, HUMAN "press and hold") in frames; blocking
-/// those leaves a challenge that can never be solved. Credentials still come only from
-/// login.live.com, so a frame from these domains can show content but never sign in.
+/// those leaves a challenge that can never be solved. The page's own IPC messages are checked against the page
+/// the window is on, which WebKit reports for the main frame only, so this does not stop a frame from these
+/// domains from posting a message: what keeps frame script from signing anyone in is the nonce in
+/// [`credentials_from_page`], which only the helper's own evaluated script knows.
 pub fn allowed_navigation(url: &str) -> bool {
     if matches!(url, "about:blank" | "about:srcdoc") {
         return true;
@@ -249,12 +251,38 @@ pub fn credential_page(url: &str) -> bool {
 /// carries the whole page state and can be larger than an IPC frame.
 pub const DA_FIELDS: [&str; 7] =
     ["sDAToken", "sDASessionKey", "sDAStartTime", "sDAExpires", "sSTSInlineFlowToken", "sSigninName", "K"];
-/// Script that posts only [`DA_FIELDS`] of ServerData back through the IPC bridge.
-pub fn read_server_data() -> String {
+/// Script that posts only [`DA_FIELDS`] of ServerData back through the IPC bridge, with `nonce` in the message.
+/// The nonce is random per evaluation and is never put anywhere a page can read it before the script runs (the
+/// script text is evaluated in the main frame; a frame from another origin cannot see it), so a message that
+/// carries it was posted by this script and not by something else on the page. `None` for a nonce that is not
+/// plain letters and digits (it is pasted into JavaScript).
+pub fn read_server_data(nonce: &str) -> Option<String> {
+    if !valid_state(nonce) {
+        return None;
+    }
     let fields = DA_FIELDS.map(|f| format!("{f:?}:ServerData[{f:?}]")).join(",");
-    format!(
-        "if (typeof ServerData !== 'undefined' && ServerData.sDAToken) window.ipc.postMessage(JSON.stringify({{{fields}}}))"
-    )
+    Some(format!(
+        "if (typeof ServerData !== 'undefined' && ServerData.sDAToken) window.ipc.postMessage(JSON.stringify({{\"nonce\":\"{nonce}\",{fields}}}))"
+    ))
+}
+/// What the helper forwards for a message the page posted: `Credentials` with exactly [`DA_FIELDS`] (each a
+/// string) when `body` came from the page `uri`, carries `nonce` (the one [`read_server_data`] was last given)
+/// and that nonce is still unused; nothing otherwise. Nothing the page posts can become an Xbox message: those
+/// are built from the window's own navigation, never from page script.
+pub fn credentials_from_page(body: &str, uri: &str, nonce: Option<&str>) -> Option<Message> {
+    if body.len() > LIMIT || !allowed_url(uri) || !credential_page(uri) {
+        return None;
+    }
+    let nonce = nonce.filter(|n| valid_state(n))?;
+    let data: serde_json::Value = serde_json::from_str(body).ok()?;
+    if data.get("nonce")?.as_str()? != nonce {
+        return None;
+    }
+    let fields: serde_json::Map<String, serde_json::Value> = DA_FIELDS
+        .iter()
+        .map(|f| Some((f.to_string(), serde_json::Value::String(data.get(*f)?.as_str()?.into()))))
+        .collect::<Option<_>>()?;
+    Some(Message::Credentials { data: fields.into() })
 }
 /// Headers used for both hosted legs (BOL patch 0004).
 pub fn headers(correlation: &str) -> Vec<(&'static str, String)> {
