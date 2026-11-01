@@ -1285,7 +1285,7 @@ mod tests {
             inner_plan(
                 &engine,
                 &profile,
-                Path::new("/owned/bedrock/helpers/x/blockforge-bedrock-runtime"),
+                Path::new("/owned/bedrock/helpers/x/bedrock-runtime"),
                 base.join("sessions/s/wine-plan.json"),
                 program,
                 vec![],

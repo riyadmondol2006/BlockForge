@@ -2,7 +2,7 @@
 //!
 //! - `blockforge-bedrock-auth` (crates/bedrock-auth): the Microsoft Store sign-in window (WebKitGTK). Runs on the host
 //!   from where it is installed.
-//! - `blockforge-bedrock-runtime` (crates/bedrock-runtime): the static program that becomes Wine inside the Steam
+//! - `bedrock-runtime` (crates/bedrock-runtime): the static program that becomes Wine inside the Steam
 //!   Linux Runtime container. The container has its own `/usr`, so a copy installed in `/usr/bin` (or inside an
 //!   AppImage's mount) is not visible there: it is copied, once per build of it, into `bedrock/helpers/<sha256>/`
 //!   in BlockForge's own data folder, which the container mounts.
@@ -16,7 +16,7 @@ use std::{
 };
 
 pub const AUTH_HELPER: &str = "blockforge-bedrock-auth";
-pub const RUNTIME_HELPER: &str = "blockforge-bedrock-runtime";
+pub const RUNTIME_HELPER: &str = "bedrock-runtime";
 pub const AUTH_ENV: &str = "BF_BEDROCK_AUTH_HELPER";
 pub const RUNTIME_ENV: &str = "BF_BEDROCK_RUNTIME_HELPER";
 

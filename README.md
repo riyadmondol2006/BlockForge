@@ -301,19 +301,6 @@ cargo run --release            # the launcher window
 cargo test --release           # about 600 tests, a few seconds
 ```
 
-On Linux, Bedrock Edition also needs two small helper programs beside `blockforge` (the release packages include them).
-Building them needs `protoc`, WebKitGTK 4.1 and GTK 3 development files (Fedora: `sudo dnf install protobuf-compiler
-webkit2gtk4.1-devel`) and the musl target (`rustup target add x86_64-unknown-linux-musl`):
-
-```sh
-cargo build --locked --release -p blockforge-bedrock-auth            # the Microsoft Store sign-in window
-cargo build --locked --release -p bedrock-runtime --target x86_64-unknown-linux-musl
-cp target/x86_64-unknown-linux-musl/release/blockforge-bedrock-runtime target/release/
-```
-
-BlockForge looks for `blockforge-bedrock-auth` and `blockforge-bedrock-runtime` in the folder of its own program;
-`BF_BEDROCK_AUTH_HELPER` and `BF_BEDROCK_RUNTIME_HELPER` point at others while developing.
-
 Packages are built by the scripts in [`packaging/`](packaging/) and by the
 [GitHub workflow](.github/workflows/build.yml), which builds, tests and publishes everything on every push to `main`. A push that changes the program raises the version
 by itself (see `.github/scripts/version.sh`: `[skip bump]` in a commit message skips it, `[minor]` or `[major]` raises
