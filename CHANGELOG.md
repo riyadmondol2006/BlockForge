@@ -7,7 +7,7 @@ The section for a version is used as the text of its release on GitHub. Older re
 
 ### What is new
 
-- **Minecraft: Bedrock Edition.** New instance now offers three games: Minecraft: Java Edition, Horizon and
+- **Minecraft: Bedrock Edition.** On Linux, New instance now offers three games: Minecraft: Java Edition, Horizon and
   Minecraft: Bedrock Edition. Bedrock is your own copy of Minecraft for Windows (bought on a Microsoft account; a
   console or phone copy doesn't count), as Release or Preview, each with its own worlds. The card says what it needs:
   the game, one Microsoft sign-in, and about 3 GB the first time.
@@ -27,9 +27,7 @@ The section for a version is used as the text of its release on GitHub. Older re
   program or library. Staging checks the encrypted images against the same tree, and Repair checks the kept metadata.
   Microsoft's signature on the header can't be checked (its key isn't public); the header is trusted as served over
   HTTPS.
-- **On Windows** the game is native: a Bedrock instance finds Minecraft for Windows or Preview installed for your
-  Windows user, starts it, opens its Microsoft Store page when it isn't installed, and backs up its worlds from
-  `%APPDATA%\Minecraft Bedrock`. On macOS Bedrock isn't available yet, and New instance says so.
+- **Linux only, for now.** On Windows and macOS, New instance doesn't offer Bedrock yet.
 - **A Bedrock instance has a page of its own:** how it stands, both sign-ins with Sign in and Sign out (Xbox's code
   is shown large, with Copy and Open), Download, Play, Stop, Repair and Diagnose, progress with Cancel, the game's log,
   and its worlds with Open folder and Back up. The Library (grid and list, with a Bedrock filter) and Home show

@@ -1085,10 +1085,12 @@ impl App {
     /// page the cards keep only their names; what they are is said when one is pointed at.
     fn edition_choice(&mut self, ui: &mut Ui, width: f32) {
         const GAP: f32 = 10.0;
-        let w = ((width - 14.0 - 2.0 * GAP) / 3.0).floor().max(90.0);
         let supported = horizon::supported();
         let bedrock = crate::bedrock::support();
         let bedrock_ok = bedrock != crate::bedrock::Support::Unavailable;
+        // Bedrock is offered only where BlockForge plays it (Linux for now); elsewhere its card isn't shown at all
+        let cards = if bedrock_ok { 3.0 } else { 2.0 };
+        let w = ((width - 14.0 - (cards - 1.0) * GAP) / cards).floor().max(90.0);
         let mc = self.horizon_minecraft();
         let on = self.create.edition;
         let mut picked = None;
@@ -1130,20 +1132,24 @@ impl App {
             if hz.clicked() && supported {
                 picked = Some(Edition::Horizon);
             }
-            let (title, line, hint) = match (bedrock, size) {
-                (crate::bedrock::Support::Unavailable, CardSize::Compact) => {
-                    ("Bedrock", "", crate::bedrock::UNAVAILABLE)
+            if bedrock_ok {
+                let (title, line, hint) = match (bedrock, size) {
+                    (crate::bedrock::Support::Unavailable, CardSize::Compact) => {
+                        ("Bedrock", "", crate::bedrock::UNAVAILABLE)
+                    }
+                    (crate::bedrock::Support::Unavailable, _) => {
+                        ("Bedrock Edition", "Not on macOS yet", crate::bedrock::UNAVAILABLE)
+                    }
+                    (_, CardSize::Roomy) => {
+                        ("Minecraft: Bedrock Edition", "Your own copy, from the Store", BEDROCK_HINT)
+                    }
+                    (_, CardSize::Narrow) => ("Bedrock Edition", "Your own copy", BEDROCK_HINT),
+                    (_, CardSize::Compact) => ("Bedrock", "", BEDROCK_HINT),
+                };
+                let bd = edition_card(ui, title, line, None, on == Edition::Bedrock, bedrock_ok, w).on_hover_text(hint);
+                if bd.clicked() && bedrock_ok {
+                    picked = Some(Edition::Bedrock);
                 }
-                (crate::bedrock::Support::Unavailable, _) => {
-                    ("Bedrock Edition", "Not on macOS yet", crate::bedrock::UNAVAILABLE)
-                }
-                (_, CardSize::Roomy) => ("Minecraft: Bedrock Edition", "Your own copy, from the Store", BEDROCK_HINT),
-                (_, CardSize::Narrow) => ("Bedrock Edition", "Your own copy", BEDROCK_HINT),
-                (_, CardSize::Compact) => ("Bedrock", "", BEDROCK_HINT),
-            };
-            let bd = edition_card(ui, title, line, None, on == Edition::Bedrock, bedrock_ok, w).on_hover_text(hint);
-            if bd.clicked() && bedrock_ok {
-                picked = Some(Edition::Bedrock);
             }
         });
         if let Some(e) = picked.filter(|e| *e != on) {

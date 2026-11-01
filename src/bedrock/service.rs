@@ -260,15 +260,10 @@ fn platform_parts() -> Arc<dyn Parts> {
     }
 }
 
-/// What the window can be told the platform offers.
+/// What the window can be told the platform offers. Bedrock is offered on Linux only for now: the native Windows track
+/// (finding and starting Minecraft for Windows) is kept, but stays off until it has been tried on a real Windows PC.
 pub fn support() -> Support {
-    if cfg!(target_os = "linux") {
-        Support::Linux
-    } else if cfg!(windows) {
-        Support::Windows
-    } else {
-        Support::Unavailable
-    }
+    if cfg!(target_os = "linux") { Support::Linux } else { Support::Unavailable }
 }
 
 /// Why Bedrock can't be played here, said where it would be offered.
@@ -1912,7 +1907,7 @@ mod tests {
     }
 
     /// The prefix's launch lease is held by a supervisor this process doesn't know of: Delete is refused whole.
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn delete_waits_for_a_game_that_holds_the_prefix() {
         use super::super::supervisor::lease::{Kind, Lease};

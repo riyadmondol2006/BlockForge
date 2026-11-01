@@ -116,10 +116,8 @@ console or phone copy doesn't count). Choose Release or Preview; each keeps its 
   Microsoft's download network serves it over HTTPS. A build downloaded by an earlier test version of BlockForge, before
   this check, must be repaired (downloaded again) before it plays. The sign-in window uses the system's WebKitGTK 4.1
   (`webkit2gtk4.1` on Fedora, `libwebkit2gtk-4.1-0` on Debian and Ubuntu); BlockForge itself starts without it.
-- **Windows:** the game is native, so BlockForge finds Minecraft for Windows (or Preview) installed for your Windows
-  user, starts it, opens its Microsoft Store page when it isn't installed, and backs up its worlds from
-  `%APPDATA%\Minecraft Bedrock`. Windows and the game sign you in.
-- **macOS:** not available yet.
+- **Windows and macOS:** not yet. Bedrock is offered on Linux only for now; on other systems New instance doesn't
+  show it.
 
 The instance's page shows how it stands, both sign-ins with Sign in and Sign out, Download, Play and Stop, Repair and
 Diagnose, the game's log and its worlds folder. The Library and Home show Bedrock instances with a Bedrock tag.

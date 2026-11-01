@@ -443,7 +443,7 @@ pub(super) fn save(paths: &Paths, rec: &InstanceRecord) -> Result<()> {
 /// it. `Busy` then, with nothing removed.
 pub(super) fn remove(paths: &Paths, rec: &InstanceRecord) -> Result<()> {
     let profile = paths.profile(&rec.profile);
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     let _lease = if profile.is_dir() {
         use super::supervisor::lease::{Kind, Lease, LeaseError};
         match Lease::try_take(&paths.launch_lease(&rec.profile), Kind::Exclusive) {
@@ -603,7 +603,7 @@ mod tests {
 
     /// A game a closed window left running holds the prefix's launch lease: deleting its instance is refused and
     /// nothing is removed; once the lease is free the instance goes.
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     #[test]
     fn removing_an_instance_waits_for_the_prefixs_launch_lease() {
         use super::super::supervisor::lease::{Kind, Lease};
