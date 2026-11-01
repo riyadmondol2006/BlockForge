@@ -188,9 +188,19 @@ fn timing_of(plan: &LaunchPlan) -> Timing {
     }
 }
 
+/// Wine's programs that carry the game's name on their command line before the game runs: its loader (until the
+/// image is mapped and Wine rewrites the command line to the game's own path) and the programs that start it.
+const WINE_LAUNCHERS: [&str; 6] = ["wine", "wine64", "wine-preloader", "wine64-preloader", "start.exe", "steam.exe"];
+
+/// Whether a process is the game itself, running. `wine Z:\…\Minecraft.Windows.exe` is not: taking that for the game
+/// called the start ready (and let the staged images go) before the loader had opened the game.
 fn is_the_image(info: &super::procs::ProcInfo, image: &str) -> bool {
     let want = image.to_lowercase();
-    if info.cmdline.iter().any(|a| a.to_lowercase().contains(&want)) {
+    let launcher = info.cmdline.first().is_some_and(|a| {
+        let name = a.rsplit(['/', '\\']).next().unwrap_or_default().to_lowercase();
+        WINE_LAUNCHERS.contains(&name.as_str())
+    });
+    if !launcher && info.cmdline.iter().any(|a| a.to_lowercase().contains(&want)) {
         return true;
     }
     // a command name is cut at 15 characters
@@ -538,10 +548,8 @@ async fn session_inner(
                         seen.extend(found.iter().map(|i| i.id));
                         if found.iter().any(|i| is_the_image(i, &plan.ready_image)) {
                             ready = true;
-                            if let Some(s) = &staging {
-                                // the loader unlinks what it opened: anything still here was never needed
-                                s.release_files();
-                            }
+                            // The staged images stay until the session ends: the loader unlinks each one as it opens
+                            // it, and a staged DLL may be loaded long after the game's own image.
                             hub.emit(SessionEvent::Ready, Some(Stage::Ready));
                         }
                     }
@@ -850,4 +858,37 @@ pub fn cleanup_stale_sessions(bedrock_root: &Path, ram_root: Option<&Path>) -> C
         }
     }
     report
+}
+
+#[cfg(test)]
+mod image_tests {
+    use super::super::procs::{ProcId, ProcInfo};
+    use super::is_the_image;
+
+    fn proc(comm: &str, cmdline: &[&str]) -> ProcInfo {
+        ProcInfo {
+            id: ProcId { pid: 1, start: 1 },
+            ppid: 0,
+            state: 'S',
+            uid: 1000,
+            comm: comm.into(),
+            cmdline: cmdline.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn the_wine_loader_naming_the_game_is_not_the_game() {
+        let image = "Minecraft.Windows.exe";
+        let game = r"Z:\games\mc\Minecraft.Windows.exe";
+        // before the image is mapped: the loader, and the programs that start the game
+        assert!(!is_the_image(&proc("wine", &["/engine/files/bin-wow64/wine", game]), image));
+        assert!(!is_the_image(&proc("wine-preloader", &["/e/bin/wine-preloader", "/e/bin/wine", game]), image));
+        assert!(!is_the_image(&proc("start.exe", &[r"C:\windows\system32\start.exe", "/exec", game]), image));
+        assert!(!is_the_image(&proc("steam.exe", &[r"c:\windows\system32\steam.exe", game]), image));
+        // running: Wine rewrites the command line to the game's path and names the process after it
+        assert!(is_the_image(&proc("Minecraft.Windo", &[game]), image));
+        assert!(is_the_image(&proc("MINECRAFT MAIN ", &[game]), image));
+        assert!(is_the_image(&proc("Minecraft.Windo", &[]), image));
+        assert!(!is_the_image(&proc("explorer.exe", &[r"C:\windows\explorer.exe", "/desktop"]), image));
+    }
 }
