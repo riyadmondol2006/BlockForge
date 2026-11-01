@@ -1,0 +1,2 @@
+# Preserve the original signed-off mail patches byte for byte (including context spaces).
+patches/*.patch -whitespace

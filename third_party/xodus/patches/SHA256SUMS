@@ -1,0 +1,7 @@
+3c912918d19bdb8b370ecbf5d78fa2cf8010676d81e2ab7d7b70ec3130d0a201  third_party/xodus/patches/0001-msixvc-only-count-cache-bytes-that-are-on-disk.patch
+3e6169de8938d4e1862ec0780eca0dfa473806b556d3a384fed03968619d59a3  third_party/xodus/patches/0002-licensing-accept-a-license-type-the-enum-does-not-name.patch
+92ee11c7292a0772569214ced7f1599054d91dd0bcef00db2e7a10394b98b41f  third_party/xodus/patches/0003-licensing-report-a-license-that-cannot-be-read.patch
+3891d267f8013e53542bb6265acf7c2b6b011ec401e31ce1844b3cd21b87e4f7  third_party/xodus/patches/0004-login-host-the-second-leg-of-a-sign-in-like-the-first.patch
+5f490e849fccb814fc6cec48299699acdad2fa3448ca1529c5d86cf9845d0266  third_party/xodus/patches/0005-licensing-ask-for-a-sign-in-instead-of-unwrapping-a-missing-token.patch
+1026fcafbd84182a59a0a85975839009d052d590f72f624cd5431f8c46d0f922  third_party/xodus/patches/0006-licensing-send-a-jwe-delegation-ticket-without-the-d-prefix.patch
+311919058345ee45d410ca305621ae4a2a64e9db85c3c444cbf9e0b969e0b9a4  third_party/xodus/patches/0007-licensing-report-a-refused-license-request-with-its-status-and-reason.patch
