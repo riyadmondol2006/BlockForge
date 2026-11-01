@@ -97,6 +97,9 @@ pub fn prepare(engine: &Engine, prefix: &Path, nvapi: bool) -> Result<()> {
         seed_machine_guid(&prefix.join("system.reg"))?;
     }
     migrate_user_paths(prefix)?;
+    if let Some(login) = login_name() {
+        link_login_user(prefix, &login)?;
+    }
     let drive = prefix.join("drive_c");
     fs::create_dir_all(&drive).map_err(io)?;
     fs::create_dir_all(prefix.join("dosdevices")).map_err(io)?;
@@ -401,6 +404,32 @@ fn atomic_file(path: &Path, bytes: &[u8]) -> Result<()> {
     result
 }
 
+/// The name Wine gives the Windows user: the login the session passes it as `USER` (or `LOGNAME`). None when it is
+/// not a plain folder name.
+fn login_name() -> Option<String> {
+    ["USER", "LOGNAME"]
+        .iter()
+        .filter_map(|k| std::env::var(k).ok())
+        .find(|n| !n.is_empty() && n != "." && n != ".." && !n.contains(['/', '\\', '\0']) && n.len() <= 255)
+}
+
+/// Make `drive_c/users/<login>` the same folder as `steamuser`, as umu does for a Proton prefix (umu_run.py
+/// `setup_pfx`). This Wine names the user's folders after the login, while the game's data (worlds, options, the
+/// backups of them) is kept under `steamuser`; without the link the game wrote to a folder nothing else reads.
+/// A login folder that already holds something is left as it is.
+fn link_login_user(prefix: &Path, login: &str) -> Result<()> {
+    if login.eq_ignore_ascii_case("steamuser") {
+        return Ok(());
+    }
+    let users = prefix.join("drive_c/users");
+    let steamuser = users.join("steamuser");
+    let user = users.join(login);
+    if fs::symlink_metadata(&user).is_err() && fs::symlink_metadata(&steamuser).is_ok_and(|m| m.is_dir()) {
+        symlink("steamuser", &user).map_err(io)?;
+    }
+    Ok(())
+}
+
 fn migrate_user_paths(prefix: &Path) -> Result<()> {
     let user = prefix.join("drive_c/users/steamuser");
     for (old, new, link) in [
@@ -456,6 +485,22 @@ fn merge_user_dir(src: &Path, dst: &Path) -> Result<()> {
 #[cfg(test)]
 mod migration_tests {
     use super::*;
+    #[test]
+    fn the_login_folder_is_steamuser_unless_it_already_holds_something() {
+        let dir = crate::testutil::scratch("b-login");
+        let users = dir.join("drive_c/users");
+        fs::create_dir_all(users.join("steamuser/AppData/Roaming")).unwrap();
+        link_login_user(&dir, "player").unwrap();
+        assert_eq!(fs::read_link(users.join("player")).unwrap(), Path::new("steamuser"));
+        assert!(users.join("player/AppData/Roaming").is_dir(), "the login's folders are steamuser's");
+        link_login_user(&dir, "player").unwrap();
+        link_login_user(&dir, "steamuser").unwrap();
+        assert!(fs::symlink_metadata(users.join("steamuser")).unwrap().is_dir());
+        fs::create_dir_all(users.join("other/AppData")).unwrap();
+        link_login_user(&dir, "other").unwrap();
+        assert!(!fs::symlink_metadata(users.join("other")).unwrap().is_symlink(), "a real folder is kept");
+        fs::remove_dir_all(dir).unwrap();
+    }
     #[test]
     fn unique_template_guid_preserved_on_repair_and_user_aliases_keep_data() {
         let dir = crate::testutil::scratch("b-guid");
