@@ -23,6 +23,7 @@
 
 pub mod accounts;
 pub mod backups;
+pub mod bedrock;
 pub mod canary;
 pub mod cf_seam;
 pub mod classcache;
