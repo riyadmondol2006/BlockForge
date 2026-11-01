@@ -1598,6 +1598,10 @@ fn account_row(ui: &mut Ui, row: &AccountRow, act: &mut Option<BAct>) {
             if signed_in && !row.busy {
                 let _ = match &row.xbox_state {
                     SignInState::Linked { display_name: Some(tag) } => {
+/// What the first Store sign-in on a computer may ask of the player (`store/device.rs` runs `pkexec` for it).
+const PASSWORD_NOTE: &str = "Your system may ask for your password so the Microsoft Store can register this \
+                             computer (it reads the PC's model and serial). Cancel works too.";
+
                         status_line(ui, Status::Good, &format!("Xbox Live: {tag}"))
                     }
                     SignInState::Linked { display_name: None } => status_line(ui, Status::Good, "Xbox Live: linked"),
@@ -1654,6 +1658,11 @@ fn account_row(ui: &mut Ui, row: &AccountRow, act: &mut Option<BAct>) {
                         });
                     }
                 });
+            if !signed_in {
+                // told before it happens, and while it can: the first sign-in on a computer registers it with the
+                // Store, which reads the firmware table as root through polkit
+                ui.add(egui::Label::new(RichText::new(PASSWORD_NOTE).size(FS_META).color(c_muted())).wrap());
+            }
             } else if primary(ui, "Sign in to play Bedrock").clicked() {
                 *act = Some(BAct::SignIn(row.store.clone()));
             }

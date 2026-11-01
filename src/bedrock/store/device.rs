@@ -1,5 +1,6 @@
 //! Ported from Xodus tokens/device.rs; never treat corrupt storage as a new device.
 use super::*;
+use std::path::Path;
 use tokens::{Slot, store_error};
 use xodus::{
     licensing::{
@@ -12,6 +13,24 @@ use xodus::{
         soap::BodyContent,
     },
 };
+
+/// polkit's launcher and `cat`, by absolute path: a program found through `PATH` could be anything the player's
+/// environment puts first, and it would be run as root.
+const PKEXEC: &str = "/usr/bin/pkexec";
+const CAT: &str = "/usr/bin/cat";
+/// The firmware's system table is readable by root only; this is the one thing BlockForge asks polkit to read.
+const DMI: &str = "/sys/firmware/dmi/entries/1-0/raw";
+
+/// The command that reads the firmware table as root through polkit, or None when `pkexec` or `cat` is not at its
+/// place on this system (then the table is simply not read, and the Store gets the components without it).
+fn privileged_probe(pkexec: &Path, cat: &Path) -> Option<tokio::process::Command> {
+    if !pkexec.is_file() || !cat.is_file() {
+        return None;
+    }
+    let mut command = tokio::process::Command::new(pkexec);
+    command.arg(cat).arg(DMI).stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null()).kill_on_drop(true);
+    Some(command)
+}
 
 pub async fn ensure(client: &reqwest::Client, slot: &Slot, cancel: &Cancel) -> Result<()> {
     use xodus::tokens::store::TokenStoreError;
@@ -27,25 +46,26 @@ pub async fn ensure(client: &reqwest::Client, slot: &Slot, cancel: &Cancel) -> R
             }
             let username = format!("02{}", generate_string(14));
             let password = generate_string(20);
-            // Hardware probing may launch an optional pkexec prompt. It never blocks the UI or GTK loop.
-            let raw = match tokio::fs::read("/sys/firmware/dmi/entries/1-0/raw").await {
+            // Hardware probing may launch an optional polkit password prompt (Cancel is fine). It never blocks the UI
+            // or GTK loop.
+            let raw = match tokio::fs::read(DMI).await {
                 Ok(raw) => Some(raw),
                 Err(_) => {
-                    let mut command = tokio::process::Command::new("pkexec");
-                    command
-                        .args(["cat", "/sys/firmware/dmi/entries/1-0/raw"])
-                        .stdin(std::process::Stdio::null())
-                        .stderr(std::process::Stdio::null())
-                        .kill_on_drop(true);
-                    interrupt(cancel, async {
-                        Ok(tokio::time::timeout(std::time::Duration::from_secs(30), command.output())
-                            .await
-                            .ok()
-                            .and_then(|r| r.ok())
-                            .filter(|r| r.status.success())
-                            .map(|r| r.stdout))
-                    })
-                    .await?
+                    // The sign-in page tells the player first that the system may ask for a password (F4).
+                    match privileged_probe(Path::new(PKEXEC), Path::new(CAT)) {
+                        Some(mut command) => {
+                            interrupt(cancel, async {
+                                Ok(tokio::time::timeout(std::time::Duration::from_secs(30), command.output())
+                                    .await
+                                    .ok()
+                                    .and_then(|r| r.ok())
+                                    .filter(|r| r.status.success())
+                                    .map(|r| r.stdout))
+                            })
+                            .await?
+                        }
+                        None => None,
+                    }
                 }
             };
             let components =
@@ -127,4 +147,33 @@ pub(super) fn never_sent(error: &(dyn std::error::Error + 'static)) -> bool {
         next = error.source();
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_firmware_probe_runs_polkit_by_absolute_path_or_not_at_all() {
+        let dir = crate::testutil::scratch("bedrock-pkexec");
+        let (pkexec, cat) = (dir.join("pkexec"), dir.join("cat"));
+        // neither program there, or only one of them: nothing is run
+        assert!(privileged_probe(&pkexec, &cat).is_none());
+        std::fs::write(&pkexec, b"").unwrap();
+        assert!(privileged_probe(&pkexec, &cat).is_none());
+        std::fs::write(&cat, b"").unwrap();
+        // a folder in the place of a program is not a program
+        let folder = dir.join("folder");
+        std::fs::create_dir_all(&folder).unwrap();
+        assert!(privileged_probe(&folder, &cat).is_none());
+        let command = privileged_probe(&pkexec, &cat).expect("both are there");
+        let command = command.as_std();
+        assert_eq!(command.get_program(), pkexec.as_os_str());
+        let args: Vec<_> = command.get_args().collect();
+        assert_eq!(args, [cat.as_os_str(), std::ffi::OsStr::new(DMI)]);
+        // the real places are absolute, and the program name is never looked up through PATH
+        assert!(Path::new(PKEXEC).is_absolute() && Path::new(CAT).is_absolute());
+        assert!(Path::new(DMI).starts_with("/sys/firmware/dmi/"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }
