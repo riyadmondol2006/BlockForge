@@ -75,6 +75,8 @@ libc = "0.2"
 xodus = { path = "third_party/xodus/crates/xodus", optional = true, default-features = false }
 msixvc = { path = "third_party/xodus/crates/msixvc", optional = true }
 rustix = { version = "1.1.4", features = ["fs", "process"], optional = true }
+xz2 = "0.1.7"
+bedrock-runtime = { path = "crates/bedrock-runtime" }
 
 [target.'cfg(any(target_os = "windows", target_os = "macos"))'.dependencies]
 tray-icon = "0.26.1"

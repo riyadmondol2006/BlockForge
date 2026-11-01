@@ -1,0 +1,44 @@
+{
+  "program": "/owned/bedrock/runtime/steamrt3/.3.0.20261021.266025.view/pressure-vessel/bin/pressure-vessel-wrap",
+  "argv": [
+    "--variable-dir=/owned/bedrock/profiles/p/compat/state/pressure-vessel",
+    "--",
+    "/owned/bedrock/helpers/bedrock-runtime",
+    "--plan",
+    "/owned/bedrock/sessions/s/plan.json"
+  ],
+  "env": {
+    "HOME": "/home/player",
+    "LANG": "en_US.UTF-8",
+    "PATH": "/usr/bin:/bin",
+    "PRESSURE_VESSEL_ARCHITECTURES": "x86_64-linux-gnu:i386-linux-gnu",
+    "PRESSURE_VESSEL_COPY_RUNTIME": "1",
+    "PRESSURE_VESSEL_RUNTIME": "sniper_platform_3.0.20261021.266025",
+    "PRESSURE_VESSEL_RUNTIME_BASE": "/owned/bedrock/runtime/steamrt3/.3.0.20261021.266025.view",
+    "PRESSURE_VESSEL_VARIABLE_DIR": "/owned/bedrock/profiles/p/compat/state/pressure-vessel",
+    "STEAM_COMPAT_APP_ID": "00000000-0000-4000-8000-000000000001",
+    "STEAM_COMPAT_CLIENT_INSTALL_PATH": "/owned/bedrock/profiles/p/compat/state/steam-client",
+    "STEAM_COMPAT_DATA_PATH": "/owned/bedrock/profiles/p/compat/pfx",
+    "STEAM_COMPAT_INSTALL_PATH": "/owned/bedrock/profiles/p/compat",
+    "STEAM_COMPAT_MOUNTS": "/owned/bedrock/helpers/bedrock-runtime:/owned/bedrock/sessions/s/plan.json:/owned/bedrock/profiles/p/compat/pfx:/owned/bedrock/profiles/p/compat:/owned/bedrock/profiles/p/compat/state",
+    "STEAM_COMPAT_SHADER_PATH": "/owned/bedrock/profiles/p/compat/state/shaders",
+    "STEAM_COMPAT_TOOL_PATHS": "/owned/bedrock/engine/wow64-archs-native21:/owned/bedrock/runtime/steamrt3/.3.0.20261021.266025.view",
+    "WINEPREFIX": "/owned/bedrock/profiles/p/compat/pfx",
+    "XDG_CACHE_HOME": "/owned/bedrock/profiles/p/compat/state/xdg-cache",
+    "XDG_CONFIG_HOME": "/owned/bedrock/profiles/p/compat/state/xdg-config",
+    "XDG_DATA_HOME": "/owned/bedrock/profiles/p/compat/state/xdg-data"
+  },
+  "env_removals": [
+    "WINEARCH",
+    "WINEDLLOVERRIDES",
+    "WINEDLLPATH",
+    "LD_PRELOAD",
+    "LD_AUDIT",
+    "LD_LIBRARY_PATH",
+    "PYTHONPATH",
+    "PYTHONHOME",
+    "PRESSURE_VESSEL_RUNTIME_ARCHIVE",
+    "PRESSURE_VESSEL_PREFIX"
+  ],
+  "cwd": "/owned/bedrock/profiles/p/compat"
+}

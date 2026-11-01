@@ -1,0 +1,41 @@
+{
+  "program": "/owned/bedrock/engine/wow64-archs-native21/files/bin-wow64/wine",
+  "argv": [
+    "C:\\game\\Minecraft.Windows.exe"
+  ],
+  "env": {
+    "DXVK_ENABLE_NVAPI": "0",
+    "DXVK_SHADER_CACHE_PATH": "/owned/bedrock/profiles/p/compat/state/shaders",
+    "GST_PLUGIN_SYSTEM_PATH_1_0": "/owned/bedrock/engine/wow64-archs-native21/files/lib/x86_64-linux-gnu/gstreamer-1.0:/owned/bedrock/engine/wow64-archs-native21/files/lib/aarch64-linux-gnu/gstreamer-1.0:/owned/bedrock/engine/wow64-archs-native21/files/lib/i386-linux-gnu/gstreamer-1.0",
+    "HOME": "/home/player",
+    "LANG": "en_US.UTF-8",
+    "LD_LIBRARY_PATH": "/owned/bedrock/engine/wow64-archs-native21/files/lib/x86_64-linux-gnu:/owned/bedrock/engine/wow64-archs-native21/files/lib/aarch64-linux-gnu:/owned/bedrock/engine/wow64-archs-native21/files/lib/i386-linux-gnu",
+    "ORIG_LD_LIBRARY_PATH": "",
+    "PATH": "/usr/bin:/bin",
+    "VKD3D_CONFIG": "force_raw_va_cbv",
+    "VKD3D_DEBUG": "info",
+    "VKD3D_SHADER_CACHE_PATH": "/owned/bedrock/profiles/p/compat/state/shaders",
+    "WINEDEBUG": "-all",
+    "WINEDLLOVERRIDES": "winebth.sys=d;winewayland.drv=d;d3d8=b;cryptbase=n,b;vrclient=d;vrclient_x64=d;openvr_api=d;wineopenxr=d;amd_ags_x64=d;winex11.drv=b;d3d11,d3d10core,d3d9,dxgi,d3d12,d3d12core=n;nvapi,nvapi64,nvofapi64=d",
+    "WINEDLLPATH": "/owned/bedrock/engine/wow64-archs-native21/files/lib/vkd3d:/owned/bedrock/engine/wow64-archs-native21/files/lib/wine",
+    "WINEESYNC": "0",
+    "WINEFSYNC": "0",
+    "WINENTSYNC": "0",
+    "WINEPREFIX": "/owned/bedrock/profiles/p/compat/pfx",
+    "WINEUSERNAME": "steamuser",
+    "WINE_GST_REGISTRY_DIR": "/owned/bedrock/profiles/p/compat/state/gstreamer-1.0",
+    "XDG_CACHE_HOME": "/owned/bedrock/profiles/p/compat/state/xdg-cache",
+    "XDG_CONFIG_HOME": "/owned/bedrock/profiles/p/compat/state/xdg-config",
+    "XDG_DATA_HOME": "/owned/bedrock/profiles/p/compat/state/xdg-data"
+  },
+  "env_removals": [
+    "WINEARCH",
+    "LD_PRELOAD",
+    "LD_AUDIT",
+    "PYTHONPATH",
+    "PYTHONHOME",
+    "GNUTLS_SYSTEM_PRIORITY_FILE",
+    "GNUTLS_SYSTEM_PRIORITY_FAIL_ON_INVALID"
+  ],
+  "cwd": "/owned/bedrock/profiles/p/compat"
+}

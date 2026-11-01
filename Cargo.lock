@@ -386,6 +386,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 
 [[package]]
+name = "bedrock-runtime"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "bergshamra"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -652,6 +660,7 @@ version = "5.1.0"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
+ "bedrock-runtime",
  "chrono",
  "clap",
  "eframe",
@@ -688,6 +697,7 @@ dependencies = [
  "windows-sys 0.61.2",
  "winresource",
  "xodus",
+ "xz2",
  "zip",
 ]
 
@@ -4022,6 +4032,17 @@ name = "lz4_flex"
 version = "0.11.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "373f5eceeeab7925e0c1098212f2fbc4d416adec9d35051a6ab251e824c1854a"
+
+[[package]]
+name = "lzma-sys"
+version = "0.1.20"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5fda04ab3764e6cde78b9974eec4f779acaba7c4e84b36eca3cf77c581b85d27"
+dependencies = [
+ "cc",
+ "libc",
+ "pkg-config",
+]
 
 [[package]]
 name = "mach2"
@@ -9143,6 +9164,15 @@ dependencies = [
  "uuid",
  "xal",
  "zerocopy",
+]
+
+[[package]]
+name = "xz2"
+version = "0.1.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "388c44dc09d76f1536602ead6d325eb532f5c122f17782bd57fb47baeeb767e2"
+dependencies = [
+ "lzma-sys",
 ]
 
 [[package]]
