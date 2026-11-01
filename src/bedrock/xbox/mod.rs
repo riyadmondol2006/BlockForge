@@ -33,22 +33,18 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use tokio::sync::broadcast;
 
 pub(crate) use cache::Epoch;
 pub(crate) use device_code::{DevicePrompt, SignedIn};
 pub(crate) use preauth::{Category, Offline, OnlineReadiness, StageResult};
 pub(crate) use presence::{PresenceSession, SocialSnapshot};
 
-use super::{BedrockError, Cancel, ErrorKind, Event, ProfileId, Result, SignInState};
+use super::{BedrockError, Cancel, ErrorKind, Result, SignInState};
 use cache::MsaToken;
 use device_code::Refreshed;
 
 /// The environment variable that hands WineGDK the payload (as a `Z:\...` path).
 pub(crate) const PREAUTH_ENV: &str = "WINEGDK_PREAUTH_DEVICE";
-/// Where WineGDK's XUser reads the refresh token: HKLM, written into the stopped prefix by the prefix package.
-pub(crate) const WINEGDK_REGISTRY_KEY: &str = r"Software\Wine\WineGDK";
-pub(crate) const WINEGDK_REFRESH_TOKEN_VALUE: &str = "RefreshToken";
 /// Said once when a launch meant to publish presence and could not.
 pub(crate) const PRESENCE_UNAVAILABLE: &str = "Xbox Live was not told you are playing, so your account stays \
      \"Offline\" to your friends and they cannot join your world or invite you. Sign in to Xbox again if this \
@@ -222,29 +218,6 @@ fn serial(dir: &Path) -> Arc<tokio::sync::Mutex<()>> {
 }
 
 /// Sign this profile into Xbox, announcing the code as [`Event::DeviceCode`]. Already signed in: nothing is asked.
-pub(crate) async fn sign_in(
-    x: &Xbox,
-    profile: &ProfileId,
-    events: &broadcast::Sender<Event>,
-    cancel: &Cancel,
-) -> Result<SignedIn> {
-    let (profile, events) = (profile.clone(), events.clone());
-    sign_in_with(
-        x,
-        move |p| {
-            let _ = events.send(Event::DeviceCode {
-                profile,
-                url: p.url,
-                user_code: p.user_code,
-                expires_at_unix: p.expires_at_unix,
-            });
-        },
-        cancel,
-    )
-    .await
-}
-
-/// [`sign_in`] with the prompt handed to `on_prompt` (for a caller that also keeps it in the snapshot).
 pub(crate) async fn sign_in_with(
     x: &Xbox,
     on_prompt: impl FnOnce(DevicePrompt) + Send,
@@ -266,30 +239,32 @@ pub(crate) async fn sign_out(x: &Xbox) -> Result<()> {
 }
 
 /// The cached sign-in state for the window: no network, and nothing created on disk.
+#[cfg(test)]
 pub(crate) async fn state(x: &Xbox) -> SignInState {
-    let dir = x.dir.clone();
-    blocking(move || {
-        if !dir.join(cache::TOKEN_FILE).exists() {
-            return SignInState::SignedOut;
-        }
-        match cache::session_snapshot(&dir) {
-            Err(_) => SignInState::Unknown,
-            Ok((_, None)) => SignInState::NeedsSignIn {
-                reason: "This profile's Xbox sign-in record is damaged: sign out of Xbox and sign in again.".into(),
-            },
-            Ok((None, _)) => SignInState::SignedOut,
-            Ok((Some(_), Some(epoch))) => SignInState::Linked {
-                display_name: cache::load_payload(&dir)
-                    .filter(|p| p.account_epoch.as_ref() == Some(&epoch))
-                    .and_then(|p| p.xbl_gamertag),
-            },
-        }
-    })
-    .await
-    .unwrap_or(SignInState::Unknown)
+    let x = x.clone();
+    blocking(move || cached_state(&x)).await.unwrap_or(SignInState::Unknown)
 }
 
-/// Whether a payload valid for the current account is on disk now (`Readiness::Ready { xbox_online_cached }`).
+/// [`state`] for a caller already on a blocking worker: a few small reads, no network.
+pub(crate) fn cached_state(x: &Xbox) -> SignInState {
+    let dir = &x.dir;
+    if !dir.join(cache::TOKEN_FILE).exists() {
+        return SignInState::SignedOut;
+    }
+    match cache::session_snapshot(dir) {
+        Err(_) => SignInState::Unknown,
+        Ok((_, None)) => SignInState::NeedsSignIn {
+            reason: "This profile's Xbox sign-in record is damaged: sign out of Xbox and sign in again.".into(),
+        },
+        Ok((None, _)) => SignInState::SignedOut,
+        Ok((Some(_), Some(epoch))) => SignInState::Linked {
+            display_name: cache::load_payload(dir)
+                .filter(|p| p.account_epoch.as_ref() == Some(&epoch))
+                .and_then(|p| p.xbl_gamertag),
+        },
+    }
+}
+
 pub(crate) async fn online_cached(x: &Xbox) -> bool {
     let dir = x.dir.clone();
     blocking(move || {

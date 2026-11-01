@@ -258,7 +258,7 @@ async fn real_store_release_scratch() {
     }
     let staged = stage(&ctx, id.clone(), &installed, cancel).await.unwrap();
     // Read 64 + 4 header bytes of each image, nothing more; nothing is copied off tmpfs.
-    let header = |image: &StagedImage| -> bool {
+    let header = |image: &super::stage::StagedImage| -> bool {
         let mut file = image.file.try_clone().unwrap();
         file.rewind().unwrap();
         let mut dos = [0; 64];
@@ -534,9 +534,11 @@ fn operations_can_run_on_tokio_workers() {
         Arc::new(Progress::default()),
         Cancel::default(),
     ));
-    fn stage_is_send(ctx: &Context, build: &InstalledBuild) {
+    // checked by the compiler, never run
+    let _stage_is_send = |ctx: &Context, build: &InstalledBuild| {
         send(stage(ctx, StoreId(uuid::Uuid::new_v4()), build, Cancel::default()));
-    }
+        send(stage_into(ctx, StoreId(uuid::Uuid::new_v4()), build, Path::new("/dev/shm/x"), Cancel::default()));
+    };
 }
 
 #[test]

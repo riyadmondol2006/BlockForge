@@ -251,10 +251,6 @@ impl Control {
         Control { dir: session_dir.to_path_buf() }
     }
 
-    pub fn session_dir(&self) -> &Path {
-        &self.dir
-    }
-
     /// What the supervisor last recorded, `None` before it has written anything.
     pub fn state(&self) -> Option<State> {
         read_state(&self.dir)
@@ -323,7 +319,11 @@ impl Control {
                         ))
                     }
                 }
-                Ok(Reply::Error { message }) => Err(BedrockError::new(ErrorKind::Runtime, message)),
+                Ok(Reply::Error { message }) => match self.state() {
+                    // asked in the moment between the end of the session and the supervisor's exit
+                    Some(s) if matches!(s.stage, Stage::Finished) => Ok(finished_outcome(&s)),
+                    _ => Err(BedrockError::new(ErrorKind::Runtime, message)),
+                },
                 _ => Err(BedrockError::new(ErrorKind::Internal, "an unexpected answer from the Bedrock session")),
             },
             // the supervisor closed the connection: look at what it recorded

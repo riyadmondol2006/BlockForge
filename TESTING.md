@@ -74,6 +74,8 @@ The test world for the Bedrock to Java direction is `~/Downloads/Mace, Spear, Sw
 | `BLOCKFORGE_CF_KEY` | CurseForge API key to use instead of the built-in one |
 | `BLOCKFORGE_MS_CLIENT_ID` | Microsoft sign-in application id to use instead of the built-in one |
 | `BLOCKFORGE_UPDATE_API` | address that stands in for GitHub's "latest release" (for testing the updater) |
+| `BF_BEDROCK_AUTH_HELPER` | the Bedrock Store sign-in helper to use instead of the one beside `blockforge` |
+| `BF_BEDROCK_RUNTIME_HELPER` | the static Bedrock runtime helper to use instead of the one beside `blockforge` |
 
 ## Before a release
 

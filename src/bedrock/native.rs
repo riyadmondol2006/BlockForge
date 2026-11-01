@@ -30,6 +30,7 @@ impl Package {
 }
 
 /// The package family name.
+#[cfg(any(windows, test))]
 pub(super) fn family(e: Edition) -> &'static str {
     match e {
         Edition::Release => "Microsoft.MinecraftUWP_8wekyb3d8bbwe",
@@ -51,11 +52,13 @@ pub fn store_page(e: Edition) -> String {
 }
 
 /// The application to activate: the package family and the game's app id.
+#[cfg(any(windows, test))]
 pub(super) fn aumid(e: Edition) -> String {
     format!("{}!Game", family(e))
 }
 
 /// The address the package registers, used when activation itself isn't available.
+#[cfg(any(windows, test))]
 pub(super) fn uri(e: Edition) -> &'static str {
     match e {
         Edition::Release => "minecraft:",
@@ -79,6 +82,7 @@ pub(super) fn users_folder(e: Edition) -> Option<PathBuf> {
 }
 
 /// The version in a package full name of `family` (`<name>_<version>_<arch>_<resource>_<publisher>`), if it is one.
+#[cfg(any(windows, test))]
 pub(super) fn version_of(full_name: &str, family: &str) -> Option<String> {
     let (name, publisher) = family.split_once('_')?;
     let mut parts = full_name.split('_');
@@ -97,16 +101,19 @@ pub(super) fn version_of(full_name: &str, family: &str) -> Option<String> {
 }
 
 /// The numbers of a version, for comparing.
+#[cfg(any(windows, test))]
 fn version_key(v: &str) -> Vec<u64> {
     v.split('.').map(|n| n.parse().unwrap_or(0)).collect()
 }
 
 /// The newest of the packages found for one family (other launchers can register more than one).
+#[cfg(any(windows, test))]
 pub(super) fn newest(found: Vec<Package>) -> Option<Package> {
     found.into_iter().max_by(|a, b| version_key(&a.version).cmp(&version_key(&b.version)))
 }
 
 /// Whether a process's program is the game of the package installed at `install` (`Minecraft.Windows.exe` under it).
+#[cfg(any(windows, test))]
 pub(super) fn is_game_image(image: &str, install: &std::path::Path) -> bool {
     let image = image.replace('/', "\\").to_ascii_lowercase();
     let root = install.to_string_lossy().replace('/', "\\").trim_end_matches('\\').to_ascii_lowercase();

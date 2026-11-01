@@ -6,7 +6,7 @@
 //! grant of login.live.com. It is not, and must never share anything with, BlockForge's Java sign-in
 //! (`src/msauth.rs`), which uses another app and the modern endpoints.
 
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use serde_json::Value;
 

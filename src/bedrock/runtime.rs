@@ -24,6 +24,7 @@ pub struct Runtime {
     revision: &'static str,
 }
 impl Runtime {
+    #[cfg(test)]
     pub fn root(&self) -> &Path {
         &self.root
     }
@@ -31,6 +32,7 @@ impl Runtime {
         self.revision
     }
     /// The copy pressure-vessel actually runs from (see [`ensure_view`]).
+    #[cfg(test)]
     pub fn view(&self) -> &Path {
         &self.view
     }
@@ -105,6 +107,7 @@ pub fn quick(root: &Path) -> Result<()> {
 }
 
 /// The installed runtime with a complete view, or None. Blocking, a few small reads.
+#[cfg(test)]
 pub fn open(dir: &Path) -> Result<Option<Runtime>> {
     let Some(root) = artifact::open(dir, pins::RUNTIME, quick)? else { return Ok(None) };
     let view = view_path(dir);
@@ -114,6 +117,7 @@ pub fn open(dir: &Path) -> Result<Option<Runtime>> {
     Ok(Some(Runtime { root, view, revision: pins::RUNTIME.revision }))
 }
 /// Installs from an archive already on disk (hashed again here), then builds the view. Blocking; minutes.
+#[cfg(test)]
 pub fn install(dir: &Path, archive: &Path) -> Result<Runtime> {
     let root = artifact::install(dir, pins::RUNTIME, archive, verify)?;
     ensure_view(dir, &root, false)
@@ -449,7 +453,7 @@ mod tests {
     /// again) into BF's layout under `~/.cache/bf-bedrock-pkgb/bedrock`, prepares a prefix, runs headless
     /// `wineboot -u` through pressure-vessel and the static helper under `strace -f -e execve`, waits for
     /// `wineserver -w`, then records hives, xgameruntime files, fonts and the exec audit under
-    /// `~/bf-ui/bedrock/evidence/pkgb`. Needs BF_RUNTIME_HELPER (static musl build) and strace (BF_STRACE).
+    /// `~/bf-ui/bedrock/evidence/pkgb`. Needs BF_BEDROCK_RUNTIME_HELPER (static musl build) and strace (BF_STRACE).
     #[test]
     #[ignore = "native engine + SteamRT smoke, ~5 GiB and strace required"]
     fn real_native_wineboot() {
@@ -491,7 +495,9 @@ mod tests {
             }
         }
         p.env.insert("HOME".into(), home.display().to_string());
-        p.helper = PathBuf::from(std::env::var_os("BF_RUNTIME_HELPER").expect("BF_RUNTIME_HELPER static binary"));
+        p.helper = PathBuf::from(
+            std::env::var_os("BF_BEDROCK_RUNTIME_HELPER").expect("BF_BEDROCK_RUNTIME_HELPER static binary"),
+        );
         super::super::proton::prepare(&e, &p.prefix, false).unwrap();
         write_plan(&r, &e, &p).unwrap();
         let spec = command(&r, &e, &p).unwrap();

@@ -153,7 +153,6 @@ pub fn safe_component(name: &str) -> bool {
 #[derive(Debug)]
 pub struct StagingDir {
     dir: PathBuf,
-    owner: Owner,
     /// false once the folder was handed to a supervisor, which removes it
     armed: bool,
 }
@@ -227,7 +226,7 @@ impl StagingDir {
         }
         let owner = Owner::this_process(session);
         write_private(&dir.join(OWNER_FILE), &serde_json::to_vec(&owner).unwrap_or_default())?;
-        Ok(StagingDir { dir, owner, armed: true })
+        Ok(StagingDir { dir, armed: true })
     }
 
     pub fn path(&self) -> &Path {
@@ -235,6 +234,7 @@ impl StagingDir {
     }
 
     /// The path of a file to stage called `name`, checked to be safe in the map.
+    #[cfg(test)]
     pub fn file_path(&self, name: &str) -> Result<PathBuf, StageError> {
         if !safe_component(name) || name == OWNER_FILE {
             return Err(StageError::BadName(name.to_string()));
@@ -245,6 +245,7 @@ impl StagingDir {
     }
 
     /// Write `bytes` as a staged file (0600, not shared with anyone) and return its path.
+    #[cfg(test)]
     pub fn stage_bytes(&self, name: &str, bytes: &[u8]) -> Result<PathBuf, StageError> {
         let p = self.file_path(name)?;
         write_private(&p, bytes)?;
@@ -253,17 +254,15 @@ impl StagingDir {
 
     /// Remove the staged files but keep the directory and the owner record (the loader unlinks its own copies as it
     /// opens them; whatever is still here after the game is up was never opened).
+    #[cfg(test)]
     pub fn release_files(&self) -> usize {
         release_files_in(&self.dir)
     }
 
     /// Files left (besides the owner record).
+    #[cfg(test)]
     pub fn remaining(&self) -> usize {
         std::fs::read_dir(&self.dir).map(|rd| rd.flatten().filter(|e| e.file_name() != OWNER_FILE).count()).unwrap_or(0)
-    }
-
-    pub fn owner(&self) -> &Owner {
-        &self.owner
     }
 
     /// Give the folder to the session supervisor (which names it in its plan and removes it at the end): this value
@@ -360,6 +359,7 @@ impl FileMap {
     }
 
     /// Read a map back the way Wine's loader does (split at `|`, then at the first `:`).
+    #[cfg(test)]
     pub fn parse(value: &str) -> Vec<(String, String)> {
         value
             .split('|')

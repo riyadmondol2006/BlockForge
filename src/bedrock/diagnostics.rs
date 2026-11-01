@@ -18,7 +18,9 @@ use std::path::{Path, PathBuf};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
-use super::{BedrockError, DiagnosticReport, ErrorKind};
+use super::DiagnosticReport;
+#[cfg(test)]
+use super::{BedrockError, ErrorKind};
 
 /// What a finding is about. The first group stops the game from being played at all.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
@@ -71,6 +73,7 @@ impl Finding {
     }
 
     /// The error a session that never played should give (licensing and display problems are the player's to fix).
+    #[cfg(test)]
     pub fn into_error(self, log_path: Option<PathBuf>) -> BedrockError {
         let kind = match self.kind {
             FindingKind::LicenceRefused | FindingKind::LicenceServiceRefused => ErrorKind::NotEntitled,
@@ -605,7 +608,8 @@ pub fn evaluate_host(f: &HostFacts) -> Vec<Check> {
             "disk",
             Verdict::Warn,
             format!(
-                "Only {m} MiB is free where the game lives. Shader caches can't grow there and a world save or update can fail outright. Free a few GiB before playing."
+                "Only {m} MiB is free where the game lives{}. Shader caches can't grow there and a world save or update can fail outright. Free a few GiB before playing.",
+                f.data_dir.as_ref().map(|d| format!(" ({})", d.display())).unwrap_or_default()
             ),
         ),
         Some(m) => add("disk", Verdict::Ok, format!("OK ({m} MiB free)")),

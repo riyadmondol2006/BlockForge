@@ -132,6 +132,8 @@ pub fn allowed_env(k: &str) -> bool {
             | "DXVK_FILTER_DEVICE_NAME"
             | "WINE_DISABLE_VULKAN_OPWR"
             | "VKD3D_CONFIG"
+            | "DXVK_SHADER_CACHE_PATH"
+            | "VKD3D_SHADER_CACHE_PATH"
     )
 }
 /// What the launcher hands pressure-vessel itself, outside the container: the session (display, audio, locale) and
@@ -232,8 +234,9 @@ pub fn inner_command_with_container(
     env.insert("WINEESYNC".into(), "0".into());
     env.insert("WINEFSYNC".into(), "0".into());
     env.insert("DXVK_ENABLE_NVAPI".into(), if p.nvapi { "1" } else { "0" }.into());
+    // The launcher may keep shader caches per engine and card (and mounts them); otherwise the profile's own.
     for k in ["DXVK_SHADER_CACHE_PATH", "VKD3D_SHADER_CACHE_PATH"] {
-        env.insert(k.into(), p.state.join("shaders").display().to_string());
+        env.entry(k.into()).or_insert_with(|| p.state.join("shaders").display().to_string());
     }
     env.entry("WINEDEBUG".into()).or_insert_with(|| "-all".into());
     env.entry("VKD3D_DEBUG".into()).or_insert_with(|| "info".into());
@@ -332,6 +335,17 @@ mod tests {
         assert_eq!(nvidia.env["VKD3D_CONFIG"], "force_raw_va_cbv");
         p.env.insert("VKD3D_CONFIG".into(), "nodxr;force_raw_va_cbv".into());
         assert_eq!(inner_command(&p).unwrap().env["VKD3D_CONFIG"], "nodxr,force_raw_va_cbv");
+    }
+    #[test]
+    fn shader_caches_are_the_profiles_unless_the_launcher_names_them() {
+        let mut p = plan();
+        assert_eq!(inner_command(&p).unwrap().env["VKD3D_SHADER_CACHE_PATH"], "/owned/state/shaders");
+        p.env.insert("VKD3D_SHADER_CACHE_PATH".into(), "/owned/cache/graphics/e/10de-1f99/vkd3d".into());
+        p.env.insert("DXVK_SHADER_CACHE_PATH".into(), "/owned/cache/graphics/e/10de-1f99/dxvk".into());
+        validate(&p).unwrap();
+        let c = inner_command(&p).unwrap();
+        assert_eq!(c.env["VKD3D_SHADER_CACHE_PATH"], "/owned/cache/graphics/e/10de-1f99/vkd3d");
+        assert_eq!(c.env["DXVK_SHADER_CACHE_PATH"], "/owned/cache/graphics/e/10de-1f99/dxvk");
     }
     #[test]
     fn only_validated_identity_and_environment_cross_the_boundary() {

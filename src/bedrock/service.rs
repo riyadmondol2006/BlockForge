@@ -3,8 +3,8 @@
 //! account, one Bedrock game at a time in v1).
 //!
 //! The parts other packages build (the Store, the engine and runtime, the prefix, Xbox, the supervisor) are reached
-//! through [`Parts`]. [`Seams`] is what this build has of them: every call names the package function it stands for
-//! and answers [`BedrockError::not_implemented`] until the integrator plugs that function in. Tests put fakes there.
+//! through [`Parts`]: on Linux that is `super::linux::Linux`, which puts them together in the order each one
+//! requires; elsewhere [`Elsewhere`], which has none of them. Tests put fakes there.
 //!
 //! On Windows the game is native and none of those parts are used: the instance finds Minecraft for Windows with the
 //! package API and starts it by activation (see `native`). On other systems every operation says it isn't available.
@@ -31,10 +31,19 @@ use crate::paths::Dirs;
 /// A piece of work of the parts, boxed so [`Parts`] can be a trait object (and replaced by fakes in tests).
 pub(super) type Job<'a, T> = Pin<Box<dyn Future<Output = Result<T>> + Send + 'a>>;
 
-/// What every part gets: where things are, and the runtime to run blocking work on.
+/// What every part gets: where things are, the runtime to run blocking work on, and the window's events (for the
+/// notices a long job has along the way).
 pub(super) struct Ctx {
     pub paths: Paths,
     pub handle: tokio::runtime::Handle,
+    pub events: broadcast::Sender<Event>,
+}
+
+impl Ctx {
+    /// Tell the window something worth knowing that doesn't stop the job.
+    pub fn notice(&self, instance: Option<&InstanceId>, text: impl Into<String>) {
+        let _ = self.events.send(Event::Notice { instance: instance.cloned(), text: text.into() });
+    }
 }
 
 /// The way an Xbox sign-in shows its code: the window gets it in the snapshot and as an event. Public user code only;
@@ -90,10 +99,6 @@ pub(super) struct Launched {
     pub exited: Pin<Box<dyn Future<Output = Option<i32>> + Send>>,
 }
 
-fn not_yet<'a, T: Send + 'a>() -> Job<'a, T> {
-    Box::pin(async { Err(BedrockError::not_implemented()) })
-}
-
 /// What the facade needs from packages A to E (PORT-PLAN.md section 4). Every method runs on a worker; the two
 /// `*_state` ones are cheap local checks (no network) made while refreshing.
 pub(super) trait Parts: Send + Sync + 'static {
@@ -142,47 +147,41 @@ pub(super) trait Parts: Send + Sync + 'static {
         progress: Arc<Progress>,
         cancel: Cancel,
     ) -> Job<'a, Launched>;
+    /// Revalidate and rebuild while idle, keeping the worlds. Some(build) when the game had to be fetched again and
+    /// that gave another build than the instance had.
     fn repair<'a>(
         &'a self,
         ctx: &'a Ctx,
         instance: &'a BedrockInstance,
         progress: Arc<Progress>,
         cancel: Cancel,
-    ) -> Job<'a, ()>;
+    ) -> Job<'a, Option<BuildId>>;
     /// What is wrong, in plain words (empty when nothing is).
     fn diagnose<'a>(&'a self, ctx: &'a Ctx, instance: &'a BedrockInstance) -> Job<'a, Vec<String>>;
 }
 
-/// The seams for the integrator: each stands for the named function of another package and answers "not built yet"
-/// until it is plugged in. Keep them this small: the facade does the bookkeeping around them.
-pub(super) struct Seams;
+/// Where Bedrock isn't played through BlockForge's own backend (Windows runs the Store package itself; other systems
+/// have nothing yet): the facade never gets this far there, and if it did, every part says it isn't available.
+#[cfg(not(all(target_os = "linux", feature = "bedrock")))]
+pub(super) struct Elsewhere;
 
-impl Parts for Seams {
-    fn store_state(&self, _ctx: &Ctx, _store: &StoreId) -> SignInState {
-        // A: store::cached_state(ctx, store), reading stores/<id>/credentials.json without the network
+#[cfg(not(all(target_os = "linux", feature = "bedrock")))]
+impl Parts for Elsewhere {
+    fn store_state(&self, _: &Ctx, _: &StoreId) -> SignInState {
         SignInState::Unknown
     }
-
-    fn xbox_state(&self, _ctx: &Ctx, _profile: &ProfileId) -> SignInState {
-        // D: xbox::cached_state(ctx, profile), reading profiles/<id>/xbox/ without the network
+    fn xbox_state(&self, _: &Ctx, _: &ProfileId) -> SignInState {
         SignInState::Unknown
     }
-
     fn store_sign_in<'a>(&'a self, _: &'a Ctx, _: &'a StoreId, _: Arc<Progress>, _: Cancel) -> Job<'a, ()> {
-        // A: store::sign_in(ctx, store, progress, cancel)
-        not_yet()
+        Box::pin(async { Err(unavailable()) })
     }
-
     fn store_sign_out<'a>(&'a self, _: &'a Ctx, _: &'a StoreId, _: SignOutMode) -> Job<'a, ()> {
-        // A: store::sign_out(ctx, store, mode); User keeps the device identity, UserAndDevice forgets it too
-        not_yet()
+        Box::pin(async { Err(unavailable()) })
     }
-
     fn store_latest<'a>(&'a self, _: &'a Ctx, _: &'a StoreId, _: Edition, _: Cancel) -> Job<'a, BuildInfo> {
-        // A: store::latest(ctx, store, edition, cancel)
-        not_yet()
+        Box::pin(async { Err(unavailable()) })
     }
-
     fn store_install<'a>(
         &'a self,
         _: &'a Ctx,
@@ -191,34 +190,40 @@ impl Parts for Seams {
         _: Arc<Progress>,
         _: Cancel,
     ) -> Job<'a, BuildId> {
-        // A: store::install(ctx, store, selection, progress, cancel) -> InstalledBuild, then its BuildId
-        not_yet()
+        Box::pin(async { Err(unavailable()) })
     }
-
     fn xbox_sign_in<'a>(&'a self, _: &'a Ctx, _: &'a ProfileId, _: Prompts, _: Cancel) -> Job<'a, ()> {
-        // D: xbox::sign_in(ctx, profile, prompts, cancel), showing its code through prompts.device_code
-        not_yet()
+        Box::pin(async { Err(unavailable()) })
     }
-
     fn xbox_sign_out<'a>(&'a self, _: &'a Ctx, _: &'a ProfileId) -> Job<'a, ()> {
-        // D: xbox::sign_out(ctx, profile), with C clearing the profile's Xbox hives
-        not_yet()
+        Box::pin(async { Err(unavailable()) })
     }
-
     fn launch<'a>(&'a self, _: &'a Ctx, _: LaunchRequest, _: Arc<Progress>, _: Cancel) -> Job<'a, Launched> {
-        // B: engine::ensure, runtime::ensure; C: prefix::ensure, saves::before_launch (when backup_first);
-        // D: xbox::prepare; A: store::stage; E: supervisor::spawn, whose control implements StopGame
-        not_yet()
+        Box::pin(async { Err(unavailable()) })
     }
-
-    fn repair<'a>(&'a self, _: &'a Ctx, _: &'a BedrockInstance, _: Arc<Progress>, _: Cancel) -> Job<'a, ()> {
-        // B: engine/runtime revalidation; C: prefix::repair keeping Users; A: build revalidation
-        not_yet()
+    fn repair<'a>(
+        &'a self,
+        _: &'a Ctx,
+        _: &'a BedrockInstance,
+        _: Arc<Progress>,
+        _: Cancel,
+    ) -> Job<'a, Option<BuildId>> {
+        Box::pin(async { Err(unavailable()) })
     }
-
     fn diagnose<'a>(&'a self, _: &'a Ctx, _: &'a BedrockInstance) -> Job<'a, Vec<String>> {
-        // E: diagnostics::report(ctx, instance)
-        not_yet()
+        Box::pin(async { Err(unavailable()) })
+    }
+}
+
+/// This system's parts.
+fn platform_parts() -> Arc<dyn Parts> {
+    #[cfg(all(target_os = "linux", feature = "bedrock"))]
+    {
+        Arc::new(super::linux::Linux)
+    }
+    #[cfg(not(all(target_os = "linux", feature = "bedrock")))]
+    {
+        Arc::new(Elsewhere)
     }
 }
 
@@ -455,7 +460,7 @@ pub struct Service {
 impl Service {
     /// Only allocates: no folder is made or read here.
     pub fn new(dirs: &Dirs, handle: tokio::runtime::Handle) -> Self {
-        Self::with_parts(dirs.base.join("bedrock"), handle, support(), Arc::new(Seams))
+        Self::with_parts(dirs.base.join("bedrock"), handle, support(), platform_parts())
     }
 
     pub(super) fn with_parts(
@@ -486,7 +491,7 @@ impl Service {
     }
 
     fn ctx(&self) -> Ctx {
-        Ctx { paths: Paths::at(&self.root), handle: self.handle.clone() }
+        Ctx { paths: Paths::at(&self.root), handle: self.handle.clone(), events: self.shared.events.clone() }
     }
 
     fn support(&self) -> Support {
@@ -576,10 +581,19 @@ impl Service {
         let paths = Paths::at(&self.root);
         let parts = self.parts.clone();
         let handle = self.handle.clone();
+        let events = self.shared.events.clone();
+        let first = !self.shared.lock().loaded;
         let (loaded, store_states, xbox_states, native) = self
             .blocking(move || {
+                // what sessions of an earlier run left behind (their folders, their staged images), once per run
+                #[cfg(all(target_os = "linux", feature = "bedrock"))]
+                if first && support == Support::Linux {
+                    super::linux::clean_up_after_earlier_sessions(paths.root());
+                }
+                #[cfg(not(all(target_os = "linux", feature = "bedrock")))]
+                let _ = first;
                 let loaded = storage::load_all(&paths);
-                let ctx = Ctx { paths, handle };
+                let ctx = Ctx { paths, handle, events };
                 let (mut stores, mut xbox) = (HashMap::new(), HashMap::new());
                 if support == Support::Linux {
                     for id in &loaded.stores {
@@ -627,7 +641,10 @@ impl Service {
             s.native = native;
             let mut wanted: Vec<(StoreId, Edition)> = Vec::new();
             for rec in &s.instances {
-                if matches!(rec.selection, BuildSelection::Latest(_))
+                // only a signed-in Store slot can ask the Store
+                let signed_in = matches!(s.store_states.get(&rec.store), Some(SignInState::Linked { .. }));
+                if signed_in
+                    && matches!(rec.selection, BuildSelection::Latest(_))
                     && !wanted.iter().any(|(_, e)| *e == rec.edition())
                 {
                     wanted.push((rec.store.clone(), rec.edition()));
@@ -1088,7 +1105,18 @@ impl Service {
         let _guard = self.begin(vec![JobKey::Instance(id.0)])?;
         self.idle(&id)?;
         let _lock = self.lock_instance(&id).await?;
-        self.parts.repair(&self.ctx(), &rec.public(), progress, cancel).await?;
+        let fetched = self.parts.repair(&self.ctx(), &rec.public(), progress, cancel).await?;
+        if let Some(build) = fetched {
+            // the Store only had another build to fetch: the instance plays that one now
+            storage::check_build(&build)?;
+            let mut rec = self.record(&id)?;
+            if rec.installed.as_ref().is_some_and(|b| b != &build) {
+                rec.backup_before_play = true;
+            }
+            rec.installed = Some(build);
+            self.save(rec.clone()).await?;
+            self.replace(rec);
+        }
         self.shared.update(|s| {
             s.repair.remove(&id);
         });
@@ -1330,8 +1358,14 @@ mod tests {
                 })
             })
         }
-        fn repair<'a>(&'a self, _: &'a Ctx, _: &'a BedrockInstance, _: Arc<Progress>, _: Cancel) -> Job<'a, ()> {
-            Box::pin(async { Ok(()) })
+        fn repair<'a>(
+            &'a self,
+            _: &'a Ctx,
+            _: &'a BedrockInstance,
+            _: Arc<Progress>,
+            _: Cancel,
+        ) -> Job<'a, Option<BuildId>> {
+            Box::pin(async { Ok(None) })
         }
         fn diagnose<'a>(&'a self, _: &'a Ctx, _: &'a BedrockInstance) -> Job<'a, Vec<String>> {
             Box::pin(async { Ok(vec!["Vulkan: no device".into()]) })
@@ -1581,20 +1615,27 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    #[cfg(all(target_os = "linux", feature = "bedrock"))]
     #[tokio::test]
-    async fn the_seams_say_they_are_not_built_yet() {
-        let root = crate::testutil::scratch("bedrock-seams");
+    async fn the_real_parts_ask_for_the_store_sign_in_before_anything_else() {
+        let root = crate::testutil::scratch("bedrock-real-parts");
         let svc = Service::with_parts(
             root.join("bedrock"),
             tokio::runtime::Handle::current(),
             Support::Linux,
-            Arc::new(Seams),
+            Arc::new(crate::bedrock::linux::Linux),
         );
         let a = svc.create_instance(create("First", None)).await.unwrap();
-        let e = svc.sign_in(AccountTarget::Store(a.store.clone()), Progress::new(), Cancel::default()).await;
-        assert!(matches!(e.unwrap_err().kind, ErrorKind::NotImplemented));
-        let e = svc.install(a.id.clone(), Progress::new(), Cancel::default()).await;
-        assert!(matches!(e.unwrap_err().kind, ErrorKind::NotImplemented));
+        // a new slot is signed out: Install and Play say so, without the network
+        let e = svc.install(a.id.clone(), Progress::new(), Cancel::default()).await.unwrap_err();
+        assert!(matches!(e.kind, ErrorKind::SignInRequired), "{e}");
+        let Err(e) = svc.play(a.id.clone(), options(), Progress::new(), Cancel::default()).await else {
+            panic!("Play must ask for the Store sign-in")
+        };
+        assert!(matches!(e.kind, ErrorKind::SignInRequired), "{e}");
+        assert!(matches!(readiness_of(&svc, &a.id), Readiness::NeedsStoreSignIn));
+        // an Xbox sign-out of a profile that never signed in is quietly done
+        svc.sign_out(AccountTarget::Xbox(a.profile.clone()), SignOutMode::User).await.unwrap();
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -1605,7 +1646,7 @@ mod tests {
             root.join("bedrock"),
             tokio::runtime::Handle::current(),
             Support::Unavailable,
-            Arc::new(Seams),
+            Arc::new(FakeParts(Arc::new(Fake::default()))),
         );
         let e = svc.create_instance(create("First", None)).await.unwrap_err();
         assert!(matches!(e.kind, ErrorKind::UnsupportedPlatform));

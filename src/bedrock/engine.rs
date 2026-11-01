@@ -28,10 +28,13 @@ impl Engine {
     pub fn revision(&self) -> &'static str {
         self.revision
     }
-    /// The WoW64 Wine (`PROTON_USE_WOW64=1` in the script): one 64-bit loader that runs 32-bit code in-process.
+    /// The WoW64 Wine (`PROTON_USE_WOW64=1` in the script): one 64-bit loader that runs 32-bit code in-process. The
+    /// runtime helper picks it from the plan's engine root; this is what the tests check it against.
+    #[cfg(test)]
     pub fn wine(&self) -> PathBuf {
         self.root.join("files/bin-wow64/wine")
     }
+    #[cfg(test)]
     pub fn wineserver(&self) -> PathBuf {
         self.root.join("files/bin-wow64/wineserver")
     }
@@ -130,7 +133,9 @@ pub fn dir(base: &Path) -> PathBuf {
 pub fn open(dir: &Path) -> Result<Option<Engine>> {
     Ok(artifact::open(dir, pins::ENGINE, quick)?.map(|root| Engine { root, revision: pins::ENGINE.revision }))
 }
-/// Installs from an archive already on disk (it's hashed again here). Blocking; minutes.
+/// Installs from an archive already on disk (it's hashed again here). Blocking; minutes. Play and Repair go through
+/// [`ensure`], which finds a pre-seeded archive in `cache/artifacts` by itself.
+#[cfg(test)]
 pub fn install(dir: &Path, archive: &Path) -> Result<Engine> {
     let root = artifact::install(dir, pins::ENGINE, archive, verify)?;
     Ok(Engine { root, revision: pins::ENGINE.revision })

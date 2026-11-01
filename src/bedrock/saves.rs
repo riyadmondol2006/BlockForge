@@ -25,6 +25,7 @@ use std::time::SystemTime;
 use serde::{Deserialize, Serialize};
 
 use super::Edition;
+#[cfg(test)]
 use super::prefix::registry::OfflineLock;
 use super::prefix::{PrefixError, free_bytes, prefix_processes, require_prefix_idle, write_atomic};
 
@@ -248,7 +249,17 @@ impl Saves {
             if protect.iter().any(|p| p == &old.path) {
                 continue;
             }
-            let _ = fs::remove_dir_all(&old.path);
+            if fs::remove_dir_all(&old.path).is_ok() {
+                crate::logs::info(format!(
+                    "Bedrock: removed an old {} backup ({}, {} world(s), {} bytes, made for {} after {})",
+                    edition_name(old.edition),
+                    old.reason,
+                    old.worlds,
+                    old.size,
+                    old.version.as_deref().unwrap_or("an unknown version"),
+                    old.previous.as_deref().unwrap_or("nothing"),
+                ));
+            }
         }
     }
 
@@ -384,7 +395,9 @@ impl Saves {
     }
 
     /// Put the data of one backup back. Returns the backup made of the data it replaced (None when there was
-    /// none): what is there now is the player's too, and restoring is a choice they may want back.
+    /// none): what is there now is the player's too, and restoring is a choice they may want back. Not offered in
+    /// the window yet; the backups are plain folders the player can copy back meanwhile.
+    #[cfg(test)]
     pub fn restore_backup(&self, backup: &Path) -> Result<Option<PathBuf>, PrefixError> {
         let info =
             self.list_backups(None).into_iter().find(|b| b.path == backup).ok_or_else(|| {
@@ -434,6 +447,7 @@ impl Saves {
     }
 
     /// [`Saves::copy_to_preview`] for a request made outside a launch.
+    #[cfg(test)]
     pub fn copy_to_preview_when_idle(&self) -> Result<usize, PrefixError> {
         require_prefix_idle(&self.prefix, "copy your worlds into Preview")?;
         let _lock = OfflineLock::take(&self.prefix)?;

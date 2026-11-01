@@ -29,7 +29,7 @@ use std::path::{Path, PathBuf};
 use sha2::{Digest, Sha256};
 
 use super::{BedrockError, ErrorKind};
-pub use registry::{RegChange, RegValue, update_prefix_registry};
+pub use registry::{RegChange, update_prefix_registry};
 
 // ---------------------------------------------------------------- errors
 

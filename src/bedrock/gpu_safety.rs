@@ -14,7 +14,6 @@
 //!   the check says it could not verify and carries on, and the doctor says so.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -55,7 +54,7 @@ pub trait Host: Send + Sync {
     /// the NVIDIA kernel driver is loaded while the GLX libraries are Mesa's (a state Debian derivatives get into)
     fn nvidia_with_mesa_glx(&self) -> bool;
     /// the display is a nested gamescope one (asked only when the environment didn't settle it)
-    fn gamescope_atoms(&self, env: &Env) -> bool {
+    fn gamescope_atoms(&self, _env: &Env) -> bool {
         false
     }
 }

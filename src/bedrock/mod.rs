@@ -7,18 +7,17 @@
 //! Nothing here touches the disk or the network on the window's thread: [`Backend::snapshot`] is a copy of what is
 //! in memory, and everything else runs on the runtime's workers.
 
-// The interface is in place before the parts behind it: these come off once every stub is filled in.
-#![allow(unused_variables, unused_imports, dead_code)]
+// Where BlockForge's own backend isn't built (Windows and macOS, which play the game natively or not at all, and a
+// Linux build without the `bedrock` feature), the facade's plumbing for it has nothing to call.
+#![cfg_attr(not(all(target_os = "linux", feature = "bedrock")), allow(dead_code, unused_imports))]
 use crate::{gpu, install::Progress, launch::Running, paths::Dirs};
 use serde::{Deserialize, Serialize};
-use std::{
-    path::{Path, PathBuf},
-    sync::Arc,
-};
+use std::{path::PathBuf, sync::Arc};
 use tokio::sync::{broadcast, watch};
 
 #[cfg(target_os = "linux")]
 mod artifact;
+#[cfg(target_os = "linux")]
 mod diagnostics;
 #[cfg(target_os = "linux")]
 mod engine;
@@ -26,7 +25,13 @@ mod engine;
 mod fixups;
 #[cfg(target_os = "linux")]
 mod gpu_safety;
+#[cfg(target_os = "linux")]
+mod helpers;
+#[cfg(all(target_os = "linux", feature = "bedrock"))]
+mod linux;
 mod native;
+#[cfg(target_os = "linux")]
+mod payloads;
 #[cfg(target_os = "linux")]
 mod pins;
 #[cfg(target_os = "linux")]
@@ -41,6 +46,7 @@ mod service;
 mod storage;
 #[cfg(all(target_os = "linux", feature = "bedrock"))]
 mod store;
+#[cfg(target_os = "linux")]
 mod supervisor;
 #[cfg(target_os = "linux")]
 mod xbox;
@@ -49,6 +55,35 @@ pub type Result<T> = std::result::Result<T, BedrockError>;
 
 pub use native::store_page;
 pub use service::{UNAVAILABLE, support};
+
+/// Whether a line of a session's output is one of its supervisor's event lines rather than the game's log (the
+/// window leaves those out of the log it shows; the snapshot and the events carry what they say).
+pub fn is_session_event(line: &str) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        supervisor::parse_event_line(line).is_some()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = line;
+        false
+    }
+}
+
+/// The game session's supervisor runs in a BlockForge process of its own: `blockforge --bedrock-session <folder>`.
+/// `main` calls this before anything else (no window, no runtime): with those arguments it runs the session and
+/// returns the process's exit code; otherwise it does nothing and returns None.
+pub fn run_session_if_requested(args: &[String]) -> Option<i32> {
+    #[cfg(target_os = "linux")]
+    {
+        supervisor::session_main(args)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = args;
+        None
+    }
+}
 
 /// How Bedrock is played on this system: through BlockForge's own backend (Linux), as the native Store package the
 /// system runs (Windows), or not yet (macOS and the rest; [`UNAVAILABLE`] says why).

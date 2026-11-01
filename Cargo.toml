@@ -188,7 +188,7 @@ desktop-file-utils = "*"
 
 [workspace]
 resolver = "3"
-members = ["crates/bedrock-auth", "third_party/xodus/crates/xodus", "third_party/xodus/crates/msixvc", "third_party/xodus/crates/msixvc-common"]
+members = ["crates/bedrock-auth", "crates/bedrock-runtime", "third_party/xodus/crates/xodus", "third_party/xodus/crates/msixvc", "third_party/xodus/crates/msixvc-common"]
 default-members = ["."]
 
 [patch.crates-io]

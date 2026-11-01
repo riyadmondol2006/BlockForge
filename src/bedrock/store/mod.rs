@@ -1,6 +1,8 @@
 //! Ported from BedrockOnLinux bol/xodus.py (MIT); acquisition uses the patched Xodus libraries.
 //! Call on backend workers. No startup work, GUI imports or process-global credential state.
-use super::{BedrockError, BuildId, BuildSelection, Cancel, Edition, ErrorKind, Result, SignOutMode, StoreId};
+use super::{
+    BedrockError, BuildId, BuildSelection, Cancel, Edition, ErrorKind, Result, SignInState, SignOutMode, StoreId,
+};
 use crate::install::Progress;
 use std::{
     path::{Path, PathBuf},
@@ -15,7 +17,7 @@ mod login;
 mod stage;
 mod tokens;
 pub use download::InstalledBuild;
-pub use stage::{StagedImage, StagedImages};
+pub use stage::StagedImages;
 pub use tokens::Slot;
 
 #[derive(Clone)]
@@ -34,6 +36,7 @@ impl Context {
 }
 pub async fn sign_in(ctx: &Context, id: StoreId, progress: Arc<Progress>, cancel: Cancel) -> Result<()> {
     let slot = ctx.slot(&id).await?;
+    progress.stage("Signing in to the Microsoft Store");
     device::ensure(&ctx.client, &slot, &cancel).await?;
     login::run(ctx, &slot, &cancel).await
 }
@@ -65,12 +68,46 @@ pub async fn install(
         }
     }
 }
-pub async fn stage(ctx: &Context, id: StoreId, installed: &InstalledBuild, cancel: Cancel) -> Result<StagedImages> {
+/// The newest build of `edition` the Store offers this slot's account, and its download size. Network; nothing is
+/// downloaded or licensed.
+pub async fn latest(ctx: &Context, id: StoreId, edition: Edition, cancel: Cancel) -> Result<(BuildId, u64)> {
+    let slot = ctx.slot(&id).await?;
+    slot.tokens.get_user().map_err(tokens::store_error)?;
+    license::legacy(slot.tokens.get_user_sts_token())?;
+    let package = catalog::latest(&ctx.client, &slot.tokens, edition, &cancel).await?;
+    Ok((package.build, package.bytes))
+}
+/// Decrypt the build's encrypted images into `dir`, a private folder on a RAM file system that the caller owns (the
+/// session supervisor's staging folder): the images are left there for it, and it removes them. A fresh content
+/// licence is fetched for this: files on disk alone never authorise a start.
+pub async fn stage_into(
+    ctx: &Context,
+    id: StoreId,
+    installed: &InstalledBuild,
+    dir: &Path,
+    cancel: Cancel,
+) -> Result<StagedImages> {
     let slot = ctx.slot(&id).await?;
     slot.tokens.get_user().map_err(tokens::store_error)?;
     license::legacy(slot.tokens.get_user_sts_token())?;
     device::ensure(&ctx.client, &slot, &cancel).await.map_err(license::unavailable)?;
-    stage::stage(ctx, &slot, installed, &cancel).await
+    stage::stage(ctx, &slot, installed, Some(dir), &cancel).await
+}
+/// What is known of a slot's sign-in without the network or its lock: a hint for the window (a valid licence is
+/// only proven by a download or a start). Blocking: a few small reads.
+pub fn cached_state(root: &Path, id: &StoreId) -> SignInState {
+    let dir = root.join("stores").join(id.0.to_string());
+    if !dir.join("initialized").exists() {
+        return SignInState::SignedOut;
+    }
+    if dir.join("provisioning").exists() {
+        return SignInState::NeedsSignIn {
+            reason: "Registering this computer with the Microsoft Store was interrupted. Sign out with \"forget this \
+                     computer\" and sign in again."
+                .into(),
+        };
+    }
+    tokens::cached_state(&dir)
 }
 fn err(kind: ErrorKind, message: impl Into<String>) -> BedrockError {
     BedrockError::new(kind, message)
@@ -93,6 +130,14 @@ fn cancelled(cancel: &Cancel) -> Result<()> {
 }
 async fn interrupt<T>(cancel: &Cancel, future: impl std::future::Future<Output = Result<T>>) -> Result<T> {
     tokio::select! { biased; _ = cancel.cancelled() => Err(err(ErrorKind::Cancelled, "Store operation cancelled")), result = future => result }
+}
+#[cfg(test)]
+pub async fn stage(ctx: &Context, id: StoreId, installed: &InstalledBuild, cancel: Cancel) -> Result<StagedImages> {
+    let slot = ctx.slot(&id).await?;
+    slot.tokens.get_user().map_err(tokens::store_error)?;
+    license::legacy(slot.tokens.get_user_sts_token())?;
+    device::ensure(&ctx.client, &slot, &cancel).await.map_err(license::unavailable)?;
+    stage::stage(ctx, &slot, installed, None, &cancel).await
 }
 #[cfg(test)]
 mod tests;

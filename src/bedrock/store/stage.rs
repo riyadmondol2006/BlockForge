@@ -11,7 +11,9 @@ pub struct StagedImage {
 }
 pub struct StagedImages {
     pub images: Vec<StagedImage>,
-    root: PathBuf,
+    /// The folder this value made and removes when dropped; None when the images went into a folder the caller owns
+    /// (the session supervisor's), which removes them itself.
+    root: Option<PathBuf>,
 }
 impl std::fmt::Debug for StagedImages {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -20,13 +22,16 @@ impl std::fmt::Debug for StagedImages {
 }
 impl Drop for StagedImages {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.root);
+        if let Some(root) = &self.root {
+            let _ = std::fs::remove_dir_all(root);
+        }
     }
 }
 pub async fn stage(
     ctx: &Context,
     slot: &tokens::Slot,
     build: &InstalledBuild,
+    into: Option<&Path>,
     cancel: &Cancel,
 ) -> Result<StagedImages> {
     let mut metadata = tokio::fs::File::open(build.content.join(download::METADATA))
@@ -37,10 +42,17 @@ pub async fn stage(
         return Err(integrity("Mismatched metadata"));
     }
     let key = license::acquire(&ctx.client, slot, xvd.content_id().to_string(), cancel).await?;
-    let base = PathBuf::from(format!("/dev/shm/blockforge-bedrock-{}", rustix::process::geteuid().as_raw()));
-    tokens::private_dir(&base)?;
+    let base = match into {
+        Some(dir) => dir.to_path_buf(),
+        None => {
+            let base = PathBuf::from(format!("/dev/shm/blockforge-bedrock-{}", rustix::process::geteuid().as_raw()));
+            tokens::private_dir(&base)?;
+            base
+        }
+    };
     let stat = rustix::fs::statfs(&base).map_err(integrity)?;
-    if stat.f_type as u64 != 0x01021994 {
+    // tmpfs or ramfs only: the plaintext never goes to a disk
+    if !matches!(stat.f_type as u64, 0x01021994 | 0x858458f6) {
         return Err(err(ErrorKind::Runtime, "Executable staging requires private tmpfs"));
     }
     let needed = build
@@ -55,9 +67,15 @@ pub async fn stage(
     if space.f_bavail.saturating_mul(space.f_frsize).min(ram) < needed {
         return Err(err(ErrorKind::NoSpace, "Not enough tmpfs space to stage executable images"));
     }
-    let root = base.join(uuid::Uuid::new_v4().simple().to_string());
-    tokens::private_dir(&root)?;
-    let mut staged = StagedImages { images: vec![], root };
+    let (root, owned) = match into {
+        Some(dir) => (dir.to_path_buf(), None),
+        None => {
+            let root = base.join(uuid::Uuid::new_v4().simple().to_string());
+            tokens::private_dir(&root)?;
+            (root.clone(), Some(root))
+        }
+    };
+    let mut staged = StagedImages { images: vec![], root: owned };
     for (name, entry) in &build.receipt.files {
         if !entry.encrypted {
             continue;
@@ -68,7 +86,7 @@ pub async fn stage(
         if download::disk_hash(&encrypted).await? != entry.disk_sha256 {
             return Err(integrity("Encrypted file was modified"));
         }
-        let path = staged.root.join(format!("image-{}", staged.images.len()));
+        let path = root.join(format!("image-{}", staged.images.len()));
         let mut output = tokio::fs::File::from_std(tokens::private_open(&path, true).map_err(io_error)?);
         let mut source = tokio::fs::File::open(encrypted).await.map_err(io_error)?;
         let segment = SegmentFile {

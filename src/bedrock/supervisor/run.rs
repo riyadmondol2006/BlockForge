@@ -29,7 +29,7 @@ use super::lease::Held;
 use super::plan::{EVENT_PREFIX, FailureKind, LaunchPlan, SESSION_ARG, SessionEvent, Stage, State, StopOutcome};
 use super::procs::{ProcId, ProcTable, RealSignals, Reaper, Scope, Signals, Stage as StopStage, StopReport, Timing};
 use super::redact::Redactor;
-use super::staging::{self, Owner, StagingDir};
+use super::staging::{self, Owner};
 use super::sys;
 use crate::bedrock::diagnostics::{self, Finding, LogContext};
 use crate::bedrock::gpu_safety::{self, Armed, Env, Host, SystemHost};
@@ -152,12 +152,6 @@ impl Hub {
         }
         self.out.event(&event);
         let _ = self.tx.send(event);
-    }
-
-    fn set_stage(&self, stage: Stage) {
-        let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        s.stage = stage;
-        let _ = ipc::write_state(&self.dir, &s);
     }
 
     fn snapshot(&self) -> State {
@@ -747,7 +741,6 @@ pub struct Spawned {
     /// the supervisor process: its lines are the game's log with event lines among them ([`super::parse_event_line`])
     pub running: crate::launch::Running,
     pub control: Control,
-    pub log_dir: PathBuf,
 }
 
 /// Make the session folder and start the supervisor for `plan` with `exe` (the BlockForge executable). Must be called
@@ -787,7 +780,7 @@ pub fn spawn_with(
         crate::launch::spawn_process(exe, args, &plan.session_dir, env, Some(payload), None).map_err(|e| {
             BedrockError::new(ErrorKind::Runtime, format!("Couldn't start the Bedrock session supervisor: {e}"))
         })?;
-    Ok(Spawned { running, control: Control::attach(&plan.session_dir), log_dir: plan.log_dir.clone() })
+    Ok(Spawned { running, control: Control::attach(&plan.session_dir) })
 }
 
 /// What a cleanup of old sessions did.

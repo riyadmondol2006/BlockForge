@@ -11,16 +11,15 @@ Build with Rust 1.98 or newer:
 
 ```sh
 rustup target add x86_64-unknown-linux-musl
-cargo build --manifest-path crates/bedrock-runtime/Cargo.toml --locked \
-  --release --target x86_64-unknown-linux-musl
-readelf -l target/x86_64-unknown-linux-musl/release/bedrock-runtime
+cargo build --locked --release -p bedrock-runtime --target x86_64-unknown-linux-musl
+readelf -l target/x86_64-unknown-linux-musl/release/blockforge-bedrock-runtime
 ```
 
-There must be no `INTERP` header. Package this binary alongside BlockForge; the
-integrator owns workspace/packaging plumbing and the bundled binary digest. Do
-not ask end users to build it. The library shares `InnerPlan` and `CommandSpec`
-with the launcher. Helper tests/build use this crate's committed lockfile until
-the integrator adds workspace membership.
+There must be no `INTERP` header (BlockForge refuses a dynamically linked helper). The crate is a member of the root
+workspace and uses its `Cargo.lock`. Package `blockforge-bedrock-runtime` beside the `blockforge` program; BlockForge
+copies it once per build of it into `bedrock/helpers/<sha256>/` in its data folder, because the container has its own
+`/usr` and cannot see a copy in `/usr/bin` or inside an AppImage. `BF_BEDROCK_RUNTIME_HELPER` names another one while
+developing. Do not ask end users to build it. The library shares `InnerPlan` and `CommandSpec` with the launcher.
 
 How BlockForge uses it (everything below runs on tokio workers, never the window's thread; `base` is
 `Dirs.base/bedrock`):
@@ -71,7 +70,7 @@ From the repository with the brief's TMPDIR/CARGO_TARGET_DIR settings:
 
 ```sh
 cargo test --locked bedrock::
-BF_RUNTIME_HELPER=/absolute/path/to/static/bedrock-runtime \
+BF_BEDROCK_RUNTIME_HELPER=/absolute/path/to/static/blockforge-bedrock-runtime \
 BF_STRACE=/absolute/path/to/strace \
 cargo test --locked real_native_wineboot -- --ignored --nocapture
 ```

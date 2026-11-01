@@ -849,7 +849,7 @@ async fn a_slow_reader_is_told_how_many_lines_it_missed_and_events_always_arrive
     use tokio::io::AsyncReadExt;
     let mut text = String::new();
     a.read_to_string(&mut text).await.unwrap();
-    assert!(text.contains(super::EVENT_PREFIX), "{text}");
+    assert!(text.contains(super::plan::EVENT_PREFIX), "{text}");
     assert!(text.contains("lines were not shown here"), "{text}");
     assert!(text.contains("line 0") && !text.contains("line 99"), "the queue keeps the oldest lines: {text}");
 }

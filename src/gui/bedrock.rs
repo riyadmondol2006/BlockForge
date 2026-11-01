@@ -468,6 +468,9 @@ impl App {
                     let ctx = self.ctx.clone();
                     self.rt.spawn(async move {
                         while let Some(line) = running.lines.recv().await {
+                            if crate::bedrock::is_session_event(&line) {
+                                continue;
+                            }
                             {
                                 let mut b = buf.lock().unwrap_or_else(|e| e.into_inner());
                                 b.push_back(line);

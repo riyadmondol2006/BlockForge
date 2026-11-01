@@ -25,6 +25,14 @@ Corrupt/lost credentials and interrupted device registration request explicit
 repair instead of silently spending another device registration. Initial firmware
 probing may trigger the optional upstream pkexec prompt; never run BF as root.
 
+Integrated (src/bedrock/linux.rs): `latest(&Context, StoreId, Edition, Cancel)` answers the newest build and its
+size for the window's refresh; `cached_state(root, &StoreId)` reads the slot's sign-in hint without its lock or the
+network; Play stages with `stage_into(.., dir, ..)` straight into the session supervisor's RAM staging folder
+(`<XDG_RUNTIME_DIR or /dev/shm>/blockforge-bedrock*/<session>/`, owned and removed by the supervisor), so there is
+one copy of the plaintext and one cleanup policy. `stage` (own folder, removed on drop) remains for the ignored
+scratch test. The facade records C's game-folder fixups with `InstalledBuild::record_patches` and checks a build
+locally with `damaged_files` on Repair.
+
 `StagedImages.images` has relative image name, tmpfs path and open read/write File
 for package C's PE stack patch and package E's Wine file map. Keep the images until
 the loader/supervisor confirms release. Drop removes only this session's directory.

@@ -6,11 +6,7 @@ use super::{
     engine::Engine,
 };
 use std::os::unix::fs::symlink;
-use std::{
-    collections::BTreeMap,
-    fs,
-    path::{Path, PathBuf},
-};
+use std::{collections::BTreeMap, fs, path::Path};
 
 const PAYLOAD: &[&str] = &[
     "libasprintf-0.dll",

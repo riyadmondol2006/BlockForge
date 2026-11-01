@@ -27,7 +27,6 @@ pub struct ProcId {
 pub struct ProcInfo {
     pub id: ProcId,
     pub ppid: u32,
-    pub pgrp: i32,
     /// `Z` for a zombie, which holds a number but no resources and is not "running"
     pub state: char,
     pub uid: u32,
@@ -116,6 +115,7 @@ impl ProcTable {
     }
 
     /// A table over another directory, for tests. `myself` is a number that is never reported.
+    #[cfg(test)]
     pub fn at(root: &Path, uid: u32, myself: u32) -> Self {
         Self { root: root.to_path_buf(), uid, myself }
     }
@@ -123,7 +123,7 @@ impl ProcTable {
     pub fn info(&self, pid: u32) -> Option<ProcInfo> {
         let dir = self.root.join(pid.to_string());
         let stat = std::fs::read_to_string(dir.join("stat")).ok()?;
-        let (state, ppid, pgrp, start) = parse_stat(&stat)?;
+        let (state, ppid, _pgrp, start) = parse_stat(&stat)?;
         let uid = owner_of(&dir).unwrap_or(u32::MAX);
         let comm = std::fs::read_to_string(dir.join("comm")).unwrap_or_default().trim().to_string();
         let cmdline = std::fs::read(dir.join("cmdline"))
@@ -134,7 +134,7 @@ impl ProcTable {
                     .collect()
             })
             .unwrap_or_default();
-        Some(ProcInfo { id: ProcId { pid, start }, ppid, pgrp, state, uid, comm, cmdline })
+        Some(ProcInfo { id: ProcId { pid, start }, ppid, state, uid, comm, cmdline })
     }
 
     /// Whether `id` is still that process and still ours under `scope`.
@@ -393,11 +393,6 @@ impl Reaper<'_> {
             sleep(timing.poll.min(remaining));
         }
     }
-}
-
-/// The processes of ours using the prefix right now, as identities.
-pub fn live_in_scope(table: &ProcTable, scope: &Scope) -> Vec<ProcId> {
-    table.in_scope(scope).into_iter().map(|i| i.id).collect()
 }
 
 #[cfg(test)]

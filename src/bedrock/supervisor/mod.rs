@@ -44,17 +44,14 @@ mod staging;
 #[cfg(target_os = "linux")]
 mod sys;
 
-pub use plan::{
-    EVENT_PREFIX, FailureKind, LaunchPlan, SESSION_ARG, SessionEvent, Stage, State, StopOutcome, TimingMs,
-    parse_event_line,
-};
+pub use plan::{FailureKind, LaunchPlan, SessionEvent, parse_event_line};
 
 #[cfg(target_os = "linux")]
 pub use ipc::Control;
 #[cfg(target_os = "linux")]
-pub use run::{Spawned, cleanup_stale_sessions, session_main, spawn, spawn_with};
+pub use run::{cleanup_stale_sessions, session_main, spawn};
 #[cfg(target_os = "linux")]
-pub use staging::{FileMap, StagingDir, boot_id, process_start, sweep_stale};
+pub use staging::{FileMap, StageError, StagingDir, boot_id, process_start};
 
 /// Free and total bytes of the file system `path` is on.
 #[cfg(target_os = "linux")]
@@ -66,18 +63,6 @@ pub fn free_space(path: &std::path::Path) -> Option<(u64, u64)> {
 #[cfg(target_os = "linux")]
 pub fn staging_system_root() -> Option<std::path::PathBuf> {
     staging::system_root().map(|c| c.root)
-}
-
-/// The window's handle on a session where there are no sessions (every platform but Linux).
-#[cfg(not(target_os = "linux"))]
-#[derive(Clone, Debug)]
-pub struct Control;
-
-#[cfg(not(target_os = "linux"))]
-impl Control {
-    pub async fn stop(&self, _mode: super::StopMode) -> Result<StopOutcome, super::BedrockError> {
-        Err(super::BedrockError::unsupported())
-    }
 }
 
 #[cfg(all(test, target_os = "linux"))]

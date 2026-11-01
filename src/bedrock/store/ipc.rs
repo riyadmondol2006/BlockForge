@@ -1,5 +1,8 @@
 //! Private Store helper wire contract. Shared verbatim with crates/bedrock-auth.
 //! Length-prefixed JSON, version 1, maximum 128 KiB. Never Debug/log payloads.
+//! Each program uses its own half of this file (the helper the page rules, BlockForge the framing and the URLs it may
+//! open), so neither compiler sees every item used.
+#![allow(dead_code)]
 use serde::{Deserialize, Serialize};
 pub const VERSION: u32 = 1;
 pub const LIMIT: usize = 128 * 1024;

@@ -48,8 +48,6 @@ impl std::error::Error for LeaseError {}
 #[derive(Debug)]
 pub struct Lease {
     file: File,
-    path: PathBuf,
-    kind: Kind,
 }
 
 fn open(path: &Path) -> io::Result<File> {
@@ -74,7 +72,7 @@ impl Lease {
             Kind::Shared => file.try_lock_shared(),
         };
         match r {
-            Ok(()) => Ok(Lease { file, path: path.to_path_buf(), kind }),
+            Ok(()) => Ok(Lease { file }),
             Err(TryLockError::WouldBlock) => Err(LeaseError::Busy(path.to_path_buf())),
             Err(TryLockError::Error(e)) => Err(LeaseError::Io(path.to_path_buf(), e)),
         }
@@ -102,14 +100,6 @@ impl Lease {
                 other => return other,
             }
         }
-    }
-
-    pub fn path(&self) -> &Path {
-        &self.path
-    }
-
-    pub fn kind(&self) -> Kind {
-        self.kind
     }
 
     /// Let the game's wrapper inherit this lease (and so hold it for as long as it runs, whatever happens to us).
@@ -164,10 +154,6 @@ impl Held {
         for l in &self.leases {
             let _ = l.inherit_into_children();
         }
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.leases.is_empty()
     }
 }
 

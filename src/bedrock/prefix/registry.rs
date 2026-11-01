@@ -503,7 +503,10 @@ fn resolve_control_set(original: &[u8], changes: &[RegChange]) -> Result<Vec<Reg
 // ---------------------------------------------------------------- writing the files back
 
 /// The one flock that serializes BlockForge's own offline edits of a prefix.
-pub(crate) struct OfflineLock(File);
+/// Held, never read: the lock lives as long as the open file.
+pub(crate) struct OfflineLock {
+    _file: File,
+}
 
 impl OfflineLock {
     pub(crate) fn take(prefix: &Path) -> Result<Self, PrefixError> {
@@ -517,7 +520,7 @@ impl OfflineLock {
             .open(&path)
             .map_err(|e| PrefixError::io(format!("open {}", path.display()), e))?;
         file.lock().map_err(|e| PrefixError::io("lock the prefix for editing", e))?;
-        Ok(Self(file))
+        Ok(Self { _file: file })
     }
 }
 

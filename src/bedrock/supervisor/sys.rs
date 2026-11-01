@@ -18,7 +18,6 @@ unsafe extern "C" {
 pub const SIGHUP: i32 = 1;
 pub const SIGTERM: i32 = 15;
 pub const SIGKILL: i32 = 9;
-pub const SIGCONT: i32 = 18;
 
 // the same numbers on every architecture Linux has had since the pidfd calls were added
 const SYS_PIDFD_SEND_SIGNAL: c_long = 424;
@@ -59,16 +58,6 @@ pub fn reap(pid: u32) -> bool {
     let mut status: c_int = 0;
     // SAFETY: waitpid with a valid out pointer; WNOHANG never blocks
     unsafe { waitpid(pid as c_int, &mut status, WNOHANG) == pid as c_int }
-}
-
-/// Whether a process by this number exists (a process of another user counts: it exists).
-pub fn pid_exists(pid: u32) -> bool {
-    if pid == 0 || pid > i32::MAX as u32 {
-        return false;
-    }
-    // SAFETY: signal 0 only checks that the process can be signalled
-    let r = unsafe { kill(pid as c_int, 0) };
-    r == 0 || io::Error::last_os_error().raw_os_error() == Some(1)
 }
 
 /// Ask for `signum` to be delivered to `handler` (an `extern "C" fn(i32)`), the old BSD way: restarts system calls.

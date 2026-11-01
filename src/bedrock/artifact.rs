@@ -120,6 +120,8 @@ pub async fn download(
 pub struct Lease {
     _file: File,
 }
+/// How long a lock that is taken waits before saying Busy.
+const LOCK_PATIENCE_MS: u64 = 500;
 fn lock(root: &Path, name: &str, shared: bool) -> Result<Lease> {
     fs::create_dir_all(root).map_err(io)?;
     let file = OpenOptions::new()
@@ -129,9 +131,20 @@ fn lock(root: &Path, name: &str, shared: bool) -> Result<Lease> {
         .write(true)
         .open(root.join(format!(".{name}.lock")))
         .map_err(io)?;
-    let result = if shared { file.try_lock_shared() } else { file.try_lock() };
-    result.map_err(|e| BedrockError::new(ErrorKind::Busy, format!("{name} is in use: {e}")))?;
-    Ok(Lease { _file: file })
+    // A child another thread of this process forks holds a copy of every open descriptor until it execs, a lock
+    // just let go of included: a short wait tells that moment apart from a real holder.
+    let mut waited = 0;
+    loop {
+        let result = if shared { file.try_lock_shared() } else { file.try_lock() };
+        match result {
+            Ok(()) => return Ok(Lease { _file: file }),
+            Err(std::fs::TryLockError::WouldBlock) if waited < LOCK_PATIENCE_MS => {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                waited += 10;
+            }
+            Err(e) => return Err(BedrockError::new(ErrorKind::Busy, format!("{name} is in use: {e}"))),
+        }
+    }
 }
 pub fn lease(root: &Path, name: &str) -> Result<Lease> {
     lock(root, name, true)

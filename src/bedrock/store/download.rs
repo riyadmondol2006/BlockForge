@@ -67,6 +67,48 @@ impl InstalledBuild {
         Ok(())
     }
 }
+impl InstalledBuild {
+    /// After the game-folder fixups ran on this idle, leased generation: record every file `wanted` names whose bytes
+    /// no longer match the receipt (a patched or replaced original) as patch `revision`. Files the fixups added
+    /// beside the game are not in the receipt and are left alone; encrypted images are never patched on disk.
+    /// Returns how many were recorded.
+    pub async fn record_patches(&mut self, revision: &str, wanted: impl Fn(&str) -> bool) -> Result<usize> {
+        let names: Vec<(String, String)> = self
+            .receipt
+            .files
+            .iter()
+            .filter(|(name, entry)| !entry.encrypted && wanted(name))
+            .map(|(name, entry)| (name.clone(), entry.disk_sha256.clone()))
+            .collect();
+        let mut recorded = 0;
+        for (name, recorded_hash) in names {
+            if disk_hash(&self.content.join(&name)).await? != recorded_hash {
+                self.record_patch(&name, revision).await?;
+                recorded += 1;
+            }
+        }
+        Ok(recorded)
+    }
+    /// The files whose bytes on disk differ from the receipt (missing, cut off, changed): a local check of every
+    /// file, no network. Repair uses it to decide whether the build must be fetched again.
+    pub async fn damaged_files(&self, cancel: &Cancel) -> Result<Vec<String>> {
+        let mut damaged = Vec::new();
+        for (name, entry) in &self.receipt.files {
+            cancelled(cancel)?;
+            let path = self.content.join(name);
+            let intact = tokio::fs::symlink_metadata(&path).await.is_ok_and(|m| m.len() == entry.local_length)
+                && disk_hash(&path).await.is_ok_and(|h| h == entry.disk_sha256);
+            if !intact {
+                damaged.push(name.clone());
+            }
+        }
+        Ok(damaged)
+    }
+    /// Bytes of the encrypted images, the room their decrypted copies need when staged.
+    pub fn encrypted_bytes(&self) -> u64 {
+        self.receipt.files.values().filter(|e| e.encrypted).map(|e| e.length).sum()
+    }
+}
 impl std::fmt::Debug for InstalledBuild {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("InstalledBuild").field("id", &self.id).finish_non_exhaustive()

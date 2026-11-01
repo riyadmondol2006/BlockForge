@@ -44,10 +44,6 @@ impl Epoch {
         ring::rand::SystemRandom::new().fill(&mut bytes).map_err(|_| io::Error::other("no system randomness"))?;
         Ok(Epoch(hex::encode(bytes)))
     }
-
-    pub(crate) fn as_str(&self) -> &str {
-        &self.0
-    }
 }
 
 /// The saved Microsoft (legacy Live) sign-in. Only the refresh token is kept: access tokens are minted per Play.
@@ -133,11 +129,6 @@ pub(super) fn session_snapshot(dir: &Path) -> io::Result<(Option<MsaToken>, Opti
     let held = lock(dir)?;
     let epoch = read_epoch(dir, &held)?;
     Ok((load_token(dir), epoch))
-}
-
-/// Whether a refresh token is saved at all (a hint for the window; it says nothing about Xbox Live).
-pub(super) fn has_token(dir: &Path) -> bool {
-    load_token(dir).is_some()
 }
 
 /// Save a sign-in (or a rotated refresh token) only if no sign-out happened since `expected` was read. `false`

@@ -206,6 +206,13 @@ mod winconsole {
 }
 
 fn main() -> Result<()> {
+    // A Bedrock game session's supervisor is this program started again with `--bedrock-session <folder>`: it runs
+    // the session and nothing else (no window, no settings, no runtime of the launcher's).
+    // (args_os: a file path given to "open with" need not be UTF-8, and args() would panic on it)
+    let args: Vec<String> = std::env::args_os().skip(1).map(|a| a.to_string_lossy().into_owned()).collect();
+    if let Some(code) = blockforge::bedrock::run_session_if_requested(&args) {
+        std::process::exit(code);
+    }
     #[cfg(windows)]
     winconsole::init();
     let _ = blockforge::START.set(Instant::now());

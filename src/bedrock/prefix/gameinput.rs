@@ -63,9 +63,10 @@ pub fn embedded_cabinet(msi: &[u8]) -> Result<Vec<u8>, PrefixError> {
             }
         }
     }
+    let streams: Vec<&str> = file.entries().iter().filter(|e| e.kind == 2).map(|e| e.name.as_str()).collect();
     Err(PrefixError::Malformed(match first_problem {
         Some(p) => format!("GameInputRedist.msi holds no readable cabinet ({p})"),
-        None => "GameInputRedist.msi holds no cabinet".into(),
+        None => format!("GameInputRedist.msi holds no cabinet (streams: {})", streams.join(", ")),
     }))
 }
 
@@ -83,6 +84,7 @@ pub fn payload_from_msi(msi: &[u8]) -> Result<RedistPayload, PrefixError> {
     let mut x64_exes: Vec<Vec<u8>> = Vec::new();
     let mut x86_dlls: Vec<Vec<u8>> = Vec::new();
     let mut seen = 0usize;
+    let names: Vec<String> = files.iter().map(|f| String::from_utf8_lossy(&f.name).into_owned()).collect();
     for f in files {
         let Some(PeInfo { is_dll, .. }) = pe::parse(&f.data) else { continue };
         let info = pe::parse(&f.data).expect("just parsed");
@@ -103,7 +105,8 @@ pub fn payload_from_msi(msi: &[u8]) -> Result<RedistPayload, PrefixError> {
     let (Some(x64_redist), Some(x64_service)) = (dlls.next(), exes.next()) else {
         return Err(PrefixError::Malformed(format!(
             "GameInputRedist.msi does not look like the GameInput redistributable ({seen} Windows image(s) found, \
-             but not a 64-bit DLL together with a 64-bit service)"
+             but not a 64-bit DLL together with a 64-bit service; files: {})",
+            names.join(", ")
         )));
     };
     Ok(RedistPayload {

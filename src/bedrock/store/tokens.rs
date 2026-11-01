@@ -118,6 +118,25 @@ impl Slot {
     }
 }
 
+/// A slot's sign-in from its credentials file alone (no lock, no network): linked with the account's name, signed
+/// out, or damaged.
+pub fn cached_state(root: &Path) -> SignInState {
+    let backend = PathBackend { path: root.join("credentials.json") };
+    let entries = match backend.read() {
+        Ok(entries) => entries,
+        Err(_) => {
+            return SignInState::NeedsSignIn {
+                reason: "This Microsoft Store sign-in record is damaged. Sign out and sign in again.".into(),
+            };
+        }
+    };
+    if !entries.contains_key("user-tokens") || !entries.contains_key("user-DA") {
+        return SignInState::SignedOut;
+    }
+    let manager = TokenManager::new(Arc::new(backend), Arc::new(MemoryBackend::default()));
+    SignInState::Linked { display_name: manager.get_user().ok().map(|u| u.username).filter(|n| !n.is_empty()) }
+}
+
 pub fn private_dir(path: &Path) -> Result<()> {
     fs::create_dir_all(path).map_err(io_error)?;
     let meta = fs::symlink_metadata(path).map_err(io_error)?;
