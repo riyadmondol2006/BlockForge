@@ -54,7 +54,8 @@ required-features = ["converter"]
 name = "craft_diff"
 
 [features]
-default = ["converter"]
+default = ["converter", "bedrock"]
+bedrock = ["dep:xodus", "dep:msixvc", "dep:rustix"]
 # World conversion (Bedrock to Java), a Rust port of Chunker by Hive Games (MIT). See PORTING.md.
 converter = ["dep:indexmap", "dep:rusty-leveldb", "dep:lz4_flex", "serde_json/preserve_order"]
 
@@ -71,6 +72,9 @@ opt-level = 1
 [target.'cfg(target_os = "linux")'.dependencies]
 ksni = "0.3.6"
 libc = "0.2"
+xodus = { path = "third_party/xodus/crates/xodus", optional = true, default-features = false }
+msixvc = { path = "third_party/xodus/crates/msixvc", optional = true }
+rustix = { version = "1.1.4", features = ["fs", "process"], optional = true }
 
 [target.'cfg(any(target_os = "windows", target_os = "macos"))'.dependencies]
 tray-icon = "0.26.1"
@@ -179,3 +183,11 @@ xdg-desktop-portal = "*"
 xdg-utils = "*"
 shared-mime-info = "*"
 desktop-file-utils = "*"
+
+[workspace]
+resolver = "3"
+members = ["crates/bedrock-auth", "third_party/xodus/crates/xodus", "third_party/xodus/crates/msixvc", "third_party/xodus/crates/msixvc-common"]
+default-members = ["."]
+
+[patch.crates-io]
+ntfs = { git = "https://github.com/xodus-gaming/ntfs.git", rev = "5edc794c3ec73a2722dad24abefd05f270d3e066" }

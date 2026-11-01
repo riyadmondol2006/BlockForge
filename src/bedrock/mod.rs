@@ -38,7 +38,7 @@ mod runtime;
 mod saves;
 mod service;
 mod storage;
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "bedrock"))]
 mod store;
 mod supervisor;
 #[cfg(target_os = "linux")]
