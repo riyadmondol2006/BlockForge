@@ -4,6 +4,9 @@
 %global _build_id_links none
 %global __os_install_post %{nil}
 %global _binary_payload w19.xzdio
+# rpm would turn the libraries blockforge-bedrock-auth links (GTK, WebKitGTK, libsoup) into hard requirements. Only Bedrock
+# Edition sign-in needs them, so they are a Recommends below and the package installs and starts BlockForge without them.
+%global __requires_exclude_from ^%{_bindir}/blockforge-bedrock-auth$
 
 Name:           blockforge
 Version:        %{bf_version}
@@ -38,6 +41,8 @@ Recommends:     libXrandr.so.2()(64bit)
 Recommends:     libXxf86vm.so.1()(64bit)
 Recommends:     libasound.so.2()(64bit)
 Recommends:     libpulse.so.0()(64bit)
+# Only the Bedrock Edition sign-in window (blockforge-bedrock-auth) needs WebKitGTK; BlockForge itself starts without it
+Recommends:     libwebkit2gtk-4.1.so.0()(64bit)
 Suggests:       gamemode
 
 %description
@@ -77,6 +82,8 @@ fi
 %defattr(-,root,root,-)
 %license %{_datadir}/licenses/blockforge/LICENSE
 %{_bindir}/blockforge
+%{_bindir}/blockforge-bedrock-auth
+%{_bindir}/bedrock-runtime
 %{_datadir}/applications/blockforge.desktop
 %{_datadir}/icons/hicolor/*/apps/blockforge.*
 %{_datadir}/metainfo/io.github.riyadmondol2006.BlockForge.metainfo.xml

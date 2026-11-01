@@ -289,7 +289,10 @@ import screen, which is what double-clicking a `.mrpack` does.
 
 ## Building from source
 
-You need the stable [Rust toolchain](https://rustup.rs) (1.98 or newer).
+You need the stable [Rust toolchain](https://rustup.rs) (1.98 or newer). Nothing else is needed on Windows and macOS. On
+Linux you also need `protoc` (Debian and Ubuntu: `protobuf-compiler`, Fedora: `protobuf-compiler`), which the Bedrock
+Edition code needs to build; see [CONTRIBUTING.md](CONTRIBUTING.md#the-bedrock-edition-helpers-linux) for the two small helper programs the
+Linux packages carry.
 
 ```sh
 git clone https://github.com/riyadmondol2006/BlockForge

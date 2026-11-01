@@ -4,11 +4,12 @@ Everything that turns the release binary (`target/release/blockforge`) into some
 workflow in `.github/workflows/build.yml` runs these scripts on every push; you can run them yourself.
 
 Build the program first: `cargo build --locked --release`. Every script takes the version (the one in `Cargo.toml`)
-and writes into `dist/`.
+and writes into `dist/`. The Linux packages also need the two Bedrock Edition helpers, built with
+`packaging/linux/helpers.sh build` (see below).
 
 | Folder | Makes | Run it with | Needs |
 |---|---|---|---|
-| `linux/` | `BlockForge-<v>-linux-x86_64.deb`, `.rpm` and `.AppImage` | `packaging/linux/build.sh <v>` | `dpkg-dev`, `rpm`, `squashfs-tools`, `curl`, `file` (and `desktop-file-utils`, `appstream` for the checks) |
+| `linux/` | `BlockForge-<v>-linux-x86_64.deb`, `.rpm` and `.AppImage` | `packaging/linux/helpers.sh build`, then `packaging/linux/build.sh <v>` | `dpkg-dev`, `rpm`, `squashfs-tools`, `curl`, `file` (and `desktop-file-utils`, `appstream` for the checks) |
 | `windows/` | `BlockForge-<v>-windows-x64-setup.exe` and `-portable.zip` | `packaging\windows\build.ps1 -Version <v>` | Inno Setup 6 |
 | `macos/` | `BlockForge-<v>-macos-arm64.dmg` | `packaging/macos/build.sh <v>` | macOS on Apple Silicon (`hdiutil`, `codesign`) |
 | `boost/` | `blockforge-boost.jar`, the fast-start Java agent every game is started with (`-javaagent`); not a release file | `packaging/boost/build.sh` | a JDK |
@@ -21,6 +22,27 @@ and runs it on both jars.
 
 Each system also has a smoke test that CI runs on the result: `windows/smoke.ps1`, `macos/smoke.sh`, and for Linux the
 workflow installs the deb, the rpm (in a clean Fedora container) and starts the AppImage.
+
+## The Bedrock Edition helpers (Linux packages)
+
+Every Linux package carries two more programs in `/usr/bin` (in the AppImage: `usr/bin`), next to `blockforge`, which looks
+for them beside its own file:
+
+- `blockforge-bedrock-auth`, the Microsoft sign-in window (`crates/bedrock-auth`). It links GTK 3, WebKitGTK 4.1 and
+  libsoup 3 from the computer, so WebKit is **not** a hard dependency of anything: BlockForge itself starts without it. The deb
+  lists `libwebkit2gtk-4.1-0 (>= 2.40)` under `Recommends` and the rpm `libwebkit2gtk-4.1.so.0()(64bit)` under `Recommends`
+  (both installers install these by default, and can be told not to). The AppImage does not bundle WebKit (it is large);
+  the helper uses the computer's, and BlockForge shows what to install when it is missing.
+- `bedrock-runtime`, which runs inside the Steam Linux Runtime container (`crates/bedrock-runtime`). It is built static
+  with `--target x86_64-unknown-linux-musl`, so it depends on nothing, in the container or out of it.
+
+`packaging/linux/helpers.sh build|clippy|test` builds, lints and tests both (the crates are built as members of the
+workspace in `Cargo.toml` when they are listed there, from their own `Cargo.toml` otherwise); it needs `protoc` (for
+BlockForge itself), the GTK 3, WebKitGTK 4.1 and libsoup 3 development files, and `rustup target add
+x86_64-unknown-linux-musl`. `build.sh` refuses to pack a helper that is missing, and a `bedrock-runtime` that is not
+static. `packaging/linux/check-helpers.sh [root]` checks an installed system or an unpacked AppImage the same way (CI runs
+it on the deb and the AppImage). Windows and macOS build none of this; `.github/scripts/linux-only-deps.sh` fails the
+checks if one of these dependencies ever shows up in their dependency tree.
 
 ## The release file names matter
 

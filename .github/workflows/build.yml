@@ -14,6 +14,12 @@ name: Build
 # Running the workflow by hand with "Make a draft release" on checks the whole publishing step without showing
 # anything to the public.
 #
+# Building on Linux needs more than a Rust toolchain since Bedrock Edition: protoc (the vendored Xodus crates), and for the
+# two small helpers that ship next to blockforge in every Linux package, the GTK 3, WebKitGTK 4.1 and libsoup 3 headers
+# (blockforge-bedrock-auth, the sign-in window) and the musl Rust target (bedrock-runtime, a static program that runs in
+# the Steam Linux Runtime container). Windows and macOS need none of this and are built as before; the "Linux-only
+# dependencies" step checks that they stay that way.
+#
 # File names (the updater of every BlockForge version picks its download by these endings, so each ending must belong
 # to exactly one file):
 #   BlockForge-<version>-windows-x64-setup.exe      the Windows installer
@@ -49,7 +55,8 @@ jobs:
   checks:
     name: Format, lint and tests
     runs-on: ubuntu-22.04
-    timeout-minutes: 40
+    # a cold cache compiles the whole program, the vendored Xodus crates and WebKit's bindings
+    timeout-minutes: 60
     outputs:
       version: ${{ steps.version.outputs.version }}
       bumped: ${{ steps.version.outputs.bumped }}
@@ -62,7 +69,17 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+          targets: x86_64-unknown-linux-musl
+      - name: Install what the Linux build needs
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends protobuf-compiler pkg-config libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev
+          protoc --version
+          rustc --version
+      # also saved when a later step fails, so a cold build of the Bedrock dependencies is not paid again by the next try
       - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
       - name: Work out the version
         id: version
         env:
@@ -76,14 +93,22 @@ jobs:
           echo "::notice title=Version::$version"
       - run: cargo fmt --check
       - run: cargo clippy --locked --release --all-targets -- -D warnings
+      # the two helpers that ship next to blockforge (crates/bedrock-auth and crates/bedrock-runtime); the vendored Xodus
+      # crates in third_party are not ours to lint
+      - name: Lint the Bedrock helpers
+        run: packaging/linux/helpers.sh clippy
       - run: cargo test --locked --release
+      - name: Test the Bedrock helpers
+        run: packaging/linux/helpers.sh test
+      - name: Linux-only dependencies stay out of Windows and macOS
+        run: .github/scripts/linux-only-deps.sh
 
   linux:
     name: Linux packages (deb, rpm, AppImage)
     needs: checks
     # the oldest runner on purpose: a program built on an older system runs on newer ones, not the other way round
     runs-on: ubuntu-22.04
-    timeout-minutes: 45
+    timeout-minutes: 75
     env:
       VERSION: ${{ needs.checks.outputs.version }}
     steps:
@@ -92,11 +117,22 @@ jobs:
         shell: bash
         run: .github/scripts/version.sh apply "$VERSION"
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo build --locked --release
-      - name: Install the packaging tools
+        with:
+          targets: x86_64-unknown-linux-musl
+      - name: Install what the Linux build needs
         run: |
           sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends protobuf-compiler pkg-config libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      - run: cargo build --locked --release
+      # blockforge-bedrock-auth (sign-in window, links WebKitGTK) and bedrock-runtime (static, for the game's container),
+      # which every package carries next to blockforge
+      - name: Build the Bedrock helpers
+        run: packaging/linux/helpers.sh build
+      - name: Install the packaging tools
+        run: |
           sudo apt-get install -y dpkg-dev rpm squashfs-tools desktop-file-utils appstream curl file
       - name: Build the packages
         run: |
@@ -109,14 +145,38 @@ jobs:
           blockforge --version
           desktop-file-validate /usr/share/applications/blockforge.desktop
           test -f /usr/share/icons/hicolor/256x256/apps/blockforge.png
+          # both helpers sit next to blockforge; the sign-in helper finds its libraries (WebKitGTK came with the deb as
+          # a recommended package, which apt installs by default)
+          packaging/linux/check-helpers.sh /
+          # WebKit is only recommended: Depends must not name it, because BlockForge starts without it
+          deb=(dist/BlockForge-$VERSION-linux-*.deb)
+          if dpkg-deb -f "${deb[0]}" Depends | grep -qi 'webkit\|gtk\|soup'; then
+            echo "::error::Depends of the deb names WebKit or GTK; it belongs in Recommends"; exit 1
+          fi
+          dpkg-deb -f "${deb[0]}" Recommends | grep -q 'libwebkit2gtk-4.1-0'
+      # The helper opens a WebKit page in a window and exits (--self-test). A machine without a display or a sandbox for
+      # WebKit can fail it for reasons that say nothing about the package, so it warns instead of failing the build.
+      - name: Start the sign-in helper's own WebKit check (advisory)
+        continue-on-error: true
+        run: |
+          sudo apt-get install -y --no-install-recommends xvfb
+          timeout 60 xvfb-run -a blockforge-bedrock-auth --self-test
       - name: Check the rpm on a clean Fedora
         run: |
           docker run --rm -v "$PWD/dist:/dist:ro" fedora:latest sh -c \
-            'dnf install -y /dist/BlockForge-*-linux-*.rpm && blockforge --version && test -f /usr/share/applications/blockforge.desktop'
+            'dnf install -y /dist/BlockForge-*-linux-*.rpm && blockforge --version && test -f /usr/share/applications/blockforge.desktop && test -x /usr/bin/bedrock-runtime && test -x /usr/bin/blockforge-bedrock-auth && ! ldd /usr/bin/blockforge-bedrock-auth | grep -q "not found"'
       - name: Check the AppImage
         run: |
           chmod +x dist/BlockForge-$VERSION-linux-*.AppImage
           dist/BlockForge-$VERSION-linux-*.AppImage --appimage-extract-and-run --version
+          # the helpers are in the image, next to blockforge; WebKit is not (the sign-in helper uses the computer's own)
+          rm -rf squashfs-root
+          dist/BlockForge-$VERSION-linux-*.AppImage --appimage-extract > /dev/null
+          packaging/linux/check-helpers.sh squashfs-root
+          if find squashfs-root -iname '*webkit*' | grep -q .; then
+            echo "::error::the AppImage carries WebKit; it should use the computer's own"; exit 1
+          fi
+          rm -rf squashfs-root
       - uses: actions/upload-artifact@v7
         with:
           name: BlockForge-linux

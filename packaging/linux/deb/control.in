@@ -6,7 +6,7 @@ Architecture: amd64
 Installed-Size: @SIZE_KB@
 Maintainer: BlockForge contributors <riyadmondol2006@gmail.com>
 Depends: @DEPENDS@
-Recommends: xdg-desktop-portal, xdg-desktop-portal-gtk | xdg-desktop-portal-backend, xdg-utils, hicolor-icon-theme, libasound2t64 | libasound2, libpulse0, libudev1, libxrandr2, libxxf86vm1, libxext6, libxtst6
+Recommends: xdg-desktop-portal, xdg-desktop-portal-gtk | xdg-desktop-portal-backend, xdg-utils, hicolor-icon-theme, libasound2t64 | libasound2, libpulse0, libudev1, libxrandr2, libxxf86vm1, libxext6, libxtst6, libwebkit2gtk-4.1-0 (>= 2.40)
 Suggests: gamemode
 Replaces: blockforge (<< 4.0.0)
 Conflicts: blockforge (<< 4.0.0)

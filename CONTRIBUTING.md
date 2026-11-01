@@ -9,8 +9,10 @@ doesn't go to waste. Follow the [code of conduct](CODE_OF_CONDUCT.md). Security 
 ## Building
 
 You need the stable [Rust toolchain](https://rustup.rs) (1.98 or newer). Nothing else is needed on Windows and macOS. On
-Linux, a C compiler (`gcc` or `clang`) is enough to build; the window needs OpenGL and either Wayland or X11 at run
-time, which any desktop has.
+Linux, a C compiler (`gcc` or `clang`) and `protoc` are needed to build (Debian and Ubuntu: `protobuf-compiler`, Fedora:
+`protobuf-compiler`; it compiles the protocol files of the vendored Xodus crates in `third_party/xodus` for Bedrock
+Edition, and `PROTOC=/path/to/protoc` points the build at one that is not on the `PATH`). The window needs OpenGL and
+either Wayland or X11 at run time, which any desktop has. WebKitGTK is not needed to build or start BlockForge itself.
 
 ```sh
 cargo run --release            # the launcher window
@@ -25,6 +27,24 @@ things. Never point tests at your real data folder.
 
 Installers are built by the scripts in `packaging/` and by `.github/workflows/build.yml`; see
 [packaging/README.md](packaging/README.md).
+
+### The Bedrock Edition helpers (Linux)
+
+Two small programs are built next to `blockforge` and shipped beside it in the `.deb`, `.rpm` and AppImage. You only need
+them to try Bedrock Edition on Linux (`cargo run` does not build them) and to make the packages:
+
+| Program | Crate | Needs |
+|---|---|---|
+| `blockforge-bedrock-auth`, the Microsoft sign-in window | `crates/bedrock-auth` | the GTK 3, WebKitGTK 4.1 (2.40 or newer) and libsoup 3 development files: Debian and Ubuntu `libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev`, Fedora `webkit2gtk4.1-devel gtk3-devel libsoup3-devel`. Only this program needs WebKitGTK at run time, and BlockForge says so when it is missing. |
+| `bedrock-runtime`, which runs inside the Steam Linux Runtime container | `crates/bedrock-runtime` | the Rust target `x86_64-unknown-linux-musl` (`rustup target add x86_64-unknown-linux-musl`); it is built static, so it needs no C compiler for musl |
+
+```sh
+packaging/linux/helpers.sh build    # both, in release mode, into the same target folder as blockforge
+packaging/linux/helpers.sh clippy   # the lint CI runs on them
+packaging/linux/helpers.sh test     # and their tests
+```
+
+The vendored Xodus crates are not linted (they are not our code); `cargo clippy` on the program covers the rest.
 
 ## How the code is laid out
 

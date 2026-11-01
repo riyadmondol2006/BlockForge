@@ -7,12 +7,15 @@
 #   BlockForge-<version>-linux-x86_64.rpm       Fedora, openSUSE and relatives
 #   BlockForge-<version>-linux-x86_64.AppImage  runs anywhere, adds its own menu entry (src/desktop_integration.rs)
 #
-# The output folder is dist/ next to Cargo.toml unless given. It needs the binary (cargo build --release) and
-# dpkg-deb, rpmbuild, curl, sha256sum and mksquashfs (Debian: dpkg-dev rpm curl squashfs-tools; no root, no FUSE, no
+# The output folder is dist/ next to Cargo.toml unless given. It needs the binary (cargo build --release), the two
+# Bedrock Edition helpers (packaging/linux/helpers.sh build) and dpkg-deb, rpmbuild, curl, sha256sum and mksquashfs (Debian: dpkg-dev rpm curl squashfs-tools; no root, no FUSE, no
 # docker). The AppImage tools are downloaded once, checked against the checksums below and cached.
 #
 # Environment (all optional):
 #   BLOCKFORGE_BIN        the binary to package (default: target/release/blockforge)
+#   BEDROCK_AUTH_BIN      the Bedrock sign-in helper (default: target/release/blockforge-bedrock-auth)
+#   BEDROCK_RUNTIME_BIN   the static Bedrock runtime helper (default: target/x86_64-unknown-linux-musl/release/bedrock-runtime)
+#                         Both helpers are installed next to blockforge, because BlockForge looks for them there.
 #   SOURCE_DATE_EPOCH     the release date (default: the date of the last commit, else now)
 #   APPIMAGETOOL          an appimagetool to use instead of downloading one
 #   APPIMAGE_RUNTIME      an AppImage runtime file to use instead of downloading one
@@ -34,6 +37,8 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 CRATE="$(cd "$HERE/../.." && pwd)"
 ROOT="$CRATE"
 BIN="${BLOCKFORGE_BIN:-$CRATE/target/release/blockforge}"
+AUTH_BIN="${BEDROCK_AUTH_BIN:-$CRATE/target/release/blockforge-bedrock-auth}"
+RUNTIME_BIN="${BEDROCK_RUNTIME_BIN:-$CRATE/target/x86_64-unknown-linux-musl/release/bedrock-runtime}"
 OUT="${2:-$CRATE/dist}"
 ONLY="${ONLY:-deb rpm appimage}"
 ARCH=x86_64
@@ -55,6 +60,13 @@ want() { case " $ONLY " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 need() { command -v "$1" > /dev/null 2>&1 || die "$1 is needed ($2)"; }
 
 [ -f "$BIN" ] || die "$BIN not found (build it with: cargo build --release)"
+[ -f "$AUTH_BIN" ] || die "$AUTH_BIN not found (build it with: packaging/linux/helpers.sh build)"
+[ -f "$RUNTIME_BIN" ] || die "$RUNTIME_BIN not found (build it with: packaging/linux/helpers.sh build)"
+# The runtime helper runs inside the Steam Linux Runtime container, whose libraries are not ours, so it has to be fully
+# static: no dynamic loader and no needed libraries. A glibc build copied here by mistake would fail only for players.
+if readelf -lW "$RUNTIME_BIN" | grep -q INTERP || readelf -d "$RUNTIME_BIN" 2> /dev/null | grep -q NEEDED; then
+    die "$RUNTIME_BIN is not a static program (build it with: packaging/linux/helpers.sh build)"
+fi
 [ "$(uname -m)" = x86_64 ] || echo "build.sh: not an x86_64 computer, only the files are packed, nothing is run" >&2
 for f in "$HERE/blockforge.desktop" "$HERE/blockforge-mime.xml" "$HERE/blockforge.1" \
     "$HERE/$METAINFO_ID.metainfo.xml" "$ROOT/LICENSE" "$ICON_SVG"; do
@@ -90,6 +102,9 @@ STAGE="$WORK/stage"
 install -d "$STAGE/usr/bin" "$STAGE/usr/share/applications" "$STAGE/usr/share/metainfo" \
     "$STAGE/usr/share/mime/packages" "$STAGE/usr/share/man/man1" "$STAGE/usr/share/icons/hicolor/scalable/apps"
 install -m 0755 "$BIN" "$STAGE/usr/bin/blockforge"
+# next to blockforge: it starts them from where its own file is
+install -m 0755 "$AUTH_BIN" "$STAGE/usr/bin/blockforge-bedrock-auth"
+install -m 0755 "$RUNTIME_BIN" "$STAGE/usr/bin/bedrock-runtime"
 install -m 0644 "$HERE/blockforge.desktop" "$STAGE/usr/share/applications/blockforge.desktop"
 install -m 0644 "$HERE/blockforge-mime.xml" "$STAGE/usr/share/mime/packages/blockforge.xml"
 sed "s|<release version=\"[^\"]*\" date=\"[^\"]*\"/>|<release version=\"$VERSION\" date=\"$DATE_ISO\"/>|" "$HERE/$METAINFO_ID.metainfo.xml" \
@@ -160,10 +175,11 @@ COPYRIGHT
     install -D -m 0644 "$HERE/deb/lintian-overrides" "$D/usr/share/lintian/overrides/blockforge"
     chmod 0644 "$D/usr/share/doc/blockforge/copyright" "$D/usr/share/doc/blockforge/changelog.Debian.gz"
 
-    # the C library version the binary needs, so the package cannot be installed where it would not start
+    # the C library version the programs need, so the package cannot be installed where it would not start (the runtime
+    # helper is static and needs none)
     DEPENDS="libc6, libgcc-s1"
     if command -v objdump > /dev/null 2>&1; then
-        glibc="$(objdump -T "$BIN" 2>/dev/null | grep -o 'GLIBC_[0-9][0-9.]*' | sed 's/GLIBC_//' | sort -t. -k1,1n -k2,2n -k3,3n | tail -n 1)"
+        glibc="$(objdump -T "$BIN" "$AUTH_BIN" 2>/dev/null | grep -o 'GLIBC_[0-9][0-9.]*' | sed 's/GLIBC_//' | sort -t. -k1,1n -k2,2n -k3,3n | tail -n 1)"
         [ -n "$glibc" ] && DEPENDS="libc6 (>= $glibc), libgcc-s1"
     fi
     # opened at run time (dlopen), so dpkg-shlibdeps cannot see them
