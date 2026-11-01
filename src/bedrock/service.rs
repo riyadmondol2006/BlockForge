@@ -175,6 +175,11 @@ pub(super) trait Parts: Send + Sync + 'static {
         progress: Arc<Progress>,
         cancel: Cancel,
     ) -> Job<'a, Launched>;
+    /// A game of an earlier BlockForge window that is still running for this instance, taken up again: its session
+    /// and how to stop and follow it. A worker call that only reads (a few files, `/proc`). None where there is none.
+    fn attach(&self, _ctx: &Ctx, _instance: &BedrockInstance) -> Option<(SessionId, Launched)> {
+        None
+    }
     /// Revalidate and rebuild while idle, keeping the worlds. Some(build) when the game had to be fetched again and
     /// that gave another build than the instance had.
     fn repair<'a>(
@@ -324,6 +329,9 @@ struct State {
     /// Minecraft for Windows as the package API found it (Windows only).
     native: HashMap<Edition, super::native::Package>,
     live: HashMap<InstanceId, Live>,
+    /// How to stop a game this process found already running (a closed window's), by instance. The window holds the
+    /// control of the games it started itself.
+    adopted: HashMap<InstanceId, SessionControl>,
     repair: HashMap<InstanceId, String>,
     jobs: HashSet<JobKey>,
     refreshing: bool,
@@ -615,7 +623,7 @@ impl Service {
         let handle = self.handle.clone();
         let events = self.shared.events.clone();
         let first = !self.shared.lock().loaded;
-        let (loaded, store_states, xbox_states, native) = self
+        let (loaded, store_states, xbox_states, native, found) = self
             .blocking(move || {
                 // what sessions of an earlier run left behind (their folders, their staged images), once per run
                 #[cfg(all(target_os = "linux", feature = "bedrock"))]
@@ -627,7 +635,15 @@ impl Service {
                 let loaded = storage::load_all(&paths);
                 let ctx = Ctx { paths, handle, events };
                 let (mut stores, mut xbox) = (HashMap::new(), HashMap::new());
+                // games a closed window left running: found again, so Stop, Delete and Quit know of them
+                let mut found = Vec::new();
                 if support == Support::Linux {
+                    for rec in &loaded.instances {
+                        let public = rec.public();
+                        if let Some((session, launched)) = parts.attach(&ctx, &public) {
+                            found.push((rec.id.clone(), session, launched));
+                        }
+                    }
                     for id in &loaded.stores {
                         stores.insert(id.clone(), (parts.store_state(&ctx, id), parts.store_identity(&ctx, id)));
                     }
@@ -651,7 +667,7 @@ impl Service {
                         }
                     }
                 }
-                Ok((loaded, stores, xbox, native))
+                Ok((loaded, stores, xbox, native, found))
             })
             .await?;
         for p in &loaded.problems {
@@ -690,6 +706,9 @@ impl Service {
             }
             wanted
         });
+        for (id, session, launched) in found {
+            self.adopt(id, session, launched).await;
+        }
         if matches!(policy, RefreshPolicy::NetworkAllowed) && support == Support::Linux {
             let ctx = self.ctx();
             for (store, edition) in editions {
@@ -704,6 +723,37 @@ impl Service {
             }
         }
         Ok(())
+    }
+
+    /// Take up a game that an earlier window left running: it counts as live (so the instance can't be played,
+    /// changed or deleted meanwhile and Stop reaches it), the instance's keys and lock are held until it is over,
+    /// and the window is told when that is. Skipped when this process already has the instance in hand or another
+    /// BlockForge window has its lock.
+    async fn adopt(&self, id: InstanceId, session: SessionId, launched: Launched) {
+        let Ok(guard) = self.begin(vec![JobKey::Instance(id.0), JobKey::Game]) else { return };
+        if self.shared.lock().live.contains_key(&id) || self.record(&id).is_err() {
+            return;
+        }
+        let Ok(lock) = self.lock_instance(&id).await else { return };
+        let control = SessionControl {
+            inner: Arc::new(Control {
+                shared: Arc::downgrade(&self.shared),
+                instance: id.clone(),
+                session: session.clone(),
+                stop: launched.stop,
+            }),
+        };
+        self.shared.update(|s| {
+            s.live.insert(id.clone(), Live { session: session.clone(), phase: LivePhase::Starting });
+            s.adopted.insert(id.clone(), control);
+        });
+        self.watch(id, session, launched.started, launched.exited, guard, lock);
+    }
+
+    /// How to stop the game of `id` when this process found it already running; None for one it started itself
+    /// (the window holds that one) or none at all.
+    pub fn attached_control(&self, id: &InstanceId) -> Option<SessionControl> {
+        self.shared.lock().adopted.get(id).cloned()
     }
 
     pub async fn create_instance(&self, request: CreateRequest) -> Result<BedrockInstance> {
@@ -1225,6 +1275,7 @@ impl Service {
             };
             let rec = shared.update(|s| {
                 s.live.remove(&id);
+                s.adopted.remove(&id);
                 let rec = s.instances.iter_mut().find(|r| r.id == id)?;
                 rec.last_played = Some(storage::now());
                 Some(rec.clone())
@@ -1455,6 +1506,8 @@ mod tests {
         xbox_linked: Mutex<HashSet<ProfileId>>,
         /// What was asked of the sign-ins, in order.
         calls: Mutex<Vec<String>>,
+        /// The instance whose game "an earlier window left running": the next refresh finds it once.
+        attachable: Mutex<Option<InstanceId>>,
     }
 
     impl Fake {
@@ -1597,6 +1650,27 @@ mod tests {
                 })
             })
         }
+        fn attach(&self, _: &Ctx, instance: &BedrockInstance) -> Option<(SessionId, Launched)> {
+            let mut mine = self.0.attachable.lock().unwrap();
+            if mine.as_ref() != Some(&instance.id) {
+                return None;
+            }
+            mine.take();
+            let (up_tx, up_rx) = oneshot::channel();
+            let (end_tx, end_rx) = oneshot::channel();
+            *self.0.ends.lock().unwrap() = Some((up_tx, end_tx));
+            Some((
+                SessionId(uuid::Uuid::new_v4()),
+                Launched {
+                    running: None,
+                    stop: Arc::new(FakeStop(self.0.clone())),
+                    started: Box::pin(async move {
+                        let _ = up_rx.await;
+                    }),
+                    exited: Box::pin(async move { end_rx.await.ok().flatten() }),
+                },
+            ))
+        }
         fn repair<'a>(
             &'a self,
             _: &'a Ctx,
@@ -1733,6 +1807,82 @@ mod tests {
         assert!(matches!(readiness_of(&svc, &a.id), Readiness::Ready { .. }));
         // the game is over: the other instance can play now
         assert!(svc.play(b.id.clone(), options(), Progress::new(), Cancel::default()).await.is_ok());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// A game a closed window left running is found when BlockForge opens: the instance shows as live (Play, Delete
+    /// and the other changes are refused), Stop reaches the game, and when it is over the instance is free.
+    #[tokio::test]
+    async fn a_game_left_running_by_a_closed_window_is_found_and_can_be_stopped() {
+        let fake = Arc::new(Fake::default());
+        let (svc, root) = service("bedrock-attach", &fake);
+        let a = svc.create_instance(create("First", None)).await.unwrap();
+        svc.install(a.id.clone(), Progress::new(), Cancel::default()).await.unwrap();
+        // a second backend on the same folder, as a new BlockForge process
+        let again = Service::with_parts(
+            root.join("bedrock"),
+            tokio::runtime::Handle::current(),
+            Support::Linux,
+            Arc::new(FakeParts(fake.clone())),
+        );
+        let mut events = again.subscribe();
+        *fake.attachable.lock().unwrap() = Some(a.id.clone());
+        again.refresh(RefreshPolicy::LocalOnly, Cancel::default()).await.unwrap();
+        assert!(matches!(readiness_of(&again, &a.id), Readiness::Starting(_) | Readiness::Running(_)));
+        let control = again.attached_control(&a.id).expect("Stop can reach a game that was found");
+        // nothing is changed under it
+        let e = again.play(a.id.clone(), options(), Progress::new(), Cancel::default()).await.err().unwrap();
+        assert!(matches!(e.kind, ErrorKind::Busy), "{e}");
+        let e = again.delete_instance(&a.id).await.unwrap_err();
+        assert!(matches!(e.kind, ErrorKind::Busy), "{e}");
+        assert!(again.select_build(a.id.clone(), BuildSelection::Latest(Edition::Preview)).await.is_err());
+        assert_eq!(again.snapshot().instances.len(), 1, "the instance is still there");
+        // another refresh doesn't take the same game up twice
+        again.refresh(RefreshPolicy::LocalOnly, Cancel::default()).await.unwrap();
+        assert_eq!(fake.launches.load(Ordering::SeqCst), 0);
+        // the window comes up: the game is running, and Stop goes through
+        let (up, end) = fake.ends.lock().unwrap().take().unwrap();
+        up.send(()).unwrap();
+        loop {
+            if let Event::SessionStarted(_) = events.recv().await.unwrap() {
+                break;
+            }
+        }
+        assert!(matches!(readiness_of(&again, &a.id), Readiness::Running(_)));
+        control.stop(StopMode::Graceful).await.unwrap();
+        assert_eq!(fake.stop_calls.load(Ordering::SeqCst), 1);
+        end.send(Some(0)).unwrap();
+        loop {
+            if let Event::SessionExited { code, .. } = events.recv().await.unwrap() {
+                assert_eq!(code, Some(0));
+                break;
+            }
+        }
+        assert!(matches!(readiness_of(&again, &a.id), Readiness::Ready { .. }));
+        assert!(again.attached_control(&a.id).is_none());
+        // free again: it can be deleted
+        again.delete_instance(&a.id).await.unwrap();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// The prefix's launch lease is held by a supervisor this process doesn't know of: Delete is refused whole.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn delete_waits_for_a_game_that_holds_the_prefix() {
+        use super::super::supervisor::lease::{Kind, Lease};
+        let fake = Arc::new(Fake::default());
+        let (svc, root) = service("bedrock-delete-lease", &fake);
+        let a = svc.create_instance(create("First", None)).await.unwrap();
+        let paths = Paths::at(root.join("bedrock"));
+        let held = Lease::try_take(&paths.launch_lease(&a.profile), Kind::Exclusive).unwrap();
+        let e = svc.delete_instance(&a.id).await.unwrap_err();
+        assert!(matches!(e.kind, ErrorKind::Busy), "{e}");
+        assert_eq!(svc.snapshot().instances.len(), 1);
+        assert!(paths.instance_file(&a.id).exists() && paths.profile(&a.profile).is_dir());
+        // the instance lock the failed delete took is let go: it can be tried again
+        drop(held);
+        svc.delete_instance(&a.id).await.unwrap();
+        assert!(svc.snapshot().instances.is_empty() && !paths.profile(&a.profile).exists());
         let _ = std::fs::remove_dir_all(root);
     }
 

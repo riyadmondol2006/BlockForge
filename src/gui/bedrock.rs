@@ -387,6 +387,26 @@ pub fn credit(ui: &mut Ui) -> Option<String> {
     )
 }
 
+/// The names of the instances whose Bedrock game is starting, running or stopping.
+pub fn playing_names(snap: &br::Snapshot) -> Vec<String> {
+    let mut names: Vec<String> =
+        snap.instances.iter().filter(|st| is_live(&st.readiness)).map(|st| st.instance.name.clone()).collect();
+    names.sort_unstable();
+    names.dedup();
+    names
+}
+
+/// The line the quit confirmation shows for running Bedrock games, as the Java games have one; none without games.
+pub fn quit_line(playing: &[String]) -> Option<String> {
+    (!playing.is_empty()).then(|| {
+        format!(
+            "Minecraft: Bedrock Edition is running ({}). It keeps running; BlockForge finds it again when it opens, \
+             but won't show its log or back up the worlds when it ends.",
+            playing.join(", ")
+        )
+    })
+}
+
 impl App {
     /// Start listening to the backend and read its records, both on the runtime: the window doesn't wait.
     pub(super) fn bedrock_start(&mut self) {
@@ -644,11 +664,17 @@ impl App {
                 });
             }
             BAct::Stop(id) => {
-                let Some(live) = self.bedrock.live.get(&id.0) else {
+                // a game this window started, or one an earlier window left running and this one found again
+                let Some(control) = self
+                    .bedrock
+                    .live
+                    .get(&id.0)
+                    .map(|l| l.control.clone())
+                    .or_else(|| self.bedrock.backend.attached_control(&id))
+                else {
                     self.toast_err("This game wasn't started from this window. Close it in the game.");
                     return;
                 };
-                let control = live.control.clone();
                 let force = self.bedrock.force.contains(&id.0);
                 let n = self.notifier();
                 let key = id.0;
@@ -1572,6 +1598,10 @@ impl AccountRow {
     }
 }
 
+/// What the first Store sign-in on a computer may ask of the player (`store/device.rs` runs `pkexec` for it).
+const PASSWORD_NOTE: &str = "Your system may ask for your password so the Microsoft Store can register this \
+                             computer (it reads the PC's model and serial). Cancel works too.";
+
 /// The one Microsoft account row: how it stands, the Xbox Live half, the link to the BlockForge account, and the one
 /// button (Sign in to play Bedrock, or Sign out of both).
 fn account_row(ui: &mut Ui, row: &AccountRow, act: &mut Option<BAct>) {
@@ -1598,10 +1628,6 @@ fn account_row(ui: &mut Ui, row: &AccountRow, act: &mut Option<BAct>) {
             if signed_in && !row.busy {
                 let _ = match &row.xbox_state {
                     SignInState::Linked { display_name: Some(tag) } => {
-/// What the first Store sign-in on a computer may ask of the player (`store/device.rs` runs `pkexec` for it).
-const PASSWORD_NOTE: &str = "Your system may ask for your password so the Microsoft Store can register this \
-                             computer (it reads the PC's model and serial). Cancel works too.";
-
                         status_line(ui, Status::Good, &format!("Xbox Live: {tag}"))
                     }
                     SignInState::Linked { display_name: None } => status_line(ui, Status::Good, "Xbox Live: linked"),
@@ -1632,6 +1658,11 @@ const PASSWORD_NOTE: &str = "Your system may ask for your password so the Micros
                            download and Xbox Live.";
                 ui.add(egui::Label::new(RichText::new(why).size(FS_META).color(c_muted())).wrap());
             }
+            if !signed_in {
+                // told before it happens, and while it can: the first sign-in on a computer registers it with the
+                // Store, which reads the firmware table as root through polkit
+                ui.add(egui::Label::new(RichText::new(PASSWORD_NOTE).size(FS_META).color(c_muted())).wrap());
+            }
         });
         ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
             if row.busy {
@@ -1658,11 +1689,6 @@ const PASSWORD_NOTE: &str = "Your system may ask for your password so the Micros
                         });
                     }
                 });
-            if !signed_in {
-                // told before it happens, and while it can: the first sign-in on a computer registers it with the
-                // Store, which reads the firmware table as root through polkit
-                ui.add(egui::Label::new(RichText::new(PASSWORD_NOTE).size(FS_META).color(c_muted())).wrap());
-            }
             } else if primary(ui, "Sign in to play Bedrock").clicked() {
                 *act = Some(BAct::SignIn(row.store.clone()));
             }
@@ -1739,6 +1765,43 @@ mod tests {
         assert_eq!(unique_name(&snap, "Bedrock"), "Bedrock (3)");
         assert_eq!(unique_name(&snap, "Other"), "Other");
         assert_eq!(version_line(&snap.instances[0].instance, Support::Linux), "Release \u{00B7} not downloaded");
+    }
+
+    #[test]
+    fn closing_the_window_asks_while_a_bedrock_game_runs() {
+        let inst = |name: &str, readiness: Readiness| InstanceStatus {
+            instance: br::BedrockInstance {
+                id: InstanceId(uuid::Uuid::new_v4()),
+                name: name.into(),
+                profile: br::ProfileId(uuid::Uuid::new_v4()),
+                store: br::StoreId(uuid::Uuid::new_v4()),
+                selection: br::BuildSelection::Latest(Edition::Release),
+                installed: None,
+            },
+            readiness,
+        };
+        let session = || br::SessionId(uuid::Uuid::new_v4());
+        let idle = br::Snapshot {
+            instances: vec![
+                inst("Idle", Readiness::NeedsInstall),
+                inst("Ready", Readiness::Ready { xbox_online_cached: false }),
+            ],
+            ..Default::default()
+        };
+        assert!(playing_names(&idle).is_empty());
+        assert_eq!(quit_line(&playing_names(&idle)), None);
+        let busy = br::Snapshot {
+            instances: vec![
+                inst("Zed", Readiness::Running(session())),
+                inst("Idle", Readiness::NeedsInstall),
+                inst("Alpha", Readiness::Stopping(session())),
+                inst("Beta", Readiness::Starting(session())),
+            ],
+            ..Default::default()
+        };
+        assert_eq!(playing_names(&busy), ["Alpha", "Beta", "Zed"]);
+        let line = quit_line(&playing_names(&busy)).unwrap();
+        assert!(line.contains("is running (Alpha, Beta, Zed)") && line.contains("keeps running"), "{line}");
     }
 
     #[test]

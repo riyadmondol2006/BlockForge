@@ -1797,6 +1797,7 @@ impl App {
                 playing.join(", ")
             ));
         }
+        lines.extend(bedrock::quit_line(&bedrock::playing_names(&self.bedrock.snap)));
         for t in self.tasks.iter().take(3) {
             lines.push(format!("{} stops halfway.", t.label));
         }

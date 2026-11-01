@@ -796,6 +796,73 @@ fn state_files_survive_a_round_trip() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// A window that finds a session it did not start takes it up only when its supervisor is a live BlockForge session
+/// supervisor of this user: same process number and start time, not over, not a stranger's or a zombie, and in the
+/// folder the state names.
+#[test]
+fn a_found_session_needs_a_live_supervisor_of_ours() {
+    let proc = scratch("sup-ours-proc");
+    let sessions = scratch("sup-ours-sessions");
+    let dir = sessions.join("sess-1");
+    std::fs::create_dir_all(&dir).unwrap();
+    let table = ProcTable::at(&proc, super::procs::current_uid(), 1);
+    let state = |pid: u32, start: Option<u64>, stage: Stage, session: &str| State {
+        session: session.into(),
+        supervisor_pid: pid,
+        supervisor_start: start,
+        stage,
+        events: vec![SessionEvent::Ready],
+    };
+    let supervisor = |pid: u32, start: u64, stat: char, args: &[&str]| {
+        super::procs::fake::add(&proc, pid, "blockforge", stat, 1, start, &[]);
+        let mut cmdline = Vec::new();
+        for a in args {
+            cmdline.extend_from_slice(a.as_bytes());
+            cmdline.push(0);
+        }
+        std::fs::write(proc.join(pid.to_string()).join("cmdline"), cmdline).unwrap();
+    };
+    let ours = |dir: &Path| Control::attach(dir).supervisor_is_ours_in(&table);
+    // no state yet
+    assert!(!ours(&dir));
+    // a live supervisor with the recorded start time
+    supervisor(500, 77, 'S', &["/usr/bin/blockforge", "--bedrock-session", "/x/sess-1"]);
+    super::ipc::write_state(&dir, &state(500, Some(77), Stage::Ready, "sess-1")).unwrap();
+    assert!(ours(&dir));
+    for stage in [Stage::Starting, Stage::Running, Stage::Stopping] {
+        super::ipc::write_state(&dir, &state(500, Some(77), stage, "sess-1")).unwrap();
+        assert!(ours(&dir), "{stage:?}");
+    }
+    // the session is over
+    for stage in [Stage::Finished, Stage::Failed] {
+        super::ipc::write_state(&dir, &state(500, Some(77), stage, "sess-1")).unwrap();
+        assert!(!ours(&dir), "{stage:?}");
+    }
+    // the number was reused by another process (another start time), or no start time was recorded
+    super::ipc::write_state(&dir, &state(500, Some(78), Stage::Ready, "sess-1")).unwrap();
+    assert!(!ours(&dir));
+    super::ipc::write_state(&dir, &state(500, None, Stage::Ready, "sess-1")).unwrap();
+    assert!(!ours(&dir));
+    // the state of another session copied here
+    super::ipc::write_state(&dir, &state(500, Some(77), Stage::Ready, "sess-2")).unwrap();
+    assert!(!ours(&dir));
+    // the process is gone, a zombie, or not a session supervisor at all
+    super::ipc::write_state(&dir, &state(500, Some(77), Stage::Ready, "sess-1")).unwrap();
+    super::procs::fake::remove(&proc, 500);
+    assert!(!ours(&dir));
+    supervisor(500, 77, 'Z', &["/usr/bin/blockforge", "--bedrock-session", "/x/sess-1"]);
+    assert!(!ours(&dir));
+    supervisor(500, 77, 'S', &["/usr/bin/sleep", "1000"]);
+    assert!(!ours(&dir));
+    // a live supervisor of another user
+    supervisor(500, 77, 'S', &["/usr/bin/blockforge", "--bedrock-session", "/x/sess-1"]);
+    assert!(ours(&dir));
+    let stranger = ProcTable::at(&proc, super::procs::current_uid().wrapping_add(1), 1);
+    assert!(!Control::attach(&dir).supervisor_is_ours_in(&stranger));
+    let _ = std::fs::remove_dir_all(proc);
+    let _ = std::fs::remove_dir_all(sessions);
+}
+
 // ---- the output towards the window
 
 #[tokio::test]

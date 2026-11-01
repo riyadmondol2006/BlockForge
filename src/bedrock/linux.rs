@@ -11,7 +11,7 @@
 //! Everything here runs on the runtime's workers; file work goes to blocking workers.
 use super::{
     AccountIdentity, BedrockError, BedrockInstance, BuildId, BuildInfo, BuildSelection, Cancel, Edition, ErrorKind,
-    Event, InstanceId, ProfileId, Result, SignInState, SignOutMode, StopMode, StoreId, diagnostics,
+    Event, InstanceId, ProfileId, Result, SessionId, SignInState, SignOutMode, StopMode, StoreId, diagnostics,
     engine::{self, Check, Engine},
     fixups, gpu_safety, helpers, payloads, prefix, proton,
     runtime::{self, InnerPlan, Program, Runtime},
@@ -566,6 +566,75 @@ async fn follow(
     }
     drop(held);
     let _ = exited.send(code.flatten());
+}
+
+/// The game a window that has since closed left running for this profile, if there is one: the session the profile
+/// last played (`last-session`), whose folder is ours and whose supervisor is a live BlockForge session supervisor of
+/// this user (`Control::supervisor_is_ours`: the recorded process number, start time and arguments all match). Reads a
+/// few small files and `/proc`; run it on a worker.
+fn live_session(base: &Path, profile: &Profile) -> Option<(SessionId, Control)> {
+    use std::os::unix::fs::MetadataExt;
+    let last = profile.last_session();
+    let meta = std::fs::symlink_metadata(&last).ok()?;
+    if !meta.is_file() || meta.len() > 64 {
+        return None;
+    }
+    let id = uuid::Uuid::parse_str(std::fs::read_to_string(&last).ok()?.trim()).ok()?;
+    let dir = base.join("sessions").join(id.to_string());
+    let meta = std::fs::symlink_metadata(&dir).ok()?;
+    if !meta.is_dir() || meta.uid() != rustix::process::geteuid().as_raw() {
+        return None;
+    }
+    let control = Control::attach(&dir);
+    control.supervisor_is_ours().then_some((SessionId(id), control))
+}
+
+/// A running session taken up again: Stop works through its control socket, "started" is when the supervisor says the
+/// game's window is up, and "over" is when the supervisor is gone. There is no log to show (the old window had the
+/// supervisor's output) and no Xbox presence (it ended with that window).
+fn attached(control: Control) -> Launched {
+    let ready = control.clone();
+    let started = Box::pin(async move {
+        loop {
+            let c = ready.clone();
+            let past_start = tokio::task::spawn_blocking(move || {
+                !c.supervisor_alive()
+                    || c.state().is_some_and(|s| {
+                        !matches!(s.stage, supervisor::plan::Stage::Starting | supervisor::plan::Stage::Running)
+                    })
+            })
+            .await
+            .unwrap_or(true);
+            if past_start {
+                break;
+            }
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+    });
+    let over = control.clone();
+    let record = control.clone();
+    let exited = Box::pin(async move {
+        loop {
+            let c = over.clone();
+            if !tokio::task::spawn_blocking(move || c.supervisor_alive()).await.unwrap_or(false) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+        tokio::task::spawn_blocking(move || {
+            record.state().and_then(|s| {
+                s.events.iter().rev().find_map(|e| match e {
+                    SessionEvent::Exited { code, .. } => Some(*code),
+                    _ => None,
+                })
+            })
+        })
+        .await
+        .ok()
+        .flatten()
+        .flatten()
+    });
+    Launched { running: None, stop: Arc::new(SupervisorStop(control)), started, exited }
 }
 
 /// Start-up, on a worker: what earlier runs' sessions left (their folders, their staged images), now that their
@@ -1364,6 +1433,11 @@ impl Parts for Linux {
         Box::pin(self.launch_inner(ctx, request, progress, cancel))
     }
 
+    fn attach(&self, ctx: &Ctx, instance: &BedrockInstance) -> Option<(SessionId, Launched)> {
+        let profile = Profile::of(&ctx.paths, &instance.profile);
+        live_session(ctx.paths.root(), &profile).map(|(session, control)| (session, attached(control)))
+    }
+
     fn repair<'a>(
         &'a self,
         ctx: &'a Ctx,
@@ -1383,6 +1457,145 @@ impl Parts for Linux {
 mod tests {
     use super::*;
     use crate::bedrock::artifact;
+
+    /// A stand-in for a session supervisor: a process that waits and has `--bedrock-session` among its arguments,
+    /// as the real one's command line does. Killed when dropped.
+    struct FakeSupervisor(std::process::Child);
+
+    impl FakeSupervisor {
+        fn start() -> Self {
+            let child = std::process::Command::new("sh")
+                .args(["-c", "read x", "--bedrock-session"])
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .unwrap();
+            // wait for the shell to have its arguments (a fork's command line is the parent's until it execs)
+            for _ in 0..200 {
+                let line = std::fs::read(format!("/proc/{}/cmdline", child.id())).unwrap_or_default();
+                if String::from_utf8_lossy(&line).contains("--bedrock-session") {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Self(child)
+        }
+        fn stop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    impl Drop for FakeSupervisor {
+        fn drop(&mut self) {
+            self.stop();
+        }
+    }
+
+    /// What a closed window leaves: `last-session` of the profile, and the session's folder with the state its
+    /// supervisor wrote.
+    fn leave_session(
+        base: &Path,
+        profile: &Profile,
+        supervisor: &FakeSupervisor,
+        stage: supervisor::plan::Stage,
+    ) -> String {
+        let id = uuid::Uuid::new_v4().to_string();
+        let dir = base.join("sessions").join(&id);
+        std::fs::create_dir_all(&dir).unwrap();
+        let state = supervisor::plan::State {
+            session: id.clone(),
+            supervisor_pid: supervisor.0.id(),
+            supervisor_start: supervisor::process_start(supervisor.0.id()),
+            stage,
+            events: vec![SessionEvent::Ready],
+        };
+        std::fs::write(dir.join("state.json"), serde_json::to_vec(&state).unwrap()).unwrap();
+        std::fs::create_dir_all(&profile.dir).unwrap();
+        std::fs::write(profile.last_session(), id.as_bytes()).unwrap();
+        id
+    }
+
+    #[test]
+    fn a_session_the_closed_window_left_running_is_found_only_while_its_supervisor_lives() {
+        use supervisor::plan::Stage;
+        let root = crate::testutil::scratch("bedrock-live-session");
+        let base = root.join("bedrock");
+        let paths = Paths::at(&base);
+        let profile = Profile::of(&paths, &ProfileId(uuid::Uuid::new_v4()));
+        // nothing played yet
+        assert!(live_session(&base, &profile).is_none());
+        let mut supervisor = FakeSupervisor::start();
+        let id = leave_session(&base, &profile, &supervisor, Stage::Ready);
+        let (found, _) = live_session(&base, &profile).expect("a live supervisor's session is found");
+        assert_eq!(found.0.to_string(), id);
+        // a session that is over, or whose folder is a link to somewhere else, or an id that isn't one
+        let state_file = base.join("sessions").join(&id).join("state.json");
+        let live_state = std::fs::read(&state_file).unwrap();
+        let mut over: supervisor::plan::State = serde_json::from_slice(&live_state).unwrap();
+        over.stage = Stage::Finished;
+        std::fs::write(&state_file, serde_json::to_vec(&over).unwrap()).unwrap();
+        assert!(live_session(&base, &profile).is_none());
+        std::fs::write(&state_file, &live_state).unwrap();
+        assert!(live_session(&base, &profile).is_some());
+        std::fs::write(profile.last_session(), "../../etc").unwrap();
+        assert!(live_session(&base, &profile).is_none());
+        std::fs::write(profile.last_session(), vec![b'a'; 1000]).unwrap();
+        assert!(live_session(&base, &profile).is_none());
+        std::fs::write(profile.last_session(), id.as_bytes()).unwrap();
+        let moved = base.join("sessions/real");
+        std::fs::rename(base.join("sessions").join(&id), &moved).unwrap();
+        std::os::unix::fs::symlink(&moved, base.join("sessions").join(&id)).unwrap();
+        assert!(live_session(&base, &profile).is_none(), "a link is not a session folder");
+        std::fs::remove_file(base.join("sessions").join(&id)).unwrap();
+        std::fs::rename(&moved, base.join("sessions").join(&id)).unwrap();
+        assert!(live_session(&base, &profile).is_some());
+        // the supervisor is gone
+        supervisor.stop();
+        assert!(live_session(&base, &profile).is_none());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn a_found_session_is_followed_to_its_end() {
+        use supervisor::plan::Stage;
+        let root = crate::testutil::scratch("bedrock-attached");
+        let base = root.join("bedrock");
+        let paths = Paths::at(&base);
+        let profile = Profile::of(&paths, &ProfileId(uuid::Uuid::new_v4()));
+        let mut supervisor = FakeSupervisor::start();
+        let id = leave_session(&base, &profile, &supervisor, Stage::Running);
+        let (session, control) = live_session(&base, &profile).unwrap();
+        let Launched { started, exited, .. } = attached(control);
+        let mut started = Box::pin(started);
+        let mut exited = Box::pin(exited);
+        // still starting: neither has happened
+        let pending = tokio::time::timeout(Duration::from_millis(300), &mut started).await;
+        assert!(pending.is_err(), "not started while the game's window isn't up");
+        // the game's window appears
+        let state_file = base.join("sessions").join(&id).join("state.json");
+        let mut state: supervisor::plan::State = serde_json::from_slice(&std::fs::read(&state_file).unwrap()).unwrap();
+        state.stage = Stage::Ready;
+        std::fs::write(&state_file, serde_json::to_vec(&state).unwrap()).unwrap();
+        tokio::time::timeout(Duration::from_secs(5), &mut started).await.expect("started once the window is up");
+        // the supervisor ends and says how
+        assert!(tokio::time::timeout(Duration::from_millis(300), &mut exited).await.is_err());
+        state.stage = Stage::Finished;
+        state.events.push(SessionEvent::Exited {
+            code: Some(3),
+            prefix_idle: true,
+            marker_cleared: true,
+            findings: vec![],
+        });
+        std::fs::write(&state_file, serde_json::to_vec(&state).unwrap()).unwrap();
+        supervisor.stop();
+        let code =
+            tokio::time::timeout(Duration::from_secs(5), exited).await.expect("over once the supervisor is gone");
+        assert_eq!(code, Some(3));
+        assert_eq!(session.0.to_string(), id);
+        let _ = std::fs::remove_dir_all(root);
+    }
 
     #[test]
     fn images_are_named_the_way_the_loader_asks_for_them() {

@@ -137,6 +137,11 @@ impl ProcTable {
         Some(ProcInfo { id: ProcId { pid, start }, ppid, state, uid, comm, cmdline })
     }
 
+    /// Whether `info` is a live (not zombie) process of the user this table is for.
+    pub fn is_live_and_ours(&self, info: &ProcInfo) -> bool {
+        !info.is_zombie() && info.uid == self.uid
+    }
+
     /// Whether `id` is still that process and still ours under `scope`.
     pub fn is_ours(&self, id: ProcId, scope: &Scope) -> bool {
         let Some(info) = self.info(id.pid) else { return false };

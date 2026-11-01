@@ -55,6 +55,12 @@ impl Paths {
         self.profiles().join(id.0.to_string())
     }
 
+    /// The profile's launch lock: setup, repair, sign-out and play of its prefix exclude each other, and the game's
+    /// supervisor holds it for the whole session (the same file as `linux::Profile::launch_lease`).
+    pub fn launch_lease(&self, id: &ProfileId) -> PathBuf {
+        self.profile(id).join("locks/launch.lease")
+    }
+
     pub fn profile_file(&self, id: &ProfileId) -> PathBuf {
         self.profile(id).join("profile.json")
     }
@@ -431,14 +437,34 @@ pub(super) fn save(paths: &Paths, rec: &InstanceRecord) -> Result<()> {
 
 /// Remove an instance: its record first (from then on it is gone, even if the rest fails), then its profile with the
 /// Wine prefix and the worlds in it. The Store slot stays: other instances, or a later one, sign in with it.
+///
+/// The profile's launch lease is taken first and kept until the profile is gone: a game this process doesn't know of
+/// (one a closed window left running) holds it through its supervisor, and its Wine prefix is not to be deleted under
+/// it. `Busy` then, with nothing removed.
 pub(super) fn remove(paths: &Paths, rec: &InstanceRecord) -> Result<()> {
+    let profile = paths.profile(&rec.profile);
+    #[cfg(unix)]
+    let _lease = if profile.is_dir() {
+        use super::supervisor::lease::{Kind, Lease, LeaseError};
+        match Lease::try_take(&paths.launch_lease(&rec.profile), Kind::Exclusive) {
+            Ok(lease) => Some(lease),
+            Err(LeaseError::Busy(_)) => {
+                return Err(BedrockError::new(
+                    ErrorKind::Busy,
+                    "This instance's game or another job is using its Wine prefix. Close the game first.",
+                ));
+            }
+            Err(e) => return Err(BedrockError::new(ErrorKind::Internal, e.to_string())),
+        }
+    } else {
+        None
+    };
     let file = paths.instance_file(&rec.id);
     match std::fs::remove_file(&file) {
         Ok(()) => {}
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => return Err(io_error("remove", &file, e)),
     }
-    let profile = paths.profile(&rec.profile);
     match std::fs::remove_dir_all(&profile) {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -572,6 +598,31 @@ mod tests {
         assert!(!paths.profile(&rec.profile).exists());
         assert!(paths.store(&rec.store).exists(), "the Store slot outlives the instance");
         assert!(load_all(&paths).instances.is_empty());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// A game a closed window left running holds the prefix's launch lease: deleting its instance is refused and
+    /// nothing is removed; once the lease is free the instance goes.
+    #[cfg(unix)]
+    #[test]
+    fn removing_an_instance_waits_for_the_prefixs_launch_lease() {
+        use super::super::supervisor::lease::{Kind, Lease};
+        let root = crate::testutil::scratch("bedrock-remove-lease");
+        let paths = Paths::at(&root);
+        let rec = record(&paths);
+        create(&paths, &rec, true).unwrap();
+        std::fs::create_dir_all(paths.profile(&rec.profile).join("compat/pfx")).unwrap();
+        let held = Lease::try_take(&paths.launch_lease(&rec.profile), Kind::Exclusive).unwrap();
+        let refused = remove(&paths, &rec).unwrap_err();
+        assert!(matches!(refused.kind, ErrorKind::Busy), "{refused}");
+        assert!(paths.instance_file(&rec.id).exists(), "the record stays");
+        assert!(paths.profile(&rec.profile).join("compat/pfx").exists(), "the prefix stays");
+        drop(held);
+        remove(&paths, &rec).unwrap();
+        assert!(!paths.profile(&rec.profile).exists() && !paths.instance_file(&rec.id).exists());
+        // removing what is already gone is not an error, and makes nothing
+        remove(&paths, &rec).unwrap();
+        assert!(!paths.profile(&rec.profile).exists());
         let _ = std::fs::remove_dir_all(root);
     }
 

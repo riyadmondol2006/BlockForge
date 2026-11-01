@@ -268,6 +268,29 @@ impl Control {
         }
     }
 
+    /// Whether the folder's session has a supervisor that is ours and running, for a window that finds a session it
+    /// did not start (the game outlived the window before it). Stricter than [`Control::supervisor_alive`]: the
+    /// process of the recorded number must have the recorded start time, belong to this user, be no zombie and
+    /// be a BlockForge session supervisor (`--bedrock-session` among its arguments), and the state must say the
+    /// session is this folder's and not over.
+    pub fn supervisor_is_ours(&self) -> bool {
+        self.supervisor_is_ours_in(&super::procs::ProcTable::system())
+    }
+
+    pub(super) fn supervisor_is_ours_in(&self, table: &super::procs::ProcTable) -> bool {
+        let Some(state) = self.state() else { return false };
+        if matches!(state.stage, Stage::Finished | Stage::Failed) {
+            return false;
+        }
+        if self.dir.file_name().and_then(|n| n.to_str()) != Some(state.session.as_str()) {
+            return false;
+        }
+        let Some(start) = state.supervisor_start else { return false };
+        table.info(state.supervisor_pid).is_some_and(|p| {
+            p.id.start == start && table.is_live_and_ours(&p) && p.cmdline.iter().any(|a| a == "--bedrock-session")
+        })
+    }
+
     async fn connect(&self) -> std::io::Result<UnixStream> {
         let addr = SocketAddr::for_folder(&self.dir)?;
         UnixStream::connect(&addr.path).await

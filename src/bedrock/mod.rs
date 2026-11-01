@@ -393,6 +393,11 @@ impl Backend {
     pub fn new(dirs: &Dirs, handle: tokio::runtime::Handle) -> Self {
         Self { inner: Arc::new(service::Service::new(dirs, handle)) }
     }
+    /// How to stop a game that was already running when BlockForge opened (one a closed window left behind), once
+    /// the first refresh has found it. None for any other instance.
+    pub fn attached_control(&self, id: &InstanceId) -> Option<SessionControl> {
+        self.inner.attached_control(id)
+    }
     /// Memory-only clone. Never scans or checks installed applications.
     pub fn snapshot(&self) -> Arc<Snapshot> {
         self.inner.snapshot()
