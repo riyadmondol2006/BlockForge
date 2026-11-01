@@ -385,12 +385,42 @@ async fn fix_build(build: &mut store::InstalledBuild, sources: &fixups::DllSourc
     Ok(notes)
 }
 
-/// `\??\Z:\abs\path\content\<relative with backslashes>`: the name Wine's loader asks for an image by.
-/// `relative` under `content` as Wine's `Z:` drive names it.
+/// The patch recorded for the game's program when the build ships it in the clear and its stack is raised on disk.
+const STACK_PATCH: &str = "bf-stack-reserve-16m";
+
+/// A program the build ships in the clear runs from disk, so its stack is raised there, as BOL does for a plain
+/// program (bol/fixups.py `bump_stack_reserve`), and the change is recorded in the build's receipt (A) so its checks
+/// and updates keep it. An encrypted program gets the same in its staged copy instead. On every start: the edit reads
+/// 1 KiB when it is already there, and the receipt (which hashes the program) is written only the first time.
+async fn raise_plain_stack(build: &mut store::InstalledBuild) -> Result<Vec<String>> {
+    if build.images_to_decrypt().await.iter().any(|n| n.eq_ignore_ascii_case(GAME_EXE)) {
+        return Ok(Vec::new());
+    }
+    let path = build.content.join(GAME_EXE);
+    let raised = blocking(move || Ok(fixups::raise_stack_reserve_path(&path, fixups::GAME_STACK_RESERVE))).await?;
+    match raised {
+        Err(e) => Ok(vec![format!("The game's stack couldn't be raised ({e}); it may crash in its settings.")]),
+        Ok(None) if build.patch_revision(GAME_EXE) == Some(STACK_PATCH) => Ok(Vec::new()),
+        Ok(old) => {
+            if let Some(old) = old {
+                crate::logs::info(format!(
+                    "Bedrock: the game's stack raised from {} KiB to {} KiB",
+                    old / 1024,
+                    fixups::GAME_STACK_RESERVE / 1024
+                ));
+            }
+            build.record_patch(GAME_EXE, STACK_PATCH).await?;
+            Ok(Vec::new())
+        }
+    }
+}
+
+/// `Z:\abs\path\content\<relative with backslashes>`: `relative` under `content` as Wine's `Z:` drive names it.
 fn dos_name(content: &Path, relative: &str) -> String {
     format!("Z:{}\\{}", content.to_string_lossy().replace('/', "\\"), relative.replace('/', "\\"))
 }
 
+/// `\??\Z:\abs\path\content\<relative with backslashes>`: the NT name Wine's loader asks for an image by.
 fn nt_name(content: &Path, relative: &str) -> String {
     format!("\\??\\Z:{}\\{}", content.to_string_lossy().replace('/', "\\"), relative.replace('/', "\\"))
 }
@@ -631,6 +661,7 @@ impl Linux {
             )
             .await?;
             let mut notes = fix_build(&mut build, &sources).await?;
+            notes.extend(raise_plain_stack(&mut build).await?);
             notes.extend(
                 set_up_prefix(
                     &engine,
@@ -708,35 +739,37 @@ impl Linux {
             ctx.notice(Some(&instance.id), text);
         }
 
-        // 4. a fresh licence and the decrypted images, in RAM, in the folder the supervisor will own (A, E)
-        progress.stage("Getting the game's licence and decrypting it");
-        let ram = supervisor::staging_system_root()
-            .ok_or_else(|| err(ErrorKind::Runtime, supervisor::StageError::NoRam.to_string()))?;
-        let (need, sid) = (build.encrypted_bytes(), session.0.to_string());
-        let staging =
-            blocking(move || StagingDir::create(&ram, &sid, need).map_err(|e| err(ErrorKind::NoSpace, e.to_string())))
-                .await?;
-        let staging_path = staging.path().to_path_buf();
-        let staged = store::stage_into(&sctx, instance.store.clone(), &build, &staging_path, cancel.clone()).await?;
+        // 4. the images the build keeps encrypted on disk, decrypted with a fresh licence into RAM, in the folder the
+        // supervisor will own (A, E). Images the build ships in the clear (this one's own program, for one) run from
+        // disk like BOL runs a plain program: no licence, no copy, no map.
         let mut map = FileMap::new();
-        let mut exe_staged = false;
-        for image in &staged.images {
-            if image.relative.eq_ignore_ascii_case(GAME_EXE) {
-                exe_staged = true;
-                // a 16 MiB stack, as the plaintext path gets (C)
-                if let Err(e) = fixups::raise_stack_reserve(&image.file, fixups::GAME_STACK_RESERVE) {
-                    ctx.notice(
-                        Some(&instance.id),
-                        format!("The game's stack couldn't be raised ({e}); it may crash in its settings."),
-                    );
+        let mut staging = None;
+        if !build.images_to_decrypt().await.is_empty() {
+            progress.stage("Getting the game's licence and decrypting it");
+            let ram = supervisor::staging_system_root()
+                .ok_or_else(|| err(ErrorKind::Runtime, supervisor::StageError::NoRam.to_string()))?;
+            let (need, sid) = (build.decrypted_bytes().await?, session.0.to_string());
+            let dir = blocking(move || {
+                StagingDir::create(&ram, &sid, need).map_err(|e| err(ErrorKind::NoSpace, e.to_string()))
+            })
+            .await?;
+            let staged = store::stage_into(&sctx, instance.store.clone(), &build, dir.path(), cancel.clone()).await?;
+            for image in &staged.images {
+                if image.relative.eq_ignore_ascii_case(GAME_EXE) {
+                    // a 16 MiB stack, as the plaintext path gets (C)
+                    if let Err(e) = fixups::raise_stack_reserve(&image.file, fixups::GAME_STACK_RESERVE) {
+                        ctx.notice(
+                            Some(&instance.id),
+                            format!("The game's stack couldn't be raised ({e}); it may crash in its settings."),
+                        );
+                    }
                 }
+                map.add(&image.path, &nt_name(&build.content, &image.relative))
+                    .map_err(|e| err(ErrorKind::Integrity, e.to_string()))?;
             }
-            map.add(&image.path, &nt_name(&build.content, &image.relative))
-                .map_err(|e| err(ErrorKind::Integrity, e.to_string()))?;
+            staging = Some(dir);
         }
-        if !exe_staged {
-            crate::logs::warn("Bedrock: the game's executable isn't one of the encrypted images; it runs from disk");
-        }
+        let staging_path = staging.as_ref().map(|s| s.path().to_path_buf());
 
         // 5. the Wine plan (B): the session, the graphics card (E), the online payload (D) and the image map (A)
         progress.stage("Starting the game");
@@ -754,7 +787,7 @@ impl Linux {
         if let Some((k, v)) = readiness.wine_env() {
             env.insert(k.to_string(), v);
         }
-        if !map.is_empty() && std::env::var_os("BF_EXPERIMENT_NO_MAP").is_none() {
+        if !map.is_empty() {
             env.insert("WINE_DLL_FILE_MAP".into(), map.value());
         }
         // X11 through XWayland by default; Vulkan's present-wait path misbehaves there under a Wayland session
@@ -768,10 +801,11 @@ impl Linux {
         let session_dir = base.join("sessions").join(session.0.to_string());
         let wine_plan = session_dir.join("wine-plan.json");
         // The program is named by its DOS path: Wine's launcher resolves that like any path (the file is there on
-        // disk, encrypted or not) and opens it under the NT name the map gives the staged image, which the loader
-        // then reads instead. Handed the NT name itself, this engine's launcher couldn't find the program and passed
-        // it to start.exe ("ShellExecuteEx failed: Invalid name").
+        // disk, encrypted or not) and, when the map names a staged image for it, the loader opens that instead (and
+        // unlinks it). Handed the NT name itself, this engine's launcher couldn't find the program and passed it to
+        // start.exe ("ShellExecuteEx failed: Invalid name").
         let exe = dos_name(&build.content, GAME_EXE);
+        let mounts = staging_path.iter().cloned().chain([xbox_account.dir().to_path_buf(), shader_root.clone()]);
         let mut plan = inner_plan(
             &engine,
             &profile,
@@ -781,7 +815,7 @@ impl Linux {
             vec![exe],
             env,
             build.content.clone(),
-            vec![staging_path.clone(), xbox_account.dir().to_path_buf(), shader_root.clone()],
+            mounts.collect(),
         );
         plan.ntsync = blocking({
             let e = engine.clone();
@@ -855,8 +889,7 @@ impl Linux {
 
         // 7. hand everything to the supervisor (E): the staged folder, and (by letting go of ours) the leases
         let mut launch = launch;
-        launch.staging_dir = Some(staging.hand_over());
-        drop(staged);
+        launch.staging_dir = staging.map(StagingDir::hand_over);
         drop(build);
         drop(launch_lease);
         let secrets: Vec<String> = prepared
@@ -874,7 +907,9 @@ impl Linux {
         let spawned = match supervisor::spawn(&exe, &launch, &secrets) {
             Ok(s) => s,
             Err(e) => {
-                let _ = tokio::fs::remove_dir_all(launch.staging_dir.as_deref().unwrap_or(&staging_path)).await;
+                if let Some(dir) = &launch.staging_dir {
+                    let _ = tokio::fs::remove_dir_all(dir).await;
+                }
                 return Err(e);
             }
         };

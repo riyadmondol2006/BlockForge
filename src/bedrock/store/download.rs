@@ -54,7 +54,8 @@ impl InstalledBuild {
         }
         let mut receipt = self.receipt.clone();
         let entry = receipt.files.get_mut(&name).ok_or_else(|| integrity("Unknown patched file"))?;
-        if entry.encrypted {
+        // ciphertext is only ever patched in its staged copy; an image the build ships in the clear is patched on disk
+        if entry.encrypted && !super::stage::plain_on_disk(&self.content.join(&name)).await {
             return Err(err(ErrorKind::InvalidRequest, "Patch encrypted executables only after tmpfs staging"));
         }
         entry.disk_sha256 = disk_hash(&self.content.join(&name)).await?;
@@ -104,9 +105,29 @@ impl InstalledBuild {
         }
         Ok(damaged)
     }
-    /// Bytes of the encrypted images, the room their decrypted copies need when staged.
-    pub fn encrypted_bytes(&self) -> u64 {
-        self.receipt.files.values().filter(|e| e.encrypted).map(|e| e.length).sum()
+    /// The images the licence keeps encrypted that really are ciphertext on disk, the ones staging decrypts. One the
+    /// build ships in the clear (see `stage::is_plain_pe`) is not among them: it runs from disk. A few small reads.
+    pub async fn images_to_decrypt(&self) -> Vec<String> {
+        let mut names = Vec::new();
+        for (name, entry) in &self.receipt.files {
+            if entry.encrypted && !super::stage::plain_on_disk(&self.content.join(name)).await {
+                names.push(name.clone());
+            }
+        }
+        names
+    }
+    /// Bytes of the images [`Self::images_to_decrypt`] names, the room their decrypted copies need when staged.
+    pub async fn decrypted_bytes(&self) -> Result<u64> {
+        let mut total = 0u64;
+        for name in self.images_to_decrypt().await {
+            let length = self.receipt.files.get(&name).map(|e| e.length).unwrap_or(0);
+            total = total.checked_add(length).ok_or_else(|| integrity("Image size overflow"))?;
+        }
+        Ok(total)
+    }
+    /// The patch a file of the build was last recorded with, if any.
+    pub fn patch_revision(&self, relative: &str) -> Option<&str> {
+        self.receipt.files.get(relative).and_then(|e| e.patch_revision.as_deref())
     }
 }
 impl std::fmt::Debug for InstalledBuild {

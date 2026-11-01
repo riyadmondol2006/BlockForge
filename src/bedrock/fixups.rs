@@ -99,7 +99,6 @@ fn truncated() -> io::Error {
 }
 
 /// [`raise_stack_reserve`] for an executable on disk.
-#[cfg(test)]
 pub fn raise_stack_reserve_path(exe: &Path, target: u64) -> io::Result<Option<u64>> {
     let file = fs::OpenOptions::new().read(true).write(true).open(exe)?;
     raise_stack_reserve(&file, target)

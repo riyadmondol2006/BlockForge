@@ -4,6 +4,25 @@ use msixvc::xvd::{SegmentEncryption, SegmentFile, XvdFile};
 use std::fs::File;
 use tokio::io::AsyncWriteExt;
 
+/// Whether these first bytes of a file are a PE image's: "MZ", and the "PE\0\0" signature the DOS header points at.
+/// A build may ship a file its licence lists as encrypted in the clear (Minecraft 1.26.60's own program is, outside
+/// both its encrypted sections); BOL tells the two apart by the "MZ" (bol/xodus.py `exe_is_encrypted`).
+pub(super) fn is_plain_pe(head: &[u8]) -> bool {
+    if head.len() < 0x40 || !head.starts_with(b"MZ") {
+        return false;
+    }
+    let at = u32::from_le_bytes([head[0x3c], head[0x3d], head[0x3e], head[0x3f]]) as usize;
+    head.get(at..at.saturating_add(4)) == Some(b"PE\0\0".as_slice())
+}
+
+/// Whether the file is a loadable image as it lies on disk, so it runs from there and is not decrypted.
+pub(super) async fn plain_on_disk(path: &Path) -> bool {
+    use tokio::io::AsyncReadExt;
+    let Ok(file) = tokio::fs::File::open(path).await else { return false };
+    let mut head = Vec::with_capacity(4096);
+    file.take(4096).read_to_end(&mut head).await.is_ok() && is_plain_pe(&head)
+}
+
 pub struct StagedImage {
     pub relative: String,
     pub path: PathBuf,
@@ -55,13 +74,7 @@ pub async fn stage(
     if !matches!(stat.f_type as u64, 0x01021994 | 0x858458f6) {
         return Err(err(ErrorKind::Runtime, "Executable staging requires private tmpfs"));
     }
-    let needed = build
-        .receipt
-        .files
-        .values()
-        .filter(|e| e.encrypted)
-        .try_fold(0u64, |n, e| n.checked_add(e.length))
-        .ok_or_else(|| integrity("Image size overflow"))?;
+    let needed = build.decrypted_bytes().await?;
     let space = rustix::fs::statvfs(&base).map_err(integrity)?;
     let ram = memory_available(&tokio::fs::read_to_string("/proc/meminfo").await.map_err(io_error)?)?;
     if space.f_bavail.saturating_mul(space.f_frsize).min(ram) < needed {
@@ -83,6 +96,10 @@ pub async fn stage(
         cancelled(cancel)?;
         let name = download::safe_name(name)?;
         let encrypted = build.content.join(&name);
+        // shipped in the clear: it runs from disk, as BOL runs a plain program without Xodus
+        if plain_on_disk(&encrypted).await {
+            continue;
+        }
         if download::disk_hash(&encrypted).await? != entry.disk_sha256 {
             return Err(integrity("Encrypted file was modified"));
         }
@@ -95,9 +112,9 @@ pub async fn stage(
             keep_encrypted: true,
             data_hashs: entry.hashes.clone(),
         };
-        // A file the licence keeps encrypted is usually in an encrypted section and decrypted here; a build may also
-        // ship one plain (Minecraft 1.26.60's own program is, outside both its sections), and it is copied as it is,
-        // like Xodus does. One that only partly overlaps a section would come out half encrypted: refused.
+        // A file the licence keeps encrypted is usually in an encrypted section and decrypted here; one that is not a
+        // program yet lies outside the sections is copied as it is, like Xodus does. One that only partly overlaps a
+        // section would come out half encrypted: refused.
         let plain = match xvd.segment_encryption(&segment) {
             SegmentEncryption::Encrypted => false,
             SegmentEncryption::Plain => true,

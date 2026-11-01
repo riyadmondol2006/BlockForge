@@ -467,6 +467,76 @@ async fn recorded_patch_hash_and_length_survive_receipt_reload() {
     std::fs::remove_dir_all(root).unwrap();
 }
 
+/// A synthetic PE header: "MZ", the offset of the signature at 0x3c, "PE\0\0" there.
+fn synthetic_pe() -> Vec<u8> {
+    let mut image = vec![0u8; 0x200];
+    image[..2].copy_from_slice(b"MZ");
+    image[0x3c..0x40].copy_from_slice(&0x80u32.to_le_bytes());
+    image[0x80..0x84].copy_from_slice(b"PE\0\0");
+    image
+}
+
+#[test]
+fn a_plain_image_is_told_from_ciphertext_by_its_pe_header() {
+    assert!(stage::is_plain_pe(&synthetic_pe()));
+    let mut moved = synthetic_pe();
+    moved[0x3c..0x40].copy_from_slice(&0x100u32.to_le_bytes());
+    assert!(!stage::is_plain_pe(&moved), "MZ alone is not enough");
+    assert!(!stage::is_plain_pe(&[0x8c; 0x200]), "ciphertext");
+    assert!(!stage::is_plain_pe(b"MZ"), "cut off");
+    let mut far = synthetic_pe();
+    far[0x3c..0x40].copy_from_slice(&u32::MAX.to_le_bytes());
+    assert!(!stage::is_plain_pe(&far));
+}
+
+#[tokio::test]
+async fn an_image_shipped_in_the_clear_is_not_decrypted_and_may_be_patched_on_disk() {
+    let root = scratch("plain-image");
+    let ctx = Context { root: root.clone(), client: reqwest::Client::new(), auth_helper: PathBuf::from("unused") };
+    let id =
+        BuildId { edition: Edition::Release, version: "1.2.3.4".into(), package_id: uuid::Uuid::new_v4().to_string() };
+    let build_root = root.join("builds/release/1.2.3.4").join(&id.package_id);
+    let content = build_root.join("content");
+    std::fs::create_dir_all(&content).unwrap();
+    std::fs::write(content.join(download::METADATA), b"synthetic-metadata-placeholder").unwrap();
+    std::fs::write(content.join("Game.exe"), synthetic_pe()).unwrap();
+    std::fs::write(content.join("Other.dll"), [0x8c; 0x200]).unwrap();
+    let mut files = std::collections::BTreeMap::new();
+    for name in ["Game.exe", "Other.dll"] {
+        let entry = download::Entry {
+            offset: 0,
+            length: 0x200,
+            hashes: vec![[1; 20]],
+            encrypted: true,
+            disk_sha256: download::disk_hash(&content.join(name)).await.unwrap(),
+            local_length: 0x200,
+            patch_revision: None,
+        };
+        files.insert(name.to_string(), entry);
+    }
+    let receipt = download::Receipt {
+        schema: 1,
+        adapter: 1,
+        build: id.clone(),
+        content_id: catalog::content_id(Edition::Release).into(),
+        files,
+    };
+    std::fs::write(build_root.join("install.json"), serde_json::to_vec(&receipt).unwrap()).unwrap();
+    let mut build = download::load(&ctx, &id).await.unwrap();
+    assert_eq!(build.images_to_decrypt().await, vec!["Other.dll".to_string()]);
+    assert_eq!(build.decrypted_bytes().await.unwrap(), 0x200);
+    let mut patched = synthetic_pe();
+    patched[0x100] = 1;
+    std::fs::write(content.join("Game.exe"), &patched).unwrap();
+    build.record_patch("Game.exe", "stack").await.unwrap();
+    assert!(build.record_patch("Other.dll", "stack").await.is_err(), "ciphertext is never patched on disk");
+    drop(build);
+    let build = download::load(&ctx, &id).await.unwrap();
+    assert_eq!(build.patch_revision("Game.exe"), Some("stack"));
+    assert!(build.damaged_files(&Cancel::default()).await.unwrap().is_empty());
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 #[test]
 fn staging_memory_budget_requires_valid_available_ram() {
     assert_eq!(stage::memory_available("MemTotal: 100 kB\nMemAvailable: 42 kB\n").unwrap(), 42 * 1024);
