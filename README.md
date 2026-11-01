@@ -104,9 +104,9 @@ other computers. It is your own copy of Minecraft for Windows: you need to have 
 console or phone copy doesn't count). Choose Release or Preview; each keeps its own worlds.
 
 - **Linux (experimental):** BlockForge downloads your copy from the Microsoft Store with your licence and plays it in
-  a Windows compatibility engine, all from BlockForge itself, without Python or another launcher. It needs two sign-ins,
-  which can be different accounts: the Microsoft Store account that owns the game, to download it, and Xbox, to play
-  online (Xbox shows a code to type at microsoft.com/link). The first download is about 2 GB for the game and about
+  a Windows compatibility engine, all from BlockForge itself, without Python or another launcher. It needs one sign-in:
+  the Microsoft Store account that owns the game, in a small sign-in window, which also links Xbox Live for playing
+  online (if Microsoft asks for it separately, Xbox shows a code to type at microsoft.com/link instead). The first download is about 2 GB for the game and about
   1 GB for the engine. Each instance has its own game profile, so its worlds are its own; everything lives in the
   `bedrock` folder of BlockForge's data folder, and other Bedrock launchers are left alone.
   The Store sends the game over plain HTTP, so BlockForge checks it: it fetches the package's header over HTTPS from
@@ -114,7 +114,8 @@ console or phone copy doesn't count). Choose Release or Preview; each keeps its 
   header vouches for, before anything is installed or decrypted. A download that differs anywhere is refused. One
   thing can't be checked: Microsoft's signature on the header, whose key isn't public, so the header is trusted as
   Microsoft's download network serves it over HTTPS. A build downloaded by an earlier test version of BlockForge, before
-  this check, must be repaired (downloaded again) before it plays.
+  this check, must be repaired (downloaded again) before it plays. The sign-in window uses the system's WebKitGTK 4.1
+  (`webkit2gtk4.1` on Fedora, `libwebkit2gtk-4.1-0` on Debian and Ubuntu); BlockForge itself starts without it.
 - **Windows:** the game is native, so BlockForge finds Minecraft for Windows (or Preview) installed for your Windows
   user, starts it, opens its Microsoft Store page when it isn't installed, and backs up its worlds from
   `%APPDATA%\Minecraft Bedrock`. Windows and the game sign you in.

@@ -3,15 +3,19 @@
 The section for a version is used as the text of its release on GitHub. Older releases (the Java versions, up to
 3.4.42.x) are on the [releases page](https://github.com/riyadmondol2006/BlockForge/releases).
 
-## Unreleased
+## 5.2.0
 
 ### What is new
 
 - **Minecraft: Bedrock Edition.** New instance now offers three games: Minecraft: Java Edition, Horizon and
   Minecraft: Bedrock Edition. Bedrock is your own copy of Minecraft for Windows (bought on a Microsoft account; a
   console or phone copy doesn't count), as Release or Preview, each with its own worlds. The card says what it needs:
-  the game, two sign-ins (the Microsoft Store account that owns it, to download it, and Xbox, to play online; they can
-  be different accounts) and about 3 GB the first time.
+  the game, one Microsoft sign-in, and about 3 GB the first time.
+- **One sign-in.** One window signs in to the Microsoft Store (to download the game with your licence) and, in the same
+  session, links Xbox Live (to play online), usually without asking again; a short code at microsoft.com/link is the
+  fallback. It opens with your BlockForge account's address and says when the account you signed in with is a
+  different one. The first sign-in may ask for your system password so the Store can register this computer (it reads
+  the PC's model and serial); Cancel works too, and BlockForge says so before it happens.
 - **On Linux (experimental)** BlockForge downloads the game from the Microsoft Store with your licence and plays it in
   a Windows compatibility engine, in a game profile of the instance's own, all from BlockForge in Rust: no Python, and
   no other launcher. Everything lives in the `bedrock` folder of BlockForge's data folder.
@@ -30,6 +34,14 @@ The section for a version is used as the text of its release on GitHub. Older re
   is shown large, with Copy and Open), Download, Play, Stop, Repair and Diagnose, progress with Cancel, the game's log,
   and its worlds with Open folder and Back up. The Library (grid and list, with a Bedrock filter) and Home show
   Bedrock instances with a Bedrock tag. Nothing of it reads the disk or the network while the window draws.
+- **A game that outlives the window is found again:** close BlockForge while Bedrock runs and the game goes on; the
+  next BlockForge finds it, shows it running and stops it with Stop, and Delete waits for it. Quitting says the game
+  will keep running. Play while the same account downloads another instance says which download to wait for.
+
+### Better
+
+- **The window never waits for Horizon's build check:** it runs on a thread of its own.
+
 - **Credit:** Bedrock support follows [BedrockOnLinux](https://github.com/Wyze3306/BedrockOnLinux) by Wyze3306 and its
   contributors (MIT licence), ported to Rust, and uses the [Xodus](https://github.com/xodus-gaming/xodus) libraries
   (GPL-3.0). Neither is affiliated with Mojang or Microsoft.
