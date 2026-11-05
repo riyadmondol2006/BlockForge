@@ -50,6 +50,14 @@ pub struct Settings {
     pub lite: bool,
     /// Changes of the smoothness helper to leave out, by id (`ID;ID`).
     pub lite_off: String,
+    /// Speed-up, the switch beside Play (see `launch::speedup`). On unless switched off.
+    pub speedup: bool,
+    /// Under Speed-up: fewer world-generation threads, so they leave room for the frame being drawn.
+    pub speedup_threads: bool,
+    /// Under Speed-up: compact object headers and giving unused memory back to the system.
+    pub speedup_memory: bool,
+    /// Under Speed-up: the low-pause garbage collector: `auto`, `on` or `off` (`speedup::GcChoice`).
+    pub speedup_gc: String,
     /// Lower the graphics settings for a slow computer: `auto` (when the computer looks slow), `on` or `off` (see
     /// `launch::lowend`).
     pub low_end_mode: String,
@@ -133,6 +141,10 @@ impl Default for Settings {
             fast_start: true,
             lite: true,
             lite_off: String::new(),
+            speedup: true,
+            speedup_threads: true,
+            speedup_memory: true,
+            speedup_gc: "auto".to_string(),
             low_end_mode: "auto".to_string(),
             low_end_hint_dismissed: false,
             auto_game_options: true,

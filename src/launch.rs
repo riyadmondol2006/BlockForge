@@ -44,6 +44,7 @@ pub mod lwjgl;
 pub mod memory;
 pub mod prompts;
 pub mod settings;
+pub mod speedup;
 pub mod warmer;
 pub mod workers;
 
