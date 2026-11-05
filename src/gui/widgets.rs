@@ -1058,7 +1058,7 @@ pub fn shot_found() -> Option<egui::Rect> {
     SHOT_SEEK.lock().unwrap_or_else(|e| e.into_inner()).as_mut().and_then(|s| s.1.take())
 }
 
-fn shot_note(text: &str, rect: egui::Rect) {
+pub fn shot_note(text: &str, rect: egui::Rect) {
     if !SHOT_SEEKING.load(std::sync::atomic::Ordering::Relaxed) {
         return;
     }

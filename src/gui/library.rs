@@ -1436,6 +1436,8 @@ impl App {
             if let Some(d) = self.inst_draft.as_mut().filter(|d| d.folder == inst.folder) {
                 d.tab = 0;
             }
+            // and the settings scroll down to it
+            ui.ctx().data_mut(|d| d.insert_temp(scroll_to_performance_id(), true));
             self.tab = InstTab::Settings;
         }
     }
@@ -1457,6 +1459,8 @@ impl App {
             head.finish_whole(ui);
             ui.add_space(2.0);
             ui.add(egui::Label::new(RichText::new(this.speed_summary(inst)).size(FS_BODY).color(c_muted())).wrap());
+            // a second line only when Speed-up has something to say
+            this.speedup_exception_line(ui, inst);
         };
         let join = |ui: &mut Ui, this: &mut Self| this.overview_join(ui, inst);
         // one card: the two halves side by side with a line between them, or one over the other when it is narrow
@@ -2610,6 +2614,12 @@ const INSTANCE_COLUMN: f32 = 1040.0;
 
 /// The widest a form on an instance's page gets.
 pub(super) const FORM_COLUMN: f32 = INSTANCE_COLUMN;
+
+/// Set when the Overview's "Change" opens the instance's settings: they scroll down to their Performance group (and
+/// clear it).
+pub(super) fn scroll_to_performance_id() -> egui::Id {
+    egui::Id::unique("instance-settings-scroll-to-performance")
+}
 
 /// The panel the log is read in: a well a step below the page, so the lines sit in it rather than on a card.
 pub(super) fn log_panel(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {

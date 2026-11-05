@@ -117,7 +117,11 @@ pub(super) fn menu_items(ui: &mut Ui) {
 /// Opens `add` as a menu under `resp` when it is clicked, in the look of the app.
 /// Closing as `close` says: on any click, or (a menu of switches, which stays open while they are flipped) only on a
 /// click outside it.
-fn open_menu_closing<R>(resp: &Response, close: egui::PopupCloseBehavior, add: impl FnOnce(&mut Ui) -> R) -> Option<R> {
+pub(super) fn open_menu_closing<R>(
+    resp: &Response,
+    close: egui::PopupCloseBehavior,
+    add: impl FnOnce(&mut Ui) -> R,
+) -> Option<R> {
     egui::Popup::menu(resp)
         .close_behavior(close)
         .gap(4.0)
@@ -133,16 +137,6 @@ fn open_menu_closing<R>(resp: &Response, close: egui::PopupCloseBehavior, add: i
 /// while it is open.
 pub(super) fn secondary_menu<R>(ui: &mut Ui, text: &str, add: impl FnOnce(&mut Ui) -> R) -> (Response, Option<R>) {
     secondary_menu_closing(ui, text, 32.0, egui::PopupCloseBehavior::CloseOnClick, add)
-}
-
-/// [`secondary_menu`] for a menu of switches: it stays open while they are flipped and closes on a click outside it.
-pub(super) fn secondary_switch_menu<R>(
-    ui: &mut Ui,
-    text: &str,
-    height: f32,
-    add: impl FnOnce(&mut Ui) -> R,
-) -> (Response, Option<R>) {
-    secondary_menu_closing(ui, text, height, egui::PopupCloseBehavior::CloseOnClickOutside, add)
 }
 
 fn secondary_menu_closing<R>(
