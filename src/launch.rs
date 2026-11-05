@@ -100,6 +100,8 @@ pub struct Prepared {
     pub fast_start: bool,
     /// The game was started with the smoothness helper (see `lite`), the same way.
     pub lite: bool,
+    /// Speed-up was enabled for this start.
+    pub speedup: bool,
     /// The game's world-generation threads get a lower priority while it runs (see `workers`).
     pub lower_workers: bool,
     /// The commands to run before and after, if commands are switched on.
@@ -652,6 +654,93 @@ pub async fn prepare_ext(
     let assembled = command::assemble(&input);
     notes.extend(assembled.notes.iter().cloned());
     let mut jvm = assembled.options;
+    let own_arguments = jvmargs::is_custom(Some(&ls.java_arguments));
+    let speedup_on = speedup::enabled(settings, instance) && !own_arguments;
+    let major = java_pick.major.unwrap_or(0);
+    if speedup::enabled(settings, instance) && own_arguments {
+        notes.push("Speed-up: left Java options alone because you set your own Java arguments".into());
+    }
+    if speedup_on {
+        if speedup::threads_on(settings, instance) {
+            if speedup::has_c2me(instance) {
+                notes.push("Speed-up: world-generation thread cap skipped because C2ME is installed".into());
+            } else if let Some(n) = speedup::thread_cap(memory::cores()) {
+                jvm.push(format!("-Dmax.bg.threads={n}"));
+                notes.push(format!("Speed-up: world generation uses at most {n} background threads"));
+            } else {
+                notes.push("Speed-up: worker priority handles world generation on 4 processor threads or fewer".into());
+            }
+        }
+        if speedup::memory_on(settings, instance) {
+            if major >= 25 {
+                jvm.push("-XX:+UseCompactObjectHeaders".into());
+            }
+            if platform::os() == platform::Os::Linux && major >= 17 && speedup::accepts_trim(&java_pick.binary) {
+                jvm.push("-XX:TrimNativeHeapInterval=5000".into());
+            }
+        }
+        let choice = speedup::gc_choice(settings, instance);
+        let gc = speedup::collector(
+            choice,
+            major,
+            input.total_ram_mb,
+            input.available_ram_mb - i64::from(decision.heap_mb),
+            input.cores,
+        );
+        if gc == speedup::Collector::Zgc {
+            jvm.retain(|a| {
+                !a.starts_with("-XX:G1")
+                    && !(a.starts_with("-XX:+Use") && a.ends_with("GC"))
+                    && !a.starts_with("-XX:MaxGCPauseMillis=")
+            });
+            jvm.push("-XX:+UseZGC".into());
+            if (21..24).contains(&major) {
+                jvm.push("-XX:+ZGenerational".into());
+            }
+            notes.push("Speed-up: using generational ZGC for shorter collection pauses".into());
+        } else if choice == speedup::GcChoice::On {
+            notes.push(
+                if major < 21 {
+                    "Speed-up: using G1 because generational ZGC needs Java 21 or newer"
+                } else {
+                    "Speed-up: using G1 because ZGC needs about 1.4 GB free beyond the game heap"
+                }
+                .into(),
+            );
+        }
+    }
+    let aot = speedup_on && major >= 25;
+    if aot
+        && ls.class_data_cache
+        && speedup::unsigned_jar_on(settings, instance)
+        && instance.loader().is_none()
+        && instance.mod_count == 0
+        && !instance.root.join("jarmods").exists()
+        && !instance.root.join("bin/modpack.jar").exists()
+    {
+        let source = crate::install::client_jar(dirs, version.game_version());
+        match classcache::unsigned_jar(dirs, &source) {
+            Ok(copy) => {
+                for pair in jvm
+                    .windows(2)
+                    .enumerate()
+                    .filter(|(_, w)| matches!(w[0].as_str(), "-cp" | "-classpath" | "--class-path"))
+                    .map(|(n, _)| n + 1)
+                    .collect::<Vec<_>>()
+                {
+                    let paths = std::env::split_paths(&jvm[pair]).map(|p| if p == source { copy.clone() } else { p });
+                    if let Ok(cp) = std::env::join_paths(paths) {
+                        jvm[pair] = cp.to_string_lossy().into_owned();
+                    }
+                }
+                notes.push(
+                    "Speed-up: using an unsigned copy of the vanilla jar; Minecraft will report itself as modded"
+                        .into(),
+                );
+            }
+            Err(e) => notes.push(format!("Speed-up: couldn't prepare unsigned jar: {e}")),
+        }
+    }
 
     // the fast-start helper (a Java agent), unless it is switched off for this instance or for all of them
     let mut fast_start = false;
@@ -713,7 +802,8 @@ pub async fn prepare_ext(
         &mut jvm,
         &java_binary,
         java_pick.home.as_deref(),
-        ls.class_data_cache,
+        ls.class_data_cache && !own_arguments,
+        aot,
         java_pick.major,
         &user_args,
         &warmer::safe_name(instance),
@@ -831,6 +921,7 @@ pub async fn prepare_ext(
         legacy,
         fast_start,
         lite: lite_on,
+        speedup: speedup_on,
         lower_workers,
         pre_launch,
         post_exit,
@@ -981,12 +1072,38 @@ pub struct Running {
     pub lines: UnboundedReceiver<String>,
     /// Keeps the game's world-generation threads at a lower priority while it runs (see `workers`).
     _workers: Option<workers::Watcher>,
+    aot_recording: bool,
 }
 
 impl Running {
     /// Stop the game and everything it started.
     pub async fn kill_tree(&mut self) {
         if let Some(pid) = self.child.id() {
+            if self.aot_recording {
+                #[cfg(unix)]
+                {
+                    let _ = crate::platform::command("kill").args(["-TERM", "--", &format!("-{pid}")]).status();
+                    // AOT records are flushed on SIGTERM. Bound Stop even if Java is stuck.
+                    let deadline = Instant::now() + Duration::from_secs(4);
+                    loop {
+                        // A wrapper can close before Java finishes flushing its AOT record. Watch the group too.
+                        let _ = self.child.try_wait();
+                        let alive = crate::platform::command("kill")
+                            .args(["-0", "--", &format!("-{pid}")])
+                            .stdout(std::process::Stdio::null())
+                            .stderr(std::process::Stdio::null())
+                            .status()
+                            .is_ok_and(|s| s.success());
+                        if !alive {
+                            return;
+                        }
+                        if Instant::now() >= deadline {
+                            break;
+                        }
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                    }
+                }
+            }
             #[cfg(unix)]
             {
                 let _ = crate::platform::command("kill").args(["-KILL", "--", &format!("-{pid}")]).status();
@@ -1025,6 +1142,9 @@ pub fn spawn(prepared: &Prepared) -> Result<Running> {
         cmd.env(k, v);
     }
     let mut child = cmd.spawn().with_context(|| format!("starting {}", prepared.program.display()))?;
+    if let Some(pending) = &prepared.class_cache {
+        let _ = pending.started.set(Instant::now());
+    }
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     if let Some(out) = child.stdout.take() {
         tokio::spawn(forward_lines(out, tx.clone(), prepared.censor.clone()));
@@ -1033,7 +1153,12 @@ pub fn spawn(prepared: &Prepared) -> Result<Running> {
         tokio::spawn(forward_lines(err, tx, prepared.censor.clone()));
     }
     let workers = if prepared.lower_workers { child.id().and_then(workers::Watcher::start) } else { None };
-    Ok(Running { child, lines: rx, _workers: workers })
+    Ok(Running {
+        child,
+        lines: rx,
+        _workers: workers,
+        aot_recording: prepared.class_cache.as_ref().is_some_and(|p| p.state.aot),
+    })
 }
 
 /// Start a game that isn't run by Java (Horizon) the way [`spawn`] starts Minecraft, so the same game loop follows
@@ -1094,7 +1219,7 @@ pub fn spawn_process_without(
     if let Some(err) = child.stderr.take() {
         tokio::spawn(forward_lines(err, tx, censor));
     }
-    Ok(Running { child, lines: rx, _workers: None })
+    Ok(Running { child, lines: rx, _workers: None, aot_recording: false })
 }
 
 /// Sweep natives folders that an earlier run left behind (a crash, a killed launcher).
@@ -1405,5 +1530,43 @@ mod spawn_process_tests {
         assert_eq!(lines.len(), 2, "{lines:?}");
         assert!(lines.iter().any(|l| l == "from the environment"));
         assert!(lines.iter().any(|l| l.starts_with("got ") && !l.contains("secret-token")), "{lines:?}");
+    }
+}
+
+#[cfg(all(test, unix))]
+mod stop_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn stop_allows_the_process_group_to_flush_before_forcing_it() {
+        let root = std::env::temp_dir().join(format!("bf-stop-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let done = root.join("done");
+        let ready = root.join("ready");
+        let mut command = tokio::process::Command::new("sh");
+        command
+            .args([
+                "-c",
+                "trap 'sleep 0.2; echo finished > \"$1\"; exit' TERM; echo ready > \"$2\"; while :; do sleep 1; done",
+                "bf-stop",
+            ])
+            .arg(&done)
+            .arg(&ready)
+            .process_group(0)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        let child = command.spawn().unwrap();
+        let (_, lines) = tokio::sync::mpsc::unbounded_channel();
+        let mut running = Running { child, lines, _workers: None, aot_recording: true };
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !ready.exists() && Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(ready.exists());
+        let started = Instant::now();
+        running.kill_tree().await;
+        assert!(done.exists(), "the TERM handler must get time to flush");
+        assert!(started.elapsed() < Duration::from_secs(5));
+        let _ = std::fs::remove_dir_all(root);
     }
 }

@@ -1,4 +1,4 @@
-//! The game start cache: Java's class-data sharing for the game, as the Java edition's `ClassDataCache` does it.
+//! The legacy game start cache API (launching uses `launch::classcache`; clearing delegates there): Java's class-data sharing for the game, as the Java edition's `ClassDataCache` does it.
 //!
 //! An archive of the classes a game's start loads (Java itself and the libraries), already parsed and checked, is
 //! mapped straight into memory on the next start instead of reading and verifying thousands of classes again.
@@ -455,55 +455,19 @@ fn quietly_delete(file: &Path) {
 
 // ---- clearing ------------------------------------------------------------------------------------------------
 
-fn is_ours(name: &str) -> bool {
-    let n = name.to_lowercase();
-    [".jsa", ".jsa.part", ".classlist", ".classlist.txt", ".json", ".args", ".log"].iter().any(|e| n.ends_with(e))
-}
-
-/// "Name-21.jsa" belongs to "Name-", but "Name-2-21.jsa" (another instance) doesn't.
-fn is_version_suffix(name: &str, prefix: &str) -> bool {
-    let rest = &name[prefix.len()..];
-    match rest.find('.') {
-        Some(dot) if dot > 0 => rest[..dot].chars().all(|c| c.is_ascii_digit()),
-        _ => false,
-    }
-}
-
-fn delete_matching(folder: &Path, prefix: Option<&str>) -> u64 {
-    let Ok(rd) = std::fs::read_dir(folder) else { return 0 };
-    let mut freed = 0;
-    for e in rd.flatten() {
-        let name = e.file_name().to_string_lossy().to_string();
-        if !is_ours(&name) {
-            continue;
-        }
-        if prefix.is_none_or(|p| name.starts_with(p) && is_version_suffix(&name, p)) {
-            let size = e.metadata().map(|m| m.len()).unwrap_or(0);
-            quietly_delete(&e.path());
-            if !e.path().exists() {
-                freed += size;
-            }
-        }
-    }
-    freed
-}
-
 /// Delete the archives of one instance (all Java versions).
 pub fn delete_for(dirs: &Dirs, instance_safe_name: &str) -> u64 {
-    let prefix = base_name(instance_safe_name, 0);
-    delete_matching(&folder(dirs), Some(&prefix[..prefix.len() - 1]))
+    crate::launch::classcache::delete_for(dirs, instance_safe_name)
 }
 
 /// Delete every archive; they are made again after the next start of each game. Returns the bytes freed.
 pub fn clear(dirs: &Dirs) -> u64 {
-    delete_matching(&folder(dirs), None)
+    crate::launch::classcache::clear(dirs)
 }
 
 /// How much room the archives take, in bytes.
 pub fn size(dirs: &Dirs) -> u64 {
-    std::fs::read_dir(folder(dirs))
-        .map(|rd| rd.flatten().filter_map(|e| e.metadata().ok()).map(|m| m.len()).sum())
-        .unwrap_or(0)
+    crate::launch::classcache::size(dirs)
 }
 
 #[cfg(test)]

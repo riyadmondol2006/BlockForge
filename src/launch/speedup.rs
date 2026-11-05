@@ -141,3 +141,118 @@ mod tests {
         assert_eq!(GcChoice::parse("something else"), GcChoice::Auto);
     }
 }
+
+/// On small CPUs the worker-priority helper already gives the frame thread room.
+pub fn thread_cap(processors: usize) -> Option<usize> {
+    (processors > 4).then(|| processors.div_ceil(2).max(2))
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Collector {
+    G1,
+    Zgc,
+}
+
+/// Auto stays G1 until measurements justify a different default.
+/// `available_ram_mb` is the memory left after reserving this start's chosen heap.
+pub fn collector(
+    choice: GcChoice,
+    java_major: u32,
+    total_ram_mb: i64,
+    available_ram_mb: i64,
+    _cores: usize,
+) -> Collector {
+    match choice {
+        GcChoice::Auto => Collector::G1,
+        GcChoice::On if java_major >= 21 && total_ram_mb > 1408 && available_ram_mb >= 1408 => Collector::Zgc,
+        _ => Collector::G1,
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SkipReason {
+    OwnArguments,
+    OldJava,
+    C2me,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CacheState {
+    NotMade,
+    Making,
+    Ready,
+}
+
+/// Only the saved state and metadata are read; no cache building or Java process runs on the window thread.
+pub fn cache_state(dirs: &crate::paths::Dirs, instance: &Instance) -> CacheState {
+    crate::launch::classcache::cache_state(
+        dirs,
+        &crate::launch::warmer::safe_name(instance),
+        java_major(instance).unwrap_or(0),
+    )
+}
+
+pub fn skip_reason(settings: &Settings, instance: &Instance) -> Option<SkipReason> {
+    if own_arguments(settings, instance) {
+        Some(SkipReason::OwnArguments)
+    } else if java_major(instance).is_some_and(|m| m < MODERN_JAVA) {
+        Some(SkipReason::OldJava)
+    } else if has_c2me(instance) {
+        Some(SkipReason::C2me)
+    } else {
+        None
+    }
+}
+
+pub fn has_c2me(instance: &Instance) -> bool {
+    type ModCache = std::collections::HashMap<std::path::PathBuf, (Option<std::time::SystemTime>, bool)>;
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<ModCache>> = std::sync::OnceLock::new();
+    let stamp = std::fs::metadata(instance.root.join("mods")).and_then(|m| m.modified()).ok();
+    let mut cache = CACHE.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((_, result)) = cache.get(&instance.root).filter(|(previous, _)| *previous == stamp) {
+        return *result;
+    }
+    let result = super::lite::mod_list(&instance.root).iter().any(|id| {
+        let id = id.to_ascii_lowercase();
+        id == "c2me" || id.starts_with("c2me-") || id.starts_with("c2me_")
+    });
+    cache.insert(instance.root.clone(), (stamp, result));
+    result
+}
+
+pub fn unsigned_jar_on(settings: &Settings, instance: &Instance) -> bool {
+    enabled(settings, instance) && settings.speedup_unsigned_jar
+}
+
+/// Runs during launch preparation, never on the window thread. Vendor backports differ, so ask this exact Java.
+pub fn accepts_trim(java: &std::path::Path) -> bool {
+    crate::platform::command(java)
+        .args(["-XX:+UnlockExperimentalVMOptions", "-XX:TrimNativeHeapInterval=5000", "-version"])
+        .output()
+        .is_ok_and(|o| o.status.success())
+}
+
+#[cfg(test)]
+mod decision_tests {
+    use super::*;
+    #[test]
+    fn caps_leave_small_cpus_alone_and_round_up() {
+        for n in 0..=4 {
+            assert_eq!(thread_cap(n), None);
+        }
+        assert_eq!(thread_cap(5), Some(3));
+        assert_eq!(thread_cap(16), Some(8));
+        assert_eq!(thread_cap(17), Some(9));
+    }
+    #[test]
+    fn zgc_is_explicit_modern_and_requires_memory() {
+        for major in [8, 17, 21, 25] {
+            assert_eq!(collector(GcChoice::Auto, major, 32000, 24000, 16), Collector::G1);
+            assert_eq!(collector(GcChoice::Off, major, 32000, 24000, 16), Collector::G1);
+        }
+        assert_eq!(collector(GcChoice::On, 17, 32000, 24000, 16), Collector::G1);
+        assert_eq!(collector(GcChoice::On, 21, 32000, 24000, 16), Collector::Zgc);
+        assert_eq!(collector(GcChoice::On, 25, 32000, 1000, 16), Collector::G1);
+        assert!(!Settings::default().speedup_unsigned_jar);
+    }
+}

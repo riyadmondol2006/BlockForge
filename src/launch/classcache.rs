@@ -8,6 +8,10 @@
 //! and the same libraries uses it. When any of that changes (a Java or library update, another loader version), the
 //! archive no longer matches: it is thrown away and made again the same way.
 //!
+//! With Speed-up on, Java 25 and newer record an AOT configuration at exit instead of a class list. After a session
+//! of at least 90 seconds, a low-priority Java links it into an AOT cache. Compact headers and the collector are part
+//! of both its fingerprint and create command. Short sessions and missing recordings are simply recorded again.
+//!
 //! Safe by design: Java only uses an archive that matches exactly and passes its checksum, and otherwise starts
 //! normally. Only Java 17 and newer; never Java 8-16. Fabric's class list can't be archived (Java rejects it); that is
 //! remembered, so it isn't tried at every start. The files are the Java edition's (`cache/class-cache/<name>-<java>.*`),
@@ -43,7 +47,8 @@ pub enum Action {
 #[serde(rename_all = "camelCase", default)]
 pub struct State {
     pub fingerprint: String,
-    /// "recording", "ready" or "failed".
+    pub aot: bool,
+    /// "recording", "making", "ready" or "failed".
     pub status: String,
     pub java: String,
     pub java_major: u32,
@@ -225,6 +230,7 @@ pub struct Pending {
     pub instance_safe_name: String,
     pub state: State,
     pub folder: PathBuf,
+    pub started: std::sync::Arc<std::sync::OnceLock<std::time::Instant>>,
 }
 
 /// What was decided for a start, for the log.
@@ -245,6 +251,7 @@ pub fn apply(
     java_executable: &str,
     java_home: Option<&Path>,
     enabled: bool,
+    aot: bool,
     java_major: Option<u32>,
     user_arguments: &[String],
     instance_safe_name: &str,
@@ -253,13 +260,29 @@ pub fn apply(
     let Some(major) = java_major.filter(|m| enabled && *m >= MINIMUM_JAVA) else { return none };
     let mut options = archive_options(java_options);
     add_agent_module(&mut options, java_options, major);
+    let aot = aot && major >= 25;
+    if aot {
+        options.extend(
+            java_options
+                .iter()
+                .filter(|a| {
+                    a.starts_with("-XX:+Use") && a.ends_with("GC")
+                        || a.contains("UseCompactObjectHeaders")
+                        || a.contains("ZGenerational")
+                        || a.starts_with("-Xbootclasspath/a:")
+                })
+                .cloned(),
+        );
+        // A separate fingerprint lets Fabric retry after a failed legacy CDS dump.
+        options.push("-XX:AOTMode=create".into());
+    }
     // Java checks each jar's size and time too, so a re-downloaded library makes the archive stale
     let print =
         fingerprint(java_executable, &format!("{}{}", java_version(java_home), class_path_stamp(&options)), &options);
     let base = base_name(instance_safe_name, major);
     let folder = folder(dirs);
-    let archive = folder.join(format!("{base}.jsa"));
-    let class_list = folder.join(format!("{base}.classlist"));
+    let archive = folder.join(format!("{base}.{}", if aot { "aot" } else { "jsa" }));
+    let class_list = folder.join(format!("{base}.{}", if aot { "aotconf" } else { "classlist" }));
     let state_file = folder.join(format!("{base}.json"));
     let state = read_state(&state_file);
     let archive_bytes = std::fs::metadata(&archive).map(|m| m.len() as i64).unwrap_or(-1);
@@ -282,6 +305,7 @@ pub fn apply(
         quietly_delete(&class_list);
         let recording = State {
             fingerprint: print,
+            aot,
             status: "recording".into(),
             java: java_executable.to_string(),
             java_major: major,
@@ -293,12 +317,13 @@ pub fn apply(
             instance_safe_name: instance_safe_name.to_string(),
             state: recording,
             folder: folder.clone(),
+            started: Default::default(),
         });
         "Class cache: this start writes down the classes it loads; the cache is made after the game closes, for quicker starts next time".to_string()
     } else {
         format!("Class cache: using {}", archive.file_name().map(|n| n.to_string_lossy()).unwrap_or_default())
     };
-    let new_flags = flags(action, &archive, &class_list);
+    let new_flags = if aot { aot_flags(action, &archive, &class_list) } else { flags(action, &archive, &class_list) };
     java_options.splice(0..0, new_flags);
     Applied { action, message: Some(message), pending }
 }
@@ -350,9 +375,9 @@ fn java_version(java_home: Option<&Path>) -> String {
 /// The game has closed: if its classes were written down, build its archive in the background, at low priority.
 pub fn game_exited(pending: Option<Pending>) {
     let Some(pending) = pending else { return };
-    release_recording(&base_name(&pending.instance_safe_name, pending.state.java_major));
     if let Ok(handle) = std::thread::Builder::new().name("class-cache-builder".into()).spawn(move || {
         build(&pending);
+        release_recording(&base_name(&pending.instance_safe_name, pending.state.java_major));
     }) {
         BUILDERS.lock().unwrap_or_else(|e| e.into_inner()).push(handle);
     }
@@ -398,27 +423,45 @@ pub fn wait_for_builders() {
 pub fn build(pending: &Pending) -> bool {
     let base = base_name(&pending.instance_safe_name, pending.state.java_major);
     let folder = &pending.folder;
-    let class_list = folder.join(format!("{base}.classlist"));
+    let aot = pending.state.aot;
+    let class_list = folder.join(format!("{base}.{}", if aot { "aotconf" } else { "classlist" }));
     let usable_list = folder.join(format!("{base}.classlist.txt"));
-    let archive = folder.join(format!("{base}.jsa"));
-    let building = folder.join(format!("{base}.jsa.part"));
+    let extension = if aot { "aot" } else { "jsa" };
+    let archive = folder.join(format!("{base}.{extension}"));
+    let building = folder.join(format!("{base}.{extension}.part"));
     let state_file = folder.join(format!("{base}.json"));
     let argument_file = folder.join(format!("{base}.args"));
     let output = folder.join(format!("{base}.log"));
 
     let result = (|| -> Option<bool> {
-        let text = std::fs::read_to_string(&class_list).ok()?;
-        let lines: Vec<String> = text.lines().map(str::to_string).collect();
-        if count_classes(&lines) < MINIMUM_CLASSES {
-            // the game didn't get far; try again on the next start
+        if aot
+            && (pending.started.get().is_none_or(|started| started.elapsed().as_secs() < 90)
+                || !std::fs::metadata(&class_list).is_ok_and(|m| m.len() > 0))
+        {
             return None;
         }
-        std::fs::write(&usable_list, usable_class_list(&lines).join("\n")).ok()?;
-        let mut options = vec![
-            "-Xshare:dump".to_string(),
-            format!("-XX:SharedClassListFile={}", usable_list.display()),
-            format!("-XX:SharedArchiveFile={}", building.display()),
-        ];
+        let mut options = if aot {
+            vec![
+                format!("-XX:AOTConfiguration={}", class_list.display()),
+                format!("-XX:AOTCache={}", building.display()),
+            ]
+        } else {
+            let text = std::fs::read_to_string(&class_list).ok()?;
+            let lines: Vec<String> = text.lines().map(str::to_string).collect();
+            if count_classes(&lines) < MINIMUM_CLASSES {
+                // the game didn't get far; try again on the next start
+                return None;
+            }
+            std::fs::write(&usable_list, usable_class_list(&lines).join("\n")).ok()?;
+            vec![
+                "-Xshare:dump".to_string(),
+                format!("-XX:SharedClassListFile={}", usable_list.display()),
+                format!("-XX:SharedArchiveFile={}", building.display()),
+            ]
+        };
+        let mut making = pending.state.clone();
+        making.status = "making".into();
+        write_state(&state_file, &making);
         options.extend(pending.state.options.iter().cloned());
         // the class path can be longer than Windows allows on a command line, so it all goes in a file
         std::fs::write(&argument_file, jvmargs::to_argument_file(&options)).ok()?;
@@ -485,7 +528,9 @@ fn quietly_delete(file: &Path) {
 
 fn is_ours(name: &str) -> bool {
     let n = name.to_lowercase();
-    [".jsa", ".jsa.part", ".classlist", ".classlist.txt", ".json", ".args", ".log"].iter().any(|e| n.ends_with(e))
+    [".jsa", ".jsa.part", ".aot", ".aot.part", ".aotconf", ".classlist", ".classlist.txt", ".json", ".args", ".log"]
+        .iter()
+        .any(|e| n.ends_with(e))
 }
 
 /// "Name-21.jsa" belongs to "Name-", but "Name-2-21.jsa" (another instance) doesn't.
@@ -746,7 +791,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("bf-cds2-{}", std::process::id()));
         let dirs = Dirs::at(&dir);
         let mut opts = vec!["-Xmx2G".to_string(), "-cp".into(), "/nonexistent/a.jar".into()];
-        let applied = apply(&dirs, &mut opts, "/usr/bin/java", None, true, Some(21), &[], "My Pack");
+        let applied = apply(&dirs, &mut opts, "/usr/bin/java", None, true, false, Some(21), &[], "My Pack");
         assert_eq!(applied.action, Action::Record);
         assert!(opts[0].starts_with("-XX:DumpLoadedClassList="));
         let pending = applied.pending.unwrap();
@@ -760,11 +805,174 @@ mod tests {
         write_state(&folder(&dirs).join("MyPack-21.json"), &state);
         std::fs::write(archive_for(&dirs, "MyPack", 21), b"1234").unwrap();
         let mut opts2 = vec!["-Xmx2G".to_string(), "-cp".into(), "/nonexistent/a.jar".into()];
-        let again = apply(&dirs, &mut opts2, "/usr/bin/java", None, true, Some(21), &[], "MyPack");
+        let again = apply(&dirs, &mut opts2, "/usr/bin/java", None, true, false, Some(21), &[], "MyPack");
         assert_eq!(again.action, Action::Use);
         assert!(
             opts2[0].starts_with("-XX:SharedArchiveFile=") && opts2.contains(&"-XX:+VerifySharedSpaces".to_string())
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+pub fn aot_flags(action: Action, archive: &Path, configuration: &Path) -> Vec<String> {
+    match action {
+        Action::Record => {
+            vec!["-XX:AOTMode=record".into(), format!("-XX:AOTConfiguration={}", configuration.display())]
+        }
+        Action::Use => vec![
+            format!("-XX:AOTCache={}", archive.display()),
+            "-XX:+VerifySharedSpaces".into(),
+            "-Xlog:aot=off,cds=off".into(),
+        ],
+        Action::None => Vec::new(),
+    }
+}
+
+pub fn cache_state(dirs: &Dirs, name: &str, major: u32) -> super::speedup::CacheState {
+    use super::speedup::CacheState;
+    let base = base_name(name, major);
+    let Some(state) = read_state(&folder(dirs).join(format!("{base}.json"))) else { return CacheState::NotMade };
+    let archive = folder(dirs).join(format!("{base}.{}", if state.aot { "aot" } else { "jsa" }));
+    if state.status == "ready"
+        && std::fs::metadata(archive).is_ok_and(|m| m.len() > 0 && m.len() as i64 == state.archive_bytes)
+    {
+        CacheState::Ready
+    } else if matches!(state.status.as_str(), "recording" | "making")
+        && RECORDING.lock().unwrap_or_else(|e| e.into_inner()).iter().any(|(b, _)| b == &base)
+    {
+        CacheState::Making
+    } else {
+        CacheState::NotMade
+    }
+}
+
+/// A separate copy leaves the downloaded jar intact. Unchanged entries keep their compressed bytes.
+pub fn unsigned_jar(dirs: &Dirs, source: &Path) -> anyhow::Result<PathBuf> {
+    use std::io::{Read, Write};
+    let stamp = std::fs::metadata(source)?;
+    let identity = format!("{}:{}:{:?}", source.display(), stamp.len(), stamp.modified()?);
+    let key = fingerprint("unsigned", &identity, &[]);
+    let folder = dirs.cache.join("unsigned-client");
+    std::fs::create_dir_all(&folder)?;
+    let target = folder.join(format!("{key}.jar"));
+    if target.is_file() {
+        return Ok(target);
+    }
+    let temporary = folder.join(format!("{key}.{}.part", uuid::Uuid::new_v4()));
+    let result = (|| -> anyhow::Result<()> {
+        let mut input = zip::ZipArchive::new(std::fs::File::open(source)?)?;
+        let mut output = zip::ZipWriter::new(std::fs::File::create(&temporary)?);
+        for n in 0..input.len() {
+            let mut entry = input.by_index(n)?;
+            let name = entry.name()?.to_ascii_uppercase();
+            if name.starts_with("META-INF/")
+                && [".SF", ".RSA", ".DSA", ".EC"].iter().any(|suffix| name.ends_with(suffix))
+            {
+                continue;
+            }
+            if name == "META-INF/MANIFEST.MF" {
+                let mut text = String::new();
+                entry.read_to_string(&mut text)?;
+                // A manifest attribute may wrap onto continuation lines. Drop those with the digest too.
+                let mut digest = false;
+                let mut per_entry = false;
+                let mut clean = String::new();
+                for line in text.lines() {
+                    if line.is_empty() {
+                        per_entry = true;
+                    }
+                    if !line.starts_with(' ') {
+                        digest = per_entry
+                            && line.split(':').next().is_some_and(|key| key.to_ascii_lowercase().contains("-digest"));
+                    }
+                    if !digest {
+                        clean.push_str(line);
+                        clean.push_str("\r\n");
+                    }
+                }
+                output.start_file(entry.name()?, zip::write::SimpleFileOptions::default())?;
+                output.write_all(clean.as_bytes())?;
+            } else {
+                // Java jars carry a 0xCAFE marker in their extra fields. Keep the compressed bytes without
+                // copying those optional fields, which zip deliberately refuses to write by default.
+                let time = entry.last_modified().unwrap_or_default();
+                let mode = entry.unix_mode();
+                output.raw_copy_file_touch(entry, time, mode)?;
+            }
+        }
+        output.finish()?;
+        std::fs::rename(&temporary, &target)?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    result?;
+    Ok(target)
+}
+
+#[cfg(test)]
+mod aot_tests {
+    use super::*;
+    #[test]
+    fn aot_recording_fingerprints_the_vm_layout_and_retries_old_failures() {
+        let dirs = Dirs::at(std::env::temp_dir().join(format!("bf-aot-{}", uuid::Uuid::new_v4())));
+        let mut args = vec![
+            "-XX:+UseG1GC".into(),
+            "-XX:+UseCompactObjectHeaders".into(),
+            "-cp".into(),
+            "/missing/game.jar".into(),
+        ];
+        let first = apply(&dirs, &mut args, "/java", None, true, true, Some(25), &[], "AotTest");
+        assert_eq!(first.action, Action::Record);
+        assert!(args.iter().any(|a| a == "-XX:AOTMode=record"));
+        let pending = first.pending.unwrap();
+        assert!(pending.state.options.contains(&"-XX:+UseCompactObjectHeaders".into()));
+        assert!(pending.state.options.contains(&"-XX:+UseG1GC".into()));
+        assert!(!build(&pending), "a short session is recorded again");
+        assert_eq!(read_state(&folder(&dirs).join("AotTest-25.json")).unwrap().status, "recording");
+        let old = fingerprint("/java", "", &["-cp".into(), "/missing/game.jar".into()]);
+        assert_ne!(old, pending.state.fingerprint);
+        release_recording("AotTest-25");
+        for suffix in ["aot", "aotconf", "aot.part"] {
+            std::fs::write(folder(&dirs).join(format!("AotTest-25.{suffix}")), b"cache").unwrap();
+        }
+        delete_for(&dirs, "AotTest");
+        assert_eq!(size(&dirs), 0);
+        let _ = std::fs::remove_dir_all(dirs.base);
+    }
+    #[test]
+    fn unsigned_copy_keeps_the_source_and_compressed_entries() {
+        use std::io::{Read, Write};
+        let dirs = Dirs::at(std::env::temp_dir().join(format!("bf-unsigned-{}", uuid::Uuid::new_v4())));
+        std::fs::create_dir_all(&dirs.base).unwrap();
+        let source = dirs.base.join("signed.jar");
+        let mut writer = zip::ZipWriter::new(std::fs::File::create(&source).unwrap());
+        for (name, text) in [
+            (
+                "META-INF/MANIFEST.MF",
+                "Manifest-Version: 1.0\r\nMain-Class: Hello\r\n\r\nName: Hello.class\r\nSHA-256-Digest: abc\r\n\r\n",
+            ),
+            ("META-INF/TEST.SF", "signature"),
+            ("META-INF/TEST.RSA", "signature"),
+            ("Hello.class", "class bytes"),
+        ] {
+            writer.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+            writer.write_all(text.as_bytes()).unwrap();
+        }
+        writer.finish().unwrap();
+        let original = std::fs::read(&source).unwrap();
+        let copy = unsigned_jar(&dirs, &source).unwrap();
+        assert_eq!(copy, unsigned_jar(&dirs, &source).unwrap());
+        assert_eq!(original, std::fs::read(&source).unwrap());
+        let mut archive = zip::ZipArchive::new(std::fs::File::open(copy).unwrap()).unwrap();
+        assert!(archive.by_name("META-INF/TEST.SF").is_err());
+        assert!(archive.by_name("META-INF/TEST.RSA").is_err());
+        let mut manifest = String::new();
+        archive.by_name("META-INF/MANIFEST.MF").unwrap().read_to_string(&mut manifest).unwrap();
+        assert!(manifest.contains("Main-Class: Hello"));
+        assert!(!manifest.contains("Digest"));
+        assert!(archive.by_name("Hello.class").is_ok());
+        let _ = std::fs::remove_dir_all(dirs.base);
     }
 }

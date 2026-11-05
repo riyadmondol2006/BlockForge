@@ -113,6 +113,7 @@ pub fn files_for(dirs: &Dirs, settings: &Settings, instance: &Instance) -> Vec<P
         add(home.join("lib/server/libjvm.dylib"));
         if let Some(major) = java.major {
             add(classcache::archive_for(dirs, &safe_name(instance), major));
+            add(classcache::archive_for(dirs, &safe_name(instance), major).with_extension("aot"));
         }
     }
     let features = Features::default();

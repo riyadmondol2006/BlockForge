@@ -300,8 +300,7 @@ impl App {
     /// is switched on. Call it from the `GameExit` message.
     pub(super) fn svc_after_game_exit(&mut self, folder: &str) {
         let Some(inst) = self.instance(folder).cloned() else { return };
-        let safe = crate::backups::safe_name(inst.name());
-        crate::classcache::game_exited(&self.dirs, &safe);
+        // Prepared::cleanup starts the launcher cache builder once, for window and command-line starts.
         let svc = ServiceSettings::from_settings(&self.settings);
         if svc.enable_automatic_backup_after_launch {
             let dirs = self.dirs.clone();

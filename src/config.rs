@@ -58,6 +58,8 @@ pub struct Settings {
     pub speedup_memory: bool,
     /// Under Speed-up: the low-pause garbage collector: `auto`, `on` or `off` (`speedup::GcChoice`).
     pub speedup_gc: String,
+    /// Cache vanilla classes too; the game then reports itself as modded.
+    pub speedup_unsigned_jar: bool,
     /// Lower the graphics settings for a slow computer: `auto` (when the computer looks slow), `on` or `off` (see
     /// `launch::lowend`).
     pub low_end_mode: String,
@@ -145,6 +147,7 @@ impl Default for Settings {
             speedup_threads: true,
             speedup_memory: true,
             speedup_gc: "auto".to_string(),
+            speedup_unsigned_jar: false,
             low_end_mode: "auto".to_string(),
             low_end_hint_dismissed: false,
             auto_game_options: true,
