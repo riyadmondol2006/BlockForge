@@ -165,7 +165,7 @@ const fn entry(
 use Group as G;
 
 /// Every setting of the page, section by section in the order they are listed.
-const ENTRIES: [Entry; 32] = [
+const ENTRIES: [Entry; 37] = [
     entry(
         "theme",
         G::Appearance,
@@ -267,8 +267,16 @@ const ENTRIES: [Entry; 32] = [
         G::Java,
         true,
         "Java arguments",
-        "Extra options passed to the Java virtual machine",
+        "Extra options passed to the Java virtual machine. Your own arguments replace BlockForge's memory and speed settings.",
         "jvm flags parameters options gc g1 aikar",
+    ),
+    entry(
+        "speedup",
+        G::Java,
+        false,
+        "Speed-up",
+        super::performance::SPEEDUP_HINT,
+        "faster speed performance boost quick world cpu usage",
     ),
     entry(
         "fast-start",
@@ -298,14 +306,46 @@ const ENTRIES: [Entry; 32] = [
         "class-cache",
         G::Java,
         false,
-        "Speed up game start (class cache)",
-        "Makes the next start of a game quicker (Minecraft 1.18 and newer)",
-        "cds appcds speed quick",
+        "Quicker second start",
+        super::performance::QUICKER_START_HINT,
+        "cds appcds aot class cache speed quick",
+    ),
+    entry(
+        "speedup-threads",
+        G::Java,
+        true,
+        "Smoother chunk loading",
+        super::performance::THREADS_HINT,
+        "threads chunks world generation lag stutter frames",
+    ),
+    entry(
+        "speedup-memory",
+        G::Java,
+        true,
+        "Use less memory",
+        super::performance::MEMORY_HINT,
+        "compact headers heap trim native footprint",
+    ),
+    entry(
+        "speedup-gc",
+        G::Java,
+        true,
+        "Shorter pauses",
+        super::performance::GC_HINT,
+        "zgc gc garbage collector pause stutter freeze",
+    ),
+    entry(
+        "speedup-unsigned-jar",
+        G::Java,
+        true,
+        "Even quicker vanilla start",
+        super::performance::UNSIGNED_JAR_HINT,
+        "signature signed jar aot cache modded",
     ),
     entry(
         "warm-up",
         G::Java,
-        false,
+        true,
         "Read game files ahead of Play",
         "Loads a game's files into memory while the launcher is idle so Play starts quicker",
         "preload cache disk speed warm",
@@ -1613,6 +1653,12 @@ impl App {
                             s.startup_mode != "auto",
                             custom_java.is_some(),
                             s.java_parameters != crate::config::DEFAULT_JAVA_ARGS,
+                            // the folded rows of Speed-up, and the one that reads game files ahead of Play
+                            !s.speedup_threads,
+                            !s.speedup_memory,
+                            s.speedup_gc != "auto",
+                            super::performance::unsigned_jar(s),
+                            s.extras.get("warmUpGameFiles").and_then(|v| v.as_bool()) == Some(false),
                         ]
                         .into_iter()
                         .filter(|c| *c)
@@ -1621,12 +1667,6 @@ impl App {
                             Part::Main => {
                                 dirty |= perf.rows(ui, c, s);
                                 dirty |= c.switch(ui, "class-cache", &mut s.class_data_cache, true);
-                                let mut warm =
-                                    s.extras.get("warmUpGameFiles").and_then(|v| v.as_bool()).unwrap_or(true);
-                                if c.switch(ui, "warm-up", &mut warm, true) {
-                                    s.extras.insert("warmUpGameFiles".into(), warm.into());
-                                    dirty = true;
-                                }
                                 // what the smoothness helper did in the last game, under its rows
                                 if c.shows("smoothness") {
                                     c.gap(ui);
@@ -1634,6 +1674,13 @@ impl App {
                                 }
                             }
                             Part::Advanced => {
+                                dirty |= perf.advanced_rows(ui, c, s);
+                                let mut warm =
+                                    s.extras.get("warmUpGameFiles").and_then(|v| v.as_bool()).unwrap_or(true);
+                                if c.switch(ui, "warm-up", &mut warm, true) {
+                                    s.extras.insert("warmUpGameFiles".into(), warm.into());
+                                    dirty = true;
+                                }
                                 const MODES: [(&str, &str); 3] =
                                     [("auto", "Automatic"), ("fast", "Light"), ("full", "Full performance")];
                                 let reset = (s.startup_mode != "auto").then_some("Automatic");
@@ -1653,6 +1700,10 @@ impl App {
                                 if pressed {
                                     s.startup_mode = "auto".to_string();
                                     dirty = true;
+                                }
+                                if perf.custom_arguments() && c.shows("compiler") {
+                                    ui.add_space(4.0);
+                                    super::performance::own_arguments_line(ui);
                                 }
                                 // an empty path means automatic. The game only falls back to this Java when it doesn't use
                                 // the one that comes with Minecraft (an instance's own Java setting), as in the Java
@@ -1964,6 +2015,26 @@ mod tests {
         assert_eq!(view.advanced_count(Group::Backups), 1);
         let view = View::new("zzzz", &[]);
         assert!(view.shown.is_empty() && view.groups().is_empty(), "nothing found");
+    }
+
+    #[test]
+    fn speedup_has_its_rows_and_jargon_is_only_in_the_search_words() {
+        for key in ["speedup", "speedup-threads", "speedup-memory", "speedup-gc", "speedup-unsigned-jar"] {
+            assert_eq!(find(key).group, Group::Java, "{key}");
+        }
+        // the first five rows of the main card, in this order; the rest is folded
+        let main: Vec<&str> = ENTRIES.iter().filter(|e| e.group == Group::Java && !e.advanced).map(|e| e.key).collect();
+        assert_eq!(main, ["speedup", "fast-start", "smoothness", "low-end", "class-cache"]);
+        assert!(find("speedup-gc").advanced && find("warm-up").advanced);
+        assert_eq!(find("class-cache").title, "Quicker second start");
+        // a search for the jargon finds the plain row
+        assert!(View::new("aot", &[]).shows("class-cache") && View::new("zgc", &[]).shows("speedup-gc"));
+        for e in ENTRIES.iter().filter(|e| e.key.starts_with("speedup") || e.key == "class-cache") {
+            for jargon in ["aot", "zgc", "compact", "gc ", "cds"] {
+                let shown = format!("{} {}", e.title, e.hint).to_lowercase();
+                assert!(!shown.contains(jargon), "{jargon} in {}", e.key);
+            }
+        }
     }
 
     #[test]

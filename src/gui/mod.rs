@@ -248,6 +248,10 @@ pub struct Game {
     fast_start: bool,
     /// Whether this start used the smoothness helper, the same way.
     lite: bool,
+    /// Whether this start used Speed-up, the same way (and to tell, while the game runs, that the switch was turned
+    /// since: the change applies at the next start). Worked out when Play was pressed, which is what the game then
+    /// gets; `launch::Prepared` has no such field yet.
+    speedup: bool,
     /// The "Starting ..." progress card of this session, taken away once the game is up.
     task: u64,
     lines: Vec<LogLine>,
@@ -852,6 +856,7 @@ impl App {
                 // the helpers are Java's; Horizon starts without them
                 fast_start: !horizon && launch::fast_start_enabled(&self.settings, &instance),
                 lite: !horizon && launch::lite_enabled(&self.settings, &instance),
+                speedup: !horizon && launch::speedup::enabled(&self.settings, &instance),
                 task: self.next_task,
                 lines: Vec::new(),
                 phase: Phase::Preparing,
@@ -1032,16 +1037,21 @@ impl App {
         }
     }
 
-    /// Stop one session, by its key in `games`.
-    /// Switch the fast-start helper on or off for one instance (kept in the instance's own file).
+    /// Switch the fast-start helper on or off for one instance (kept in the instance's own file). A switch put back to
+    /// what the launcher says follows the launcher again, so the instance isn't left pinned.
     pub fn set_fast_start(&mut self, folder: &str, on: bool) {
+        let launcher = self.settings.fast_start;
         let Some(inst) = self.instances.iter_mut().find(|i| i.folder == folder) else { return };
-        inst.file.launcher.extras.insert("fastStart".into(), serde_json::json!(on));
+        match performance::pin(on, launcher) {
+            Some(v) => inst.file.launcher.extras.insert("fastStart".into(), serde_json::json!(v)),
+            None => inst.file.launcher.extras.remove("fastStart"),
+        };
         if let Err(e) = inst.save() {
             self.toast_err(format!("Couldn't save the setting: {e}"));
         }
     }
 
+    /// Stop one session, by its key in `games`.
     pub fn stop_session(&mut self, key: &str) {
         if let Some(k) = self.games.get_mut(key).and_then(|g| g.kill.take()) {
             let _ = k.send(());
@@ -2426,7 +2436,7 @@ static SHOT_HOVER: std::sync::LazyLock<Option<egui::Pos2>> = std::sync::LazyLock
 /// The ids of the jobs the tour makes up to show the sidebar busy; no real job gets ids this high.
 const SHOT_TASK: u64 = u64::MAX - 8;
 
-const SHOT_PAGES: [&str; 93] = [
+const SHOT_PAGES: [&str; 99] = [
     "home",
     "library",
     "instance",
@@ -2438,6 +2448,13 @@ const SHOT_PAGES: [&str; 93] = [
     "instance-settings",
     "instance-settings-java",
     "instance-settings-cmd",
+    // Speed-up: its menu beside Play, what is said when it can't work, and its group in an instance's settings
+    "instance-performance",
+    "instance-performance-light",
+    "instance-performance-custom",
+    "instance-performance-oldjava",
+    "instance-settings-performance",
+    "instance-settings-performance-custom",
     "discover",
     "discover-both",
     "discover-datapacks",
@@ -2585,11 +2602,16 @@ impl App {
             let before = step.checked_sub(1).and_then(|i| shot.pages.get(i)).cloned().unwrap_or_default();
             shot.press = None;
             widgets::shot_seek(None);
+            // a menu the page before left open would be closed by the press that is meant to open it
+            egui::Popup::close_all(ctx);
             self.shot_close_windows(before.trim_end_matches("-light"));
             // only the Horizon pages show a sample instance as a Horizon one; the others show the data as it is
             let horizon = name.contains("horizon");
             if let Some(shot) = self.shot.as_mut().filter(|s| s.horizon != horizon) {
                 shot.horizon = horizon;
+                self.reload_instances();
+            } else if before.contains("performance") {
+                // the Speed-up pages change the sample instance in memory: the next page gets it as it is on disk
                 self.reload_instances();
             }
             // only the Bedrock pages show Bedrock instances (in memory, see `shot_bedrock`)
@@ -2629,6 +2651,37 @@ impl App {
                     self.page = Page::Library;
                     let list = name.trim_end_matches("-light") == "library-list";
                     self.settings.library_view = if list { "list" } else { "grid" }.to_string();
+                }
+                "instance-performance"
+                | "instance-performance-custom"
+                | "instance-performance-oldjava"
+                | "instance-settings-performance"
+                | "instance-settings-performance-custom" => {
+                    if let Some(f) = first {
+                        self.open_instance(&f);
+                        let name = name.trim_end_matches("-light");
+                        if let Some(inst) = self.instances.iter_mut().find(|i| i.folder == f) {
+                            if name.ends_with("custom") {
+                                inst.file.launcher.java_arguments = Some("-Xmx6G -XX:+UseZGC".to_string());
+                            }
+                            if name.ends_with("oldjava") {
+                                inst.file.version.java_version = Some(crate::model::JavaVersion {
+                                    component: "java-runtime-gamma".into(),
+                                    major_version: 17,
+                                });
+                            }
+                        }
+                        if name.starts_with("instance-settings") {
+                            self.tab = InstTab::Settings;
+                            self.shot_instance_settings_tab(&f, 0);
+                            self.ctx.data_mut(|d| d.insert_temp(library::scroll_to_performance_id(), true));
+                        } else {
+                            self.tab = InstTab::Overview;
+                            if name != "instance-performance-oldjava" {
+                                self.shot_press("Performance options");
+                            }
+                        }
+                    }
                 }
                 "instance"
                 | "instance-backups"
@@ -2671,6 +2724,7 @@ impl App {
                                     player: "Player".into(),
                                     fast_start: false,
                                     lite: false,
+                                    speedup: false,
                                     task: 0,
                                     lines: sample_log(),
                                     phase: Phase::Exited(Some(0)),
@@ -2949,6 +3003,7 @@ impl App {
                 | "import"
         ) || name.trim_end_matches("-light").starts_with("craft")
             || name.trim_end_matches("-light") == "instance-resourcepacks"
+            || matches!(name.trim_end_matches("-light"), "instance-performance" | "instance-performance-custom")
         {
             180
         } else {
@@ -3046,6 +3101,7 @@ impl App {
                     player: "Alex".into(),
                     fast_start: false,
                     lite: false,
+                    speedup: false,
                     task: 0,
                     lines: Vec::new(),
                     phase: Phase::Running,

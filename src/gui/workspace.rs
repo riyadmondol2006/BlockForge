@@ -18,14 +18,19 @@ const BANNER_TALL: f32 = 196.0;
 const BANNER_SHORT: f32 = 64.0;
 /// The air inside the banner, left of the name.
 const BANNER_PAD: f32 = 22.0;
-/// Play, Performance and the menu sit in the banner's top right corner, this far in from its right edge and its top,
+/// Play, Speed-up and the menu sit in the banner's top right corner, this far in from its right edge and its top,
 /// on every tab: the banner grows and shrinks under them, and Play never moves when the tab changes.
 const ACTIONS_RIGHT: f32 = 16.0;
 const ACTIONS_TOP: f32 = 10.0;
 /// The height of those buttons.
 const ACTION_H: f32 = 44.0;
-/// From this width of the banner on, Performance has a button of its own beside Play (it is in the menu as well).
-const PERFORMANCE_ROOM: f32 = 600.0;
+/// From this width of the banner on, Speed-up has a control of its own beside Play: its switch and the chevron that
+/// opens the Performance menu (which is in the instance's menu as well, with Speed-up first). It is as wide as the
+/// two buttons it joins, the menu button and Play with its part count together, and the name keeps what the narrower
+/// Performance button left it.
+const PERFORMANCE_ROOM: f32 = 680.0;
+/// The part of the Speed-up control that opens the Performance menu.
+const SPEEDUP_MENU_PART: f32 = 34.0;
 /// How long the banner takes to grow or shrink when the tab changes.
 const BANNER_GLIDE: f32 = 0.18;
 /// The part of the Play button that opens its menu.
@@ -160,6 +165,77 @@ fn split_play(ui: &mut Ui, stop: bool, height: f32) -> (Response, Response) {
     (main_resp, more_resp)
 }
 
+/// The Speed-up control of the banner, in the way of [`split_play`]: a part with the word and a small switch showing
+/// whether Speed-up is on, and a part with a chevron that opens the Performance menu. Returns the switch part's
+/// response and the menu part's; `performance::speedup_control` gives them their words and their menu.
+pub(super) fn speedup_split(ui: &mut Ui, on: bool, height: f32) -> (Response, Response) {
+    const LABEL: &str = "Speed-up";
+    let font = super::fonts::medium(FS_BODY);
+    let galley = ui.painter().layout_no_wrap(LABEL.to_string(), font.clone(), c_text());
+    let (track_w, track_h) = (32.0, 18.0);
+    let main_w = 14.0 + galley.size().x + 10.0 + track_w + 12.0;
+    let (rect, _) = ui.allocate_exact_size(vec2(main_w + SPEEDUP_MENU_PART, height), Sense::hover());
+    let main = Rect::from_min_max(rect.min, pos2(rect.left() + main_w, rect.bottom()));
+    let more = Rect::from_min_max(pos2(main.right(), rect.top()), rect.max);
+    let id = ui.make_persistent_id("instance-speedup");
+    let main_resp = ui.interact(main, id, Sense::click());
+    let more_resp = ui.interact(more, id.with("menu"), Sense::click());
+    let open = egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&more_resp));
+    let tm = motion::hover(ui, main_resp.id, main_resp.hovered());
+    let tc = motion::hover(ui, more_resp.id, more_resp.hovered() || open);
+    if ui.is_rect_visible(rect) {
+        let p = ui.painter();
+        let radius = CornerRadius::same(R_CONTROL);
+        p.rect_filled(rect, radius, c_field());
+        let r = R_CONTROL;
+        let lift = |part: Rect, t: f32, corners: CornerRadius| {
+            if t > 0.0 {
+                p.rect_filled(part, corners, c_field_hover().gamma_multiply(t));
+            }
+        };
+        lift(main, tm, CornerRadius { nw: r, sw: r, ne: 0, se: 0 });
+        lift(more, tc, CornerRadius { nw: 0, sw: 0, ne: r, se: r });
+        p.rect_stroke(rect, radius, Stroke::new(1.0, c_control()), egui::StrokeKind::Inside);
+        p.vline(main.right(), rect.top() + 9.0..=rect.bottom() - 9.0, Stroke::new(1.0, c_control()));
+        let label = p.layout_no_wrap(LABEL.to_string(), font, c_text());
+        p.galley(pos2(main.left() + 14.0, main.center().y - label.size().y / 2.0), label, c_text());
+        // the switch, as the launcher's other switches are: the brand gradient slides in as it turns on
+        let s = motion::toward(ui.ctx(), main_resp.id.with("on"), on, motion::MEDIUM);
+        let track =
+            Rect::from_center_size(pos2(main.right() - 12.0 - track_w / 2.0, main.center().y), vec2(track_w, track_h));
+        let round = CornerRadius::same((track_h / 2.0) as u8);
+        let p = ui.painter();
+        p.rect_filled(track, round, c_active());
+        p.rect_stroke(track, round, Stroke::new(1.0, c_control().gamma_multiply(1.0 - s)), egui::StrokeKind::Inside);
+        if s > 0.0 {
+            motion::gradient_rect(
+                p,
+                track,
+                track_h as u8 / 2,
+                c_accent().gamma_multiply(s),
+                c_accent2().gamma_multiply(s),
+            );
+        }
+        let knob = pos2(track.left() + 9.0 + s * (track_w - 18.0), track.center().y);
+        p.circle_filled(knob + vec2(0.0, 1.0), 7.0, Color32::from_black_alpha(40));
+        p.circle_filled(knob, 6.5, motion::mix(c_muted(), Color32::WHITE, s));
+        // the chevron points down, and up while the menu is open
+        let (c, d) = (more.center(), if open { -1.0 } else { 1.0 });
+        let chevron = vec![c + vec2(-4.0, -2.0 * d), c + vec2(0.0, 2.0 * d), c + vec2(4.0, -2.0 * d)];
+        p.add(egui::Shape::line(chevron, Stroke::new(1.6, c_muted())));
+    }
+    focus_ring(ui, &main_resp, main, R_CONTROL);
+    focus_ring(ui, &more_resp, more, R_CONTROL);
+    // the screenshot tour opens the menu the way a player does
+    shot_note("Performance options", more);
+    main_resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Switch, true, on, LABEL));
+    more_resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Performance options"));
+    (
+        main_resp.on_hover_cursor(egui::CursorIcon::PointingHand),
+        more_resp.on_hover_cursor(egui::CursorIcon::PointingHand),
+    )
+}
+
 /// A square button of glass over the cover, with an icon: the "…" of the banner.
 fn cover_button(ui: &mut Ui, icon: Icon, size: f32) -> Response {
     let (rect, resp) = ui.allocate_exact_size(vec2(size, size), Sense::click());
@@ -246,7 +322,7 @@ fn bottom_shade_mesh(rect: Rect, radius: f32, strength: u8) -> egui::Mesh {
 
 impl App {
     /// The cover of the instance across the page with its picture, name and what it is, and Play, Play as, the
-    /// performance switches and the menu over it. The Overview has the tall banner; the other tabs a short one, and
+    /// Speed-up control and the menu over it. The Overview has the tall banner; the other tabs a short one, and
     /// the height glides between the two when the tab changes (at once for a tab picked from the keyboard). The
     /// buttons keep to the banner's top right corner whatever its height, so Play never moves.
     pub(super) fn instance_banner(&mut self, ui: &mut Ui, inst: &Instance, action: &mut Option<Act>) {
@@ -329,7 +405,7 @@ impl App {
     }
 
     /// The buttons of the banner, laid out from its right edge leftwards so each keeps its place: the menu,
-    /// Performance (when the banner has room for it), Play (Stop while the game runs) with its Play as part, and left
+    /// Speed-up (when the banner has room for it), Play (Stop while the game runs) with its Play as part, and left
     /// of Play what the game is doing, where its changing words can't push Play along.
     fn banner_actions(&mut self, ui: &mut Ui, inst: &Instance, tall: bool, action: &mut Option<Act>) {
         let folder = inst.folder.clone();
@@ -342,10 +418,10 @@ impl App {
         if let Some(a) = picked.and_then(|r| r.inner) {
             *action = Some(a);
         }
-        // decided by the banner's width alone, the same on every tab (it is under Performance in the menu as well).
-        // Its helpers are Java's: a Horizon instance has none
+        // decided by the banner's width alone, the same on every tab (Speed-up is the first row of the menu's
+        // Performance submenu as well). Its helpers are Java's: a Horizon instance has none
         if width >= PERFORMANCE_ROOM - ACTIONS_RIGHT - BANNER_PAD && !crate::horizon::is_horizon(inst) {
-            if let Some(a) = self.performance_button(ui, inst, ACTION_H) {
+            if let Some(a) = self.speedup_control(ui, inst, ACTION_H) {
                 *action = Some(a);
             }
         }

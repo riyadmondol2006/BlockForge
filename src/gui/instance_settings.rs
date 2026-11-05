@@ -836,6 +836,10 @@ impl App {
                     }
                     save_note(ui, "Changes above apply with Save");
                     if !horizon {
+                        // the Overview's "Change" brought the player here for this group
+                        if ui.ctx().data_mut(|d| d.remove_temp::<bool>(super::library::scroll_to_performance_id())).is_some() {
+                            ui.scroll_to_cursor(Some(egui::Align::TOP));
+                        }
                         group(ui, Icon::Sliders, "Performance", "These apply right away, from the next start of the game", |ui, r| {
                             helper_change = self.instance_performance_rows(ui, inst, r);
                         });
@@ -924,7 +928,7 @@ impl App {
                             });
                         }
                         let reset = (d.java_args != default_args).then_some("the launcher's Java arguments");
-                        if stacked(ui, r, "Java arguments", "Extra options passed to Java. Memory is set above, so leave out -Xmx", &mut d.java_args, "", reset) {
+                        if stacked(ui, r, "Java arguments", "Extra options passed to Java. Memory is set above, so leave out -Xmx. Your own arguments replace BlockForge's memory and speed settings.", &mut d.java_args, "", reset) {
                             d.java_args = default_args.clone();
                         }
                     });
