@@ -92,6 +92,9 @@
 - **Set up for your PC automatically.** Game memory is picked from your RAM, free memory and cores and from the game
   (version, loader, number of mods, shaders, what the pack asks for), or you set your own amount, for everything or per
   instance. Light mode switches on by itself on older computers.
+- **Speed-up, beside Play.** On by default for Java Edition: less stutter while new land is made (the slowest frames 14-20%
+  better in testing on Minecraft 26.3) and up to 13% less memory, for slightly slower land. One switch, each part can be
+  switched off, and your own Java arguments always win.
 - **Smoother games on any loader.** Two small helpers start with the game: Fast start (opens it sooner) and the
   smoothness helper (small fixes inside the game). They are not mods, so they work the same with vanilla, Fabric, Quilt,
   Forge and NeoForge. **Low-end mode** lowers the graphics settings of games on a slow computer (on by itself when the
@@ -320,7 +323,7 @@ import screen, which is what double-clicking a `.mrpack` does.
 - **Rewritten in Rust** with a new window written from scratch: five places in the sidebar, a generated cover for every
   instance, dark and light looks (or following the system), 18 themes, and vector icons.
 - **Offline players** are built in, and any account can be picked for a game with the Play as button next to Play, and several games can run at once.
-- **Performance helpers**: Fast start, the smoothness helper and Low-end mode (Settings > Game > Performance, and a
+- **Performance helpers**: Speed-up (the switch beside Play), Fast start, the smoothness helper and Low-end mode (Settings > Game > Performance, and a
   switch on every instance), for every mod loader. If a game closes early with a helper on, BlockForge offers to turn
   them off, and switches the smoothness helper off by itself after two early closes in a row.
 - **Crafting calculator** (in the Workshop): materials, steps, tree and storage for any item, with your own stock,

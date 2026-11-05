@@ -3,6 +3,43 @@
 The section for a version is used as the text of its release on GitHub. Older releases (the Java versions, up to
 3.4.42.x) are on the [releases page](https://github.com/riyadmondol2006/BlockForge/releases).
 
+## 5.3.0
+
+### What is new
+
+- **Speed-up, beside Play.** A switch next to Play on the instance page, on by default for Minecraft: Java Edition, with
+  an arrow that opens the Performance menu. It makes games stutter less while new land is made and use less memory.
+  Worlds, saves and servers stay as they are, and it applies the next time the game starts. Each instance can follow the
+  launcher or have its own setting; Horizon and Bedrock don't have it. Two early closes in a row turn it off for that
+  instance by itself. Measured on Minecraft 26.3 (16 processor threads, GTX 1650, a world generated from nothing):
+
+  | | Vanilla | Fabric with 4 mods | Fabric with 29 mods |
+  |---|---|---|---|
+  | Frames per second while land is made | about +14% | +17% | +25% |
+  | The slowest 1% of frames | about -19% | -20% | -14% |
+  | Peak memory | about -12% | -13% | -3% |
+  | Time to make the land | about +6% | +3.5% | +6% |
+
+  It doesn't make new land appear sooner: the frames are smoother because world generation leaves room for drawing.
+- **What it does, under Settings > Java and performance > Advanced:**
+  - *Smoother chunk loading*: world generation uses at most half of the processor threads, on computers with more than
+    four.
+  - *Use less memory*: compact object headers on Java 25, and unused memory goes back to the system on Linux.
+  - *Shorter pauses*: a choice of the low-pause garbage collector (ZGC). Automatic keeps the usual one: ZGC used about
+    1.4 GB more memory or more in testing.
+- **A word about simulation distance.** When a game's simulation distance is above 16, the Performance menu says so and
+  offers to set it to 12. It is never changed without asking: the game simulates (2d+1)² chunks, so 32 is 4225 and 12 is
+  625.
+
+### Improved
+
+- The Performance menu no longer ties an instance to its own value when the choice equals the launcher's, so a later
+  change in Settings still reaches it.
+- Settings: "Speed up game start (class cache)" is now "Quicker second start", "Read game files ahead of Play" moved under
+  Advanced, plainer hints, and "What the smoothness helper did" shows descriptions instead of internal names.
+- Your own Java arguments now say that they are in charge, wherever they turn these settings off.
+- Overview's Change opens at the Performance group, and the Low-end choices fit their row.
+
 ## 5.2.0
 
 ### What is new
