@@ -1657,7 +1657,7 @@ impl App {
                             !s.speedup_threads,
                             !s.speedup_memory,
                             s.speedup_gc != "auto",
-                            super::performance::unsigned_jar(s),
+                            s.speedup_unsigned_jar,
                             s.extras.get("warmUpGameFiles").and_then(|v| v.as_bool()) == Some(false),
                         ]
                         .into_iter()

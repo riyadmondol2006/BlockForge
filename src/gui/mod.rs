@@ -856,7 +856,10 @@ impl App {
                 // the helpers are Java's; Horizon starts without them
                 fast_start: !horizon && launch::fast_start_enabled(&self.settings, &instance),
                 lite: !horizon && launch::lite_enabled(&self.settings, &instance),
-                speedup: !horizon && launch::speedup::enabled(&self.settings, &instance),
+                // with the player's own Java arguments none of it is added, so it can't be what stopped a game
+                speedup: !horizon
+                    && launch::speedup::enabled(&self.settings, &instance)
+                    && !launch::speedup::own_arguments(&self.settings, &instance),
                 task: self.next_task,
                 lines: Vec::new(),
                 phase: Phase::Preparing,

@@ -115,7 +115,10 @@ impl Exception {
 }
 
 fn old_java_text(n: u32) -> String {
-    format!("Not used here: this game runs Java {n}. This needs Java {} or newer.", speedup::MODERN_JAVA)
+    format!(
+        "This game runs Java {n}, so Speed-up does part of its work. The rest needs Java {} or newer.",
+        speedup::MODERN_JAVA
+    )
 }
 
 /// The Java version of a game that is too old for the parts of Speed-up that need Java 25, when its version says so.
@@ -126,15 +129,12 @@ fn old_java(java: Option<u32>) -> Option<u32> {
 /// The one thing worth saying about Speed-up for an instance, most important first: the player's own arguments (said
 /// whatever the switch is, as they make it useless), then, with Speed-up on, a game too old for it and a cache that is
 /// being made. Nothing when all is as it should be.
-fn exception(own_arguments: bool, on: bool, java: Option<u32>, making_cache: bool) -> Option<Exception> {
+fn exception(own_arguments: bool, on: bool, making_cache: bool) -> Option<Exception> {
     if own_arguments {
         return Some(Exception::OwnArguments);
     }
     if !on {
         return None;
-    }
-    if let Some(n) = old_java(java) {
-        return Some(Exception::OldJava(n));
     }
     making_cache.then_some(Exception::CacheBeingMade)
 }
@@ -166,26 +166,20 @@ fn exception_line(ui: &mut Ui, e: &Exception) {
     }
 }
 
-pub(super) use pending::unsigned_jar;
+/// The class cache's state changes rarely, and looking takes a file read: looked at again at most every few seconds.
+static CACHE_MAKING: Mutex<Option<(Instant, String, bool)>> = Mutex::new(None);
 
-/// What the lead swaps for the real thing at merge: `launch::speedup` and `config` don't have these yet.
-mod pending {
-    use crate::config::Settings;
-    use crate::instances::Instance;
-
-    /// Whether the class cache of this instance is being made right now, after its game closed.
-    pub fn cache_being_made(_instance: &Instance) -> bool {
-        false
+/// Whether the class cache of this instance is being made: recorded by the running game, or built after it closed.
+fn cache_being_made(dirs: &Dirs, inst: &Instance) -> bool {
+    let mut kept = CACHE_MAKING.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((at, folder, making)) = kept.as_ref() {
+        if *folder == inst.folder && at.elapsed() < Duration::from_secs(3) {
+            return *making;
+        }
     }
-
-    /// The setting "Even quicker vanilla start" (`speedup_unsigned_jar`): off unless switched on.
-    pub fn unsigned_jar(settings: &Settings) -> bool {
-        settings.extras.get("speedupUnsignedJar").and_then(|v| v.as_bool()).unwrap_or(false)
-    }
-
-    pub fn set_unsigned_jar(settings: &mut Settings, on: bool) {
-        settings.extras.insert("speedupUnsignedJar".into(), on.into());
-    }
+    let making = speedup::cache_state(dirs, inst) == speedup::CacheState::Making;
+    *kept = Some((Instant::now(), inst.folder.clone(), making));
+    making
 }
 
 // ---- the simulation distance
@@ -411,9 +405,9 @@ impl SettingsView {
                 s.speedup_gc = GcChoice::Auto.as_setting().to_string();
                 dirty = true;
             }
-            let mut unsigned = pending::unsigned_jar(s);
+            let mut unsigned = s.speedup_unsigned_jar;
             if c.switch(ui, "speedup-unsigned-jar", &mut unsigned, false) {
-                pending::set_unsigned_jar(s, unsigned);
+                s.speedup_unsigned_jar = unsigned;
                 dirty = true;
             }
         });
@@ -475,8 +469,7 @@ impl App {
         exception(
             speedup::own_arguments(&self.settings, inst),
             speedup::enabled(&self.settings, inst),
-            speedup::java_major(inst),
-            pending::cache_being_made(inst),
+            cache_being_made(&self.dirs, inst),
         )
     }
 
@@ -622,7 +615,7 @@ impl App {
                 change = Some(HelperChange::Speedup(v));
             }
         });
-        if !own_arguments && on && pending::cache_being_made(inst) {
+        if !own_arguments && on && cache_being_made(&self.dirs, inst) {
             ui.add_space(4.0);
             exception_line(ui, &Exception::CacheBeingMade);
         }
@@ -1073,15 +1066,13 @@ mod tests {
     fn what_is_said_about_speedup_goes_by_what_matters_most() {
         use Exception::*;
         // the player's own arguments are said whatever the switch is
-        assert_eq!(exception(true, false, Some(21), false), Some(OwnArguments));
-        assert_eq!(exception(true, true, Some(8), true), Some(OwnArguments));
+        assert_eq!(exception(true, false, false), Some(OwnArguments));
+        assert_eq!(exception(true, true, true), Some(OwnArguments));
         // switched off: nothing else to say
-        assert_eq!(exception(false, false, Some(8), true), None);
-        assert_eq!(exception(false, true, Some(21), true), Some(OldJava(21)));
-        assert_eq!(exception(false, true, Some(25), true), Some(CacheBeingMade));
+        assert_eq!(exception(false, false, true), None);
+        assert_eq!(exception(false, true, true), Some(CacheBeingMade));
         // nothing when all is normal, and a version that names no Java isn't called too old
-        assert_eq!(exception(false, true, Some(25), false), None);
-        assert_eq!(exception(false, true, None, false), None);
+        assert_eq!(exception(false, true, false), None);
     }
 
     #[test]
@@ -1089,7 +1080,7 @@ mod tests {
         assert_eq!(Exception::OwnArguments.text(), "Your Java arguments are in charge, so these do nothing.");
         assert_eq!(
             Exception::OldJava(17).text(),
-            "Not used here: this game runs Java 17. This needs Java 25 or newer."
+            "This game runs Java 17, so Speed-up does part of its work. The rest needs Java 25 or newer."
         );
         assert_eq!(
             Exception::CacheBeingMade.text(),
