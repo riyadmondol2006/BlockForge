@@ -51,10 +51,10 @@ pub(super) const FAST_START_HINT: &str = "Uses spare processor cores while the g
     closes as soon as it starts.";
 
 pub(super) const SPEEDUP_HINT: &str =
-    "Faster world entry and less CPU and memory use. Each instance can have its own setting.";
+    "Less stutter while new land is made, and less memory use. Each instance can have its own setting.";
 
 pub(super) const QUICKER_START_HINT: &str =
-    "The first time you play, nothing changes. After that, the game opens faster.";
+    "The first time you play, nothing changes. After that, the game opens a little faster.";
 
 pub(super) const THREADS_HINT: &str = "Keeps a few processor threads free for drawing frames while new land is made. \
     New land takes slightly longer.";
@@ -62,20 +62,16 @@ pub(super) const THREADS_HINT: &str = "Keeps a few processor threads free for dr
 pub(super) const MEMORY_HINT: &str = "Packs the game's data more tightly and gives unused memory back. Needs Java 25 or \
     newer for the biggest effect.";
 
-pub(super) const GC_HINT: &str = "A garbage collector with much shorter pauses. It uses about 1.4 GB more memory, so \
-    Automatic keeps the usual one unless this computer has plenty.";
-
-pub(super) const UNSIGNED_JAR_HINT: &str = "Uses a copy of the game without Mojang's signature so more of it can be \
-    cached. The game then shows itself as Modded on its title screen and in crash reports. Worlds and servers aren't \
-    affected.";
+pub(super) const GC_HINT: &str = "A garbage collector with much shorter pauses, for at least 1.4 GB more memory. \
+    Automatic keeps the usual one, which did as well or better in testing with mods.";
 
 /// What the switch beside Play says when pointed at.
-const SPEEDUP_TIP: &str = "Faster world entry and less CPU and memory use. Worlds, saves and servers stay as they are. \
-    Applies the next time the game starts.";
+const SPEEDUP_TIP: &str = "Less stutter while new land is made, and less memory use. Worlds, saves and servers stay as \
+    they are. Applies the next time the game starts.";
 
 /// The first part of [`SPEEDUP_TIP`], for when the running game started the other way.
 const SPEEDUP_TIP_CORE: &str =
-    "Faster world entry and less CPU and memory use. Worlds, saves and servers stay as they are.";
+    "Less stutter while new land is made, and less memory use. Worlds, saves and servers stay as they are.";
 
 /// The tooltip of the Speed-up switch: while a game runs that started with Speed-up the other way round than the
 /// switch says now (`started_with`), it says that the change comes at the next start.
@@ -405,11 +401,6 @@ impl SettingsView {
                 s.speedup_gc = GcChoice::Auto.as_setting().to_string();
                 dirty = true;
             }
-            let mut unsigned = s.speedup_unsigned_jar;
-            if c.switch(ui, "speedup-unsigned-jar", &mut unsigned, false) {
-                s.speedup_unsigned_jar = unsigned;
-                dirty = true;
-            }
         });
         dirty
     }
@@ -609,7 +600,7 @@ impl App {
             ui.add_space(6.0);
         }
         rows.gap(ui);
-        let hint = "Faster world entry and less CPU and memory use. Applies the next time the game starts.";
+        let hint = "Less stutter while new land is made, and less memory use. Applies the next time the game starts.";
         wide_row(ui, "Speed-up", hint, 230.0, |ui| {
             if let Some(v) = tri_choice(ui, "speedup", speedup::instance_override(inst), s.speedup) {
                 change = Some(HelperChange::Speedup(v));
@@ -1139,7 +1130,7 @@ mod tests {
 
     #[test]
     fn the_hints_leave_out_jargon_and_the_old_remarks() {
-        for hint in [SPEEDUP_HINT, QUICKER_START_HINT, THREADS_HINT, MEMORY_HINT, GC_HINT, UNSIGNED_JAR_HINT] {
+        for hint in [SPEEDUP_HINT, QUICKER_START_HINT, THREADS_HINT, MEMORY_HINT, GC_HINT] {
             for word in ["AOT", "ZGC", "CDS", "compact object", "G1"] {
                 assert!(!hint.contains(word), "{word} in {hint}");
             }

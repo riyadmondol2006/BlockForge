@@ -709,7 +709,7 @@ pub async fn prepare_ext(
             );
         }
     }
-    let aot = speedup_on && major >= 25;
+    let aot = speedup::AOT_CACHE && speedup_on && major >= 25;
     if aot
         && ls.class_data_cache
         && speedup::unsigned_jar_on(settings, instance)

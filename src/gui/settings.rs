@@ -165,7 +165,7 @@ const fn entry(
 use Group as G;
 
 /// Every setting of the page, section by section in the order they are listed.
-const ENTRIES: [Entry; 37] = [
+const ENTRIES: [Entry; 36] = [
     entry(
         "theme",
         G::Appearance,
@@ -333,14 +333,6 @@ const ENTRIES: [Entry; 37] = [
         "Shorter pauses",
         super::performance::GC_HINT,
         "zgc gc garbage collector pause stutter freeze",
-    ),
-    entry(
-        "speedup-unsigned-jar",
-        G::Java,
-        true,
-        "Even quicker vanilla start",
-        super::performance::UNSIGNED_JAR_HINT,
-        "signature signed jar aot cache modded",
     ),
     entry(
         "warm-up",
@@ -1657,7 +1649,6 @@ impl App {
                             !s.speedup_threads,
                             !s.speedup_memory,
                             s.speedup_gc != "auto",
-                            s.speedup_unsigned_jar,
                             s.extras.get("warmUpGameFiles").and_then(|v| v.as_bool()) == Some(false),
                         ]
                         .into_iter()
@@ -2019,7 +2010,7 @@ mod tests {
 
     #[test]
     fn speedup_has_its_rows_and_jargon_is_only_in_the_search_words() {
-        for key in ["speedup", "speedup-threads", "speedup-memory", "speedup-gc", "speedup-unsigned-jar"] {
+        for key in ["speedup", "speedup-threads", "speedup-memory", "speedup-gc"] {
             assert_eq!(find(key).group, Group::Java, "{key}");
         }
         // the first five rows of the main card, in this order; the rest is folded

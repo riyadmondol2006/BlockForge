@@ -8,9 +8,9 @@
 //! and the same libraries uses it. When any of that changes (a Java or library update, another loader version), the
 //! archive no longer matches: it is thrown away and made again the same way.
 //!
-//! With Speed-up on, Java 25 and newer record an AOT configuration at exit instead of a class list. After a session
-//! of at least 90 seconds, a low-priority Java links it into an AOT cache. Compact headers and the collector are part
-//! of both its fingerprint and create command. Short sessions and missing recordings are simply recorded again.
+//! Java's newer AOT cache is here too, switched off by `speedup::AOT_CACHE`, which says why: it records a configuration
+//! at exit instead of a class list, and after a session of at least 90 seconds a low-priority Java links it into a
+//! cache. Short sessions and missing recordings are simply recorded again.
 //!
 //! Safe by design: Java only uses an archive that matches exactly and passes its checksum, and otherwise starts
 //! normally. Only Java 17 and newer; never Java 8-16. Fabric's class list can't be archived (Java rejects it); that is
@@ -261,13 +261,14 @@ pub fn apply(
     let mut options = archive_options(java_options);
     add_agent_module(&mut options, java_options, major);
     let aot = aot && major >= 25;
+    // Java only uses an archive made with the same object layout, without saying so: both have to agree on this
+    options.extend(java_options.iter().filter(|a| a.contains("UseCompactObjectHeaders")).cloned());
     if aot {
         options.extend(
             java_options
                 .iter()
                 .filter(|a| {
                     a.starts_with("-XX:+Use") && a.ends_with("GC")
-                        || a.contains("UseCompactObjectHeaders")
                         || a.contains("ZGenerational")
                         || a.starts_with("-Xbootclasspath/a:")
                 })

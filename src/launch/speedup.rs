@@ -6,12 +6,19 @@
 //!
 //! * fewer world-generation threads (`max.bg.threads`), so they don't compete with the frame being drawn;
 //! * less memory: compact object headers on Java 25, and giving unused native memory back to the system on Linux;
-//! * on Java 25 the class cache becomes Java's AOT cache (`classcache`), which also holds how the classes were linked.
+//! * the class cache (`classcache`) is made for the same object layout, so it keeps working with those.
 //!
 //! A player's own Java arguments win: with them, none of the Java options here are added (`command`).
 
 use crate::config::Settings;
 use crate::instances::Instance;
+
+/// Java's AOT cache instead of the class cache on Java 25: off, as with Mojang's Java 25.0.1 it isn't worth it yet.
+/// With method profiles it opened vanilla 26.3 about a quarter sooner, but crashed Java while collecting garbage (three
+/// of six starts with 29 mods, also with four). Without them (`-XX:-AOTRecordTraining -XX:-AOTReplayTraining`) 48 starts
+/// ran without a crash, but the gain is 3-10% for a first start about 15 s slower, a pause of 1-5 s when that game closes
+/// and 90-220 MB per game. Worth trying again on a newer Java; `classcache` and the Stop handling for it stay ready.
+pub const AOT_CACHE: bool = false;
 
 /// The first Java with the AOT cache and compact object headers as regular features.
 pub const MODERN_JAVA: u32 = 25;
