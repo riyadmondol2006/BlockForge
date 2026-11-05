@@ -226,10 +226,18 @@ pub fn unsigned_jar_on(settings: &Settings, instance: &Instance) -> bool {
 
 /// Runs during launch preparation, never on the window thread. Vendor backports differ, so ask this exact Java.
 pub fn accepts_trim(java: &std::path::Path) -> bool {
-    crate::platform::command(java)
+    // asked once per Java while the launcher runs: starting a Java takes a noticeable part of a game's preparation
+    static ANSWERS: std::sync::Mutex<Vec<(std::path::PathBuf, bool)>> = std::sync::Mutex::new(Vec::new());
+    let mut answers = ANSWERS.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((_, answer)) = answers.iter().find(|(path, _)| path == java) {
+        return *answer;
+    }
+    let answer = crate::platform::command(java)
         .args(["-XX:+UnlockExperimentalVMOptions", "-XX:TrimNativeHeapInterval=5000", "-version"])
         .output()
-        .is_ok_and(|o| o.status.success())
+        .is_ok_and(|o| o.status.success());
+    answers.push((java.to_path_buf(), answer));
+    answer
 }
 
 #[cfg(test)]

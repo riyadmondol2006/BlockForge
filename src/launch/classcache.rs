@@ -816,9 +816,12 @@ mod tests {
 
 pub fn aot_flags(action: Action, archive: &Path, configuration: &Path) -> Vec<String> {
     match action {
-        Action::Record => {
-            vec!["-XX:AOTMode=record".into(), format!("-XX:AOTConfiguration={}", configuration.display())]
-        }
+        // Java lists every class it can't keep (all of a signed jar's): over 11000 lines in the game's log otherwise
+        Action::Record => vec![
+            "-XX:AOTMode=record".into(),
+            format!("-XX:AOTConfiguration={}", configuration.display()),
+            "-Xlog:aot=off,cds=off".into(),
+        ],
         Action::Use => vec![
             format!("-XX:AOTCache={}", archive.display()),
             "-XX:+VerifySharedSpaces".into(),
