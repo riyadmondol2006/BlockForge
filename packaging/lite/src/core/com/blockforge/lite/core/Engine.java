@@ -35,8 +35,7 @@ public final class Engine implements ClassFileTransformer {
                 new LazyCollisionShape(), new EmptyEffectLists(), new SharedStateTables(), new ShortSpin(),
                 new SoundNoWait(), new QuietMusic(),
                 // wave 1 W1
-                new TintMemo(), new HiddenEntities(), new BlockEntityView(), new SignLines(),
-                new SectionLookup());
+                new TintMemo(), new HiddenEntities(), new BlockEntityView(), new SignLines());
     }
 
     final Options options;

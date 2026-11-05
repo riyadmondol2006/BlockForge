@@ -97,8 +97,7 @@ public final class Tests implements Opcodes {
             LazyCollisionShapeTest.class, EmptyEffectListsTest.class, SharedStateTablesTest.class, ShortSpinTest.class,
             SoundNoWaitTest.class, QuietMusicTest.class,
             // wave 1 W1
-            TintMemoTest.class, HiddenEntitiesTest.class, BlockEntityViewTest.class, SignLinesTest.class,
-            SectionLookupTest.class);
+            TintMemoTest.class, HiddenEntitiesTest.class, BlockEntityViewTest.class, SignLinesTest.class);
 
     private void one(String name, Object on, java.lang.reflect.Method m) {
         int before = failures;
